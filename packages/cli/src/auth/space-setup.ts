@@ -232,7 +232,7 @@ export async function ensureSpaceSetup(
 }
 
 export interface SpaceRecheckOptions {
-  /** Spaces this run already confirmed hosted; a confirmed space is not read again, and a hosted answer is added. */
+  /** Session spaces this run already confirmed hosted; a confirmed space is not read again, and a hosted answer is added. */
   readonly confirmed: Set<string>;
   /** Bound the wait (`onboard --timeout`); the default is {@link SPACE_SETUP_TIMEOUT_MS}. */
   readonly timeoutMs?: number;
@@ -243,23 +243,24 @@ export interface SpaceRecheckOptions {
 }
 
 /**
- * Ask the node, with the session already saved, whether a space the login was approved for is hosted, before an
- * onboarding step trusts that session: a login cut short after its approval (`SPACE_SETUP_PENDING`) leaves a usable
- * session on a space the node does not host yet.
+ * Ask the node, with the session already saved, whether the session's own space (the one OpenKey hosts first; the read
+ * goes through the session's `kv`, so it cannot target any other space) is hosted, before an onboarding step trusts that
+ * session: a login cut short after its approval (`SPACE_SETUP_PENDING`) leaves a usable session on a space the node does
+ * not host yet. `sessionSpaceId` is only the key under which this run remembers the answer.
  *
  * - `unhosted`: the same wait as after an approval (same backoff, messages, bound and `SPACE_SETUP_PENDING`).
  * - `hosted`, `unreadable` (this session cannot read it yet) or `transient`: the run goes on, silently.
  */
 export async function recheckSpaceHosting(
   ctx: ProfileSessionContext,
-  space: string,
+  sessionSpaceId: string,
   permissions: readonly PermissionEntry[] | undefined,
   options: SpaceRecheckOptions,
 ): Promise<void> {
-  if (options.confirmed.has(space)) return;
+  if (options.confirmed.has(sessionSpaceId)) return;
   const probe = kvSpaceProbe(ctx, permissions, options.restore);
   const first = await probe().catch(() => "transient" as const);
-  if (first === "hosted") options.confirmed.add(space);
+  if (first === "hosted") options.confirmed.add(sessionSpaceId);
   if (first !== "unhosted") return;
   await awaitSpaceSetup({ ready: null, pending: true }, {
     probe,
@@ -268,5 +269,27 @@ export async function recheckSpaceHosting(
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.write === undefined ? {} : { write: options.write }),
   });
-  options.confirmed.add(space);
+  options.confirmed.add(sessionSpaceId);
+}
+
+/** The re-check state of one onboard run: the session's space is read at most once, and not at all after an approval was taken in the run. */
+export function createSpaceRecheck(): {
+  /** This run took an approval and `ensureSpaceSetup` decided about the space from OpenKey's report; no step re-reads it. */
+  settle(): void;
+  check(
+    ctx: ProfileSessionContext,
+    sessionSpaceId: string,
+    permissions: readonly PermissionEntry[] | undefined,
+    options?: Omit<SpaceRecheckOptions, "confirmed">,
+  ): Promise<void>;
+} {
+  const confirmed = new Set<string>();
+  let settled = false;
+  return {
+    settle: () => { settled = true; },
+    check: async (ctx, sessionSpaceId, permissions, options = {}) => {
+      if (settled) return;
+      await recheckSpaceHosting(ctx, sessionSpaceId, permissions, { ...options, confirmed });
+    },
+  };
 }
