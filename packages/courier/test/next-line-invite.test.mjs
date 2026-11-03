@@ -19,7 +19,7 @@ const lines = (text) => text.split('\n');
 const nextLines = (text) => lines(text).filter((line) => line.startsWith('Next: '));
 // Node itself can print warning blocks to stderr: on Node 20 a `MaxListenersExceededWarning` (`(node:<pid>) ...Warning: ...`,
 // then a `(Use \`node --trace-warnings ...\`)` hint, and indented `at ...` lines under --trace-warnings) from the pre-existing
-// listener leak in the services' combineSignals (TC-2414), about 3 s into a poll loop. They are not Courier output and land
+// listener leak in the services' combineSignals (TC-2418), about 3 s into a poll loop. They are not Courier output and land
 // before or after our lines depending on timing, so the last line is picked among the lines Courier itself wrote.
 const isNodeWarning = (line) => /^\(node:\d+\) /.test(line) || line.startsWith('(Use `node --trace-warnings') || /^\s+at /.test(line);
 const lastLine = (text) => lines(text).filter((line) => line !== '' && !isNodeWarning(line)).at(-1);

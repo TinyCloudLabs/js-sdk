@@ -10,7 +10,7 @@ import { captureStdout, fakeTime, readySpace, scenario, stubSpaceProbe } from '.
 const lines = (text) => text.split('\n');
 const nextLines = (text) => lines(text).filter((line) => line.startsWith('Next: '));
 // Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener
-// leak in the services' combineSignals, TC-2414: `(node:<pid>) ...Warning: ...`, a `(Use \`node --trace-warnings ...\`)` hint,
+// leak in the services' combineSignals, TC-2418: `(node:<pid>) ...Warning: ...`, a `(Use \`node --trace-warnings ...\`)` hint,
 // indented `at ...` lines). They are not Courier output and can land after our last line, so it is picked among our own lines.
 const isNodeWarning = (line) => /^\(node:\d+\) /.test(line) || line.startsWith('(Use `node --trace-warnings') || /^\s+at /.test(line);
 const lastLine = (text) => lines(text).filter((line) => line !== '' && !isNodeWarning(line)).at(-1);

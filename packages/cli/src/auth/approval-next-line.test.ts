@@ -85,7 +85,7 @@ async function endedWith(run: () => Promise<unknown>): Promise<{ code: number; s
 const linesOf = (text: string) => text.split("\n");
 const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next: "));
 // Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener
-// leak in the services' combineSignals, TC-2414: `(node:<pid>) ...Warning: ...`, a `(Use \`node --trace-warnings ...\`)` hint,
+// leak in the services' combineSignals, TC-2418: `(node:<pid>) ...Warning: ...`, a `(Use \`node --trace-warnings ...\`)` hint,
 // indented `at ...` lines). They are not CLI output and can land after our last line, so it is picked among our own lines.
 const isNodeWarning = (line: string) => /^\(node:\d+\) /.test(line) || line.startsWith("(Use `node --trace-warnings") || /^\s+at /.test(line);
 const lastLine = (text: string) => linesOf(text).filter((line) => line !== "" && !isNodeWarning(line)).at(-1);
