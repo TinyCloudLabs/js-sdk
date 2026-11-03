@@ -340,3 +340,76 @@ describe("auth rotate: a post-approval failure drops the request that holds the 
     expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
   });
 });
+
+describe("auth rotate: a failure raised INSIDE the approval fetch (before the result is in hand) still drops the request that holds the staged key", () => {
+  const oldKey = JSON.parse(wasm.createSessionManager().jwk("default")!) as Ed25519PrivateJwk;
+  const rotate = () => refreshOpenKeySession("approval", host, {
+    rotation: { jwk: key, did }, openKeyAcquisition: (async (d: string, flow: Record<string, unknown>) => acquireApprovalRequest(d, { ...flow, ...ACQUIRE } as never)) as never,
+  });
+  const plain = () => refreshOpenKeySession("approval", host, {
+    openKeyAcquisition: (async (d: string, flow: Record<string, unknown>) => acquireApprovalRequest(d, { ...flow, ...ACQUIRE } as never)) as never,
+  });
+  /** What a CLI clock 2 minutes behind OpenKey's does to an approval whose lifetime is as requested. */
+  const behind = async <T>(run: () => Promise<T>): Promise<T> => {
+    setSystemTime(new Date(Date.now() - 120_000));
+    try { return await run(); } finally { setSystemTime(); }
+  };
+  const withNotices = async (run: () => Promise<unknown>) => {
+    let thrown: unknown;
+    const notices = await noticeOf(() => run().catch((error) => { thrown = error; throw error; }));
+    return { thrown, notices };
+  };
+  const OTHER = "did:pkh:eip155:1:0x000000000000000000000000000000000000dEaD";
+  const arrange = async (lifetimeSeconds: number | undefined) => {
+    await ProfileManager.setKey("approval", oldKey);
+    await ProfileManager.setSession("approval", { delegationCid: "old-session-cid-0123456789", siwe: "old", signature: "0x00" });
+    await unfetched(await signedDelegation(undefined, lifetimeSeconds));
+    return { key: JSON.stringify(await ProfileManager.getKey("approval")), session: JSON.stringify(await ProfileManager.getSession("approval")), profile: JSON.stringify(await ProfileManager.getProfile("approval")) };
+  };
+
+  test("clock 2 min behind (OPENKEY_EXPIRY_EXCEEDED, clock-dependent): no pending entry is left, ONE notice says the key was deleted, the old login is byte for byte unchanged", async () => {
+    const before = await arrange(3599);
+    const { thrown, notices } = await behind(() => withNotices(rotate));
+    expect(thrown).toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await entries()).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("its key was deleted, so it cannot be used");
+    expect(notices[0]).toContain("cannot revoke it");
+    expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before.key);
+    expect(JSON.stringify(await ProfileManager.getSession("approval"))).toBe(before.session);
+    expect(JSON.stringify(await ProfileManager.getProfile("approval"))).toBe(before.profile);
+  });
+
+  test("AUTH_EXPIRED at the same point: same", async () => {
+    const before = await arrange(-30);
+    const { thrown, notices } = await withNotices(rotate);
+    expect(thrown).toMatchObject({ code: "AUTH_EXPIRED" });
+    expect(await entries()).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("its key was deleted, so it cannot be used");
+    expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before.key);
+    expect(JSON.stringify(await ProfileManager.getSession("approval"))).toBe(before.session);
+  });
+
+  test("only the request holding the staged key goes: another request of the profile, and another profile's request for the same key, stay", async () => {
+    await arrange(3599);
+    const [staged] = (await entries())!;
+    await writeJsonDurable(PENDING(), [staged, { ...staged, requestId: "another-request-identifier-1", resultRef: undefined, commandIntent: "auth-grant:" + "c".repeat(64), signingKey: oldKey }]);
+    await ProfileManager.setProfile("approval-other", { name: "approval-other", did, sessionDid: did, ownerDid: OTHER, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString() } as never);
+    const otherFile = join(profilePath("approval-other"), "approval-pending.json");
+    await writeJsonDurable(otherFile, [staged]);
+    await behind(() => withNotices(rotate));
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["another-request-identifier-1"]);
+    expect((await readJson<Array<{ requestId: string }>>(otherFile))!.map((entry) => entry.requestId)).toEqual([requestId]);
+  });
+
+  test("a PLAIN login with the clock behind KEEPS its entry, deletes nothing and prints no notice", async () => {
+    await ProfileManager.setKey("approval", key);
+    await unfetched(await signedDelegation(undefined, 3599));
+    const { thrown, notices } = await behind(() => withNotices(plain));
+    expect(thrown).toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(notices).toEqual([]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+    expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(JSON.stringify(key));
+  });
+});
