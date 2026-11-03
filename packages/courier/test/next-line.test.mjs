@@ -8,11 +8,19 @@ import { captureStdout, fakeTime, readySpace, scenario, stubSpaceProbe } from '.
 // stdout (JSON) and exit codes are untouched.
 
 const lines = (text) => text.split('\n');
-// Wording v4: every Next line leads with the fact that the owner cannot see tool output (agents cut after the first clause).
-const OWNER_BLIND = 'Next: The owner cannot see this tool output.';
+// Wording v5: a link site asks ONLY for the relay now, and moves the re-run to "when the owner next writes to you".
+const createdLine = (command, again = 'again') => `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${command} ${again}.`;
+const resumedLine = (command, again = 'again') => `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
+const requestLine = (bin) => `Next: send the owner the link above in your reply now. When the owner next writes to you, run \`${bin} init --wait --timeout 60s\`.`;
+const LEAD = /^Next: (send the owner the link above in your reply now|if you have not sent the owner the link above yet, send it in your reply now)\. When the owner next writes to you, run /;
+/** Phrases of the dropped v3/v4 wordings: none may come back on a link site. */
+const OLD_PHRASES = ['cannot see', 'before your next tool call', 'same reply', 'do not end your turn', 'wait for a reply'];
 const nextLines = (text) => {
   const found = lines(text).filter((line) => line.startsWith('Next: '));
-  for (const line of found) assert.ok(line.startsWith(OWNER_BLIND), line);
+  for (const line of found) {
+    assert.match(line, LEAD);
+    for (const phrase of OLD_PHRASES) assert.ok(!line.includes(phrase), `${phrase}: ${line}`);
+  }
   return found;
 };
 // Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener
@@ -40,6 +48,7 @@ scenario('init --request ends stderr with one Next line naming init --wait --tim
   assert.ok(!run.stdout.includes('Next:'));
   const next = assertNextLast(errors.join('\n'), printed.openkeyUrl);
   assert.ok(next.includes('`courier init --wait --timeout 60s`'), next);
+  assert.equal(next, requestLine('courier'));
 });
 
 scenario('a second init --request (the request is resumed) prints one Next line, too', async ({ request, courier, errors }) => {
@@ -56,6 +65,7 @@ scenario('under tinycloud courier the init --request line names the command the 
   assert.ok(!stdout.includes('Next:'));
   const next = assertNextLast(errors.join('\n'), JSON.parse(stdout).openkeyUrl);
   assert.ok(next.includes('`tinycloud courier init --wait --timeout 60s`'), next);
+  assert.equal(next, requestLine('tinycloud courier'));
 });
 
 scenario('init --wait that ends pending (exit 8) on a resumed request ends stderr with one Next line naming that command', async ({ t, request, courier, errors }) => {
@@ -69,6 +79,7 @@ scenario('init --wait that ends pending (exit 8) on a resumed request ends stder
   assert.ok(!run.stdout.includes('Next:'));
   const next = assertNextLast(run.stderr, printed.openkeyUrl);
   assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
+  assert.equal(next, resumedLine('`courier init --wait --timeout 5s`'));
 });
 
 scenario('init --wait that created its request in this run and ends pending prints the Next line too', async ({ t, courier }) => {
@@ -77,6 +88,7 @@ scenario('init --wait that created its request in this run and ends pending prin
   assert.equal(run.code, 8);
   const next = assertNextLast(run.stderr, JSON.parse(run.stdout).pending.approvalUrl);
   assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
+  assert.equal(next, createdLine('`courier init --wait --timeout 5s`'));
 });
 
 scenario('the pending Next line quotes an argument that has a space, and names tinycloud courier when that is how it was run', async ({ t, errors }) => {
@@ -114,6 +126,8 @@ scenario('the pending init --wait line differs between a link created in this ru
   assert.equal(resumed.code, 8);
   const second = assertNextLast(resumed.stderr, JSON.parse(resumed.stdout).pending.approvalUrl);
   assert.notEqual(first, second);
+  assert.equal(first, createdLine('`courier init --wait --timeout 5s`'));
+  assert.equal(second, resumedLine('`courier init --wait --timeout 5s`'));
   for (const next of [first, second]) assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
 });
 

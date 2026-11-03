@@ -10,7 +10,7 @@ import { cmd } from './program.js';
 
 /** After the link `init --request` prints: collect the approval in the same turn. */
 export function initRequestNextLine(): string {
-  return `Next: The owner cannot see this tool output. Before your next tool call, write the link above in your reply to the owner, and in that same reply run \`${cmd('init --wait --timeout 60s')}\`; do not end your turn or wait for a reply.`;
+  return `Next: send the owner the link above in your reply now. When the owner next writes to you, run \`${cmd('init --wait --timeout 60s')}\`.`;
 }
 
 // What may be echoed is an ALLOWLIST: the command line is printed only when every token is known to be harmless.
@@ -49,20 +49,20 @@ export function pendingNextLine(argv: string[], created: boolean): string {
     ? `\`${cmd(argv.map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' '))}\``
     : 'this same command';
   return created
-    ? `Next: The owner cannot see this tool output. Before your next tool call, write the link above in your reply to the owner, and in that same reply run ${same} again; do not end your turn or wait for a reply.`
-    : `Next: The owner cannot see this tool output. If you have not written the link above to the owner yet, write it in your reply now, before your next tool call, and in that same reply run ${same} again; do not end your turn or wait for a reply.`;
+    ? `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${same} again.`
+    : `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${same} again.`;
 }
 
 /** The last line of a pending `invite`: the link is on stdout; hand it to the owner, then serve the invitation. */
 export function inviteNextLine(invitationId: string): string {
-  return `Next: The owner cannot see this tool output. Before your next tool call, write the invitation link above in your reply to the owner, and in that same reply run \`${cmd(`invite serve ${invitationId} --wait 60`)}\`; do not end your turn or wait for a reply.`;
+  return `Next: send the owner the invitation link above in your reply now. When the owner next writes to you, run \`${cmd(`invite serve ${invitationId} --wait 60`)}\`.`;
 }
 
 /** The first line of every `invite serve` run: the saved link `invite` printed, or a pointer to it when none is saved. */
 export function inviteServeNextLine(link: string | undefined): string {
   return typeof link === 'string' && link !== ''
-    ? `Next: The owner cannot see this tool output. Before your next tool call, write this invitation link in your reply to the owner if you have not written it yet: ${link}`
-    : 'Next: The owner cannot see this tool output. Before your next tool call, write the invitation link printed by `invite` in your reply to the owner if you have not written it yet.';
+    ? `Next: send the owner this invitation link in your reply now if you have not sent it yet: ${link}`
+    : 'Next: send the owner the invitation link printed by `invite` in your reply now if you have not sent it yet.';
 }
 
 /** The last line of a pending `invite serve`: nobody has joined yet, so run it again (no link to hand over, so no owner-cannot-see sentence). `waitSeconds` is the `--wait` it ran with. */

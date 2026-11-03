@@ -69,6 +69,6 @@ export function approvalNextLine(created: boolean, argv: readonly string[] = pro
   const command = !stdin && argv.length > 0 && safeToEcho(argv) ? `\`${[CLI_NAME, ...argv.map(shellWord)].join(" ")}\`` : "this same command";
   const again = stdin ? "again with the same input" : "again";
   return created
-    ? `Next: The owner cannot see this tool output. Before your next tool call, write the link above in your reply to the owner, and in that same reply run ${command} ${again}; do not end your turn or wait for a reply.`
-    : `Next: The owner cannot see this tool output. If you have not written the link above to the owner yet, write it in your reply now, before your next tool call, and in that same reply run ${command} ${again}; do not end your turn or wait for a reply.`;
+    ? `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${command} ${again}.`
+    : `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
 }

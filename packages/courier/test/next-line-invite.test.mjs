@@ -16,13 +16,20 @@ const fixture = await createGuidedFixture(path.join(root, 'guided-next-line'), p
 test.after(() => fixture.close());
 
 const lines = (text) => text.split('\n');
-// Wording v4: every Next line that hands the owner a link leads with the fact that the owner cannot see tool output (agents cut
-// after the first clause). The one exception is the pending `invite serve` line (8): there is no link to relay, only a run-again.
-const OWNER_BLIND = 'Next: The owner cannot see this tool output.';
+// Wording v5: a link site asks ONLY for the relay now ((6) adds "when the owner next writes to you, run <invite serve>"; (7) is
+// the relay alone). The one exception is the pending `invite serve` line (8): there is no link to relay, only a run-again.
+const inviteLine = (id) => `Next: send the owner the invitation link above in your reply now. When the owner next writes to you, run \`courier invite serve ${id} --wait 60\`.`;
+const startLine = (link) => `Next: send the owner this invitation link in your reply now if you have not sent it yet: ${link}`;
 const pendingServeLine = (id, wait) => `Next: No one has joined yet; run \`courier invite serve ${id} --wait ${wait}\` again now, in this same turn; do not end your turn or wait for a reply.`;
+/** Phrases of the dropped v3/v4 wordings: none may come back on a link site. */
+const OLD_PHRASES = ['cannot see', 'before your next tool call', 'same reply', 'do not end your turn', 'wait for a reply'];
 const nextLines = (text) => {
   const found = lines(text).filter((line) => line.startsWith('Next: '));
-  for (const line of found) assert.ok(line.startsWith(OWNER_BLIND) || line.startsWith('Next: No one has joined yet; run '), line);
+  for (const line of found) {
+    if (line.startsWith('Next: No one has joined yet; run ')) continue; // (8): its own wording, kept from v3
+    assert.ok(/^Next: send the owner (the invitation link above|this invitation link|the invitation link printed by `invite`) in your reply now/.test(line), line);
+    for (const phrase of OLD_PHRASES) assert.ok(!line.includes(phrase), `${phrase}: ${line}`);
+  }
   return found;
 };
 // Node itself can print warning blocks to stderr: on Node 20 a `MaxListenersExceededWarning` (`(node:<pid>) ...Warning: ...`,
@@ -63,8 +70,8 @@ test('invite (5): the pending run ends with one Next line naming invite serve fo
   assert.ok(!run.stdout.includes('Next:'));
   const next = assertNextLastAfterPending(run.stderr);
   assert.equal(lines(run.stderr).find((line) => line.includes('[invite-pending]')), pendingLine(invitation.invitationId));
+  assert.equal(next, inviteLine(invitation.invitationId));
   assert.ok(next.includes(`\`courier invite serve ${invitation.invitationId} --wait 60\``), next);
-  assert.ok(next.includes('`'), 'the follow-up command is in backticks');
 });
 
 test('invite (5): when the invitation is claimed in time (exit 0) no Next line is printed', async () => {
@@ -106,6 +113,7 @@ test('invite serve (7)+(8): a pending run prints the saved link at the start and
   const [start] = assertServePending(run.stderr, invitation.invitationId);
   assert.equal(lines(run.stderr).find((line) => line.includes('[invite-pending]')), pendingLine(invitation.invitationId));
   assert.ok(start.includes(invitation.link), 'the saved link, the same one invite printed');
+  assert.equal(start, startLine(invitation.link));
   assert.equal(run.stderr.split(invitation.link).length - 1, 1, 'the link appears once');
   const body = JSON.parse(fixture.values.get(stateKey(a, invitation.invitationId)).bytes.toString()).body;
   for (const secret of [body.relay.key.jwk.d, body.relay.delegation]) assert.ok(!run.stderr.includes(secret), 'no key material or delegation on stderr');
@@ -123,7 +131,7 @@ test('invite serve (7): without a saved link the start line says to use the link
   assert.equal(run.code, 1);
   const [start] = assertServePending(run.stderr, invitation.invitationId);
   assert.ok(!start.includes('http'), start);
-  assert.ok(start.includes('invite'), start);
+  assert.equal(start, 'Next: send the owner the invitation link printed by `invite` in your reply now if you have not sent it yet.');
 });
 
 test('invite serve (7): a run that ends paired (exit 0) prints exactly one start line with the link, before the wait, and stdout is the paired JSON', async () => {

@@ -83,11 +83,18 @@ async function endedWith(run: () => Promise<unknown>): Promise<{ code: number; s
   } finally { exit.mockRestore(); }
 }
 const linesOf = (text: string) => text.split("\n");
-/** Wording v4: every Next line leads with the fact that the owner cannot see tool output (agents cut after the first clause). */
-const OWNER_BLIND = "Next: The owner cannot see this tool output.";
+// Wording v5: a link site asks ONLY for the relay now, and moves the re-run to "when the owner next writes to you".
+const CREATED = (command: string, again = "again") => `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${command} ${again}.`;
+const RESUMED = (command: string, again = "again") => `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
+const LEAD = /^Next: (send the owner the link above in your reply now|if you have not sent the owner the link above yet, send it in your reply now)\. When the owner next writes to you, run /;
+/** Phrases of the dropped v3/v4 wordings: none may come back on a link site. */
+const OLD_PHRASES = ["cannot see", "before your next tool call", "same reply", "do not end your turn", "wait for a reply"];
 const nextLines = (text: string) => {
   const found = linesOf(text).filter((line) => line.startsWith("Next: "));
-  for (const line of found) expect(line).toStartWith(OWNER_BLIND);
+  for (const line of found) {
+    expect(line).toMatch(LEAD);
+    for (const phrase of OLD_PHRASES) expect(line).not.toContain(phrase);
+  }
   return found;
 };
 // Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener
@@ -142,6 +149,7 @@ describe("a link created in this run (exit 8 at once)", () => {
     const next = nextLines(run.stderr);
     expect(next).toHaveLength(1);
     expect(next[0]).toContain(`\`${ARGV_COMMAND}\``);
+    expect(next[0]).toBe(CREATED(`\`${ARGV_COMMAND}\``));
     const link = lines.indexOf(pending.approvalUrl);
     expect(link).toBeGreaterThanOrEqual(0);
     expect(stillWaiting(lines)).toBeGreaterThan(link);
@@ -163,6 +171,7 @@ describe("a resumed request that the deadline cut off (exit 8 after waiting)", (
     expect(next).toHaveLength(1);
     expect(next[0]).not.toBe(nextLines(created.stderr)[0]);
     expect(next[0]).toContain(`\`${ARGV_COMMAND}\``);
+    expect(next[0]).toBe(RESUMED(`\`${ARGV_COMMAND}\``));
     expect(lines.indexOf(pending.approvalUrl)).toBeGreaterThanOrEqual(0);
     expect(lines.indexOf(next[0]!)).toBeGreaterThan(stillWaiting(lines));
     expect(lastLine(run.stderr)).toBe(next[0]);
@@ -174,8 +183,8 @@ describe("approvalPendingError", () => {
   const lastLine = (error: InstanceType<typeof CLIError>) => error.message.split("\n").at(-1)!;
 
   test("a new link and a resumed one end with different Next lines; without the flag it is the resumed one", () => {
-    expect(lastLine(approvalPendingError(pending, true))).toStartWith(OWNER_BLIND);
-    expect(lastLine(approvalPendingError(pending))).toStartWith(OWNER_BLIND);
+    expect(lastLine(approvalPendingError(pending, true))).toMatch(LEAD);
+    expect(lastLine(approvalPendingError(pending))).toMatch(LEAD);
     expect(lastLine(approvalPendingError(pending, true))).not.toBe(lastLine(approvalPendingError(pending, false)));
     expect(lastLine(approvalPendingError(pending))).toBe(lastLine(approvalPendingError(pending, false)));
   });
@@ -189,7 +198,7 @@ describe("the command the Next line names", () => {
     process.argv = ["bun", "/opt/bin/tc"];
     for (const created of [true, false]) {
       const line = lastLine(approvalPendingError(pending, created));
-      expect(line).toStartWith(OWNER_BLIND);
+      expect(line).toMatch(LEAD);
       expect(line).toContain("this same command");
       expect(line).not.toContain("`");
     }
@@ -282,6 +291,7 @@ describe("the command the Next line names", () => {
       expect(next).toHaveLength(1);
       expect(next[0]).toContain("this same command");
       expect(next[0]).toContain("with the same input");
+      expect(next[0]).toBe(deadline === 60_000 ? CREATED("this same command", "again with the same input") : RESUMED("this same command", "again with the same input"));
       expect(next[0]).not.toContain("`");
       expect(next[0]).not.toContain("--stdin");
     }
