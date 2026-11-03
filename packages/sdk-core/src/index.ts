@@ -1097,6 +1097,15 @@ export {
   type RegistrySequenceStore,
   type ResolveOwnerHostsOptions,
 } from "./registry-policy";
+export {
+  canonicalLocationPayloadV2,
+  signLocationRecordV2,
+  validateLocationRecordV2,
+  validateLocationRecordV2Payload,
+  verifyLocationRecordV2,
+} from "./location";
+export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
+export { resolveRegistryResource } from "./registry-policy";
 
 // Capability subset checking and recap parsing
 export {
