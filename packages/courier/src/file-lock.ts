@@ -61,12 +61,14 @@ interface LockRecord {
   start?: string;
   host?: string;
   pidns?: string;
+  /** Linux time namespace: /proc start times are shifted by it, so they are comparable only inside one. */
+  timens?: string;
   machine?: string;
   boot?: string;
 }
 
 const MAX_FIELD = 128;
-const OPTIONAL_FIELDS = ['start', 'host', 'pidns', 'machine', 'boot'] as const;
+const OPTIONAL_FIELDS = ['start', 'host', 'pidns', 'timens', 'machine', 'boot'] as const;
 
 type LockRead = { kind: 'missing' } | { kind: 'corrupt' } | { kind: 'held'; record: LockRecord };
 
@@ -125,13 +127,26 @@ function procInfo(pid: number): { state: string; start: string | undefined } | u
 }
 
 /**
- * Whether /proc is this process's own view: `/proc/self` names this pid. After `unshare -p` without a remount, or in a different mount
- * namespace, /proc is served from another pid namespace where a pid number names a different process, so nothing read from it may be
- * recorded or trusted. Not Linux: no /proc evidence exists at all.
+ * Whether /proc is this process's own view. `/proc/self` must name this pid AND that process's parent pid must be ours (`getppid` is the
+ * kernel's answer in our own namespace): after `unshare -p` without a remount, or in another mount namespace, /proc is served from a pid
+ * namespace where this pid number names a different process, and a coincidence of the pid alone is possible but of both is not. Not Linux:
+ * no /proc evidence exists at all. (Comparing `ns/pid` of /proc/1 with ours would need ptrace rights on init and fail for ordinary users.)
  */
 function ownProc(): boolean {
   if (process.platform !== 'linux') return false;
-  try { return fs.readlinkSync('/proc/self') === String(process.pid); } catch { return false; }
+  try {
+    if (fs.readlinkSync('/proc/self') !== String(process.pid)) return false;
+    const stat = fs.readFileSync('/proc/self/stat', 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1] === String(process.ppid);
+  } catch {
+    return false;
+  }
+}
+
+/** This process's time namespace, only from an own /proc view. */
+function timeNamespace(): string | undefined {
+  if (!ownProc()) return undefined;
+  try { return fs.readlinkSync('/proc/self/ns/time'); } catch { return undefined; }
 }
 
 /** Start time of `pid`, only from a /proc that is this process's own view. */
@@ -189,10 +204,12 @@ let cachedIdentity: { machine?: string; boot?: string } | undefined;
 const currentIdentity = (): { machine?: string; boot?: string } => (cachedIdentity ??= machineIdentity());
 
 /** What this process records about itself: enough to recognize it later, and to tell another machine's, boot's or pid namespace's records apart. */
-function identity(pid: number, here: { machine?: string; boot?: string }): Pick<LockRecord, 'start' | 'host' | 'pidns' | 'machine' | 'boot'> {
-  const out: Pick<LockRecord, 'start' | 'host' | 'pidns' | 'machine' | 'boot'> = { host: os.hostname(), ...here };
+function identity(pid: number, here: { machine?: string; boot?: string }): Pick<LockRecord, 'start' | 'host' | 'pidns' | 'timens' | 'machine' | 'boot'> {
+  const out: Pick<LockRecord, 'start' | 'host' | 'pidns' | 'timens' | 'machine' | 'boot'> = { host: os.hostname(), ...here };
   const start = processStart(pid);
   if (start !== undefined) out.start = start;
+  const time = timeNamespace();
+  if (time !== undefined) out.timens = time;
   const ns = pidNamespace();
   if (ns !== undefined) out.pidns = ns;
   return out;
@@ -232,7 +249,8 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
   if (!ownProc()) return 'unknown';
   const info = procInfo(record.pid);
   if (info?.state === 'Z' || info?.state === 'X') return 'dead'; // exited, only not yet reaped
-  if (record.start === undefined || info?.start === undefined) return 'unknown';
+  // A start time is comparable only inside one time namespace (it is shifted by the namespace's boot offset): both sides must name it, and the same one.
+  if (record.start === undefined || info?.start === undefined || record.timens === undefined || record.timens !== timeNamespace()) return 'unknown';
   return info.start === record.start ? 'alive' : 'dead';
 }
 

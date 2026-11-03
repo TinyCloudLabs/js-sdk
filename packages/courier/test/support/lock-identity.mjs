@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { machineIdentity } from '../../dist/file-lock.js';
 
-const pidns = (() => { try { return fs.readlinkSync('/proc/self/ns/pid'); } catch { return undefined; } })();
+const ns = (name) => { try { return fs.readlinkSync(`/proc/self/ns/${name}`); } catch { return undefined; } };
+const pidns = ns('pid');
+const timens = ns('time');
 
-export const LOCAL = { host: os.hostname(), ...(pidns === undefined ? {} : { pidns }), ...machineIdentity() };
+export const LOCAL = { host: os.hostname(), ...(pidns === undefined ? {} : { pidns }), ...(timens === undefined ? {} : { timens }), ...machineIdentity() };
 
 /** The recovery command a refusal must name on this platform (an independent statement of the quoting rules, not the implementation's). */
 export const removalCommand = (file) => (process.platform === 'win32'

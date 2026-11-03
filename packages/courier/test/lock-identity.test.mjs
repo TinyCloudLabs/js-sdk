@@ -64,8 +64,10 @@ test('any other platform: no identity at all', () => {
 const HOST = os.hostname();
 const LOCAL_MACHINE = 'M';
 const here = (machine, boot) => () => ({ machine, ...(boot === undefined ? {} : { boot }) });
-const PIDNS = (() => { try { return fs.readlinkSync('/proc/self/ns/pid'); } catch { return undefined; } })();
-const record = (over) => JSON.stringify({ pid: 2147483000, nonce: 'n', host: HOST, pidns: PIDNS, ...over });
+const ns = (name) => { try { return fs.readlinkSync(`/proc/self/ns/${name}`); } catch { return undefined; } };
+const PIDNS = ns('pid');
+const TIMENS = ns('time');
+const record = (over) => JSON.stringify({ pid: 2147483000, nonce: 'n', host: HOST, pidns: PIDNS, timens: TIMENS, ...over });
 const gone = async () => { const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' }); const { pid } = child; await new Promise((r) => child.once('exit', r)); return pid; };
 async function take(name, content, identity) {
   const file = lock(name);
@@ -290,4 +292,76 @@ test('linux: with its own /proc view the writer records its start time', linux, 
   const release = acquireLock(file, { identity: here(LOCAL_MACHINE, 'linux:b') });
   assert.match(JSON.parse(fs.readFileSync(file, 'utf8')).start, /^\d+$/);
   release();
+});
+
+// ---- a procfs that only coincidentally agrees on this pid; time namespaces ----
+
+test('linux: a foreign procfs whose /proc/self happens to show this pid number is not trusted: its parent pid is not ours', linux, async (t) => {
+  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' });
+  const file = lock('coincidence');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, content, { mode: 0o600 });
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (f, ...rest) => {
+    const out = read(f, ...rest);
+    if (String(f) !== '/proc/self/stat') return out;
+    const text = String(out); // the same pid number, but another process's parent
+    const close = text.lastIndexOf(')') + 2;
+    const fields = text.slice(close).split(' ');
+    fields[1] = String(process.ppid + 12345);
+    return `${text.slice(0, close)}${fields.join(' ')}`;
+  });
+  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked' && /cannot tell/.test(e.message));
+  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(file, 'utf8'), content, 'the lock is untouched');
+  fs.rmSync(file);
+});
+
+test('linux: a writer whose procfs view does not match its own parent pid records no start time and no time namespace', linux, (t) => {
+  const file = lock('coincidence-writer');
+  fs.rmSync(file, { force: true });
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (f, ...rest) => {
+    const out = read(f, ...rest);
+    if (String(f) !== '/proc/self/stat') return out;
+    const text = String(out);
+    const close = text.lastIndexOf(')') + 2;
+    const fields = text.slice(close).split(' ');
+    fields[1] = String(process.ppid + 12345);
+    return `${text.slice(0, close)}${fields.join(' ')}`;
+  });
+  const release = acquireLock(file, { identity: here('M', 'linux:b') });
+  t.mock.restoreAll();
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal('start' in written || 'timens' in written, false);
+  release();
+});
+
+test('linux: same pid namespace, different time namespace: a start time that differs is not proof of a reused pid; the live holder is kept', linux, async () => {
+  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1', timens: 'time:[4026539999]' });
+  const run = await take('timens', content, here('M', 'linux:b'));
+  assert.equal(run.taken, false);
+  assert.equal(run.kept, content);
+});
+
+test('linux: a record with a start time but no time namespace (an older build) is not judged by that start time', linux, async () => {
+  const run = await take('notimens', record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1', timens: undefined }), here('M', 'linux:b'));
+  assert.equal(run.taken, false);
+});
+
+test('linux: the same time namespace still lets a different start time prove a reused pid, and a gone pid is still recovered', linux, async () => {
+  assert.equal((await take('timens-same', record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' }), here('M', 'linux:b'))).taken, true);
+  assert.equal((await take('timens-gone', record({ pid: await gone(), machine: 'M', boot: 'linux:b', timens: 'time:[4026539999]' }), here('M', 'linux:b'))).taken, true);
+});
+
+test('linux: a zombie holder is dead in the same pid namespace whatever the time namespace', linux, async (t) => {
+  const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  t.after(() => holder.kill('SIGKILL'));
+  const file = lock('zombie-timens');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, record({ pid: holder.pid, machine: 'M', boot: 'linux:b', timens: 'time:[4026539999]' }), { mode: 0o600 });
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (f, ...rest) => (String(f) === `/proc/${holder.pid}/stat` ? `${holder.pid} (node) Z ${Array(18).fill('0').join(' ')} 5 0` : read(f, ...rest)));
+  acquireLock(file, { identity: here('M', 'linux:b') })();
+  t.mock.restoreAll();
 });
