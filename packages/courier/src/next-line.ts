@@ -15,3 +15,15 @@ export function pendingNextLine(argv: string[]): string {
   const same = cmd(argv.map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' '));
   return `Next: if you have not sent the owner this link yet, send it now. Then run \`${same}\` again right away, without waiting for a reply.`;
 }
+
+/** After `invite` prints the invitation link (on stdout): hand it to the owner, then serve the invitation. */
+export function inviteNextLine(invitationId: string): string {
+  return `Next: send this invite link to the owner now, then run \`${cmd(`invite serve ${invitationId}`)}\`.`;
+}
+
+/** Before `invite serve` starts waiting: the saved link `invite` printed, or a pointer to it when none is saved. */
+export function inviteServeNextLine(link: string | undefined): string {
+  return typeof link === 'string' && link !== ''
+    ? `Next: if you have not sent the owner this invitation link yet, send it now: ${link}`
+    : 'Next: if you have not sent the owner this invitation link yet, send the invitation link printed by `invite` now.';
+}
