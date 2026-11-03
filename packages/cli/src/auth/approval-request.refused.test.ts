@@ -376,7 +376,7 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     expect(thrown).toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
     expect(await entries()).toEqual([]);
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("its key was deleted, so it cannot be used");
+    expect(notices[0]).toContain("the new key was deleted, so it cannot be used");
     expect(notices[0]).toContain("Your current login and its key are unchanged.");
     expect(notices[0]).toContain("cannot revoke it");
     expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before.key);
@@ -390,7 +390,8 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     expect(thrown).toMatchObject({ code: "AUTH_EXPIRED" });
     expect(await entries()).toEqual([]);
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("its key was deleted, so it cannot be used");
+    expect(notices[0]).toContain("the new key was deleted, so it cannot be used");
+    expect(notices[0]).not.toContain("its key was deleted");
     expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before.key);
     expect(JSON.stringify(await ProfileManager.getSession("approval"))).toBe(before.session);
   });
@@ -486,7 +487,7 @@ describe("an approval the CLI cannot collect: OpenKey rejects the requester proo
     expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID", message: "OpenKey rejected the request or requester binding." });
     expect(await entries()).toEqual([]);
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toBe(`${GENERIC} The key it would belong to was deleted, so it cannot be used. Your current login and its key are unchanged.`);
+    expect(notices[0]).toBe(`${GENERIC} The new key was deleted, so it cannot be used. Your current login and its key are unchanged.`);
     expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before);
   });
 
@@ -502,7 +503,7 @@ describe("an approval the CLI cannot collect: OpenKey rejects the requester proo
     expect(await entries()).toEqual([]);
     expect(notices).toHaveLength(1);
     const latest = new Date(Date.parse((staged as { requestExpiresAt: string }).requestExpiresAt) + 3600 * 1000).toISOString();
-    expect(notices[0]).toStartWith(`OpenKey granted this approval at the latest until ${latest}, but this CLI did not use it and its key was deleted, so it cannot be used.`);
+    expect(notices[0]).toStartWith(`OpenKey granted this approval at the latest until ${latest}, but this CLI did not use it and the new key was deleted, so it cannot be used.`);
     expect(notices[0]).toContain("Your current login and its key are unchanged. This CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.");
     expect(notices[0]).not.toContain("Refused delegation:");
   });

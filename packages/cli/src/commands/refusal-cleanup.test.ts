@@ -589,7 +589,9 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
     await runAuth("rotate", "--paste", "--no-popup", "--force");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
     const notice = text().split("\n").find((line) => line.includes("OpenKey granted this approval"))!;
-    expect(notice).toContain(`${deletedLine()} Your current login and its key are unchanged. This CLI cannot revoke it`);
+    // "its key" would read as the login's key next to the sentence below: a rotation's notice says "the new key".
+    expect(notice).toContain(`${deletedLine().replace("its key was deleted", "the new key was deleted")} Your current login and its key are unchanged. This CLI cannot revoke it`);
+    expect(notice).not.toContain("its key was deleted");
     // A fresh login that was refused owns the key it made: nothing of a "current login" to speak of.
     recordedErrors.length = 0;
     stderr.length = 0;
