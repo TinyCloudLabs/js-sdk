@@ -62,6 +62,7 @@ test('any other platform: no identity at all', () => {
 // ---- what a lock does with them ----
 
 const HOST = os.hostname();
+const LOCAL_MACHINE = 'M';
 const here = (machine, boot) => () => ({ machine, ...(boot === undefined ? {} : { boot }) });
 const PIDNS = (() => { try { return fs.readlinkSync('/proc/self/ns/pid'); } catch { return undefined; } })();
 const record = (over) => JSON.stringify({ pid: 2147483000, nonce: 'n', host: HOST, pidns: PIDNS, ...over });
@@ -262,4 +263,31 @@ test('linux: a true boot-id change is still recovered when /proc is a foreign vi
   t.mock.method(fs, 'readlinkSync', (f, ...rest) => (String(f) === '/proc/self' ? '1' : readlink(f, ...rest)));
   acquireLock(file, { identity: here('M', 'linux:new') })();
   t.mock.restoreAll();
+});
+
+// ---- the writer's own /proc view ----
+
+test('linux: a lock written while /proc was a foreign view carries no start time, so a reader with a proper /proc keeps the live holder', linux, async (t) => {
+  const file = lock('foreignwriter');
+  fs.rmSync(file, { force: true });
+  const readlink = fs.readlinkSync;
+  const foreign = (f, ...rest) => (String(f) === '/proc/self' ? '1' : readlink(f, ...rest));
+  t.mock.method(fs, 'readlinkSync', foreign); // the writer: same pid namespace, /proc mounted from elsewhere
+  const release = acquireLock(file, { identity: here(LOCAL_MACHINE, 'linux:b') });
+  t.mock.restoreAll();
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(written.pid, process.pid);
+  assert.equal('start' in written, false, 'a start time read from a foreign /proc is not recorded');
+  // The reader (a second contender) has a proper /proc: with no recorded start the holder cannot be told from a reused pid, so it stays.
+  assert.throws(() => acquireLock(file, { identity: here(LOCAL_MACHINE, 'linux:b') }), (e) => e.code === 'locked');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).nonce, written.nonce, 'the lock is untouched');
+  release();
+});
+
+test('linux: with its own /proc view the writer records its start time', linux, () => {
+  const file = lock('ownwriter');
+  fs.rmSync(file, { force: true });
+  const release = acquireLock(file, { identity: here(LOCAL_MACHINE, 'linux:b') });
+  assert.match(JSON.parse(fs.readFileSync(file, 'utf8')).start, /^\d+$/);
+  release();
 });

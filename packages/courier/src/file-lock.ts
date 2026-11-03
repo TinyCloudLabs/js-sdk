@@ -124,8 +124,19 @@ function procInfo(pid: number): { state: string; start: string | undefined } | u
   }
 }
 
+/**
+ * Whether /proc is this process's own view: `/proc/self` names this pid. After `unshare -p` without a remount, or in a different mount
+ * namespace, /proc is served from another pid namespace where a pid number names a different process, so nothing read from it may be
+ * recorded or trusted. Not Linux: no /proc evidence exists at all.
+ */
+function ownProc(): boolean {
+  if (process.platform !== 'linux') return false;
+  try { return fs.readlinkSync('/proc/self') === String(process.pid); } catch { return false; }
+}
+
+/** Start time of `pid`, only from a /proc that is this process's own view. */
 export function processStart(pid: number): string | undefined {
-  return procInfo(pid)?.start;
+  return ownProc() ? procInfo(pid)?.start : undefined;
 }
 
 function pidNamespace(): string | undefined {
@@ -217,11 +228,8 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
     if ((error as NodeJS.ErrnoException).code !== 'EPERM') return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown';
     // EPERM: the process exists but belongs to someone else. Its start time still tells a reused pid from the holder.
   }
-  // /proc is evidence only when it is this process's own view: after `unshare -p` without a remount it is served from the parent namespace,
-  // where a pid number names a different process, so a start time or state read from it could make a live holder look dead.
-  if (process.platform === 'linux') {
-    try { if (fs.readlinkSync('/proc/self') !== String(process.pid)) return 'unknown'; } catch { return 'unknown'; }
-  }
+  // /proc is evidence only when it is this process's own view (see `ownProc`): a start time or state read from a foreign one could make a live holder look dead.
+  if (!ownProc()) return 'unknown';
   const info = procInfo(record.pid);
   if (info?.state === 'Z' || info?.state === 'X') return 'dead'; // exited, only not yet reaped
   if (record.start === undefined || info?.start === undefined) return 'unknown';
