@@ -71,11 +71,15 @@ hosted `/mcp` surface only: the public ChatGPT plugin (`/chatgpt/mcp`) keeps its
 reviewed tool list, so an owner who uses ChatGPT only cannot move older apps
 yet (TC-2432); their older apps keep working in place.
 Approvals are per app, one OpenKey space at a time (OpenKey signs one space per
-delegation): first use asks for the app list; a new app asks for that app's
-folder, then for a read-only look at the older catalog
-(`xyz.tinycloud.agent-data/catalog/`) unless an older grant already covers it;
-later apps ask for their own folder only. Each grant lasts 30 days. A prefix grant
-covers get/list/put/delete for its app, not one grant per key.
+delegation). After connect, pass `app` to `tinycloud_apps_context` to approve the
+app's folder and app list together. The first new app needs two requests (the
+bundle, then a read-only look at the older catalog,
+`xyz.tinycloud.agent-data/catalog/`, unless an older grant already covers it);
+later new apps need one. Omitting `app` retains per-call approvals (three for the
+first new app). `access: "read"` requests only read access; the default
+`"change"` also covers adding the app to the list and adding, changing or
+deleting its records. Each grant lasts 30 days, and records use one prefix grant
+per app, not one grant per key.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to

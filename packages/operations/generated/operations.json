@@ -2345,6 +2345,17 @@
         "properties": {
           "timezone": {
             "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "change"
+            ],
+            "default": "change"
           }
         },
         "additionalProperties": false,
