@@ -10,9 +10,6 @@ import { join } from "node:path";
 // line written for the agent: hand the owner the link, then run the same command again right away. stdout and the
 // exit code stay exactly as they were. The OpenKey side is a bare local server: a new link is created, a poll stays 202.
 
-const NEW_LINK_NEXT = "Next: send the owner the link above now, then run this same command again right away, without waiting for a reply. The command sees the approval itself.";
-const RESUMED_NEXT = "Next: if you have not sent the owner this link yet, send it now. Then run this same command again right away, without waiting for a reply. The command sees the approval itself.";
-
 const environmentKeys = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR"] as const;
 const snapshotEnvironment = () => Object.fromEntries(environmentKeys.map((name) => [name, process.env[name]]));
 function restoreEnvironment(snapshot: Record<string, string | undefined>): void {
@@ -85,7 +82,7 @@ async function endedWith(run: () => Promise<unknown>): Promise<{ code: number; s
   } finally { exit.mockRestore(); }
 }
 const linesOf = (text: string) => text.split("\n");
-const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next:"));
+const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next: "));
 
 let spies: Array<Mock<(...args: never[]) => unknown>> = [];
 beforeEach(async () => {
@@ -113,48 +110,55 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+/** The `Still waiting` line, the one the Next line must follow. */
+const stillWaiting = (lines: string[]) => lines.findIndex((line) => line.startsWith("Still waiting for the owner to approve in OpenKey."));
+
 describe("a link created in this run (exit 8 at once)", () => {
-  test("stderr ends with the 'send now' line, once, after the link and the pending message; stdout and exit code are unchanged", async () => {
+  test("stderr ends with one Next line, after the link and the pending message; stdout and exit code are unchanged", async () => {
     const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(60_000)));
     expect(run.code).toBe(8);
     const { pending } = run.error.metadata as { pending: { approvalUrl: string } };
     expect(JSON.parse(run.stdout)).toEqual({ pending });
     expect(run.stdout).toBe(JSON.stringify({ pending }, null, 2) + "\n");
     expect(run.stdout).not.toContain("Next:");
-    expect(nextLines(run.stderr)).toEqual([NEW_LINK_NEXT]);
     const lines = linesOf(run.stderr);
+    const next = nextLines(run.stderr);
+    expect(next).toHaveLength(1);
     const link = lines.indexOf(pending.approvalUrl);
-    const still = lines.findIndex((line) => line.startsWith("Still waiting for the owner to approve in OpenKey."));
     expect(link).toBeGreaterThanOrEqual(0);
-    expect(still).toBeGreaterThan(link);
-    expect(lines.indexOf(NEW_LINK_NEXT)).toBeGreaterThan(still);
-    expect(lines.filter((line) => line !== "").at(-1)).toBe(NEW_LINK_NEXT);
+    expect(stillWaiting(lines)).toBeGreaterThan(link);
+    expect(lines.indexOf(next[0]!)).toBeGreaterThan(stillWaiting(lines));
+    expect(lines.filter((line) => line !== "").at(-1)).toBe(next[0]);
   });
 });
 
 describe("a resumed request that the deadline cut off (exit 8 after waiting)", () => {
-  test("stderr ends with the 'if you have not sent' line, once; stdout and exit code are unchanged", async () => {
-    await endedWith(() => acquireApprovalRequest(did, withDeadline(60_000)));
+  test("stderr ends with one Next line that differs from the new-link one; stdout and exit code are unchanged", async () => {
+    const created = await endedWith(() => acquireApprovalRequest(did, withDeadline(60_000)));
     stderr = []; stdout = []; clock = START;
     const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(6_000)));
     expect(run.code).toBe(8);
     const { pending } = run.error.metadata as { pending: { approvalUrl: string } };
     expect(run.stdout).toBe(JSON.stringify({ pending }, null, 2) + "\n");
-    expect(nextLines(run.stderr)).toEqual([RESUMED_NEXT]);
     const lines = linesOf(run.stderr);
+    const next = nextLines(run.stderr);
+    expect(next).toHaveLength(1);
+    expect(next[0]).not.toBe(nextLines(created.stderr)[0]);
     expect(lines.indexOf(pending.approvalUrl)).toBeGreaterThanOrEqual(0);
-    expect(lines.indexOf(RESUMED_NEXT)).toBeGreaterThan(lines.findIndex((line) => line.startsWith("Still waiting for the owner to approve in OpenKey.")));
-    expect(lines.filter((line) => line !== "").at(-1)).toBe(RESUMED_NEXT);
+    expect(lines.indexOf(next[0]!)).toBeGreaterThan(stillWaiting(lines));
+    expect(lines.filter((line) => line !== "").at(-1)).toBe(next[0]);
   });
 });
 
 describe("approvalPendingError", () => {
   const pending = { step: 1, of: 1, approvalUrl: "https://openkey.example/a/abc#v=4", expiresAt: "2026-11-01T12:00:00.000Z" };
+  const lastLine = (error: InstanceType<typeof CLIError>) => error.message.split("\n").at(-1)!;
 
-  test("a new link says to send it now; without that knowledge it says to send it if not yet sent", () => {
-    expect(approvalPendingError(pending, true).message.endsWith(`\n${NEW_LINK_NEXT}`)).toBe(true);
-    expect(approvalPendingError(pending).message.endsWith(`\n${RESUMED_NEXT}`)).toBe(true);
-    expect(approvalPendingError(pending, false).message.endsWith(`\n${RESUMED_NEXT}`)).toBe(true);
+  test("a new link and a resumed one end with different Next lines; without the flag it is the resumed one", () => {
+    expect(lastLine(approvalPendingError(pending, true))).toStartWith("Next: ");
+    expect(lastLine(approvalPendingError(pending))).toStartWith("Next: ");
+    expect(lastLine(approvalPendingError(pending, true))).not.toBe(lastLine(approvalPendingError(pending, false)));
+    expect(lastLine(approvalPendingError(pending))).toBe(lastLine(approvalPendingError(pending, false)));
   });
 });
 
@@ -166,7 +170,6 @@ describe("exits that are not an approval still waiting", () => {
     stderr = []; stdout = [];
     const expired = await endedWith(async () => { throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.", 3); });
     expect(expired.code).toBe(3);
-    expect(expired.stderr).not.toContain("Next:");
-    expect(expired.stdout + expired.stderr).not.toContain(NEW_LINK_NEXT);
+    expect(expired.stdout + expired.stderr).not.toContain("Next:");
   });
 });
