@@ -4174,18 +4174,18 @@ describe("replace the 10-year lifetime ceiling with the technical expiry limits 
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2276TechnicalLimits).toEqual(approvedTc2276TechnicalLimits);
     expect(row().root).toEqual({
-      delta: { "index.mjs": 147, "index.cjs": 131 },
-      ceiling: { "index.mjs": 1478545, "index.cjs": 1420187 },
+      delta: { "index.mjs": 286, "index.cjs": 1140 },
+      ceiling: { "index.mjs": 1478684, "index.cjs": 1421196 },
     });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().base).toBe("e981c1020eb208f4b9918ba3dba487dbb0f19191");
-    expect(row().sourceCommits).toEqual(["5e1b0667d60d977460e2344d648375613c336c5c"]);
+    expect(row().sourceCommits).toEqual(["62cf64215149a30d743317a3b88548080cd47f19"]);
     expect(row().canonicalCI).toEqual({
-      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41545346241",
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828",
       jobs: [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41545346241/job/125619463321",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41545346241/job/125619463536",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828/job/125635880163",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828/job/125635879697",
       ],
     });
     expect(row().firstImport).toEqual(prerequisite().firstImport);
@@ -4194,11 +4194,11 @@ describe("replace the 10-year lifetime ceiling with the technical expiry limits 
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).at(-1)).toEqual({
       row: "tc2276TechnicalLimits",
-      ceiling: { "index.mjs": 1478545, "index.cjs": 1420187 },
+      ceiling: { "index.mjs": 1478684, "index.cjs": 1421196 },
     });
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc2276TechnicalLimits",
-      pin: "5e1b0667d60d977460e2344d648375613c336c5c",
+      pin: "62cf64215149a30d743317a3b88548080cd47f19",
     });
   });
 
