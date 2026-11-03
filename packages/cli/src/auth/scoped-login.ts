@@ -67,7 +67,7 @@ export function defaultExpiryLimit(): number {
  * Whether the signed expiry is above the request's lifetime counted from the SIWE's own `Issued At` (plus the skew allowance),
  * which does not depend on this machine's clock. An unreadable Issued At proves nothing: false.
  */
-function outlivesRequestFromIssuedAt(siwe: string, signedExpiry: number, expiry: RequestedExpiry): boolean {
+export function outlivesRequestFromIssuedAt(siwe: string, signedExpiry: number, expiry: RequestedExpiry): boolean {
   const raw = [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
   const issuedAt = raw === undefined ? NaN : Date.parse(raw);
   return Number.isFinite(issuedAt) && signedExpiry > issuedAt + expiry.durationMs + CLOCK_SKEW_MS;
