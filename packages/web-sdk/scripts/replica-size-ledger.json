@@ -2554,21 +2554,49 @@
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "TC-2272 technical expiry limits row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2276."
   },
+  "tc2418AbortListenerCleanup": {
+    "label": "stop leaking an abort listener per request: combine request signals with AbortSignal.any where it exists (TC-2418, #844)",
+    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head 7b80027520dffc43444b34a9f6696e2b082ab3ea measures root 1,478,715/1,421,238 B (+31/+42 over TC-2276 technical limits), kv-storage worker 776,561 B (+22) and replica worker 770,494 B (+27); replica first import +1/-3 B and activation -5/-2 B against master run 41579061096, inside their carried ceilings. Naomi ruled 2026-11-03: exact CI bytes, at most +150 B per bucket. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+    "base": "356c6053b4789529ab6c84536a385adf2e4e0c77",
+    "sourceCommits": ["7b80027520dffc43444b34a9f6696e2b082ab3ea"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943580",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943897"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 31, "index.cjs": 42 },
+      "ceiling": { "index.mjs": 1478715, "index.cjs": 1421238 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 1, "replica.cjs": -3 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": -5, "activation.cjs": -2 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 22, "ceiling": 776561 },
+    "replicaWorker": { "delta": 27, "ceiling": 770494 },
+    "reason": "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276."
+  },
   "tc2379SignOutFence": {
     "label": "sign out locally first, fence a signed-out session, clear only the own session (TC-2379)",
-    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head d30bb448cd7f5931eaa78af4a145fcd502642194 measures 1,479,089/1,421,492 B, +405/+296 B over TC-2272. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
-    "base": "356c6053b4789529ab6c84536a385adf2e4e0c77",
-    "sourceCommits": ["d30bb448cd7f5931eaa78af4a145fcd502642194"],
+    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head b4f918a35a67cbcbb2d84b12379c1ba235fa9f22 measures 1,479,124/1,421,537 B, +409/+299 B over TC-2418. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+    "base": "902e603101695438557d67a065ef5dc97f706325",
+    "sourceCommits": ["b4f918a35a67cbcbb2d84b12379c1ba235fa9f22"],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906/job/125767972322",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906/job/125767972142"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625804",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625686"
       ]
     },
     "root": {
-      "delta": { "index.mjs": 405, "index.cjs": 296 },
-      "ceiling": { "index.mjs": 1479089, "index.cjs": 1421492 }
+      "delta": { "index.mjs": 409, "index.cjs": 299 },
+      "ceiling": { "index.mjs": 1479124, "index.cjs": 1421537 }
     },
     "firstImport": {
       "delta": { "replica.mjs": 0, "replica.cjs": 0 },
@@ -2578,36 +2606,8 @@
       "delta": { "activation.mjs": 0, "activation.cjs": 0 },
       "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
     },
-    "worker": { "delta": 0, "ceiling": 776539 },
-    "replicaWorker": { "delta": 0, "ceiling": 770467 },
-    "reason": "TC-2379 sign-out fence row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2272."
-  },
-  "tc2380SpaceHosting": {
-    "label": "check space hosting on restore and record it at sign-in (TC-2380, #840)",
-    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head b27d0ddef8b6799112721b4da981853f29129ac0 measures 1,479,619/1,422,028 B, +530/+536 B over TC-2379. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
-    "base": "356c6053b4789529ab6c84536a385adf2e4e0c77",
-    "sourceCommits": ["b27d0ddef8b6799112721b4da981853f29129ac0"],
-    "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265",
-      "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397452",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397370"
-      ]
-    },
-    "root": {
-      "delta": { "index.mjs": 530, "index.cjs": 536 },
-      "ceiling": { "index.mjs": 1479619, "index.cjs": 1422028 }
-    },
-    "firstImport": {
-      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
-      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
-    },
-    "activation": {
-      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
-      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
-    },
-    "worker": { "delta": 0, "ceiling": 776539 },
-    "replicaWorker": { "delta": 0, "ceiling": 770467 },
-    "reason": "TC-2380 space hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2379."
+    "worker": { "delta": 0, "ceiling": 776561 },
+    "replicaWorker": { "delta": 0, "ceiling": 770494 },
+    "reason": "TC-2379 sign-out fence row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2418."
   }
 }

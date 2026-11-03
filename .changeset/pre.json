@@ -29,6 +29,8 @@
     "@tinycloud/sdk-services-test": "21.0.4"
   },
   "changesets": [
+    "combine-signals-listener-leak-node-sdk",
+    "combine-signals-listener-leak-sdk-services",
     "paste-expiry-cli",
     "refused-approval-cleanup-cli",
     "signed-expiry-cli",

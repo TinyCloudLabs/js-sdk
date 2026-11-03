@@ -47,6 +47,7 @@ import { approvedTc2281OpenKeyUnconnectedGuard, validateTc2281OpenKeyUnconnected
 import { approvedTc2242PathBoundShares, validateTc2242PathBoundSharesTransition } from "./replica-size-policy";
 import { approvedTc2276SignedExpiry, validateTc2276SignedExpiryTransition } from "./replica-size-policy";
 import { approvedTc2276TechnicalLimits, validateTc2276TechnicalLimitsTransition } from "./replica-size-policy";
+import { approvedTc2418AbortListenerCleanup, validateTc2418AbortListenerCleanupTransition } from "./replica-size-policy";
 import { approvedTc2379SignOutFence, validateTc2379SignOutFenceTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
@@ -2938,8 +2939,8 @@ delete tc2043Ledger.tc2281OpenKeyUnconnectedGuard;
 delete tc2043Ledger.tc2242PathBoundShares;
 delete tc2043Ledger.tc2276SignedExpiry;
 delete tc2043Ledger.tc2276TechnicalLimits;
+delete tc2043Ledger.tc2418AbortListenerCleanup;
 delete tc2043Ledger.tc2379SignOutFence;
-delete tc2043Ledger.tc2380SpaceHosting;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3439,8 +3440,8 @@ describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977OpenKeySigninRatchet")).toEqual({ row: "tc1977OpenKeySigninRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977OpenKeySigninRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing window location prerequisite", () => {
@@ -3478,8 +3479,8 @@ describe("iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765) size ra
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2130PanelIphoneRatchet")).toEqual({ row: "tc2130PanelIphoneRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2130PanelIphoneRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing OpenKey sign-in prerequisite", () => {
@@ -3517,8 +3518,8 @@ describe("isAppKeyHostBound export (TC-1977, #767) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977HostBindingRatchet")).toEqual({ row: "tc1977HostBindingRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977HostBindingRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing panel safe-area prerequisite", () => {
@@ -4224,48 +4225,118 @@ describe("replace the 10-year lifetime ceiling with the technical expiry limits 
   });
 });
 
-describe("sign out locally first, fence a signed-out session (TC-2379) size ratchet", () => {
-  const row = () => structuredClone(approvedTc2379SignOutFence);
+describe("stop leaking an abort listener per request (TC-2418, #844) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2418AbortListenerCleanup);
   const prerequisite = () => approvedTc2276TechnicalLimits;
 
-  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+  it("pins exact canonical CI bytes in every bucket it moves and carries the ceilings of the others", () => {
     expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc2379SignOutFence).toEqual(approvedTc2379SignOutFence);
+    expect(current.tc2418AbortListenerCleanup).toEqual(approvedTc2418AbortListenerCleanup);
     expect(row().root).toEqual({
-      delta: { "index.mjs": 405, "index.cjs": 296 },
-      ceiling: { "index.mjs": 1479089, "index.cjs": 1421492 },
+      delta: { "index.mjs": 31, "index.cjs": 42 },
+      ceiling: { "index.mjs": 1478715, "index.cjs": 1421238 },
     });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().base).toBe("356c6053b4789529ab6c84536a385adf2e4e0c77");
-    expect(row().sourceCommits).toEqual(["d30bb448cd7f5931eaa78af4a145fcd502642194"]);
+    expect(row().sourceCommits).toEqual(["7b80027520dffc43444b34a9f6696e2b082ab3ea"]);
     expect(row().canonicalCI).toEqual({
-      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906",
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331",
       jobs: [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906/job/125767972322",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906/job/125767972142",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943580",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943897",
       ],
     });
-    expect(row().firstImport).toEqual(prerequisite().firstImport);
-    expect(row().activation).toEqual(prerequisite().activation);
-    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
-    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    // First import and activation measured inside the carried ceilings: their deltas are recorded, the ceilings stay.
+    expect(row().firstImport).toEqual({
+      delta: { "replica.mjs": 1, "replica.cjs": -3 },
+      ceiling: prerequisite().firstImport.ceiling,
+    });
+    expect(row().activation).toEqual({
+      delta: { "activation.mjs": -5, "activation.cjs": -2 },
+      ceiling: prerequisite().activation.ceiling,
+    });
+    expect(row().worker).toEqual({ delta: 22, ceiling: prerequisite().worker.ceiling + 22 });
+    expect(row().replicaWorker).toEqual({ delta: 27, ceiling: prerequisite().replicaWorker.ceiling + 27 });
+    expect(row().worker.ceiling).toBe(776561);
+    expect(row().replicaWorker.ceiling).toBe(770494);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    // Naomi's ruling: at most +150 B in any bucket.
+    for (const delta of [...Object.values(row().root.delta), ...Object.values(row().firstImport.delta), ...Object.values(row().activation.delta), row().worker.delta, row().replicaWorker.delta]) {
+      expect(delta).toBeLessThanOrEqual(150);
+    }
     expect(rootCeilings(current)).toContainEqual({
-      row: "tc2379SignOutFence",
-      ceiling: { "index.mjs": 1479089, "index.cjs": 1421492 },
+      row: "tc2418AbortListenerCleanup",
+      ceiling: { "index.mjs": 1478715, "index.cjs": 1421238 },
     });
     expect(ancestryPins(current, false)).toContainEqual({
-      row: "tc2379SignOutFence",
-      pin: "d30bb448cd7f5931eaa78af4a145fcd502642194",
+      row: "tc2418AbortListenerCleanup",
+      pin: "7b80027520dffc43444b34a9f6696e2b082ab3ea",
     });
   });
 
   it("refuses changed bytes or a missing TC-2272 prerequisite", () => {
     const changed = copy(current);
+    changed.tc2418AbortListenerCleanup!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2418");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2276TechnicalLimits;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2418");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2418AbortListenerCleanupTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2418AbortListenerCleanupTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2418AbortListenerCleanupTransition(undefined, changed)).toThrow("TC-2418");
+    expect(() => validateTc2418AbortListenerCleanupTransition(row(), undefined)).toThrow("TC-2418");
+  });
+});
+
+describe("sign out locally first, fence a signed-out session (TC-2379) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2379SignOutFence);
+  const prerequisite = () => approvedTc2418AbortListenerCleanup;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2379SignOutFence).toEqual(approvedTc2379SignOutFence);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 409, "index.cjs": 299 },
+      ceiling: { "index.mjs": 1479124, "index.cjs": 1421537 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("902e603101695438557d67a065ef5dc97f706325");
+    expect(row().sourceCommits).toEqual(["b4f918a35a67cbcbb2d84b12379c1ba235fa9f22"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625804",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625686",
+      ],
+    });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: prerequisite().firstImport.ceiling });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: prerequisite().activation.ceiling });
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).at(-1)).toEqual({
+      row: "tc2379SignOutFence",
+      ceiling: { "index.mjs": 1479124, "index.cjs": 1421537 },
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2379SignOutFence",
+      pin: "b4f918a35a67cbcbb2d84b12379c1ba235fa9f22",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2418 prerequisite", () => {
+    const changed = copy(current);
     changed.tc2379SignOutFence!.root.ceiling["index.mjs"]++;
     expect(() => validateLedger(changed)).toThrow("TC-2379");
     const withoutPrerequisite = copy(current);
-    delete withoutPrerequisite.tc2276TechnicalLimits;
+    delete withoutPrerequisite.tc2418AbortListenerCleanup;
     expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2379");
   });
 
@@ -4465,62 +4536,5 @@ describe("TC-858 squash-proof ancestry pins", () => {
       "phase2Ratchet (#553 entry)", "fixRequiredRatchet", "canonicalToolchainCorrection", "masterMergeResolution",
       "hardeningRatchet", "gatedOnlyRatchet", "relocations", "measurementCorrection", "fixRequired",
     ]);
-  });
-});
-
-import { approvedTc2380SpaceHosting, validateTc2380SpaceHostingTransition } from "./replica-size-policy";
-
-describe("check space hosting on restore and record it at sign-in (TC-2380, #840) size ratchet", () => {
-  const row = () => structuredClone(approvedTc2380SpaceHosting);
-  const prerequisite = () => approvedTc2379SignOutFence;
-
-  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
-    expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc2380SpaceHosting).toEqual(approvedTc2380SpaceHosting);
-    expect(row().root).toEqual({
-      delta: { "index.mjs": 530, "index.cjs": 536 },
-      ceiling: { "index.mjs": 1479619, "index.cjs": 1422028 },
-    });
-    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
-    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
-    expect(row().base).toBe("356c6053b4789529ab6c84536a385adf2e4e0c77");
-    expect(row().sourceCommits).toEqual(["b27d0ddef8b6799112721b4da981853f29129ac0"]);
-    expect(row().canonicalCI).toEqual({
-      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265",
-      jobs: [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397452",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397370",
-      ],
-    });
-    expect(row().firstImport).toEqual(prerequisite().firstImport);
-    expect(row().activation).toEqual(prerequisite().activation);
-    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
-    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
-    expect(rootCeilings(current).at(-1)).toEqual({
-      row: "tc2380SpaceHosting",
-      ceiling: { "index.mjs": 1479619, "index.cjs": 1422028 },
-    });
-    expect(ancestryPins(current, false)).toContainEqual({
-      row: "tc2380SpaceHosting",
-      pin: "b27d0ddef8b6799112721b4da981853f29129ac0",
-    });
-  });
-
-  it("refuses changed bytes or a missing TC-2379 prerequisite", () => {
-    const changed = copy(current);
-    changed.tc2380SpaceHosting!.root.ceiling["index.mjs"]++;
-    expect(() => validateLedger(changed)).toThrow("TC-2380");
-    const withoutPrerequisite = copy(current);
-    delete withoutPrerequisite.tc2379SignOutFence;
-    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2380");
-  });
-
-  it("may be introduced once and never changed or removed", () => {
-    expect(() => validateTc2380SpaceHostingTransition(undefined, row())).not.toThrow();
-    expect(() => validateTc2380SpaceHostingTransition(row(), row())).not.toThrow();
-    const changed = row();
-    changed.root.ceiling["index.cjs"]++;
-    expect(() => validateTc2380SpaceHostingTransition(undefined, changed)).toThrow("TC-2380");
-    expect(() => validateTc2380SpaceHostingTransition(row(), undefined)).toThrow("TC-2380");
   });
 });
