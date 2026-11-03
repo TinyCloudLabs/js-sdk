@@ -49,8 +49,8 @@ const requested = [{ service: "tinycloud.kv", space: "applications", path: "", a
 const pendingPath = () => join(profilePath("approval"), "approval-pending.json");
 
 interface Pending {
-  requestId: string; bodyCid: string; approvalUrl: string; requestExpiresAt: string; resultRef?: string;
-  resultEnvelope?: unknown; committed?: boolean; acknowledged?: boolean; ackId: string;
+  requestId: string; bodyCid: string; approvalUrl: string; record: { header: { expiresAt: string } }; phase: string; resultRef?: string;
+  resultEnvelope?: unknown; ackId: string;
   request: { resultEncryptionPublicJwk: { x: string; y: string } };
 }
 
@@ -85,7 +85,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     if (expireRequests) return Response.json({ code: "expired_request" }, { status: 410 });
     const result = results.get(discover[1]!);
     if (!result) return new Response(null, { status: 202 });
-    return Response.json({ resultRef: result.resultRef, expiresAt: result.expiresAt });
+    return Response.json({ status: "approved", resultRef: result.resultRef, expiresAt: result.expiresAt });
   }
   const delivery = path.match(/^\/api\/approval-results\/([A-Za-z0-9_-]+)\/(fetch|ack)$/);
   const found = delivery ? [...results.entries()].find(([, value]) => value.resultRef === delivery[1]) : undefined;
@@ -95,10 +95,10 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     fetchCalls++;
     return Response.json({ requestId, bodyCid: body.bodyCid, resultRef: result.resultRef, expiresAt: result.expiresAt, relay: result.relay });
   }
-  const saved = await readJson<Pending[]>(pendingPath());
+  const saved = (await readJson<{ entries: Pending[] }>(pendingPath()))?.entries;
   const entry = saved?.find((item) => item.requestId === requestId);
   const session = await ProfileManager.getSession("approval") as Record<string, unknown> | null;
-  ackSeenSaved.push({ committed: entry?.committed === true && entry.ackId === body.ackId,
+  ackSeenSaved.push({ committed: entry?.phase === "committed" && entry.ackId === body.ackId,
     envelopeOnDisk: entry?.resultEnvelope !== undefined && entry.resultRef === result.resultRef, sessionOnDisk: session?.signature !== undefined });
   acks.push({ ackId: body.ackId!, resultRef: result.resultRef });
   return Response.json({ ackId: body.ackId, status: "acknowledged" });
@@ -115,7 +115,7 @@ async function signedDelegation(lifetimeSeconds = 3600) {
 
 /** The owner approves the newest pending request: an encrypted, owner-signed result appears at OpenKey. */
 async function approve(): Promise<void> {
-  const entries = await readJson<Pending[]>(pendingPath()) ?? [];
+  const entries = (await readJson<{ entries: Pending[] }>(pendingPath()))?.entries ?? [];
   const entry = entries.at(-1);
   if (!entry) throw new Error("No pending request to approve");
   const delegation = await signedDelegation();
@@ -200,7 +200,7 @@ async function pendingOf(run: () => Promise<unknown>): Promise<InstanceType<type
   }
   throw new Error("The wait ended without an error");
 }
-const entries = async () => await readJson<Pending[]>(pendingPath()) ?? [];
+const entries = async () => (await readJson<{ entries: Pending[] }>(pendingPath()))?.entries ?? [];
 
 async function commitAndAcknowledge(delegation: Record<string, unknown>): Promise<void> {
   const snapshot = await readProfileSnapshot("approval");
@@ -236,10 +236,10 @@ describe("a NEW request returns at once, with its link", () => {
     expect(error.code).toBe("APPROVAL_PENDING");
     const saved = await entries();
     expect(saved).toHaveLength(1);
-    expect(error.metadata).toEqual({ pending: { step: 2, of: 2, approvalUrl: saved[0]!.approvalUrl, expiresAt: saved[0]!.requestExpiresAt } });
+    expect(error.metadata).toEqual({ pending: { step: 2, of: 2, approvalUrl: saved[0]!.approvalUrl, expiresAt: saved[0]!.record.header.expiresAt } });
     expect(offered).toEqual([saved[0]!.approvalUrl]);
     expect(saved[0]!.approvalUrl).toContain("/a/" + saved[0]!.requestId);
-    expect(new Date(saved[0]!.requestExpiresAt).toISOString()).toBe(saved[0]!.requestExpiresAt);
+    expect(new Date(saved[0]!.record.header.expiresAt).toISOString()).toBe(saved[0]!.record.header.expiresAt);
     expect(discoverCalls).toBe(0);
     expect(sleeps).toEqual([]);
     expect(linkPosts).toBe(1);
@@ -257,7 +257,7 @@ describe("a NEW request returns at once, with its link", () => {
 });
 
 describe("a RESUMED request keeps waiting until the deadline", () => {
-  test("polls every 2 s, does a final poll exactly at the deadline, then reports the same link", async () => {
+  test("polls every 2 s and ends at the deadline without another poll, then reports the same link", async () => {
     const first = await pendingOf(() => acquireApprovalRequest(did, withDeadline(30_000)));
     const link = (first.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl;
     const before = await entries();
@@ -266,22 +266,22 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
     const second = await pendingOf(() => acquireApprovalRequest(did, withDeadline(30_000, { step: 1, of: 2 })));
     expect(second.exitCode).toBe(8);
     expect(second.code).toBe("APPROVAL_PENDING");
-    expect(second.metadata).toEqual({ pending: { step: 1, of: 2, approvalUrl: link, expiresAt: before[0]!.requestExpiresAt } });
+    expect(second.metadata).toEqual({ pending: { step: 1, of: 2, approvalUrl: link, expiresAt: before[0]!.record.header.expiresAt } });
     expect(linkPosts).toBe(1);
     expect(offered).toEqual([link, link]);
     expect(sleeps.every((ms) => ms <= 2000)).toBe(true);
     expect(sleeps.reduce((sum, ms) => sum + ms, 0)).toBe(30_000);
     expect(clock).toBe(START + 30_000);
-    expect(discoverCalls).toBe(16);
+    expect(discoverCalls).toBe(15);
     expect(await entries()).toEqual(before);
   });
 
-  test("a deadline that is not a multiple of the poll interval still ends exactly on it, after a last poll", async () => {
+  test("a deadline that is not a multiple of the poll interval still ends exactly on it", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
     discoverCalls = 0; sleeps = []; clock = START;
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(5_000)));
     expect(sleeps).toEqual([2000, 2000, 1000]);
-    expect(discoverCalls).toBe(4);
+    expect(discoverCalls).toBe(3);
   });
 
   test("a deadline that has already passed still asks OpenKey once before giving up", async () => {
@@ -308,11 +308,15 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
     expect(await entries()).toEqual([]);
   });
 
-  test("approval landing exactly on the deadline tick is collected, not lost to exit 8", async () => {
+  test("approval landing exactly on the deadline tick is not lost: exit 8 now (the run ends at the deadline without another poll), the next run collects it", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(10_000)));
     onTick = async (now) => { if (now === START + 10_000) await approve(); };
-    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    const pending = await pendingOf(() => acquireApprovalRequest(did, withDeadline(10_000)));
+    expect(pending.code).toBe("APPROVAL_PENDING");
     expect(clock).toBe(START + 10_000);
+    onTick = () => undefined;
+    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    expect(linkPosts).toBe(1);
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
   });
@@ -325,7 +329,7 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
     const kept = await entries();
     expect(kept).toHaveLength(1);
     expect(kept[0]!.resultRef).toBeUndefined();
-    expect(kept[0]!.committed).toBeUndefined();
+    expect(kept[0]!.phase).toBe("open");
     await approve();
     clock = START + 10_000; sleeps = [];
     const delegation = await acquireApprovalRequest(did, { ...withDeadline(60_000), onApprovalRequest: ({ approvalUrl }: { approvalUrl: string }) => { expect(approvalUrl).toBe(link); } });
@@ -335,12 +339,12 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
     expect(await entries()).toEqual([]);
   });
 
-  test("OpenKey network errors during the wait end at the deadline as pending, not as a hang or another error", async () => {
+  test("OpenKey network errors during the wait of a resumed request are exit 6, never pending: nothing confirmed the request live in this run", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
     networkFault = (url) => url.pathname.endsWith("/result");
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_PENDING");
-    expect(error.exitCode).toBe(8);
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(6);
     expect(clock).toBe(START + 7_000);
     expect(await entries()).toHaveLength(1);
   });
@@ -357,94 +361,92 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
 });
 
 describe("a response body that stalls past the cap is a network failure, never exit 1", () => {
-  const realClock = { now: undefined, sleep: undefined };
-  const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
-
-  test("a discover body that stalls ends at the timeout as pending", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+  test("a discover body that stalls is cut by the cap: exit 6 for a resumed request, and the next run resumes", async () => {
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
     await approve();
-    stalledBody = (url) => url.pathname.endsWith("/result");
-    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
-    expect(error.code).toBe("APPROVAL_PENDING");
-    stalledBody = () => false;
-    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    onRequest = (url) => url.pathname.endsWith("/result") ? cutShort() : undefined;
+    const error = await pendingOf(() => acquireApprovalRequest(did, clock.wait(1_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    onRequest = () => undefined;
+    const delegation = await acquireApprovalRequest(did, clock.wait(10_000));
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
     expect(linkPosts).toBe(1);
   }, 20_000);
 
   test("a fetch body that stalls ends as result-unavailable within the grace, and the next run resumes", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
     await approve();
-    stalledBody = (url) => url.pathname.endsWith("/fetch");
-    const started = Date.now();
-    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
+    onRequest = (url) => url.pathname.endsWith("/fetch") ? cutShort() : undefined;
+    const started = clock.now();
+    const error = await pendingOf(() => acquireApprovalRequest(did, clock.wait(1_000)));
     expect(error.code).toBe("APPROVAL_RESULT_UNAVAILABLE");
-    expect(error.exitCode).toBe(8);
-    expect(Date.now() - started).toBeLessThanOrEqual(1_000 + 1_500 + 1_800);
-    stalledBody = () => false;
-    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    expect(error.exitCode).toBe(6);
+    expect(clock.elapsed(started)).toBeLessThanOrEqual(1_000 + APPROVAL_COLLECT_GRACE_MS + 2_000);
+    onRequest = () => undefined;
+    const delegation = await acquireApprovalRequest(did, clock.wait(10_000));
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
     expect(linkPosts).toBe(1);
   }, 20_000);
 });
 
-describe("an expired request is decided locally, and production OpenKey's 400 invalid_request after expiry is exit 3", () => {
-  const REAL_SHAPE = { error: "Signed approval request header is invalid or expired", code: "invalid_request" };
-  /** Rewrites the saved entry's own expiry to `agoMs` before the (virtual) start. */
+describe("an expired request is purged by the load sweep at E + R + S; OpenKey's 410 expired_request is exit 3", () => {
+  /** Rewrites the saved entry's own signed expiry to `agoMs` before the (virtual) start. */
   const expireLocally = async (agoMs: number) => {
     const [saved] = await entries();
-    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - agoMs).toISOString() }]);
+    await writeJsonDurable(pendingPath(), { version: 2, entries: [{ ...saved!, record: { ...saved!.record, header: { ...saved!.record.header, expiresAt: new Date(START - agoMs).toISOString() } } }], unrecognized: [] });
     return saved!;
   };
   const createPending = () => pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
 
-  test("(a) the stored expiry has passed and the entry holds no result: exit 3, the entry is dropped, and OpenKey is not asked at all", async () => {
-    await createPending();
+  test("(a) past E + R + S the entry and its keys are swept on load with no OpenKey call, and the same run makes a NEW request: exit 8 with a new link", async () => {
+    const created = await createPending();
+    const oldLink = (created.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl;
+    const [old] = await entries();
     await expireLocally(20 * 60_000);
     openkeyCalls = 0;
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(error.exitCode).toBe(3);
-    expect(error.metadata?.pending).toBeUndefined();
-    expect(error.message).toMatch(/next run makes a new request/);
-    expect(error.message).not.toMatch(/until OpenKey answers|11 minutes/);
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect((error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).not.toBe(oldLink);
+    expect(linkPosts).toBe(2);
     expect(openkeyCalls).toBe(0);
-    expect(offered).toEqual([offered[0]]); // only the first run's link was ever offered
-    expect(await entries()).toEqual([]);
+    expect((await entries()).map((item) => item.requestId)).not.toContain(old!.requestId);
     expect(sleeps).toEqual([]);
   });
 
-  test("(a2) the same local decision with OpenKey down: expiry + 11 min and more needs no network", async () => {
+  test("(a2) the same with OpenKey down: the sweep needs no network", async () => {
     await createPending();
     await expireLocally(20 * 60_000);
     networkFault = () => true;
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(await entries()).toEqual([]);
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect(linkPosts).toBe(2);
     expect(sleeps).toEqual([]);
   });
 
-  test("(a3) a request 5 min past its expiry is NOT dropped locally: OpenKey is asked, and one 400 invalid_request is the exit 3 and the drop", async () => {
+  test("(a3) a request 5 min past its expiry is NOT swept: OpenKey is asked, and its 410 expired_request is the exit 3 and the drop", async () => {
     await createPending();
     await expireLocally(5 * 60_000);
     openkeyCalls = 0;
-    discoverRefusal = REAL_SHAPE;
+    expireRequests = true;
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
     expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(error.exitCode).toBe(3);
     expect(openkeyCalls).toBe(1);
     expect(await entries()).toEqual([]);
   });
 
-  test("(a4) 90 s past its expiry with OpenKey down: exit 3 at the end of the wait, the entry is KEPT (an approval given just before expiry may still be served)", async () => {
+  test("(a4) 90 s past its expiry with OpenKey down: one last check at E + S gets no answer, so exit 6 and the entry is KEPT (an approval given just before expiry may still be served)", async () => {
     await createPending();
     const [saved] = await entries();
     await expireLocally(90_000);
     networkFault = () => true;
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(error.exitCode).toBe(3);
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(6);
     expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
   });
 
@@ -457,44 +459,14 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(acks).toHaveLength(1);
   });
 
-  test("(b) production OpenKey's real answer, HTTP 400 invalid_request, after the stored expiry: exit 3 and the entry is dropped, never exit 8", async () => {
-    await createPending();
-    await expireLocally(30_000); // inside the skew: the local check leaves it for OpenKey to answer
-    discoverRefusal = REAL_SHAPE;
-    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(error.exitCode).toBe(3);
-    expect(error.metadata?.pending).toBeUndefined();
-    expect(discoverCalls).toBe(1);
-    expect(await entries()).toEqual([]);
-  });
-
-  test("(b2) a refusal that only says 'expired' (no code) after the stored expiry is the same", async () => {
-    await createPending();
-    await expireLocally(30_000);
-    discoverRefusal = { error: "This request has expired" };
-    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(await entries()).toEqual([]);
-  });
-
-  test("(c) the same 400 BEFORE the stored expiry stays APPROVAL_REQUEST_UNAVAILABLE, exit 8 without pending, entry kept (it could be a real fault)", async () => {
-    await createPending();
-    const [saved] = await entries();
-    discoverRefusal = REAL_SHAPE;
-    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
-    expect(error.exitCode).toBe(8);
-    expect(error.metadata?.pending).toBeUndefined();
-    expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
-  });
-
-  test("(c2) a different 400 after expiry (bad request binding) is refused as before, not turned into an expiry", async () => {
+  test("(c2) a request_binding answer after expiry is refused, not turned into an expiry, and the never-approved entry is dropped (exit 5)", async () => {
     await createPending();
     await expireLocally(30_000);
     discoverRefusal = { error: "request does not match", code: "request_binding" };
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
     expect(error.code).toBe("APPROVAL_RESULT_INVALID");
+    expect(error.exitCode).toBe(5);
+    expect(await entries()).toEqual([]);
   });
 
   test("(d) an expired entry that already holds a result is NOT dropped: it is collected", async () => {
@@ -502,7 +474,7 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     await approve();
     const first = await acquireApprovalRequest(did, withDeadline(60_000)); // result fetched and saved locally
     expect((await entries())[0]!.resultEnvelope).toBeDefined();
-    await expireLocally(30 * 60_000);
+    await expireLocally(5 * 60_000);
     openkeyCalls = 0;
     const again = await acquireApprovalRequest(did, withDeadline(7_000));
     expect(again.delegationCid).toBe(first.delegationCid);
@@ -522,52 +494,21 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     const [withRef] = await entries();
     expect(withRef!.resultRef).toBeDefined();
     expect(withRef!.resultEnvelope).toBeUndefined();
-    await writeJsonDurable(pendingPath(), [{ ...withRef!, requestExpiresAt: new Date(START - 30 * 60_000).toISOString() }]);
+    await writeJsonDurable(pendingPath(), { version: 2, entries: [{ ...withRef!, record: { ...withRef!.record, header: { ...withRef!.record.header, expiresAt: new Date(START - 5 * 60_000).toISOString() } } }], unrecognized: [] });
     const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
     expect(saved).toBeDefined();
   });
 
-  test("(e) the boundary is expiry + 10 min result retention + 60 s skew: at 10 min 59 s OpenKey is still asked, at 11 min 1 s the entry is dropped with zero calls", async () => {
-    await createPending();
-    await expireLocally(659_000);
-    openkeyCalls = 0;
-    const within = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
-    expect(within.code).toBe("APPROVAL_PENDING");
-    expect(openkeyCalls).toBeGreaterThan(0);
-    expect(await entries()).toHaveLength(1);
-    await expireLocally(661_000);
-    openkeyCalls = 0;
-    const beyond = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
-    expect(beyond.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(openkeyCalls).toBe(0);
-    expect(await entries()).toEqual([]);
-  });
-
-  test("(e3) the boundary is `>=`, exactly: at expiry + 660 000 ms the entry is dropped with zero calls, 1 ms earlier OpenKey is asked", async () => {
-    await createPending();
-    await expireLocally(659_999);
-    openkeyCalls = 0;
-    const early = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
-    expect(early.code).toBe("APPROVAL_PENDING");
-    expect(openkeyCalls).toBeGreaterThan(0);
-    expect(await entries()).toHaveLength(1);
-    clock = START; // the first wait advanced the virtual clock
-    await expireLocally(660_000);
-    openkeyCalls = 0;
-    const exact = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
-    expect(exact.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(openkeyCalls).toBe(0);
-    expect(await entries()).toEqual([]);
-  });
-
-  test("(f) the loop ends: after the drop the next run makes a NEW request, a new link, step/of in the JSON, exit 8", async () => {
+  test("(f) the loop ends: after the 410 drop the next run makes a NEW request, a new link, step/of in the JSON, exit 8", async () => {
     const first = await createPending();
     const oldLink = (first.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl;
-    await expireLocally(20 * 60_000);
+    await expireLocally(30_000);
+    expireRequests = true;
     const expired = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000, { step: 2, of: 2 })));
     expect(expired.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expireRequests = false;
     const renewed = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000, { step: 2, of: 2 })));
     expect(renewed.code).toBe("APPROVAL_PENDING");
     expect(renewed.exitCode).toBe(8);
@@ -575,118 +516,128 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(pending.step).toBe(2);
     expect(pending.of).toBe(2);
     expect(pending.approvalUrl).not.toBe(oldLink);
-    expect(Date.parse(pending.expiresAt)).toBeGreaterThan(Date.now());
+    expect(Date.parse(pending.expiresAt)).toBeGreaterThan(START);
     expect(linkPosts).toBe(2);
     expect(await entries()).toHaveLength(1);
   });
 
-  test("a link that expires DURING the wait, with OpenKey unreachable until the deadline, is exit 3 and the entry is kept, never pending with a dead link", async () => {
+  test("a link that expires DURING the wait, with OpenKey unreachable until the deadline: the check at E + S gets no answer, so exit 6 (never pending with a dead link) and the entry is kept", async () => {
     await createPending();
     const [saved] = await entries();
     await expireLocally(-3_000); // expires 3 s into the wait
     networkFault = (url) => url.pathname.endsWith("/result");
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(70_000)));
-    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
-    expect(error.exitCode).toBe(3);
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(6);
     expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
   });
 
-  test("a still-valid link with OpenKey unreachable stays pending, with that link", async () => {
+  test("a still-valid link with OpenKey unreachable is exit 6, not pending: nothing confirmed the request live in this run", async () => {
     await createPending();
     const [saved] = await entries();
     networkFault = (url) => url.pathname.endsWith("/result");
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_PENDING");
-    expect((error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).toBe(saved!.approvalUrl);
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(6);
+    expect(error.metadata?.pending).toBeUndefined();
+    expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
   });
 });
 
-describe("which body failures are network failures under --timeout", () => {
-  const realClock = { now: undefined, sleep: undefined };
-  const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
+/** The real time of a call, with the waiting skipped: a clock that starts at the real now and only moves when it is slept on. */
+function stepped() {
+  let at = Date.now();
+  const clockOf = { now: () => at, sleep: async (ms: number) => { at += ms; } };
+  return { ...clockOf, elapsed: (since: number) => at - since, wait: (ms: number) => options({ deadlineMs: at + ms }, clockOf) };
+}
+/** A request the cap cut short: it fails at once, the way the cap's abort would end it. */
+const cutShort = (): Promise<void> => Promise.reject(new TypeError("The operation timed out."));
 
-  test("a connection reset mid-body (a plain Error with code ECONNRESET, as Bun raises it) is a network failure: pending, then the next run resumes", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+describe("which body failures are network failures under --timeout", () => {
+  test("a connection reset mid-body (a plain Error with code ECONNRESET, as Bun raises it) after a 200 is an unexpected reply, not a network failure: retried five times, exit 7, then the next run resumes", async () => {
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
     await approve();
     brokenBody = (url) => url.pathname.endsWith("/result") ? "reset" : undefined;
-    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
-    expect(error.code).toBe("APPROVAL_PENDING");
+    const error = await pendingOf(() => acquireApprovalRequest(did, clock.wait(20_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(7);
     brokenBody = () => undefined;
-    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    const delegation = await acquireApprovalRequest(did, clock.wait(10_000));
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
     expect(linkPosts).toBe(1);
   }, 20_000);
 
-  test("a malformed (non-JSON) body is NOT swallowed as a network failure: it throws as without --timeout", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+  test("a malformed (non-JSON) body is NOT swallowed as a network failure: an unexpected reply, retried, then exit 7", async () => {
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
     await approve();
     brokenBody = (url) => url.pathname.endsWith("/result") ? "malformed" : undefined;
-    await expect(acquireApprovalRequest(did, withDeadline(7_000))).rejects.toBeInstanceOf(SyntaxError);
+    const first = await pendingOf(() => acquireApprovalRequest(did, clock.wait(20_000)));
+    expect(first.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(first.exitCode).toBe(7);
     brokenBody = (url) => url.pathname.endsWith("/fetch") ? "malformed" : undefined;
-    await expect(acquireApprovalRequest(did, withDeadline(7_000))).rejects.toBeInstanceOf(SyntaxError);
+    const second = await pendingOf(() => acquireApprovalRequest(did, clock.wait(20_000)));
+    expect(second.exitCode).toBe(7);
     expect((await entries())[0]!.resultRef).toBeDefined();
   });
 
-  test("OpenKey answered 200 and only the body was cut off: with a link that is just past its stored expiry (inside the 60 s skew) it is pending, not exit 3", async () => {
+  test("OpenKey answered 200 and only the body was cut off: with a link that is just past its stored expiry (inside the 60 s skew) it is an unexpected reply, exit 7 with the entry kept, not exit 3", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
     const [saved] = await entries();
-    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - 30_000).toISOString() }]);
+    await writeJsonDurable(pendingPath(), { version: 2, entries: [{ ...saved!, record: { ...saved!.record, header: { ...saved!.record.header, expiresAt: new Date(START - 30_000).toISOString() } } }], unrecognized: [] });
     brokenBody = (url) => url.pathname.endsWith("/result") ? "reset" : undefined;
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
-    expect(error.code).toBe("APPROVAL_PENDING");
-    expect(error.exitCode).toBe(8);
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(7);
+    expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
   });
 });
 
-describe("the whole call is bounded by timeout + grace, real clock, slow OpenKey", () => {
-  const hangUntilAbort = (init?: RequestInit) => new Promise<void>((_, reject) => {
-    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
-  });
-  const realClock = { now: undefined, sleep: undefined };
-  const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
-
-  test("an unanswered wait whose polls hang ends at the timeout, not one 10 s request later", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
-    onRequest = (url, init) => url.pathname.endsWith("/result") ? hangUntilAbort(init) : undefined;
-    const started = Date.now();
-    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
-    const elapsed = Date.now() - started;
-    expect(error.code).toBe("APPROVAL_PENDING");
-    expect(elapsed).toBeGreaterThanOrEqual(900);
-    expect(elapsed).toBeLessThanOrEqual(1_000 + 1_800);
+describe("the whole call is bounded by timeout + grace, slow OpenKey", () => {
+  test("an unanswered wait whose polls hang ends at the timeout, not one request cap later: exit 6, nothing pending", async () => {
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
+    onRequest = (url) => url.pathname.endsWith("/result") ? cutShort() : undefined;
+    const started = clock.now();
+    const error = await pendingOf(() => acquireApprovalRequest(did, clock.wait(1_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(6);
+    expect(error.metadata?.pending).toBeUndefined();
+    expect(clock.elapsed(started)).toBe(1_000);
   }, 20_000);
 
   test("an approved result whose fetch hangs ends as result-unavailable within timeout + grace, and resumes later", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
     await approve();
-    onRequest = (url, init) => url.pathname.endsWith("/fetch") ? hangUntilAbort(init) : undefined;
-    const started = Date.now();
-    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
-    const elapsed = Date.now() - started;
+    onRequest = (url) => url.pathname.endsWith("/fetch") ? cutShort() : undefined;
+    const started = clock.now();
+    const error = await pendingOf(() => acquireApprovalRequest(did, clock.wait(1_000)));
     expect(error.code).toBe("APPROVAL_RESULT_UNAVAILABLE");
+    expect(error.exitCode).toBe(6);
     expect(error.metadata?.pending).toBeUndefined();
-    expect(elapsed).toBeGreaterThanOrEqual(1_000);
-    expect(elapsed).toBeLessThanOrEqual(1_000 + 1_500 + 1_800);
+    expect(clock.elapsed(started)).toBeGreaterThanOrEqual(1_000 + APPROVAL_COLLECT_GRACE_MS);
+    expect(clock.elapsed(started)).toBeLessThanOrEqual(1_000 + APPROVAL_COLLECT_GRACE_MS + 2_000);
     expect((await entries())[0]!.resultRef).toBeDefined();
     onRequest = () => undefined;
-    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    const delegation = await acquireApprovalRequest(did, clock.wait(10_000));
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
     expect(linkPosts).toBe(1);
   }, 20_000);
 
-  test("the acknowledgement counts inside the grace: a hanging ack ends as ack-pending in time, and the re-run sends it once", async () => {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+  test("a hanging ack ends in time as exit 0 with a warning, and the re-run sends it once", async () => {
+    const clock = stepped();
+    await pendingOf(() => acquireApprovalRequest(did, clock.wait(60_000)));
     await approve();
-    const started = Date.now();
-    const delegation = await acquireApprovalRequest(did, bounded(1_000, 1_500));
-    onRequest = (url, init) => url.pathname.endsWith("/ack") ? hangUntilAbort(init) : undefined;
-    const error = await pendingOf(() => commitAndAcknowledge(delegation));
-    const elapsed = Date.now() - started;
-    expect(error.code).toBe("APPROVAL_ACK_PENDING");
-    expect(error.exitCode).toBe(8);
-    expect(elapsed).toBeLessThanOrEqual(1_000 + 1_500 + 1_800);
+    const delegation = await acquireApprovalRequest(did, clock.wait(1_000));
+    onRequest = (url) => url.pathname.endsWith("/ack") ? cutShort() : undefined;
+    const written: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; }) as typeof process.stderr.write);
+    try { await commitAndAcknowledge(delegation); } finally { stderr.mockRestore(); }
+    expect(written.join("")).not.toBe("");
     expect(acks).toHaveLength(0);
     onRequest = () => undefined;
     await completeApprovalResult("approval");
@@ -707,13 +658,13 @@ describe("after the owner approved, the command finishes even past the deadline"
     expect(acks).toHaveLength(1);
   });
 
-  test("a result that cannot be fetched for longer than the grace ends as the existing exit 8 'result unavailable', not as a pending approval, and resumes later", async () => {
+  test("a result that cannot be fetched for longer than the grace ends as exit 6 'result unavailable', not as a pending approval, and resumes later", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
     await approve();
     networkFault = (url) => url.pathname.endsWith("/fetch");
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(10_000)));
     expect(error.code).toBe("APPROVAL_RESULT_UNAVAILABLE");
-    expect(error.exitCode).toBe(8);
+    expect(error.exitCode).toBe(6);
     expect(error.metadata?.pending).toBeUndefined();
     expect(clock).toBeGreaterThanOrEqual(START + 10_000 + APPROVAL_COLLECT_GRACE_MS);
     expect(clock).toBeLessThanOrEqual(START + 10_000 + APPROVAL_COLLECT_GRACE_MS + 2_000);
@@ -726,17 +677,21 @@ describe("after the owner approved, the command finishes even past the deadline"
   });
 });
 
-// A kill is modeled by an error that nothing in the flow catches; the next call
-// starts from the profile directory alone. OpenKey keeps its result 600 s.
+// A kill is modeled by an error that nothing in the flow catches: the machine's clock throws it at the seam, after the
+// reply of the step before it. The next call starts from the profile directory alone. OpenKey keeps its result 600 s.
+// The whole describe runs on the real clock, so the entry the first run saved is as young as the next process finds it.
 describe("a process killed at any seam resumes from local state: exit-0 completion, one request, one ack", () => {
   const KILLED = new Error("process killed");
+  let armed = false;
+  const mortalClock = { now: () => { if (armed) { armed = false; throw KILLED; } return Date.now(); }, sleep: async () => undefined };
+  const realWait = () => options({ deadlineMs: Date.now() + 60_000 }, mortalClock);
 
   async function createApprovedRequest(): Promise<void> {
-    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await pendingOf(() => acquireApprovalRequest(did, realWait()));
     await approve();
   }
   async function finishAfterKill(expectedRequestPosts = 1): Promise<void> {
-    const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
+    const delegation = await acquireApprovalRequest(did, realWait());
     await commitAndAcknowledge(delegation);
     expect(linkPosts).toBe(expectedRequestPosts);
     expect(acks).toHaveLength(1);
@@ -744,24 +699,35 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     expect(await entries()).toEqual([]);
     expect(((await ProfileManager.getSession("approval")) as Record<string, unknown> | null)?.delegationCid).toBe(delegation.delegationCid);
   }
-  function killWhen(match: (url: URL) => boolean, effect: "before-response" | "after-body") {
+  /** The process dies right after the reply of the first call that matches: the next read of the clock throws. */
+  function killAfter(match: (url: URL) => boolean) {
+    let fired = false;
+    fetchSpy!.mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const response = await route(input, init);
+      if (!fired && match(url)) { fired = true; await response.clone().text(); armed = true; }
+      return response;
+    }, { preconnect: send.preconnect }));
+  }
+  /** The ack reaches OpenKey, its reply never reaches the process. */
+  function loseReplyOf(match: (url: URL) => boolean) {
     let fired = false;
     fetchSpy!.mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (fired || !match(url)) return route(input, init);
       fired = true;
-      if (effect === "before-response") throw KILLED;
       const response = await route(input, init);
       await response.clone().text();
-      Object.defineProperty(response, "json", { value: async () => { throw KILLED; } });
+      Object.defineProperty(response, "json", { value: async () => { throw new TypeError("The socket connection was closed unexpectedly"); } });
       return response;
     }, { preconnect: send.preconnect }));
   }
+  afterEach(() => { armed = false; });
 
   test("after the poll succeeded, before the result was fetched", async () => {
     await createApprovedRequest();
-    killWhen((url) => url.pathname.endsWith("/result"), "after-body");
-    await expect(acquireApprovalRequest(did, withDeadline(60_000))).rejects.toBe(KILLED);
+    killAfter((url) => url.pathname.endsWith("/result"));
+    await expect(acquireApprovalRequest(did, realWait())).rejects.toBe(KILLED);
     expect(acks).toHaveLength(0);
     fetchSpy!.mockImplementation(routed);
     await finishAfterKill();
@@ -769,8 +735,8 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
 
   test("after the result was fetched, before it was saved", async () => {
     await createApprovedRequest();
-    killWhen((url) => url.pathname.endsWith("/fetch"), "after-body");
-    await expect(acquireApprovalRequest(did, withDeadline(60_000))).rejects.toBe(KILLED);
+    killAfter((url) => url.pathname.endsWith("/fetch"));
+    await expect(acquireApprovalRequest(did, realWait())).rejects.toBe(KILLED);
     expect(acks).toHaveLength(0);
     expect((await entries())[0]!.resultEnvelope).toBeUndefined();
     fetchSpy!.mockImplementation(routed);
@@ -779,19 +745,19 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
 
   test("after the result was saved, before the login was committed: the next run needs no network to get it back", async () => {
     await createApprovedRequest();
-    const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
+    const delegation = await acquireApprovalRequest(did, realWait());
     const saved = (await entries())[0]!;
     // Saved before commit or ack: the envelope and its OpenKey reference are on disk, fsynced by the durable write.
     expect(saved.resultEnvelope).toBeDefined();
     expect(saved.resultRef).toBeDefined();
-    expect(saved.committed).toBeUndefined();
+    expect(saved.phase).toBe("fetched");
     expect(await ProfileManager.getSession("approval")).toBeNull();
     expect(acks).toHaveLength(0);
     expect(delegation.delegationCid).toBeDefined();
     // Killed here. The retention window at OpenKey may be over: any call to it now fails.
     const discoverBefore = discoverCalls, fetchBefore = fetchCalls;
     networkFault = (url) => url.pathname !== "/v1/links" && !url.pathname.endsWith("/ack");
-    const recovered = await acquireApprovalRequest(did, withDeadline(60_000));
+    const recovered = await acquireApprovalRequest(did, realWait());
     expect(discoverCalls).toBe(discoverBefore);
     expect(fetchCalls).toBe(fetchBefore);
     expect(recovered.delegationCid).toBe(delegation.delegationCid);
@@ -804,7 +770,7 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
 
   test("after the login was committed, before the ack was sent: the next run acknowledges it once", async () => {
     await createApprovedRequest();
-    const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
+    const delegation = await acquireApprovalRequest(did, realWait());
     const snapshot = await readProfileSnapshot("approval");
     const verified = verifyScopedLogin(delegation, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
     await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
@@ -821,11 +787,14 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     expect(linkPosts).toBe(1);
   });
 
-  test("while the ack is in flight and its reply is lost: the retry repeats the same ack id (two ack requests, one ack id)", async () => {
+  test("while the ack is in flight and its reply is lost: exit 0 with a warning, and the retry repeats the same ack id (two ack requests, one ack id)", async () => {
     await createApprovedRequest();
-    const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
-    killWhen((url) => url.pathname.endsWith("/ack"), "after-body");
-    await expect(commitAndAcknowledge(delegation)).rejects.toBeInstanceOf(CLIError);
+    const delegation = await acquireApprovalRequest(did, realWait());
+    loseReplyOf((url) => url.pathname.endsWith("/ack"));
+    const written: string[] = [];
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; }) as typeof process.stderr.write);
+    try { await commitAndAcknowledge(delegation); } finally { stderr.mockRestore(); }
+    expect(written.join("")).not.toBe("");
     expect(acks).toHaveLength(1);
     fetchSpy!.mockImplementation(routed);
     await completeApprovalResult("approval");

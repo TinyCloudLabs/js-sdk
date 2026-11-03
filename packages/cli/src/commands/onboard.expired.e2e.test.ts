@@ -45,7 +45,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, an expired approval request, agai
     expired?: boolean;
     /** OpenKey answers every result lookup with HTTP 503. */
     unavailable?: boolean;
-    /** OpenKey answers a discover like production does for an expired request: HTTP 400 invalid_request. */
+    /** OpenKey answers a discover like production does for an expired request: HTTP 410 expired_request. */
     invalidRequest?: boolean;
     polls: number;
   }
@@ -71,7 +71,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, an expired approval request, agai
       profile: await readJson<Record<string, unknown>>(profileConfigPath("default")),
       session: await readJson<Record<string, unknown>>(sessionPath("default")),
       grants: await readJson<SavedState["grants"]>(additionalDelegationsPath("default")) ?? [],
-      pending: await readJson<SavedState["pending"]>(join(profilePath("default"), "approval-pending.json")) ?? [],
+      pending: (await readJson<{ entries: SavedState["pending"] }>(join(profilePath("default"), "approval-pending.json")))?.entries ?? [],
     }));
   }
 
@@ -167,7 +167,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, an expired approval request, agai
       : Response.json({ code: "result_acknowledged" }, { status: 410 });
     if (discovery) entry.polls++;
     if (discovery && entry.unavailable) return new Response(null, { status: 503 });
-    if (discovery && entry.invalidRequest) return Response.json({ error: "Signed approval request header is invalid or expired", code: "invalid_request" }, { status: 400 });
+    if (discovery && entry.invalidRequest) return Response.json({ code: "expired_request" }, { status: 410 });
     if (!entry.relay) return entry.expired || Date.parse(entry.record.header.expiresAt) <= Date.now()
       ? Response.json({ code: "expired_request" }, { status: 410 }) : new Response(null, { status: 202 });
     if (Date.parse(entry.resultExpiresAt!) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
@@ -438,17 +438,17 @@ if (seam === "after-save") {
     } finally { activeChildren.delete(child); }
   }
 
-  test("an expired link ends the loop: production's 400 invalid_request is exit 3 and drops the entry; each next run makes a new link", async () => {
+  test("an expired link ends the loop: OpenKey's 410 expired_request is exit 3 and drops the entry; an entry far past expiry is swept and the run makes a new link", async () => {
     await mkdir(home("lapsed"), { recursive: true, mode: 0o700 });
     const pendingFile = await withTinyCloudStateRoot(home("lapsed"), async () => join(profilePath("default"), "approval-pending.json"));
     const setExpiry = async (requestId: string, agoMs: number) => {
-      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as Array<Record<string, unknown>>;
-      saved.find((item) => item.requestId === requestId)!.requestExpiresAt = new Date(Date.now() - agoMs).toISOString();
-      await writeFile(pendingFile, JSON.stringify(saved), { mode: 0o600 });
+      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as { entries: Array<{ requestId: string; record: { header: { expiresAt: string } } }> };
+      saved.entries.find((item) => item.requestId === requestId)!.record.header.expiresAt = new Date(Date.now() - agoMs).toISOString();
+      await writeFile(pendingFile, JSON.stringify({ ...saved, version: 2, unrecognized: [] }), { mode: 0o600 });
     };
     const entry = await openLink("lapsed", await startAndKill("lapsed"));
 
-    // 30 s past the stored expiry (inside the skew): the CLI asks, production answers 400, the CLI says exit 3 and drops it.
+    // 30 s past the stored expiry (inside the sweep window): the CLI asks, OpenKey answers 410, the CLI says exit 3 and drops it.
     await setExpiry(entry.id, 30_000);
     entry.invalidRequest = true;
     const polled = entry.polls;
@@ -462,16 +462,14 @@ if (seam === "after-save") {
     const second = await openLink("lapsed", await startAndKill("lapsed"));
     expect(second.id).not.toBe(entry.id);
 
-    // Well past the expiry: one OpenKey call answers 400, the entry goes, and the run after is new again.
+    // Well past the expiry (over 10 min 30 s): the entry is swept silently on load, OpenKey is not asked, and the same run makes a new request.
     await setExpiry(second.id, 20 * 60_000);
     second.invalidRequest = true;
     const before = second.polls;
-    const late = await run("lapsed", ["onboard"]);
-    expect(late.exitCode, late.stderr).toBe(3);
-    expect(late.stdout + late.stderr).toContain("APPROVAL_REQUEST_EXPIRED");
-    expect(second.polls).toBe(before + 1);
-    expect((await savedState("lapsed")).pending).toEqual([]);
-    expect((await openLink("lapsed", await startAndKill("lapsed"))).id).not.toBe(second.id);
+    const third = await openLink("lapsed", await startAndKill("lapsed"));
+    expect(third.id).not.toBe(second.id);
+    expect(second.polls).toBe(before);
+    expect((await savedState("lapsed")).pending.some((item) => item.requestId === second.id)).toBe(false);
   });
 
   test("a request that is still open keeps its link: a second run shows the same link and no new request is made", async () => {

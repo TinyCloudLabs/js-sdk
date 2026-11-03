@@ -64,7 +64,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
       profile: await readJson<Record<string, unknown>>(profileConfigPath("default")),
       session: await readJson<Record<string, unknown>>(sessionPath("default")),
       grants: await readJson<SavedState["grants"]>(additionalDelegationsPath("default")) ?? [],
-      pending: await readJson<SavedState["pending"]>(join(profilePath("default"), "approval-pending.json")) ?? [],
+      pending: (await readJson<{ entries: SavedState["pending"] }>(join(profilePath("default"), "approval-pending.json")))?.entries ?? [],
     }));
   }
 

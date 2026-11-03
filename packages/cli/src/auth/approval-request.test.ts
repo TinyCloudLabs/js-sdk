@@ -57,9 +57,11 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     return Response.json({ id, expiresAt: checked.header.expiresAt }, { status: 201 });
   }
   const body = await request.json() as { requestId: string; bodyCid: string; ackId: string };
-  const pending = await readJson<Array<{ committed?: boolean; ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("approval"), "approval-pending.json"));
+  // A version 1 file stays an array until a write that needs one (migration is on the first write), so the fake reads both shapes.
+  const stored = await readJson<{ entries: Array<{ phase: string; ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }> } | Array<{ ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("approval"), "approval-pending.json"));
+  const pending = Array.isArray(stored) ? stored.map((item) => ({ ...item, phase: "legacy" })) : stored?.entries;
   const session = await ProfileManager.getSession("approval") as Record<string, unknown> | null;
-  savedBeforeAck = pending?.[0]?.committed === true && pending[0].ackId === body.ackId && session?.signature !== undefined;
+  savedBeforeAck = pending?.[0]?.phase === "committed" && pending[0].ackId === body.ackId && session?.signature !== undefined;
   const [header, payload, signature] = (request.headers.get("OpenKey-Session-Proof") ?? "").split(".");
   if (!header || !payload || !signature || !verify(null, Buffer.from(`${header}.${payload}`),
     createPublicKey({ key: { kty: key.kty, crv: key.crv, x: key.x }, format: "jwk" }), Buffer.from(signature, "base64url"))) return new Response(null, { status: 401 });
@@ -69,7 +71,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   const credential = JSON.stringify([action, requestId, body.bodyCid, action === "discover" ? "" : resultRef, action === "ack" ? body.ackId : ""]);
   if (claims.htu !== request.url || claims.htm !== "POST" || claims.client_id !== "openkey-approval-result-v1" ||
     claims.cred_hash !== createHash("sha256").update(credential).digest("base64url")) return new Response(null, { status: 401 });
-  if (action === "discover") return Response.json({ resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt });
+  if (action === "discover") return Response.json({ status: "approved", resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt });
   if (action === "fetch") return Response.json({
     requestId, bodyCid: body.bodyCid, resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt,
     relay: await readJson(join(profilePath("approval"), "retained-result.json")) ?? pending![0]!.resultEnvelope,
@@ -159,14 +161,15 @@ test("a fetched approval is not acknowledged before durable login persistence", 
   const verified = verifyScopedLogin(delegation, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
   await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
   dropAck = true;
-  await expect(completeApprovalResult("approval")).rejects.toMatchObject({ code: "APPROVAL_ACK_PENDING" });
+  // An acknowledgement that cannot be confirmed after the grant is saved is exit 0 with a warning, not exit 8 (TC-2377).
+  await completeApprovalResult("approval");
   expect(savedBeforeAck).toBe(true);
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
-  const durable = await readJson<Array<{ committed?: boolean; ackId: string }>>(join(profilePath("approval"), "approval-pending.json"));
-  expect(durable?.[0]).toMatchObject({ committed: true, ackId: pending.ackId });
+  const durable = (await readJson<{ entries: Array<{ phase: string; ackId: string }> }>(join(profilePath("approval"), "approval-pending.json")))?.entries;
+  expect(durable?.[0]).toMatchObject({ phase: "committed", ackId: pending.ackId });
   await completeApprovalResult("approval");
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
-  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual({ version: 2, entries: [], unrecognized: [] });
 });
 
 test.each([ownerDid, undefined])("a saved result resumes with owner-qualified spaces without another approval (%s)", async (expectedOwner) => {
@@ -176,7 +179,7 @@ test.each([ownerDid, undefined])("a saved result resumes with owner-qualified sp
   const verified = verifyScopedLogin(delegation, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
   await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
   dropAck = true;
-  await expect(completeApprovalResult("approval")).rejects.toMatchObject({ code: "APPROVAL_ACK_PENDING" });
+  await completeApprovalResult("approval");
   let approvalRequests = 0;
   const send = globalThis.fetch;
   const localOnly = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -194,7 +197,7 @@ test.each([ownerDid, undefined])("a saved result resumes with owner-qualified sp
     await completeApprovalResult("approval", recovered);
     expect(approvalRequests).toBe(0);
     expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
-    expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+    expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual({ version: 2, entries: [], unrecognized: [] });
   } finally {
     localOnly.mockRestore();
   }
@@ -258,7 +261,7 @@ test.each(["expired_result", "not_found", "acknowledged"])("a terminal %s ACK re
   await completeApprovalResult("approval");
   expect(savedBeforeAck).toBe(true);
   expect(terminalAck).toMatchObject({ requestId, bodyCid: pending.bodyCid, ackId: pending.ackId });
-  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual({ version: 2, entries: [], unrecognized: [] });
   expect((await ProfileManager.getSession("approval"))?.delegationCid).toBe(delegation.delegationCid);
 });
 
@@ -276,13 +279,14 @@ test("housekeeping retires an expired uncommitted delegation without ACK or sess
   const now = Date.now();
   const clock = spyOn(Date, "now").mockReturnValue(now + 2 * 3600_000);
   try { await completeApprovalResult("approval"); } finally { clock.mockRestore(); }
-  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual({ version: 2, entries: [], unrecognized: [] });
   expect(await ProfileManager.getSession("approval")).toBeNull();
   expect(acknowledgements.has(resultRef)).toBe(false);
 });
 
 test("a login without expiry creates a fresh seven-day request instead of reusing an expired result", async () => {
-  await stage(await signedDelegation(), { expectedOwner: ownerDid, grantLifetimeSeconds: 604800, resultExpiresAt: new Date(Date.now() - 1000).toISOString() });
+  // 31 s past its retention: beyond the 30 s allowance the machine adds after an expiry (spec 2.7).
+  await stage(await signedDelegation(), { expectedOwner: ownerDid, grantLifetimeSeconds: 604800, resultExpiresAt: new Date(Date.now() - 31_000).toISOString() });
   const send = globalThis.fetch;
   const interrupted = new Error("Owned approval prompt interruption");
   let offered: string | undefined;
@@ -298,12 +302,12 @@ test("a login without expiry creates a fresh seven-day request instead of reusin
       onApprovalRequest: ({ approvalUrl }) => { offered = approvalUrl; throw interrupted; },
     })).rejects.toBe(interrupted);
   } finally { localOnly.mockRestore(); }
-  const pending = await readJson<Array<{ requestId: string; request: { grantLifetimeSeconds: number }; signingKey?: unknown }>>(join(profilePath("approval"), "approval-pending.json"));
+  const pending = (await readJson<{ entries: Array<{ requestId: string; request: { grantLifetimeSeconds: number }; keys?: { stagedSigningKey?: unknown } }> }>(join(profilePath("approval"), "approval-pending.json")))?.entries;
   expect(pending).toHaveLength(1);
   expect(pending![0]!.requestId).not.toBe(requestId);
   expect(offered).toContain("/a/" + pending![0]!.requestId);
   expect(pending![0]!.request.grantLifetimeSeconds).toBe(604800);
-  expect(pending![0]!.signingKey).toBeUndefined();
+  expect(pending![0]!.keys?.stagedSigningKey).toBeUndefined();
 });
 
 
@@ -321,7 +325,8 @@ test("an approved result remains discoverable after request expiry when its resu
     return send(input, init);
   }, { preconnect: send.preconnect }));
   const now = Date.now();
-  const clock = spyOn(Date, "now").mockReturnValue(now + 90 * 60_000);
+  // +65 min: after the request's expiry (+60 min), inside its retention (R = 10 min) plus the allowance S.
+  const clock = spyOn(Date, "now").mockReturnValue(now + 65 * 60_000);
   try {
     const recovered = await acquireApprovalRequest(did, { profileName: "approval", jwk: key, host, permissions: requested,
       expectedOwner: ownerDid, expiry: "2h", openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true,
@@ -354,7 +359,7 @@ test("a signed approval request never carries expiryChangeable", async () => {
         expiry: "1h", openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, ...extra,
         onApprovalRequest: ({ approvalUrl }) => { offers.push(approvalUrl); throw interrupted; },
       })).rejects.toBe(interrupted);
-      const pending = await readJson<Array<{ request: Record<string, unknown>; bodyCid: string }>>(join(profilePath("approval"), "approval-pending.json"));
+      const pending = (await readJson<{ entries: Array<{ request: Record<string, unknown>; bodyCid: string }> }>(join(profilePath("approval"), "approval-pending.json")))?.entries;
       expect(pending).toHaveLength(1);
       expect(Object.keys(pending![0]!.request)).not.toContain("expiryChangeable");
       bodies.push(JSON.stringify({ ...pending![0]!.request, issuer: undefined, targetPublicJwk: undefined, resultEncryptionPublicJwk: undefined }));
