@@ -187,6 +187,7 @@ test('a profile save refused by a lock it cannot judge prints one recovery line 
     assert.equal(e.code, 'profile-locked');
     assert.equal(e.message.split('\n').length, 1, 'one line');
     assert.ok(e.message.includes(`rm -f -- ${quoted(LOCK)}`), e.message);
+    assert.match(e.message, /only after confirming no Courier command is running[^:]*: rm -f -- /, 'the removal command is conditioned on confirming no Courier process runs');
     assert.ok(e.message.includes(LOCK) && e.message.includes('2147483000') && e.message.includes('other-host.example'), e.message);
     return true;
   });
