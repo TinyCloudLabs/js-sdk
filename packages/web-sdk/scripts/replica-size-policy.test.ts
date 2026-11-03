@@ -4231,18 +4231,18 @@ describe("sign out locally first, fence a signed-out session (TC-2379) size ratc
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2379SignOutFence).toEqual(approvedTc2379SignOutFence);
     expect(row().root).toEqual({
-      delta: { "index.mjs": 398, "index.cjs": 296 },
-      ceiling: { "index.mjs": 1479082, "index.cjs": 1421492 },
+      delta: { "index.mjs": 405, "index.cjs": 296 },
+      ceiling: { "index.mjs": 1479089, "index.cjs": 1421492 },
     });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().base).toBe("356c6053b4789529ab6c84536a385adf2e4e0c77");
-    expect(row().sourceCommits).toEqual(["c318990526f9351577b5779493703a34cb135cfb"]);
+    expect(row().sourceCommits).toEqual(["d30bb448cd7f5931eaa78af4a145fcd502642194"]);
     expect(row().canonicalCI).toEqual({
-      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41582827389",
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906",
       jobs: [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41582827389/job/125741338021",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41582827389/job/125741338049",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906/job/125767972322",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591161906/job/125767972142",
       ],
     });
     expect(row().firstImport).toEqual(prerequisite().firstImport);
@@ -4251,11 +4251,11 @@ describe("sign out locally first, fence a signed-out session (TC-2379) size ratc
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).at(-1)).toEqual({
       row: "tc2379SignOutFence",
-      ceiling: { "index.mjs": 1479082, "index.cjs": 1421492 },
+      ceiling: { "index.mjs": 1479089, "index.cjs": 1421492 },
     });
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc2379SignOutFence",
-      pin: "c318990526f9351577b5779493703a34cb135cfb",
+      pin: "d30bb448cd7f5931eaa78af4a145fcd502642194",
     });
   });
 
