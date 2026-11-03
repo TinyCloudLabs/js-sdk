@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { evaluateOperationAuthority } from "../authority.js";
+import type { AppsPermission } from "../tc-apps/kv.js";
 import { additionalDelegationsPath, writeJsonAtomic } from "../state.js";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
 import { parseKey, parsePrefix } from "../tc-apps/layout.js";
@@ -47,6 +49,77 @@ describe("personal apps key grammar", () => {
 });
 
 describe("personal apps new layout: approvals", () => {
+  test("a named task bundles only its app and app list, with read-only access when requested", async () => {
+    await fixture(async (_kv, context, applications) => {
+      const change = await definition("context").authority(context, { app: "books" });
+      expect(change).toEqual([discoveryGrant, kvScope(NEW_SPACE, root)]);
+      const read = await definition("context").authority(context, { app: "books", access: "read" });
+      expect(read).toEqual([kvScope(NEW_SPACE, DISCOVERY, ALL.slice(0, 2)), kvScope(NEW_SPACE, root, ALL.slice(0, 2))]);
+      expect(tcAppsApprovalReason(change)).toContain("add books to it");
+      expect(tcAppsApprovalReason(change)).toContain("add, change or delete");
+      expect(tcAppsApprovalReason(read)).toContain("It cannot change them");
+      for (const bundle of [change, read]) {
+        expect(tcAppsApprovalReason(bundle)).toContain("30 days");
+        expect(tcAppsApprovalReason(bundle)).not.toContain("agent-data");
+        expect(tcAppsApprovalMessage(bundle)).toContain("OpenKey");
+      }
+      applications.seed(`${root}catalog`, booksApp);
+      applications.seed(`${root}catalog/read`, readKind);
+      applications.seed(`${DISCOVERY}books/entry`, entry);
+      applications.seed(record, { v: 1, data: { title: "Dune" } });
+      for (const bundle of [change, read]) {
+        const granted = withGrants(context, bundle as AppsPermission[]);
+        const plan = await definition("read").authority(granted, { keys: [record] });
+        expect(evaluateOperationAuthority(bundle, plan).missing).toEqual([]);
+        expect((await definition("read").execute(granted, { keys: [record] })).output.records[0]).toMatchObject({ key: record, value: { data: { title: "Dune" } } });
+      }
+      const edit = { ops: [{ op: "put", key: record, etag: applications.values.get(record)!.etag, value: { data: { title: "Dune edited" } } }] };
+      const plan = await definition("write").authority(withGrants(context, change as AppsPermission[]), edit);
+      expect(evaluateOperationAuthority(change, plan).missing).toEqual([]);
+      expect((await definition("write").execute(withGrants(context, change as AppsPermission[]), edit)).output.ops[0]?.outcome).toBe("ok");
+      expect(await definition("write").authority(withGrants(context, read as AppsPermission[]), edit)).toEqual([kvScope(NEW_SPACE, root, ALL.slice(2))]);
+      expect(await definition("read").authority(context, { keys: [record] })).toEqual([kvScope(NEW_SPACE, root)]);
+    });
+  });
+  test("a first generic record needs two approvals with app, three without; a later new app needs one", async () => {
+    for (const named of [true, false]) await fixture(async (_kv, context, applications) => {
+      let grants: AppsPermission[] = [];
+      const requests: AppsPermission[][] = [];
+      const approved = async (name: "context" | "write", input: unknown) => {
+        for (let round = 0; round < 4; round++) {
+          const active = withGrants(context, grants);
+          const plan = await definition(name).authority(active, input);
+          const missing = evaluateOperationAuthority(grants, plan).missing;
+          if (!missing.length) {
+            expect((await definition(name).execute(active, input)).status).toBe("ok");
+            return;
+          }
+          requests.push([...missing] as AppsPermission[]);
+          grants = [...grants, ...missing] as AppsPermission[];
+        }
+        throw new Error("App task kept requesting approval");
+      };
+      await approved("context", named ? { app: "books" } : {});
+      await approved("write", { ops: createBooks });
+      expect(applications.values.has(record)).toBe(true);
+      expect(requests).toHaveLength(named ? 2 : 3);
+      if (named) expect(requests.map((request) => request[0]!.space)).toEqual([NEW_SPACE, SPACE]);
+      const before = requests.length;
+      await approved("context", { app: "films" });
+      await approved("write", { ops: createBooks.map((op) => ({ ...op, key: op.key.replaceAll("books", "films"), value: { ...op.value, ...("app" in op.value ? { app: "films" } : {}), ...("id" in op.value ? { id: `${ID}films` } : {}) } })) });
+      expect(requests.length - before).toBe(1);
+      expect(applications.values.has(record.replace("books", "films"))).toBe(true);
+    });
+  });
+  test("invalid context app ids and access fail validation before reading storage", async () => {
+    await fixture(async (_kv, context, applications) => {
+      for (const app of ["", "Books", "1books", "../books", "catalog", "index-stale"]) {
+        expect((await definition("context").execute(context, { app })).error.code).toBe("INPUT_INVALID");
+      }
+      expect((await definition("context").execute(context, { app: "books", access: "write" })).error.code).toBe("INPUT_INVALID");
+      expect(applications.lists).toEqual([]);
+    });
+  });
   test("each call asks for one space at a time, only the scopes of the apps it names; a new app also reads the older catalog", async () => {
     await fixture(async (_kv, context) => {
       const booksRoot = kvScope(NEW_SPACE, root);
