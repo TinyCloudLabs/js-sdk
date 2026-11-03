@@ -31,6 +31,36 @@ test("official v2 client enforces operation schemas and owner opt-in over stdio"
 
   try {
     await client.connect(transport);
+    const listed = await client.listTools();
+    // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
+    // Local/stdio has 21 tools; the 24-tool hosted surface also exposes personal apps.
+    expect(listed.tools.map(({ name, annotations }) => [
+      name, annotations?.readOnlyHint, annotations?.destructiveHint,
+      annotations?.idempotentHint, annotations?.openWorldHint,
+    ])).toEqual([
+      ["tinycloud_status", true, false, true, false],
+      ["tinycloud_auth_status", true, false, true, false],
+      ["tinycloud_auth_capabilities", true, false, true, false],
+      ["tinycloud_auth_request", false, false, true, false],
+      // TC-2469 F5: preserve today's read-only hint despite saving a pending request.
+      ["tinycloud_auth_read_scope", true, false, true, false],
+      ["tinycloud_auth_import", false, false, true, false],
+      ["tinycloud_account_spaces_list", true, false, true, true],
+      ["tinycloud_account_applications_list", true, false, true, true],
+      ["tinycloud_kv_list", true, false, true, true],
+      ["tinycloud_kv_get", true, false, true, true],
+      ["tinycloud_read", true, false, true, true],
+      ["tinycloud_kv_head", true, false, true, true],
+      ["tinycloud_kv_put", false, true, true, true],
+      ["tinycloud_kv_delete", false, true, true, true],
+      ["tinycloud_knowledge_list", true, false, true, true],
+      ["tinycloud_knowledge_read", true, false, true, true],
+      ["tinycloud_sql_schema_inspect", true, false, true, true],
+      ["tinycloud_sql_query", true, false, true, true],
+      ["tinycloud_sql_execute", false, true, false, true],
+      ["tinycloud_secrets_get", false, false, true, true],
+      ["tinycloud_secrets_status", true, false, true, true],
+    ]);
 
     const status = await client.callTool({ name: "tinycloud_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({

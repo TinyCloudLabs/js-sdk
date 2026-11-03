@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import {
+  OPERATION_ERROR_CODES,
   OperationInvocationError,
   internalOperationError,
   nodeRetryOperationError,
@@ -8,6 +9,45 @@ import {
   sanitizeThrownOperationError,
 } from "./errors.js";
 import { appsFailure } from "./tc-apps/kv.js";
+
+test("defines every stable v1 operation error code", () => {
+  expect(OPERATION_ERROR_CODES).toEqual([
+    "INPUT_INVALID",
+    "OPERATION_NOT_FOUND",
+    "OPERATION_VERSION_UNSUPPORTED",
+    "PROFILE_NOT_FOUND",
+    "PROFILE_POSTURE_NOT_ALLOWED",
+    "PROFILE_OWNER_OPT_IN_REQUIRED",
+    "PROFILE_MIGRATION_REQUIRED",
+    "AUTH_REQUIRED",
+    "PERMISSION_DENIED",
+    "SESSION_NOT_FOUND",
+    "PERMISSION_HINT_INVALID",
+    "DELEGATION_ARTIFACT_INVALID",
+    "DELEGATION_EXPIRED",
+    "DELEGATION_AUDIENCE_MISMATCH",
+    "DELEGATION_HOST_MISMATCH",
+    "DELEGATION_REJECTED",
+    "ENCRYPTION_NETWORK_UNRESOLVED",
+    "NODE_UNREACHABLE",
+    "NODE_ERROR",
+    "STORAGE_QUOTA_EXCEEDED",
+    "KV_NOT_FOUND",
+    "KV_PRECONDITION_FAILED",
+    "KV_CONFLICT",
+    "KV_RESPONSE_TOO_LARGE",
+    "SQL_QUERY_INVALID",
+    "SQL_EXECUTION_FAILED",
+    "SQL_RESULT_LIMIT_EXCEEDED",
+    "SQL_VALUE_UNSAFE",
+    "READ_SOURCE_CHANGED",
+    "READ_CONTEXT_MISMATCH",
+    "SECRET_READ_FAILED",
+    "SECRET_DECRYPT_FAILED",
+    "OUTPUT_INVALID",
+    "INTERNAL_ERROR",
+  ]);
+});
 
 test("preserves only typed expected failures and sanitizes generic exceptions", () => {
   const expected = operationError("NODE_UNREACHABLE", "The node is unavailable.", {

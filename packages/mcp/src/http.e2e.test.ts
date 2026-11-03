@@ -82,6 +82,39 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
+  // Restores the hosted count pin removed in #826 and covers its actual 24-tool matrix.
+  // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
+  expect(tools.tools.map(({ name, annotations }) => [
+    name, annotations?.readOnlyHint, annotations?.destructiveHint,
+    annotations?.idempotentHint, annotations?.openWorldHint,
+  ])).toEqual([
+    ["tinycloud_status", true, false, true, false],
+    ["tinycloud_auth_status", true, false, true, false],
+    ["tinycloud_auth_capabilities", true, false, true, false],
+    ["tinycloud_auth_request", false, false, true, false],
+    // TC-2469 F5: preserve today's read-only hint despite saving a pending request.
+    ["tinycloud_auth_read_scope", true, false, true, false],
+    ["tinycloud_account_spaces_list", true, false, true, true],
+    ["tinycloud_account_applications_list", true, false, true, true],
+    ["tinycloud_kv_list", true, false, true, true],
+    ["tinycloud_kv_get", true, false, true, true],
+    ["tinycloud_read", true, false, true, true],
+    ["tinycloud_kv_head", true, false, true, true],
+    ["tinycloud_kv_put", false, true, true, true],
+    ["tinycloud_kv_delete", false, true, true, true],
+    ["tinycloud_knowledge_list", true, false, true, true],
+    ["tinycloud_knowledge_read", true, false, true, true],
+    ["tinycloud_sql_schema_inspect", true, false, true, true],
+    ["tinycloud_sql_query", true, false, true, true],
+    ["tinycloud_sql_execute", false, true, false, true],
+    ["tinycloud_secrets_get", false, false, true, true],
+    ["tinycloud_apps_context", false, true, true, false],
+    ["tinycloud_apps_read", true, false, true, false],
+    ["tinycloud_apps_write", false, true, false, false],
+    // TC-2468: deliberately pin the current over-annotation until its behavior fix.
+    ["tinycloud_apps_query", false, true, true, false],
+    ["tinycloud_connect", false, false, true, false],
+  ]);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
   // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
   // reauthorization path for a server-revoked session (TC-896).
