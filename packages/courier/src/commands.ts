@@ -349,6 +349,7 @@ async function pairAccept(args: ParsedArgs) {
 
   if (art.step === 'A') {
     const handle = art.callMe;
+    if (profile.peers[handle]?.status === 'paired') fail('usage', `Already paired with ${handle}.`);
     const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     const peer: StoredPeer = {
       handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
