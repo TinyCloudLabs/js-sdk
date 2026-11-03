@@ -18,7 +18,7 @@
 //     when the request carried `expiryChangeable: true`. The session then
 //     lives for the SIGNED expiry; see `checkChangedExpiration`.
 
-import { EXPIRY } from "../expiry";
+import { MAX_SIWE_EXPIRY_MS, technicalExpiryRefusal } from "../expiry";
 
 export interface TinyCloudAuthorizationRequestV1 {
   protocolVersion: 1;
@@ -507,8 +507,9 @@ export interface CheckChangedExpirationInput {
  *     non-ReCap resources, and the statement when there is no ReCap);
  *   - a CHANGED expiry is a valid timestamp, more than 60 seconds from now,
  *     after `Issued At` and after `Not Before` (when the prepared message has
- *     them), not after `maxExpiresAt` (when given), and within ten years
- *     (`EXPIRY.MAX_MS`).
+ *     them), not after `maxExpiresAt` (when given), and no later than
+ *     9999-12-31T23:59:59Z, the latest a sign-in message can carry
+ *     (`MAX_SIWE_EXPIRY_MS`).
  *
  * An unchanged expiry passes the expiry rules. The ReCap subset check and the
  * rest of the result verification stay with the caller and are not relaxed.
@@ -538,7 +539,11 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   if (signed.expirationTime === prepared.expirationTime) return null;
 
   const expiresAt = parseInstantMs(signed.expirationTime);
-  if (expiresAt === undefined) return "expiry is not a valid timestamp";
+  if (expiresAt === undefined) {
+    // The strict timestamp grammar reads four-digit years only: name the 9999 limit for a later year.
+    const later = Date.parse(signed.expirationTime ?? "");
+    return later > MAX_SIWE_EXPIRY_MS ? technicalExpiryRefusal(later, "siwe") : "expiry is not a valid timestamp";
+  }
   if (expiresAt <= nowMs + CHANGED_EXPIRY_MIN_REMAINING_MS) {
     return "expiry must be more than 60 seconds from now; choose a longer expiry";
   }
@@ -551,10 +556,7 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   if (maxMs !== undefined && expiresAt > maxMs) {
     return `expiry is later than the maximum for this request (the latest allowed is ${new Date(maxMs).toISOString()}); choose an earlier expiry`;
   }
-  if (expiresAt > nowMs + EXPIRY.MAX_MS) {
-    return "expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry";
-  }
-  return null;
+  return technicalExpiryRefusal(expiresAt, "siwe");
 }
 
 /**

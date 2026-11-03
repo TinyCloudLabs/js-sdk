@@ -46,6 +46,8 @@ import { approvedTc2254HeldWireRatchet, validateTc2254HeldWireRatchetTransition 
 import { approvedTc2281OpenKeyUnconnectedGuard, validateTc2281OpenKeyUnconnectedGuardTransition } from "./replica-size-policy";
 import { approvedTc2242PathBoundShares, validateTc2242PathBoundSharesTransition } from "./replica-size-policy";
 import { approvedTc2276SignedExpiry, validateTc2276SignedExpiryTransition } from "./replica-size-policy";
+import { approvedTc2276TechnicalLimits, validateTc2276TechnicalLimitsTransition } from "./replica-size-policy";
+import { approvedTc2418AbortListenerCleanup, validateTc2418AbortListenerCleanupTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2935,6 +2937,8 @@ delete tc2043Ledger.tc2254HeldWireRatchet;
 delete tc2043Ledger.tc2281OpenKeyUnconnectedGuard;
 delete tc2043Ledger.tc2242PathBoundShares;
 delete tc2043Ledger.tc2276SignedExpiry;
+delete tc2043Ledger.tc2276TechnicalLimits;
+delete tc2043Ledger.tc2418AbortListenerCleanup;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3434,8 +3438,8 @@ describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977OpenKeySigninRatchet")).toEqual({ row: "tc1977OpenKeySigninRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977OpenKeySigninRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing window location prerequisite", () => {
@@ -3473,8 +3477,8 @@ describe("iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765) size ra
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2130PanelIphoneRatchet")).toEqual({ row: "tc2130PanelIphoneRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2130PanelIphoneRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing OpenKey sign-in prerequisite", () => {
@@ -3512,8 +3516,8 @@ describe("isAppKeyHostBound export (TC-1977, #767) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977HostBindingRatchet")).toEqual({ row: "tc1977HostBindingRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977HostBindingRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing panel safe-area prerequisite", () => {
@@ -4161,6 +4165,131 @@ describe("accept a user-changed OpenKey expiry behind an opt-in and use the sign
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2276SignedExpiryTransition(undefined, changed)).toThrow("TC-2276");
     expect(() => validateTc2276SignedExpiryTransition(row(), undefined)).toThrow("TC-2276");
+  });
+});
+
+describe("replace the 10-year lifetime ceiling with the technical expiry limits (TC-2272, #829) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2276TechnicalLimits);
+  const prerequisite = () => approvedTc2276SignedExpiry;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2276TechnicalLimits).toEqual(approvedTc2276TechnicalLimits);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 286, "index.cjs": 1140 },
+      ceiling: { "index.mjs": 1478684, "index.cjs": 1421196 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("e981c1020eb208f4b9918ba3dba487dbb0f19191");
+    expect(row().sourceCommits).toEqual(["62cf64215149a30d743317a3b88548080cd47f19"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828/job/125635880163",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828/job/125635879697",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current)).toContainEqual({
+      row: "tc2276TechnicalLimits",
+      ceiling: { "index.mjs": 1478684, "index.cjs": 1421196 },
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2276TechnicalLimits",
+      pin: "62cf64215149a30d743317a3b88548080cd47f19",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2276 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2276TechnicalLimits!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2272");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2276SignedExpiry;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2272");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2276TechnicalLimitsTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2276TechnicalLimitsTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2276TechnicalLimitsTransition(undefined, changed)).toThrow("TC-2272");
+    expect(() => validateTc2276TechnicalLimitsTransition(row(), undefined)).toThrow("TC-2272");
+  });
+});
+
+describe("stop leaking an abort listener per request (TC-2418, #844) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2418AbortListenerCleanup);
+  const prerequisite = () => approvedTc2276TechnicalLimits;
+
+  it("pins exact canonical CI bytes in every bucket it moves and carries the ceilings of the others", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2418AbortListenerCleanup).toEqual(approvedTc2418AbortListenerCleanup);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 31, "index.cjs": 42 },
+      ceiling: { "index.mjs": 1478715, "index.cjs": 1421238 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("356c6053b4789529ab6c84536a385adf2e4e0c77");
+    expect(row().sourceCommits).toEqual(["7b80027520dffc43444b34a9f6696e2b082ab3ea"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943580",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943897",
+      ],
+    });
+    // First import and activation measured inside the carried ceilings: their deltas are recorded, the ceilings stay.
+    expect(row().firstImport).toEqual({
+      delta: { "replica.mjs": 1, "replica.cjs": -3 },
+      ceiling: prerequisite().firstImport.ceiling,
+    });
+    expect(row().activation).toEqual({
+      delta: { "activation.mjs": -5, "activation.cjs": -2 },
+      ceiling: prerequisite().activation.ceiling,
+    });
+    expect(row().worker).toEqual({ delta: 22, ceiling: prerequisite().worker.ceiling + 22 });
+    expect(row().replicaWorker).toEqual({ delta: 27, ceiling: prerequisite().replicaWorker.ceiling + 27 });
+    expect(row().worker.ceiling).toBe(776561);
+    expect(row().replicaWorker.ceiling).toBe(770494);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    // Naomi's ruling: at most +150 B in any bucket.
+    for (const delta of [...Object.values(row().root.delta), ...Object.values(row().firstImport.delta), ...Object.values(row().activation.delta), row().worker.delta, row().replicaWorker.delta]) {
+      expect(delta).toBeLessThanOrEqual(150);
+    }
+    expect(rootCeilings(current).at(-1)).toEqual({
+      row: "tc2418AbortListenerCleanup",
+      ceiling: { "index.mjs": 1478715, "index.cjs": 1421238 },
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2418AbortListenerCleanup",
+      pin: "7b80027520dffc43444b34a9f6696e2b082ab3ea",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2272 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2418AbortListenerCleanup!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2418");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2276TechnicalLimits;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2418");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2418AbortListenerCleanupTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2418AbortListenerCleanupTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2418AbortListenerCleanupTransition(undefined, changed)).toThrow("TC-2418");
+    expect(() => validateTc2418AbortListenerCleanupTransition(row(), undefined)).toThrow("TC-2418");
   });
 });
 

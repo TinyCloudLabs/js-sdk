@@ -226,7 +226,7 @@ test("an active answer is reused for 30 seconds", async () => {
   expect(stub.calls).toHaveLength(2);
 });
 
-test("OpenKey unreachable: calls are served for less than the token lifetime, then refused", async () => {
+test("OpenKey unreachable: a 300 s token is served for 59 s since OpenKey last answered, then refused", async () => {
   const stub = stubOpenKey("active");
   const clock = { now: Date.now() };
   const { verify, sign } = await verifierWith(stub, clock);
@@ -234,9 +234,9 @@ test("OpenKey unreachable: calls are served for less than the token lifetime, th
   await verify(token);
 
   stub.answer = "down";
-  clock.now += 299_000; // 299 s since OpenKey last answered; token lifetime is 300 s
+  clock.now += 59_000;
   await expect(verify(token)).resolves.toMatchObject({ extra: { subject: expect.any(String) } });
-  clock.now += 1_000; // 300 s
+  clock.now += 1_000; // 60 s
   const refused = await verify(token).catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(OAuthError);
   if (!(refused instanceof OAuthError)) throw new Error("Expected an OAuthError.");
@@ -267,7 +267,7 @@ test("a 401 from OpenKey is logged once and refused even inside the outage allow
   await verify(token); // OpenKey answered at t0
 
   stub.answer = "unauthorized";
-  clock.now += 40_000; // active window over; well inside the 300 s allowance
+  clock.now += 40_000; // active window over; still inside the 60 s outage allowance
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
   }
@@ -335,6 +335,200 @@ test("an unknown answer is tolerated only for a token OpenKey answered active, w
   await expect(verify(token)).resolves.toMatchObject({ clientId: "claude-client" });
   clock.now += 1_000; // 60 s: the token's lifetime
   await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
+});
+
+test("the outage tolerance ends at the 60 s cap even when the token lives a day", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const checker = checkerWith(stub, clock);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  stub.answer = "down";
+  clock.now += 59_000;
+  expect(await checker.tokenStatus(token)).toBe("unknown");
+  expect(checker.toleratesUnknown(token)).toBe(true);
+  clock.now += 1_000; // 60 s since OpenKey last answered
+  expect(await checker.tokenStatus(token)).toBe("unknown");
+  expect(checker.toleratesUnknown(token)).toBe(false);
+  clock.now += 3_600_000; // hours of the token's life remain
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("a day-long token OpenKey never answered about is refused while OpenKey is down", async () => {
+  const stub = stubOpenKey("down");
+  const clock = { now: Date.now() };
+  const { verify, sign } = await verifierWith(stub, clock);
+  await expect(verify(await sign("24h"))).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
+});
+
+test("a token confirmed active and then answered inactive is refused, outage or not", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { verify, sign } = await verifierWith(stub, clock);
+  const token = await sign("24h");
+  await verify(token);
+
+  clock.now += 31_000; // the active answer is no longer reused
+  stub.answer = "inactive";
+  await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+  stub.answer = "down";
+  clock.now += 1_000; // 32 s: still inside the 60 s of the earlier confirmation
+  await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+});
+
+/** A checker whose wall clock (compared with `exp`) and monotonic clock (measures the windows) are separate. */
+function checkerWithClocks(
+  stub: StubOpenKey,
+  wall: { now: number },
+  monotonic: { now: number },
+  doFetch: typeof fetch = stub.fetch,
+) {
+  return createTokenStatusChecker({
+    endpoint: INTROSPECTION,
+    clientId: "mcp-client",
+    clientSecret: "s3cret/+ value",
+    resourceUrl: AUDIENCE,
+    authMethod: "basic",
+    fetch: doFetch,
+    now: () => wall.now,
+    monotonicNow: () => monotonic.now,
+    log: (message) => stub.logs.push(message),
+  });
+}
+
+test("a backward wall-clock step does not extend the outage tolerance", async () => {
+  const stub = stubOpenKey("active");
+  const wall = { now: Date.now() };
+  const monotonic = { now: 1_000_000 };
+  const { sign } = await jwksServer();
+  const checker = checkerWithClocks(stub, wall, monotonic);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  stub.answer = "down";
+  wall.now -= 3_600_000; // the wall clock is stepped back an hour
+  monotonic.now += 60_000;
+  expect(await checker.tokenStatus(token)).toBe("unknown");
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("a backward wall-clock step does not extend the 30 s active answer", async () => {
+  const stub = stubOpenKey("active");
+  const wall = { now: Date.now() };
+  const monotonic = { now: 1_000_000 };
+  const { sign } = await jwksServer();
+  const checker = checkerWithClocks(stub, wall, monotonic);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  stub.answer = "inactive";
+  wall.now -= 3_600_000;
+  monotonic.now += 31_000;
+  expect(await checker.tokenStatus(token)).toBe("inactive");
+});
+
+test("the tolerance counts from when OpenKey was asked, not from when a slow answer arrived", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const slowFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    clock.now += 2_900; // OpenKey takes 2.9 s to answer
+    return stub.fetch(input, init);
+  }) as typeof fetch;
+  const checker = checkerWithClocks(stub, clock, clock, slowFetch);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active"); // asked at t0, answered at t0 + 2.9 s
+
+  clock.now += 57_099; // 59.999 s after the ask
+  expect(checker.toleratesUnknown(token)).toBe(true);
+  clock.now += 1; // 60 s after the ask, 57.1 s after the answer
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("the 30 s active answer counts from when OpenKey was asked, not from when a slow answer arrived", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const slowFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    clock.now += 2_900;
+    return stub.fetch(input, init);
+  }) as typeof fetch;
+  const checker = checkerWithClocks(stub, clock, clock, slowFetch);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active"); // asked at t0, answered at t0 + 2.9 s
+
+  clock.now += 27_099; // 29.999 s after the ask
+  expect(await checker.tokenStatus(token)).toBe("active");
+  expect(stub.calls).toHaveLength(1);
+  clock.now += 1; // 30 s after the ask
+  await checker.tokenStatus(token);
+  expect(stub.calls).toHaveLength(2);
+});
+
+test("a forward wall-clock step does not move the windows, which run on the monotonic clock", async () => {
+  const stub = stubOpenKey("active");
+  const wall = { now: Date.now() };
+  const monotonic = { now: 1_000_000 };
+  const { sign } = await jwksServer();
+  const checker = checkerWithClocks(stub, wall, monotonic);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  wall.now += 3_600_000; // the wall clock jumps an hour ahead; the token has hours left
+  monotonic.now += 1_000;
+  expect(await checker.tokenStatus(token)).toBe("active");
+  expect(stub.calls).toHaveLength(1);
+  stub.answer = "down";
+  expect(checker.toleratesUnknown(token)).toBe(true);
+});
+
+test("an active-cache hit does not renew the outage tolerance", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const checker = checkerWith(stub, clock);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+  clock.now += 29_000;
+  expect(await checker.tokenStatus(token)).toBe("active"); // served from the cache, OpenKey not asked
+  expect(stub.calls).toHaveLength(1);
+
+  stub.answer = "down";
+  clock.now += 31_000; // 60 s after OpenKey answered, 31 s after the cache hit
+  expect(await checker.tokenStatus(token)).toBe("unknown");
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("the tolerance never outlasts the token's expiry", async () => {
+  const stub = stubOpenKey("active");
+  const { sign } = await jwksServer();
+  const token = await sign("20s");
+  const expiresAt = (decodeJwt(token).exp ?? 0) * 1000;
+  const clock = { now: expiresAt - 10_000 };
+  const checker = checkerWith(stub, clock);
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  clock.now = expiresAt - 1;
+  expect(checker.toleratesUnknown(token)).toBe(true);
+  clock.now = expiresAt;
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("an inactive answer ends the token's confirmation", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const checker = checkerWith(stub, clock);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+  expect(checker.toleratesUnknown(token)).toBe(true);
+
+  clock.now += 31_000;
+  stub.answer = "inactive";
+  expect(await checker.tokenStatus(token)).toBe("inactive");
+  expect(checker.toleratesUnknown(token)).toBe(false);
 });
 
 test("a mismatching answer clears the token's confirmation", async () => {

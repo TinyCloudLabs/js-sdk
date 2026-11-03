@@ -7,3 +7,5 @@
 A new `maxExpiresAt` option (epoch milliseconds, a `Date`, or a function read when the result arrives) sets the latest signed expiry an app accepts. A signed expiry beyond it is refused before any session is built, stored or activated; it is never sent to OpenKey or persisted, and it limits a changed expiry only. The persisted `expiresAt` and `createdAt` of every sign-in now come from the `Expiration Time` and `Issued At` lines at the start of a line, so text inside a ReCap statement can no longer stand in for them.
 
 Details: TC-2276
+
+Update: the 10-year limit was removed in a later change; the only upper limits are year 9999 for a signed message and 2255 for a delegation signed by the session key.
