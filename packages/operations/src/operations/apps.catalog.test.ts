@@ -98,6 +98,7 @@ describe("telling 'Health Log is not installed' apart from other failures", () =
     for (const error of [
       { code: "SQL_DATABASE_NOT_FOUND", message: "SQL query failed: 404 - database not found", meta: { status: 404 } },
       { code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: meal" },
+      { code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: nosuchtable" },
     ]) {
       const outcome = await failWith(error);
       expect(missing(outcome)).toBe(true);
@@ -107,6 +108,8 @@ describe("telling 'Health Log is not installed' apart from other failures", () =
   test("permission, network and ordinary SQL errors are never reported as not installed", async () => {
     for (const error of [
       { code: "SQL_PERMISSION_DENIED", message: "SQL query failed: 403 - denied" },
+      { code: "PERMISSION_DENIED", message: "SQL query failed: 401 - Unauthorized Action: tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000000:applications/sql/xyz.tinycloud.sample.healthlog/healthlog / tinycloud.sql/read" },
+      { code: "SQL_ERROR", message: "SQL query failed: 401 - Unauthorized Action: tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000000:applications/sql/xyz.tinycloud.sample.healthlog/healthlog / tinycloud.sql/write" },
       { code: "AUTH_UNAUTHORIZED", message: "SQL query failed: 401" },
       { code: "NETWORK_ERROR", message: "fetch failed" },
       { code: "SQL_ERROR", message: "SQL query failed: 400 - near \"SELEC\": syntax error" },
