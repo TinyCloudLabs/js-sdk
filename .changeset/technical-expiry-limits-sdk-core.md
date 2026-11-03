@@ -9,6 +9,6 @@ The 10-year ceiling on lifetimes is gone. `EXPIRY.MAX_MS` is removed from the `E
 
 `technicalExpiryRefusal(expiresAt, "siwe" | "ucan")` returns a plain, dated reason (or `null`) and `assertExpiryWithinTechnicalLimit` throws it. Both also refuse an invalid Date, `NaN` and `Infinity`, which would otherwise surface as `RangeError: Invalid time value`.
 
-`checkChangedExpiration` (the OpenKey changed-expiry check) now refuses an expiry later than 9999-12-31 with `expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry` instead of `more than 10 years away`. Every other rule is unchanged: a valid timestamp, more than 60 seconds from now, after `Issued At` and `Not Before`, and not after `maxExpiresAt`.
+`checkChangedExpiration` (the OpenKey changed-expiry check) now refuses an expiry later than 9999-12-31 with `expiry is later than 9999-12-31, the latest date a TinyCloud signed message can carry; choose an earlier expiry` instead of `more than 10 years away`. Every other rule is unchanged: a valid timestamp, more than 60 seconds from now, after `Issued At` and `Not Before`, and not after `maxExpiresAt`.
 
 Details: TC-2272
