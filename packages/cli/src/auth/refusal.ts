@@ -36,13 +36,21 @@ export const wasRefusedAfterApproval = (error: unknown): boolean => typeof error
 export const carriedDelegation = (error: unknown): Record<string, unknown> | undefined =>
   typeof error === "object" && error !== null ? refusedResults.get(error) : undefined;
 
+/**
+ * A ceiling the approval exceeds only against the LOCAL clock (a CLI clock behind OpenKey's makes a lifetime as requested look
+ * too long) is not a refusal of the approval: it is kept like AUTH_EXPIRED, so the same command can resume it.
+ */
+const clockDependent = new WeakSet<object>();
+export function markClockDependent(error: unknown): void {
+  if (typeof error === "object" && error !== null) clockDependent.add(error);
+}
+
 export function isPermanentRefusal(error: unknown): error is CLIError {
-  return error instanceof CLIError && (PERMANENT_REFUSALS.has(error.code) || wasRefusedAfterApproval(error));
+  return error instanceof CLIError && !clockDependent.has(error) && (PERMANENT_REFUSALS.has(error.code) || wasRefusedAfterApproval(error));
 }
 
 /**
- * When the grant OpenKey made ends: the `Expiration Time` of the result's own SIWE (the last anchored line, as the saved
- * session reads it). Display only, so an unverified result still says what it claims; no readable line means no date.
+ * When the grant OpenKey made ends: the `Expiration Time` of the result's own SIWE (the last anchored line). Display only, so an unverified result still says what it claims; no readable line means no date.
  */
 export function grantedUntil(delegation: Record<string, unknown> | undefined): string | undefined {
   const siwe = typeof delegation?.siwe === "string" ? delegation.siwe : "";
@@ -51,17 +59,20 @@ export function grantedUntil(delegation: Record<string, unknown> | undefined): s
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 }
 
-/** The refused delegation's CID (not a secret), from a result or a portable grant. */
+/** A CID is base32 or base58: letters and digits only. A value from an unverified result is never printed or matched otherwise. */
+export const isCid = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9]{8,128}$/.test(value);
+
+/** The refused delegation's CID (not a secret), from a result or a portable grant; undefined when it does not look like a CID. */
 export function delegationCidOf(delegation: Record<string, unknown> | undefined): string | undefined {
   const cid = delegation?.delegationCid ?? delegation?.cid;
-  return typeof cid === "string" && cid !== "" ? cid : undefined;
+  return isCid(cid) ? cid : undefined;
 }
 
 const approvalText = (until: string | undefined): string => `OpenKey granted this approval${until === undefined ? "" : ` until ${until}`}`;
 export const keyDeletedLine = (until?: string): string =>
   `${approvalText(until)}, but this CLI did not use it and its key was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.`;
 export const keyKeptLine = (until?: string): string =>
-  `${approvalText(until)} and the key it belongs to still exists on this device (other grants use it). Revoke it at account.tinycloud.xyz.`;
+  `${approvalText(until)} and the key it belongs to still exists on this device (other grants may use it). Revoke it at account.tinycloud.xyz.`;
 const keyNotDeletedLine = (until: string | undefined, reason: string): string =>
   `${approvalText(until)}, but this CLI did not use it and could not delete its key (${reason}). Revoke it at account.tinycloud.xyz.`;
 

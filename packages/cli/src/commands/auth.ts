@@ -2475,9 +2475,9 @@ async function rotateAuthKey(
     return generateKey();
   });
 
-  // Nothing is written until OpenKey's approval is verified: refreshOpenKeySession holds the new key in memory and commits
-  // key, session and profile in one compare-and-commit, so a refused or interrupted rotation leaves the old key and login
-  // exactly as they were. A concurrent change to the profile makes that commit refuse. A named-keys profile signs in through
+  // key.json is not touched until OpenKey's approval is verified: the new key is held in memory (paste) or in the pending
+  // request's file, mode 0600 (default flow), and refreshOpenKeySession commits key, session and profile in one
+  // compare-and-commit, so a refused or interrupted rotation leaves the old key and login exactly as they were. A concurrent change to the profile makes that commit refuse. A named-keys profile signs in through
   // a prepared session whose key the SDK creates, so it has no key of ours to stage.
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
@@ -2764,7 +2764,7 @@ interface OpenKeyLoginOptions {
   keys?: string;
   /** This command created the profile (and its key) just before asking OpenKey: a permanent refusal removes them. */
   createdProfile?: CreatedProfile;
-  /** `auth rotate`: the new session key, held in memory until the approval is verified and committed. */
+  /** `auth rotate`: the new session key; key.json keeps the old key until the approval is verified and committed. */
   rotation?: { jwk: object; did: string };
 }
 
@@ -3103,7 +3103,8 @@ export async function refreshOpenKeySession(
   // A logged-out nonreplica profile has no restorable signer. Keep the
   // candidate private key in memory until the signed OpenKey result verifies
   // and commitLogin atomically writes the key, session and matching DID. A
-  // rotation's new key is held the same way: the old key and login stay until then.
+  // rotation's new key is held the same way (in the pending request's file, mode 0600, on the approval-request path): the old key
+  // and login stay until then.
   const pendingKey = snapshot.key === null ? await pendingApprovalKey(profileName) : undefined;
   const fresh = snapshot.key === null && pendingKey === undefined && options.rotation === undefined ? generateKey() : null;
   const key = options.rotation?.jwk ?? snapshot.key ?? pendingKey ?? fresh!.jwk;
@@ -3112,7 +3113,11 @@ export async function refreshOpenKeySession(
 
   // OpenKey made the delegation before this command verifies it: a permanent refusal in the approval or the checks below
   // drops the saved approval, deletes a key this command created, and tells the owner how to revoke the grant.
-  const site = { profileName, key, storedKey: snapshot.key, ...(options.createdProfile === undefined ? {} : { createdProfile: options.createdProfile }) };
+  const site = {
+    profileName, key, storedKey: snapshot.key,
+    ...(options.createdProfile === undefined ? {} : { createdProfile: options.createdProfile }),
+    ...(options.rotation === undefined ? {} : { rotation: true }),
+  };
   const committed = await refusing(site, async (seen) => {
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;

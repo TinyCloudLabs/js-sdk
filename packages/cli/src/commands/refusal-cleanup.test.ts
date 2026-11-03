@@ -334,12 +334,14 @@ describe("the notice prints a CID only when it looks like one", () => {
   test("dropCommittedDelegation ignores a CID that is not a CID: a record keyed on it stays", async () => {
     const { dropCommittedDelegation, pendingDelegationFor } = await import("../auth/pending-code.js");
     await createKeyOnlyProfile(profileName, HOST);
+    const { generateKey } = await import("../auth/local-key.js");
+    const sessionKey = (await generateKey()).jwk as Record<string, unknown>;
     pickedLifetimeMs = 7 * DAY;
-    const odd = { ...(await proofFor("did:key:x", { kty: "OKP", crv: "Ed25519", x: "k" }, pickedLifetimeMs)), delegationCid: "not a cid\n" };
+    const odd = { ...(await proofFor("did:key:x", sessionKey, pickedLifetimeMs)), delegationCid: "not a cid\n" };
     await savePendingDelegation(profileName, "abcd-efgh", odd as never);
     await dropCommittedDelegation(profileName, { delegationCid: "not a cid\n" });
     expect(await pendingDelegationFor(profileName, "abcd-efgh")).toBeDefined();
-    const real = await proofFor("did:key:x", { kty: "OKP", crv: "Ed25519", x: "k" }, pickedLifetimeMs);
+    const real = await proofFor("did:key:x", sessionKey, pickedLifetimeMs);
     await savePendingDelegation(profileName, "wxyz-2345", real as never);
     await dropCommittedDelegation(profileName, { delegationCid: real.delegationCid });
     expect(await pendingDelegationFor(profileName, "wxyz-2345")).toBeUndefined();

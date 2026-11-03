@@ -169,7 +169,7 @@ const login = (openkey: OpenKeyStub, permissions: PermissionEntry[] = requested)
   emitInstructions: () => undefined, wait: async () => undefined,
 }));
 const deleted = /^Refused delegation: \S+\. OpenKey granted this approval until \d{4}-\d\d-\d\dT[\d:.]+Z, but this CLI did not use it and its key was deleted, so it cannot be used\. You can also remove it at account\.tinycloud\.xyz\. .*cannot revoke it.*https:\/\/account\.tinycloud\.xyz\/delegations/;
-const kept = /^Refused delegation: \S+\. OpenKey granted this approval until \d{4}-\d\d-\d\dT[\d:.]+Z and the key it belongs to still exists on this device \(other grants use it\)\. Revoke it at account\.tinycloud\.xyz\. .*cannot revoke it.*https:\/\/account\.tinycloud\.xyz\/delegations/;
+const kept = /^Refused delegation: \S+\. OpenKey granted this approval until \d{4}-\d\d-\d\dT[\d:.]+Z and the key it belongs to still exists on this device \(other grants may use it\)\. Revoke it at account\.tinycloud\.xyz\. .*cannot revoke it.*https:\/\/account\.tinycloud\.xyz\/delegations/;
 
 describe("a refused device approval", () => {
   beforeEach(() => { stderr.length = 0; });

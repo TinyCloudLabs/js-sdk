@@ -17,12 +17,17 @@ export interface RefusalSite {
   readonly storedKey: object | null;
   /** The profile (and its key) was created by this very command. */
   readonly createdProfile?: CreatedProfile;
+  /**
+   * `auth rotate`: the staged key lives only in the pending request (the request file, mode 0600, until the approval verifies),
+   * and a rotation never resumes a kept request. Any failure after the approval arrived therefore drops that request.
+   */
+  readonly rotation?: boolean;
 }
 
 /**
- * A key THIS sign-in created is one that never was, or only just was, the profile's: held in memory (a first sign-in, a
- * rotation's staged key: `key` is not the stored key) or in a pending request. Only those, and the key of a profile this
- * command created, are ever deleted. A stored key that already existed is kept, whether or not a session is live now.
+ * A key THIS sign-in created is one that never was, or only just was, the profile's: held in memory (a first paste sign-in) or
+ * only in the pending request's file (a first sign-in or a rotation's staged key on the approval-request path: `key` is not the
+ * stored key). Only those, and the key of a profile this command created, are ever deleted. A stored key that already existed is kept, whether or not a session is live now.
  */
 const heldOnlyInMemory = (site: RefusalSite): boolean => site.storedKey === null || canonicalJson(site.storedKey) !== canonicalJson(site.key);
 
@@ -93,6 +98,12 @@ export async function refusing<T>(site: RefusalSite, step: (seen: { result?: obj
   try {
     return await step(seen);
   } catch (error) {
+    if (site.rotation === true && seen.result !== undefined) {
+      try {
+        const { dropRefusedApproval } = await import("./approval-request.js");
+        await dropRefusedApproval(site.profileName, seen.result);
+      } catch { /* the request only expires on its own */ }
+    }
     await discardRefusedApproval(site, error, seen.result);
     throw error;
   }
