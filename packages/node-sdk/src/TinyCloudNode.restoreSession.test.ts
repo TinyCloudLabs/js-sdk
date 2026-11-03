@@ -1344,6 +1344,17 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
     );
   });
 
+  test("a remembered hosted answer does not depend on the case of the address in the space id", async () => {
+    const { node, proof } = await restoredNode({ abilities: LIST_GET });
+    const address = /0x[0-9a-fA-F]{40}/.exec(proof.spaceId)![0];
+    const shouted = proof.spaceId.replace(address, `0x${address.slice(2).toUpperCase()}`);
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+      await expect(node.checkSpaceHosting(proof.spaceId)).resolves.toBe("hosted");
+      await expect(node.checkSpaceHosting(shouted)).resolves.toBe("hosted");
+      expect(calls).toHaveLength(1);
+    });
+  });
+
   test("a 2xx cancels the response body instead of downloading it", async () => {
     const { node } = await restoredNode({ abilities: { kv: { "notes/": ["tinycloud.kv/get"] } } });
     let cancelled = false;

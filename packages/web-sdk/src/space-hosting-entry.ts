@@ -1,2 +1,2 @@
-/** Space hosting probe loaded when the first hosting check runs. */
-export { askSpaceHosting } from "@tinycloud/node-sdk/space-hosting";
+/** Space hosting probe and space creation, loaded when the first hosting check or creation runs. */
+export { askSpaceHosting, createPrimarySpace } from "@tinycloud/node-sdk/space-hosting";

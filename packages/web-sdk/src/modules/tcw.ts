@@ -1062,9 +1062,12 @@ export class TinyCloudWeb {
 
   /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */
   private async probeSpaceHosting(node: TinyCloudNode): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([node.checkSpaceHosting(), new Promise((resolve) => setTimeout(resolve, this.spaceHostingCapMs))]);
-    } catch { /* a probe never fails a restore */ }
+      await Promise.race([node.checkSpaceHosting(), new Promise((resolve) => { timer = setTimeout(resolve, this.spaceHostingCapMs); })]);
+    } catch { /* a probe never fails a restore */ } finally {
+      clearTimeout(timer);
+    }
   }
 
   // TC-2380 Q2 seam: undecided between a one-click OpenKey approval and a silent wait; keeps today's behaviour.

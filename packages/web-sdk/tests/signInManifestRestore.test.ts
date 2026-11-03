@@ -1862,4 +1862,36 @@ describe("space hosting on restore (TC-2380)", () => {
     // eth_accounts is a silent read; nothing that prompts (an accounts request, a signature) was asked of the wallet.
     expect(walletRequest.mock.calls.map(([request]) => request.method).filter((method) => method !== "eth_accounts")).toEqual([]);
   });
+
+  test("a restore whose probe answers at once leaves no cap timer pending", async () => {
+    const { tcw } = await webWith(async (n) => {
+      n.spaceHosting = "hosted";
+      return "hosted";
+    });
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    const pending = new Set<unknown>();
+    let capTimers = 0;
+    globalThis.setTimeout = ((handler: () => void, delay?: number, ...args: unknown[]) => {
+      const timer = realSet(handler, delay, ...args);
+      if (delay === 5_000) {
+        capTimers++;
+        pending.add(timer);
+      }
+      return timer;
+    }) as unknown as typeof setTimeout;
+    globalThis.clearTimeout = ((timer?: unknown) => {
+      pending.delete(timer);
+      return realClear(timer as Parameters<typeof clearTimeout>[0]);
+    }) as typeof clearTimeout;
+    try {
+      expect((await tcw.restoreSession(address)).status).toBe("restored");
+    } finally {
+      globalThis.setTimeout = realSet;
+      globalThis.clearTimeout = realClear;
+    }
+    // The 5 s cap was armed, and nothing keeps the process alive once the probe has answered.
+    expect(capTimers).toBe(1);
+    expect(pending.size).toBe(0);
+  });
 });

@@ -2939,6 +2939,7 @@ delete tc2043Ledger.tc2242PathBoundShares;
 delete tc2043Ledger.tc2276SignedExpiry;
 delete tc2043Ledger.tc2276TechnicalLimits;
 delete tc2043Ledger.tc2379SignOutFence;
+delete tc2043Ledger.tc2380SpaceHosting;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4249,7 +4250,7 @@ describe("sign out locally first, fence a signed-out session (TC-2379) size ratc
     expect(row().activation).toEqual(prerequisite().activation);
     expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
-    expect(rootCeilings(current).at(-1)).toEqual({
+    expect(rootCeilings(current)).toContainEqual({
       row: "tc2379SignOutFence",
       ceiling: { "index.mjs": 1479082, "index.cjs": 1421492 },
     });

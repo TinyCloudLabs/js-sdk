@@ -130,7 +130,8 @@ export async function askSpaceHosting(ports: SpaceHostingPorts): Promise<SpaceHo
   const read = selectRead(ports);
   if (!read) return "unknown";
   // Only a session that holds a read on the space is answered from what it already saw.
-  const key = `${ports.host} ${ports.spaceId}`;
+  // The address in a space id is case-insensitive; the rest of it is not.
+  const key = `${ports.host} ${ports.spaceId.replace(/^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})/, (_, prefix: string, address: string) => prefix + address.toLowerCase())}`;
   if (hostedBy.get(ports.scope)?.has(key)) return "hosted";
   let outcome = await send(ports, read);
   if (outcome === "refused") {
