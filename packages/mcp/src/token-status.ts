@@ -58,6 +58,8 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
   const doFetch = config.fetch ?? fetch;
   const clock = config.now ?? Date.now;
   // The windows are measured on a clock a wall-clock step cannot move back; `exp` is compared on the wall clock.
+  // `performance.now` does not count a host suspend on Linux, so a suspend can stretch a window in real
+  // time; the wall-clock `exp` check still bounds it.
   const monotonic = config.monotonicNow ?? (config.now ?? (() => performance.now()));
   const log = config.log ?? ((message: string) => void process.stderr.write(`[tinycloud-mcp-http] ${message}\n`));
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
