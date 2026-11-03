@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.6.1-beta.4",
+      "version": "1.6.1-beta.5",
       "bin": {
         "tc": "./bin/tinycloud",
         "tinycloud": "./bin/tinycloud",
@@ -217,7 +217,7 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
-        "@tinycloud/courier": "0.5.1-beta.2",
+        "@tinycloud/courier": "0.5.1-beta.3",
         "@tinycloud/replica": "0.4.4-beta.0",
         "@types/node": "^20",
         "tsup": "^8.0.0",
@@ -226,7 +226,7 @@
     },
     "packages/courier": {
       "name": "@tinycloud/courier",
-      "version": "0.5.1-beta.2",
+      "version": "0.5.1-beta.3",
       "bin": {
         "courier": "./dist/cli.js",
       },
@@ -243,7 +243,7 @@
     },
     "packages/mcp": {
       "name": "@tinycloud/mcp",
-      "version": "0.8.7-beta.3",
+      "version": "0.9.0-beta.4",
       "bin": {
         "tinycloud-mcp": "./bin/tinycloud-mcp",
         "tinycloud-mcp-http": "./bin/tinycloud-mcp-http",
