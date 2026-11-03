@@ -3,9 +3,10 @@ import type { IHooksService, PortableDelegation, TinyCloudSession } from '@tinyc
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { COURIER_SPACE } from './keys.js';
-import type { Profile, StoredPeer } from './profile.js';
-import { loadGrant, loadKey } from './profile.js';
+import type { AgentKey, OwnerGrant, Profile, StoredPeer } from './profile.js';
+import { loadGrant, loadKey, saveProfile } from './profile.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
+import { verifySpaceReady } from './space-probe.js';
 
 export function nodeOpts(host: string) {
   return {
@@ -23,12 +24,34 @@ const activatedCids = new WeakMap<TinyCloudNode, Set<string>>();
 export async function courierNode(profile: Profile, home?: string): Promise<TinyCloudNode> {
   const key = loadKey(home);
   const grant = loadGrant(home);
-  if (profile.status === 'awaiting-space') {
-    if (profile.spacePending) {
-      throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is still being set up by OpenKey; run \`${cmd('init --resume')}\`.`);
-    }
-    throw new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is missing; after hosting it, run \`${cmd('init --resume')}\`.`);
+  if (profile.status === 'awaiting-space') return healAwaitingSpace(profile, key, grant);
+  return restoreCourierNode(profile, key, grant);
+}
+
+function awaitingSpaceError(profile: Profile): CourierError {
+  if (profile.spacePending) {
+    return new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is still being set up by OpenKey; run \`${cmd('init --resume')}\`.`);
   }
+  return new CourierError('no-space', `TinyCloud "${COURIER_SPACE}" space is missing; after hosting it, run \`${cmd('init --resume')}\`.`);
+}
+
+/**
+ * `awaiting-space` is a cached negative answer, asked again on every use: once the node hosts the space the profile is `ready`
+ * and the command runs. The profile changes only when the shared probe says the space is hosted. A space that is not hosted
+ * (or a profile with no grant to ask with) is the no-space error the profile always gave; a probe that fails propagates its error.
+ * Saving the heal can refuse (the profile changed meanwhile); that refusal is not hidden.
+ */
+async function healAwaitingSpace(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined): Promise<TinyCloudNode> {
+  if (!grant) throw awaitingSpaceError(profile);
+  const node = await restoreCourierNode(profile, key, grant);
+  if (!(await verifySpaceReady(node))) throw awaitingSpaceError(profile);
+  profile.status = 'ready';
+  delete profile.spacePending;
+  saveProfile(profile);
+  return node;
+}
+
+async function restoreCourierNode(profile: Profile, key: AgentKey, grant: OwnerGrant | undefined): Promise<TinyCloudNode> {
   if (!grant || profile.status === 'awaiting-grant') {
     throw new CourierError('no-grant', `No OpenKey owner grant is installed. Run \`${cmd('init')}\` and approve the request in OpenKey.`);
   }

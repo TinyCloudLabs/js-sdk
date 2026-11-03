@@ -142,9 +142,9 @@ If a grant is refused, nothing was installed; tell the owner to revoke the liste
 machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
 installs a grant from a file or stdin (a successful import discards an open short-link request, a refused one leaves it). If OpenKey approves a grant before the
 `agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
-signing in at the Share view, or from a wallet profile run
-`tinycloud space host agents`, then use `init --resume` without requesting another
-approval. Run `init --request` again to renew the owner-approved grant, or
+turning on Auto-Sign in OpenKey and approving the Courier request again, or, from a wallet
+profile, run `tinycloud space host agents` and then `init --resume`. Run
+`init --request` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
 If OpenKey reports the space is still being set up, `init --wait` waits for it
 within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
