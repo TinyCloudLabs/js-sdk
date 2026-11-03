@@ -24,6 +24,18 @@ test("registers exact SQL read and mutation annotations", () => {
     });
 });
 
+test("the personal-apps tools are annotated by what they do: context deletes nothing, writes and queries can", () => {
+  const annotations = Object.fromEntries(toolBindingsForTest()
+    .filter((candidate) => candidate.name.startsWith("tinycloud_apps_"))
+    .map((candidate) => [candidate.name, [candidate.readOnlyHint, candidate.destructiveHint]]));
+  expect(annotations).toMatchObject({
+    tinycloud_apps_context: [false, false],
+    tinycloud_apps_read: [true, false],
+    tinycloud_apps_write: [false, true],
+    tinycloud_apps_query: [false, true],
+  });
+});
+
 
 test("default v2 validation preserves nested references, literals, and exclusive bounds", () => {
   const literal = { $schema: "literal-data", items: [{ type: "not-a-schema" }] };
