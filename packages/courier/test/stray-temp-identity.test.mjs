@@ -205,6 +205,28 @@ scenario('a malformed boot ID does not scrub a live key temp', { skip: !HAS_BOOT
   assert.ok(warning, ctx.errors.join('\n'));
   assert.ok(warning.includes(removalCommand(homeFile(name))), warning);
 });
+scenario('a malformed boot ID does not authorize ESRCH cleanup of a key temp', { skip: !HAS_BOOT_ID }, async (ctx) => {
+  await ctx.request();
+  const keyBefore = fs.readFileSync(homeFile('key.json'));
+  const [kind] = LOCAL.boot.split(':', 1);
+  const pid = 5_000_006;
+  const { name, identityFile } = plantTemp(pid, { boot: `${kind}:corrupt` });
+  const tempBefore = fs.readFileSync(homeFile(name));
+  const identityBefore = fs.readFileSync(homeFile(identityFile));
+  const probes = mockPidProbe(ctx.t, pid);
+  ctx.errors.length = 0;
+
+  recoverInterrupted();
+
+  assert.equal(probes(), 0, 'a malformed identity sidecar is rejected before PID probing');
+  assert.deepEqual(fs.readFileSync(homeFile(name)), tempBefore);
+  assert.deepEqual(fs.readFileSync(homeFile(identityFile)), identityBefore);
+  assert.deepEqual(fs.readFileSync(homeFile('key.json')), keyBefore);
+  const warning = ctx.errors.find((line) => line.includes(name) && /only after confirming no Courier writer anywhere is active/i.test(line));
+  assert.ok(warning, ctx.errors.join('\n'));
+  assert.ok(warning.includes(removalCommand(homeFile(name))), warning);
+});
+
 
 scenario('a saved key stays successful and durable when removing its sidecar fails', (ctx) => {
   const home = process.env.COURIER_HOME;

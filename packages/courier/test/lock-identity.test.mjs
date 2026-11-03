@@ -128,13 +128,11 @@ test('a live holder in this boot is never taken, even with an old file', () => {
   fs.rmSync(file);
 });
 
-// test-ruling: TC-2384 (replaces the earlier `fb-diff` assertion, which took a clock difference as a reboot even with a live pid)
-test('clock-derived boot values never decide: a live pid is kept, a gone pid is recovered by the pid evidence alone', async () => {
+// test-ruling: TC-2384 (clock-derived and malformed boot values never prove a reboot)
+test('clock-derived boot values never decide: a live pid is kept', async () => {
   for (const [kind, boot] of [['kern.boottime', 'boot:1699990000'], ['windows last boot', 'boot:2023-11-07T10:33:20.0000000Z'], ['uptime', 'up:1000000']]) {
     const live = await take(`clock-live-${kind}`, record({ pid: process.pid, machine: 'M', boot }), here('M', LINUX_HERE));
     assert.equal(live.taken, false, `${kind}: a live pid is not stolen on a clock difference`);
-    const dead = await take(`clock-dead-${kind}`, record({ pid: await gone(), machine: 'M', boot }), here('M', LINUX_HERE));
-    assert.equal(dead.taken, true, `${kind}: a gone pid is positive evidence`);
   }
 });
 
@@ -155,6 +153,17 @@ test('a malformed boot ID cannot prove a reboot while its pid exists', { skip: !
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
 });
+// test-ruling: TC-2384
+test('a lock record with a malformed boot ID stays corrupt even when its pid is absent', async () => {
+  for (const [kind, boot] of [['linux', 'linux:corrupt'], ['macOS', 'macos:corrupt'], ['legacy boot', 'boot:1699990000'], ['uptime', 'up:1000000']]) {
+    const content = record({ pid: await gone(), machine: 'M', boot });
+    const run = await take(`malformed-boot-${kind}`, content, here('M', LINUX_NEW));
+    assert.equal(run.taken, false, `${kind}: a malformed boot value is not identity evidence`);
+    assert.equal(run.kept, content);
+    assert.match(run.message, /record Courier cannot read/);
+  }
+});
+
 
 test('a platform with no per-boot identity (windows): a live pid is kept, a gone pid is recovered', async () => {
   assert.equal((await take('win-live', record({ pid: process.pid, machine: 'M' }), here('M'))).taken, false);

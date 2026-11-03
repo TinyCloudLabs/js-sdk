@@ -186,7 +186,7 @@ test('release leaves a lock with the same pid but another nonce', () => {
 
 test('an intake lock held by an unknown holder is kept, and the refusal is one line with the lock path, the holder and the safe command', () => {
   const file = path.join(tempDir(), 'intake.lock');
-  const body = `${JSON.stringify({ pid: 4242, nonce: 'foreign0001', host: 'other-host.example', machine: 'm', boot: 'b' })}\n`;
+  const body = `${JSON.stringify({ pid: 4242, nonce: 'foreign0001', host: 'other-host.example', machine: 'm' })}\n`;
   fs.writeFileSync(file, body);
   assert.throws(() => acquireLock(file), (e) => {
     assert.equal(e.code, 'locked');

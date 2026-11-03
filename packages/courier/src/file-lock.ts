@@ -86,6 +86,7 @@ function parseRecord(text: string): LockRecord | undefined {
       const field = fields[key];
       if (field === undefined) continue;
       if (typeof field !== 'string' || field.length > MAX_FIELD) return undefined; // an oversized or mistyped field is a corrupt record
+      if (key === 'boot' && !trueBootIdentity(field)) return undefined; // malformed boot IDs make the whole record untrustworthy
       record[key] = field;
     }
     return record;
