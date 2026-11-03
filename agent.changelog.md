@@ -3,6 +3,18 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-02
+
+- Added explicit reusable read-scope consent, cursor-preserving discovery and
+  digest-bound complete KV/SQL delivery to private/local MCP and shared
+  operations. Native reads retain their existing signed capability ceiling;
+  the public ChatGPT surface is unchanged. Handoffs carry locators/provenance,
+  not credentials or authority.
+- Verified the local hosted HTTP path against the live node using an isolated
+  profile copy: the 111,619-byte / 566-segment transcript reconstructed in ten
+  pages with the recorded SHA-256; a 130,000-character SQL field reconstructed
+  in eleven pages. No cloud records were written and no deployment was made.
+
 ## 2026-11-01
 
 - CI: the `conformance` PR job in `.github/workflows/operations-mcp.yml` is split into

@@ -140,8 +140,8 @@ function createHostedSurface(
         instructions: nativeOwner === undefined
           ? surface === "public"
             ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
-            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first."
-          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads.",
+            : "Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for approval before retrying unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first. Other app data can be discovered with account-space listing, KV cursors and SQL schema/query tools without a knowledge bundle. If the user wants reusable read access, explicitly select prefixes/databases with tinycloud_auth_read_scope; never silently broaden a key read. Use tinycloud_read for complete bounded KV/SQL delivery and replay its continuation with the original resource."
+          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads. Use tinycloud_read for large values, retaining the original resource and returned digest-bound continuation.",
       },
     );
     registerTinyCloudTools(server, {
@@ -151,7 +151,7 @@ function createHostedSurface(
       allowOwnerProfile: false,
       stateRoot,
       ...(nativeOwner === undefined ? {} : {
-        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get"] as const,
+        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"] as const,
       }),
       beforeOperation: nativeOwner === undefined
         ? () => store.validateTenant(subject, ownerDids)
@@ -325,7 +325,7 @@ function createHostedSurface(
               { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
               { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
             ],
-            tools: ["tinycloud_sql_query", "tinycloud_kv_get"],
+            tools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"],
             errors: {
               required: NATIVE_GRANT_REQUIRED,
               expired: NATIVE_GRANT_EXPIRED,
