@@ -48,7 +48,7 @@ async function signedGrant(agent) {
 }
 
 /** A home holding an agent key, an installed grant and an `awaiting-space` profile that matches it. */
-async function awaitingHome(run, { grant = true, spacePending = false } = {}) {
+async function awaitingHome(run, { grant = true, spacePending = false, grantExpiredAt } = {}) {
   const previous = process.env.COURIER_HOME;
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-heal-'));
   process.env.COURIER_HOME = home;
@@ -58,7 +58,7 @@ async function awaitingHome(run, { grant = true, spacePending = false } = {}) {
     const signed = await signedGrant(agent);
     const expiresAt = siweTimes(signed.siwe).expiresAt.toISOString();
     const ownerDid = `did:pkh:eip155:${signed.chainId}:${signed.address}`;
-    if (grant) saveGrant({ v: 1, ...signed, ownerDid, expiresAt, receivedAt: new Date().toISOString() });
+    if (grant) saveGrant({ v: 1, ...signed, ownerDid, expiresAt: grantExpiredAt ?? expiresAt, receivedAt: new Date().toISOString() });
     saveProfile({
       version: 3, host: HOST, openkeyHost: 'https://openkey.so', label: 'offline-test', courierDid: agent.did.split('#')[0],
       ownerDid, spaceId: signed.spaceId, grantExpiresAt: expiresAt, status: 'awaiting-space', ...(spacePending ? { spacePending: true } : {}), peers: {},
@@ -153,6 +153,15 @@ test('an awaiting-space profile without a grant is still no-space and probes not
   await assert.rejects(courierNode(loadProfile()), { code: 'no-space', message: noSpaceText });
   assert.equal(calls.n, 0);
 }, { grant: false }));
+
+test('an awaiting-space profile with an expired grant reports the expiry, probes nothing and is not changed', async (t) => awaitingHome(async (home) => {
+  const calls = stubProbe(t, ready);
+  const before = fs.readFileSync(path.join(home, 'profile.json'), 'utf8');
+
+  await assert.rejects(courierNode(loadProfile()), { code: 'grant-expired' });
+  assert.equal(calls.n, 0);
+  assert.equal(fs.readFileSync(path.join(home, 'profile.json'), 'utf8'), before);
+}, { grantExpiredAt: new Date(Date.now() - DAY).toISOString() }));
 
 test('the no-space message gives both ways out and does not send the owner to Share (TC-2398)', () => {
   for (const [prog, cli] of [['courier', 'tc'], ['tc courier', 'tc'], ['tinycloud courier', 'tinycloud']]) {
