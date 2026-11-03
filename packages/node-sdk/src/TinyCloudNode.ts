@@ -153,6 +153,7 @@ import {
   DUCKDB,
   ENCRYPTION,
   EXPIRY,
+  assertExpiryWithinTechnicalLimit,
   canonicalHashHex,
   canonicalizeEncryptionJson,
   verifyDidKeyEd25519Signature,
@@ -5982,6 +5983,7 @@ export class TinyCloudNode {
       verificationMethod: params.session.verificationMethod.split("#", 1)[0],
     };
 
+    assertExpiryWithinTechnicalLimit(params.expirationSecs * 1000, "ucan");
     const result = this.wasmBindings.createDelegation(
       wasmSession,
       params.delegateDID,
@@ -6021,9 +6023,10 @@ export class TinyCloudNode {
     }
     const permissions = ownerDelegationPermissions(params);
     const now = new Date();
-    if (!(params.expiresAt instanceof Date) || params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
-      throw new Error("Owner delegation expiry must be explicit, future, and within EXPIRY.MAX_MS");
+    if (!(params.expiresAt instanceof Date) || params.expiresAt.getTime() <= now.getTime()) {
+      throw new Error("Owner delegation expiry must be explicit, future, and a valid date");
     }
+    assertExpiryWithinTechnicalLimit(params.expiresAt, "siwe");
     if (!this.signer) throw new Error("Owner wallet signer is required");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("Owner session is required");
@@ -6145,6 +6148,7 @@ export class TinyCloudNode {
     /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
     readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    assertExpiryWithinTechnicalLimit(new Date(input.expiresAt), "siwe");
     const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
@@ -6217,6 +6221,8 @@ export class TinyCloudNode {
     actions: string[];
     requestedExpiry: Date;
   }, assertActive?: () => void): Promise<Delegation | undefined> {
+    // A share past the technical limit is a clear refusal, not a swallowed failure below.
+    assertExpiryWithinTechnicalLimit(params.requestedExpiry, "siwe");
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
@@ -7027,6 +7033,7 @@ export class TinyCloudNode {
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
       expiresAt = sessionExpiry;
     }
+    assertExpiryWithinTechnicalLimit(expiresAt, "siwe");
 
     const delegations: PortableDelegation[] = [];
     let rawEntriesAttached = false;
@@ -9043,6 +9050,7 @@ export class TinyCloudNode {
     const now = new Date();
     const expiryMs = params.expiryMs ?? 60 * 60 * 1000; // Default 1 hour
     const expirationTime = new Date(now.getTime() + expiryMs);
+    assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
 
     // Prepare the delegation session with:
     // - delegateUri: target the recipient's DID directly (for user-to-user delegation)
@@ -9241,6 +9249,7 @@ export class TinyCloudNode {
     const now = new Date();
     // The activated session lasts as long as the delegation it is proven by.
     const expirationTime = delegation.expiry;
+    assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
 
     // Prepare the session with:
     // - THIS user's address (we are the invoker)
@@ -9416,6 +9425,7 @@ export class TinyCloudNode {
     // Sub-delegation cannot outlive parent, so cap at parent's expiry
     const actualExpiry =
       requestedExpiry > parentDelegation.expiry ? parentDelegation.expiry : requestedExpiry;
+    assertExpiryWithinTechnicalLimit(actualExpiry, "siwe");
 
     // Build abilities for the sub-delegation
     const abilities: Record<string, Record<string, string[]>> = {};

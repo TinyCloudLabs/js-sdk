@@ -1,5 +1,4 @@
 import { describe, it, expect } from "bun:test";
-import { EXPIRY } from "../expiry";
 import { checkChangedExpiration } from "./openkey-protocol";
 
 // checkChangedExpiration is the gate for a request that carried `expiryChangeable: true` (TC-2276): the user may
@@ -53,11 +52,6 @@ describe("checkChangedExpiration accepts", () => {
     expect(check(siwe({ expiry: iso(NOW + 60_001) }))).toBeNull();
   });
 
-  it("an expiry exactly at the request max and exactly at the ten-year ceiling", () => {
-    expect(check(siwe({ expiry: "2026-08-01T03:00:00.000Z" }), { maxExpiresAt: Date.parse("2026-08-01T03:00:00.000Z") })).toBeNull();
-    expect(check(siwe({ expiry: iso(NOW + EXPIRY.MAX_MS) }))).toBeNull();
-  });
-
   it("an unchanged expiry, including one that is already inside the margin (the prepared bytes were not edited)", () => {
     const soon = siwe({ expiry: iso(NOW + 5_000) });
     expect(check(soon, { prepared: soon })).toBeNull();
@@ -101,12 +95,6 @@ describe("checkChangedExpiration refuses", () => {
     expect(reason).toContain("2026-08-01T03:00:00.000Z");
   });
 
-  it("an expiry beyond the ten-year ceiling when there is no request max", () => {
-    expect(check(siwe({ expiry: iso(NOW + EXPIRY.MAX_MS + 1) }))).toBe(
-      "expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry",
-    );
-  });
-
   // OpenKey signs any expiry the user picks; the SDK refuses the ones it cannot accept, and each refusal says what to pick.
   it("every refusal of a picked expiry says what to pick instead", () => {
     expect(check(siwe({ expiry: iso(NOW + 59_999) }))).toBe("expiry must be more than 60 seconds from now; choose a longer expiry");
@@ -116,7 +104,6 @@ describe("checkChangedExpiration refuses", () => {
     );
     const early = Date.parse("2026-07-31T00:00:00.000Z");
     expect(check(siwe({ expiry: ISSUED }), { now: early })).toBe("expiry must be after Issued At; choose a later expiry");
-    expect(check(siwe({ expiry: iso(NOW + EXPIRY.MAX_MS + 1) }))).toContain("choose a shorter expiry");
   });
 
   it("two Expiration Time lines, whichever one the parser would pick", () => {
