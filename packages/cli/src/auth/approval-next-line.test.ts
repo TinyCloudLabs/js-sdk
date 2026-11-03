@@ -84,6 +84,11 @@ async function endedWith(run: () => Promise<unknown>): Promise<{ code: number; s
 }
 const linesOf = (text: string) => text.split("\n");
 const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next: "));
+// Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener
+// leak in the services' combineSignals, TC-2414: `(node:<pid>) ...Warning: ...`, a `(Use \`node --trace-warnings ...\`)` hint,
+// indented `at ...` lines). They are not CLI output and can land after our last line, so it is picked among our own lines.
+const isNodeWarning = (line: string) => /^\(node:\d+\) /.test(line) || line.startsWith("(Use `node --trace-warnings") || /^\s+at /.test(line);
+const lastLine = (text: string) => linesOf(text).filter((line) => line !== "" && !isNodeWarning(line)).at(-1);
 const realArgv = process.argv;
 /** The command as the user ran it (set as process.argv in each case), shell-quoted, with the program name the CLI knows. */
 const ARGV_COMMAND = `${CLI_NAME} onboard --timeout 60s --profile 'my agent'`;
@@ -135,7 +140,7 @@ describe("a link created in this run (exit 8 at once)", () => {
     expect(link).toBeGreaterThanOrEqual(0);
     expect(stillWaiting(lines)).toBeGreaterThan(link);
     expect(lines.indexOf(next[0]!)).toBeGreaterThan(stillWaiting(lines));
-    expect(lines.filter((line) => line !== "").at(-1)).toBe(next[0]);
+    expect(lastLine(run.stderr)).toBe(next[0]);
   });
 });
 
@@ -154,7 +159,7 @@ describe("a resumed request that the deadline cut off (exit 8 after waiting)", (
     expect(next[0]).toContain(`\`${ARGV_COMMAND}\``);
     expect(lines.indexOf(pending.approvalUrl)).toBeGreaterThanOrEqual(0);
     expect(lines.indexOf(next[0]!)).toBeGreaterThan(stillWaiting(lines));
-    expect(lines.filter((line) => line !== "").at(-1)).toBe(next[0]);
+    expect(lastLine(run.stderr)).toBe(next[0]);
   });
 });
 

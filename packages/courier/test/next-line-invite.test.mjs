@@ -17,7 +17,12 @@ test.after(() => fixture.close());
 
 const lines = (text) => text.split('\n');
 const nextLines = (text) => lines(text).filter((line) => line.startsWith('Next: '));
-const lastLine = (text) => lines(text).filter((line) => line !== '').at(-1);
+// Node itself can print warning blocks to stderr: on Node 20 a `MaxListenersExceededWarning` (`(node:<pid>) ...Warning: ...`,
+// then a `(Use \`node --trace-warnings ...\`)` hint, and indented `at ...` lines under --trace-warnings) from the pre-existing
+// listener leak in the services' combineSignals (TC-2414), about 3 s into a poll loop. They are not Courier output and land
+// before or after our lines depending on timing, so the last line is picked among the lines Courier itself wrote.
+const isNodeWarning = (line) => /^\(node:\d+\) /.test(line) || line.startsWith('(Use `node --trace-warnings') || /^\s+at /.test(line);
+const lastLine = (text) => lines(text).filter((line) => line !== '' && !isNodeWarning(line)).at(-1);
 const stateKey = (agent, id) => `${agent.profile.spaceId}/${PREFIX}/me/state/invitations/${id}.json`;
 /** The existing pending error line, unchanged. */
 const pendingLine = (id) => `courier: [invite-pending] No claim received. Resume with courier invite serve ${id}; the same invitation and winner reservation are preserved.`;
@@ -113,19 +118,25 @@ test('invite serve (7): without a saved link the start line says to use the link
   assert.ok(start.includes('invite'), start);
 });
 
-test('invite serve (7): a run that ends paired (exit 0) prints only the start line, as its last stderr line, and stdout is the paired JSON', async () => {
+test('invite serve (7): a run that ends paired (exit 0) prints exactly one start line with the link, before the wait, and stdout is the paired JSON', async () => {
   const a = await fixture.home('next-serve-paired-a');
   const b = await fixture.home('next-serve-paired-b');
   const { invitation } = await pendingInvitation(a);
   const serving = fixture.launch(a, ['invite', 'serve', invitation.invitationId, '--wait', '15']);
+  // The start line must already be out before anybody has claimed the invitation: only then is it printed before the wait.
+  let early = '';
+  serving.child.stderr.on('data', (chunk) => { early += chunk; });
+  for (const deadline = Date.now() + 10000; !early.includes('Next: ') && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(early.includes('Next: '), 'the start line was printed before the join began');
   await fixture.run(b, ['join', invitation.link, '--consent', '--wait', '15']);
   const done = await serving.done;
   assert.equal(done.code, 0, done.stderr);
   assert.equal(JSON.parse(done.stdout.trim()).status, 'paired');
+  // Not required to be the LAST line: on Node 20 a Node warning (see lastLine) can follow it.
   const next = nextLines(done.stderr);
   assert.equal(next.length, 1, done.stderr);
   assert.ok(next[0].includes(invitation.link));
-  assert.equal(lastLine(done.stderr), next[0]);
+  assert.ok(early.includes(invitation.link), 'and it carried the link already then');
   assert.ok(!lines(done.stderr).some((line) => line.includes('run `courier invite serve')), 'no run-again line: the invitation was claimed');
 });
 
