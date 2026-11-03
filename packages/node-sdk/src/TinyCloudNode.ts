@@ -212,8 +212,6 @@ import {
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
-  linkAbortSignal,
-  releaseWithBody,
   tinyCloudDebugLogger,
   type RequestLogReader,
   type RequestSink,
@@ -617,23 +615,12 @@ class ServiceGraphLifetime {
     return this.invokeAnyFn(session, entries, facts);
   };
 
-  // The graph signal stays linked until the response body is done, so retiring the graph still cancels a body being
-  // read; `releaseWithBody` unlinks it then.
   readonly fetch: FetchFunction = (url, init) => {
     this.assertActive();
-    const { signal, release } = linkAbortSignal(this.abortController.signal, init?.signal);
-    try {
-      return this.fetchFn(url, { ...init, signal }).then(
-        (response) => releaseWithBody(response, release),
-        (error: unknown) => {
-          release();
-          throw error;
-        },
-      );
-    } catch (error) {
-      release();
-      throw error;
-    }
+    return this.fetchFn(url, {
+      ...init,
+      signal: this.combineSignals(init?.signal),
+    });
   };
 
   track(context: ServiceContext): ServiceContext {
@@ -674,6 +661,25 @@ class ServiceGraphLifetime {
     if (this.retired) {
       throw new Error("Service graph has been retired: its session was replaced or signed out.");
     }
+  }
+
+  private combineSignals(signal?: AbortSignal): AbortSignal {
+    if (!signal) return this.abortController.signal;
+    // `AbortSignal.any` links the two signals for as long as the composite lives, with no listener on the long-lived
+    // signal (TC-2418), so retiring the graph (sign-out) still cancels a response body being read. It carries the
+    // aborting signal's own reason; the listeners below abort without one. Trade-off: on Node its composites stay
+    // reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B on Node 22; a listener
+    // that is never removed retains about 1 KB). Where it is missing (older browsers) the listeners are unchanged.
+    if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, this.abortController.signal]);
+    const combined = new AbortController();
+    const abort = () => combined.abort();
+    if (signal.aborted || this.abortController.signal.aborted) {
+      abort();
+    } else {
+      signal.addEventListener("abort", abort, { once: true });
+      this.abortController.signal.addEventListener("abort", abort, { once: true });
+    }
+    return combined.signal;
   }
 }
 
