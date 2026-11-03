@@ -4467,3 +4467,60 @@ describe("TC-858 squash-proof ancestry pins", () => {
     ]);
   });
 });
+
+import { approvedTc2380SpaceHosting, validateTc2380SpaceHostingTransition } from "./replica-size-policy";
+
+describe("check space hosting on restore and record it at sign-in (TC-2380, #840) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2380SpaceHosting);
+  const prerequisite = () => approvedTc2379SignOutFence;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2380SpaceHosting).toEqual(approvedTc2380SpaceHosting);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 526, "index.cjs": 536 },
+      ceiling: { "index.mjs": 1479608, "index.cjs": 1422028 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("356c6053b4789529ab6c84536a385adf2e4e0c77");
+    expect(row().sourceCommits).toEqual(["47a7d9bb343be7fa6b0ecb3572efd82356dbeb04"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41585360373",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41585360373/job/125749456727",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41585360373/job/125749457020",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).at(-1)).toEqual({
+      row: "tc2380SpaceHosting",
+      ceiling: { "index.mjs": 1479608, "index.cjs": 1422028 },
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2380SpaceHosting",
+      pin: "47a7d9bb343be7fa6b0ecb3572efd82356dbeb04",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2379 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2380SpaceHosting!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2380");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2379SignOutFence;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2380");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2380SpaceHostingTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2380SpaceHostingTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2380SpaceHostingTransition(undefined, changed)).toThrow("TC-2380");
+    expect(() => validateTc2380SpaceHostingTransition(row(), undefined)).toThrow("TC-2380");
+  });
+});
