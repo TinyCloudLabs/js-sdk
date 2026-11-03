@@ -26,11 +26,11 @@ export interface TokenStatusChecker {
   readonly tokenStatus: (token: string) => Promise<TokenStatus>;
   /**
    * Whether an `unknown` status may still be accepted for this token: only a
-   * token that OpenKey itself answered active to this process, and only while
-   * the time since that answer is shorter than the token's own lifetime
-   * (`exp - iat`, 300 s when the token does not carry both). A token never
-   * confirmed active, or one answered inactive, is refused, and nothing is
-   * tolerated while OpenKey is refusing the client credentials.
+   * token that OpenKey itself answered active to this process, only while the
+   * token has not expired, and only for the 60 s after that answer, whatever
+   * the token's lifetime. A token never confirmed active, or one answered
+   * inactive, is refused, and nothing is tolerated while OpenKey is refusing
+   * the client credentials.
    */
   readonly toleratesUnknown: (token: string) => boolean;
 }
@@ -39,6 +39,12 @@ export interface TokenStatusChecker {
 type Outcome = TokenStatus | "credentials" | "mismatch";
 
 const ACTIVE_CACHE_MS = 30_000;
+/**
+ * How long after OpenKey last answered a token active an `unknown` answer is
+ * still tolerated. A fixed window, independent of the token's lifetime: a token
+ * revoked while introspection is unavailable stops working within this time.
+ */
+const UNKNOWN_TOLERANCE_MS = 60_000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 300;
 const DEFAULT_TIMEOUT_MS = 3_000;
 const MAX_CACHED_TOKENS = 10_000;
@@ -160,7 +166,7 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       const confirmed = confirmedActive.get(createHash("sha256").update(token).digest("hex"));
       if (confirmed === undefined) return false;
       const now = clock();
-      return confirmed.expiresAt > now && now - confirmed.at < tokenLifetimeSeconds(token) * 1000;
+      return confirmed.expiresAt > now && now - confirmed.at < UNKNOWN_TOLERANCE_MS;
     },
   };
 }
@@ -192,13 +198,6 @@ function audienceList(value: unknown): string[] {
 function tokenExpiryMs(token: string, now: number): number {
   const exp = claims(token).exp;
   return typeof exp === "number" ? exp * 1000 : now + DEFAULT_TOKEN_LIFETIME_SECONDS * 1000;
-}
-
-function tokenLifetimeSeconds(token: string): number {
-  const { exp, iat } = claims(token);
-  return typeof exp === "number" && typeof iat === "number" && exp > iat
-    ? exp - iat
-    : DEFAULT_TOKEN_LIFETIME_SECONDS;
 }
 
 function claims(token: string): ReturnType<typeof decodeJwt> {

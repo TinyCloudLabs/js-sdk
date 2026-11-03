@@ -226,7 +226,7 @@ test("an active answer is reused for 30 seconds", async () => {
   expect(stub.calls).toHaveLength(2);
 });
 
-test("OpenKey unreachable: calls are served for less than the token lifetime, then refused", async () => {
+test("OpenKey unreachable: a 300 s token is served for 59 s since OpenKey last answered, then refused", async () => {
   const stub = stubOpenKey("active");
   const clock = { now: Date.now() };
   const { verify, sign } = await verifierWith(stub, clock);
@@ -234,9 +234,9 @@ test("OpenKey unreachable: calls are served for less than the token lifetime, th
   await verify(token);
 
   stub.answer = "down";
-  clock.now += 299_000; // 299 s since OpenKey last answered; token lifetime is 300 s
+  clock.now += 59_000;
   await expect(verify(token)).resolves.toMatchObject({ extra: { subject: expect.any(String) } });
-  clock.now += 1_000; // 300 s
+  clock.now += 1_000; // 60 s
   const refused = await verify(token).catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(OAuthError);
   if (!(refused instanceof OAuthError)) throw new Error("Expected an OAuthError.");
@@ -335,6 +335,47 @@ test("an unknown answer is tolerated only for a token OpenKey answered active, w
   await expect(verify(token)).resolves.toMatchObject({ clientId: "claude-client" });
   clock.now += 1_000; // 60 s: the token's lifetime
   await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
+});
+
+test("the outage tolerance ends at the 60 s cap even when the token lives a day", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const checker = checkerWith(stub, clock);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  stub.answer = "down";
+  clock.now += 59_000;
+  expect(await checker.tokenStatus(token)).toBe("unknown");
+  expect(checker.toleratesUnknown(token)).toBe(true);
+  clock.now += 1_000; // 60 s since OpenKey last answered
+  expect(await checker.tokenStatus(token)).toBe("unknown");
+  expect(checker.toleratesUnknown(token)).toBe(false);
+  clock.now += 3_600_000; // hours of the token's life remain
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("a day-long token OpenKey never answered about is refused while OpenKey is down", async () => {
+  const stub = stubOpenKey("down");
+  const clock = { now: Date.now() };
+  const { verify, sign } = await verifierWith(stub, clock);
+  await expect(verify(await sign("24h"))).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
+});
+
+test("a token confirmed active and then answered inactive is refused, outage or not", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { verify, sign } = await verifierWith(stub, clock);
+  const token = await sign("24h");
+  await verify(token);
+
+  clock.now += 31_000; // the active answer is no longer reused
+  stub.answer = "inactive";
+  await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+  stub.answer = "down";
+  clock.now += 1_000; // 32 s: still inside the 60 s of the earlier confirmation
+  await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
 });
 
 test("a mismatching answer clears the token's confirmation", async () => {
