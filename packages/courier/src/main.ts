@@ -1,4 +1,5 @@
 import { parseArgs, type ParsedArgs } from './args.js';
+import { pendingNextLine } from './next-line.js';
 import { CourierError, CourierPending, EXIT_PENDING, errInfo } from './errors.js';
 import {
   requestHelp, cmdInit, cmdManifest, cmdPair, cmdRevoke, cmdSend, cmdInbox, cmdRead, cmdTask, cmdRequest, cmdOrders,
@@ -213,6 +214,7 @@ export async function main(argv: string[], opts: { prog?: string } = {}): Promis
   } catch (e) {
     if (e instanceof CourierPending) {
       process.stdout.write(JSON.stringify({ pending: e.pending }, null, 2) + '\n');
+      console.error(pendingNextLine(argv));
       return EXIT_PENDING;
     }
     const info = errInfo(e);

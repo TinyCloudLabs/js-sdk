@@ -357,8 +357,8 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
 }
 
 /** The wait ended with the owner's approval still outstanding: nothing is lost, the same link stays pending. */
-function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CLIError {
-  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
+function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait, created = false): CLIError {
+  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt }, created);
 }
 
 /**
@@ -507,7 +507,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       await tryOpenBrowser(entry.approvalUrl);
     }
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
-    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait);
+    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
     for (;;) {

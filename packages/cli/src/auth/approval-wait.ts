@@ -1,3 +1,4 @@
+import { approvalNextLine } from "./next-line.js";
 import { ExitCode } from "../config/constants.js";
 import { CLIError, type ApprovalPending } from "../output/errors.js";
 
@@ -76,11 +77,11 @@ export function approvalRequestTimeoutMs(wait: ApprovalWait | undefined, approve
   return Math.min(REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, left));
 }
 
-/** Exit 8 with `{"pending":{...}}` on stdout. It is the approval only; OpenKey being unavailable has its own errors. */
-export function approvalPendingError(pending: ApprovalPending): CLIError {
+/** Exit 8 with `{"pending":{...}}` on stdout. It is the approval only; OpenKey being unavailable has its own errors. `created`: the link is new in this run. */
+export function approvalPendingError(pending: ApprovalPending, created = false): CLIError {
   return new CLIError(
     "APPROVAL_PENDING",
-    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.`,
+    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.\n${approvalNextLine(created)}`,
     ExitCode.PENDING,
     { pending },
   );
