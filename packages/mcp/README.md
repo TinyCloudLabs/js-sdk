@@ -124,8 +124,11 @@ docker run --rm -p 3000:3000 \
   ghcr.io/tinycloudlabs/tinycloud-mcp:latest
 ```
 
-Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer and
-`TC_MCP_ALLOWED_ORIGINS` when browsers call the MCP endpoint directly. The
+Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer. The hosted
+endpoint answers calls and CORS preflights from any browser Origin: a call is
+authorized only by the OAuth access token in its `Authorization: Bearer`
+header (the server sets no cookies), responses never allow credentials, and
+only `WWW-Authenticate` is exposed to scripts. The
 default TinyCloud node is `https://tee.node.tinycloud.xyz`.
 The MCP server asks OpenKey's resource-server token introspection endpoint
 (RFC 7662) about each access token before serving a call.
