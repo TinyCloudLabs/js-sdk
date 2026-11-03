@@ -23,7 +23,7 @@ import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
 import { activateSession, INVITATION_MODES, selectedSession, sessionKey, validSessionId } from './guided.js';
 import type { CourierSession, InvitationMode } from './guided.js';
-import { inviteNextLine, inviteServeNextLine, nextOnInvitePending } from './next-line.js';
+import { inviteNextLine, invitePendingNextLine, inviteServeNextLine, nextOnInvitePending } from './next-line.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
 const DEFAULT_VIEWER = 'https://courier.tinycloud.xyz';
@@ -260,7 +260,8 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
     if (!state) refuse('No invitation issued by this profile.');
     const body = parseInvitation(state.value.body);
     if (body.issuer !== profile.courierDid || !sameIdentity(body.artifact.from.owner, profile.ownerDid!) || body.host !== profile.host) refuse('Invitation belongs to another issuer.');
-    return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(inviteServeNextLine(state.value.link)));
+    console.error(inviteServeNextLine(state.value.link));
+    return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(invitePendingNextLine(id, wait)));
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');
   if (!INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');

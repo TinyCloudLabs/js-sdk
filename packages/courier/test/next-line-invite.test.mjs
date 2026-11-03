@@ -5,10 +5,10 @@ import { createGuidedFixture } from './support/guided-fixture.mjs';
 import { PREFIX } from '../dist/keys.js';
 
 // TC-2360: an agent ran `invite ... --wait 1` then `invite serve --wait 60` for minutes without ever sending the invitation
-// link, although it was in its output. A pending `invite` or `invite serve` (invite-pending, exit 1) now ends its stderr
-// with one `Next: ` line, after the existing error line. The wording may follow the guides, so these tests pin only what
-// must stay true: the line is there, once, last, after the pending error; it names the follow-up command (invite) or
-// carries the saved invitation link (invite serve); a paired run prints none; stdout, the error line and exit codes are as before.
+// link, although it was in its output. A pending `invite` ends its stderr with one `Next: ` line after the existing
+// invite-pending error. `invite serve` prints one at the start of every run and, when still pending, a second as the last
+// line. The wording may follow the guides, so these tests pin only what must stay true: prefix, count, position, the
+// backticked command or the saved link; a paired invite prints none; stdout, the error line and exit codes are as before.
 
 const root = process.env.COURIER_TEST_HOME;
 assert.ok(root, 'setup-home.mjs must isolate every Courier profile');
@@ -50,7 +50,7 @@ test('invite (5): the pending run ends with one Next line naming invite serve fo
   assert.ok(!run.stdout.includes('Next:'));
   const next = assertNextLastAfterPending(run.stderr);
   assert.equal(lines(run.stderr).find((line) => line.includes('[invite-pending]')), pendingLine(invitation.invitationId));
-  assert.ok(next.includes(`invite serve ${invitation.invitationId}`), next);
+  assert.ok(next.includes(`\`courier invite serve ${invitation.invitationId} --wait 60\``), next);
   assert.ok(next.includes('`'), 'the follow-up command is in backticks');
 });
 
@@ -67,21 +67,38 @@ test('invite (5): when the invitation is claimed in time (exit 0) no Next line i
   assert.deepEqual(nextLines(done.stderr), []);
 });
 
-test('invite serve (6): the pending run ends with one Next line carrying the saved invitation link, after the pending error; no key material; stdout and exit code as before', async () => {
+/**
+ * A pending `invite serve` run prints two Next lines: the start-of-run line (7) before the wait, then the pending-exit
+ * line (8), which is the last non-empty stderr line and follows `[invite-pending]`. Returns both.
+ */
+function assertServePending(stderr, id) {
+  const next = nextLines(stderr);
+  assert.equal(next.length, 2, stderr);
+  const all = lines(stderr);
+  const pending = all.findIndex((line) => line.includes('[invite-pending]'));
+  assert.ok(pending >= 0, stderr);
+  assert.ok(all.indexOf(next[0]) < pending, 'the first Next line is printed before the wait, ahead of the pending error');
+  assert.ok(all.indexOf(next[1]) > pending, 'the second follows the invite-pending error');
+  assert.equal(lastLine(stderr), next[1], 'and is the last non-empty stderr line');
+  assert.ok(next[1].includes(`\`courier invite serve ${id} --wait 1\``), `the pending line names the command that was run: ${next[1]}`);
+  return next;
+}
+
+test('invite serve (7)+(8): a pending run prints the saved link at the start and ends with the run-again line; no key material; stdout and exit code as before', async () => {
   const a = await fixture.home('next-serve');
   const { invitation } = await pendingInvitation(a);
   const run = await fixture.launch(a, ['invite', 'serve', invitation.invitationId, '--wait', '1']).done;
   assert.equal(run.code, 1);
   assert.equal(run.stdout, '');
-  const next = assertNextLastAfterPending(run.stderr);
+  const [start] = assertServePending(run.stderr, invitation.invitationId);
   assert.equal(lines(run.stderr).find((line) => line.includes('[invite-pending]')), pendingLine(invitation.invitationId));
-  assert.ok(next.includes(invitation.link), 'the saved link, the same one invite printed');
+  assert.ok(start.includes(invitation.link), 'the saved link, the same one invite printed');
   assert.equal(run.stderr.split(invitation.link).length - 1, 1, 'the link appears once');
   const body = JSON.parse(fixture.values.get(stateKey(a, invitation.invitationId)).bytes.toString()).body;
   for (const secret of [body.relay.key.jwk.d, body.relay.delegation]) assert.ok(!run.stderr.includes(secret), 'no key material or delegation on stderr');
 });
 
-test('invite serve (6): without a saved link the line says to use the link invite printed, carries none, and is last', async () => {
+test('invite serve (7): without a saved link the start line says to use the link invite printed and carries none', async () => {
   const a = await fixture.home('next-serve-nolink');
   const { invitation } = await pendingInvitation(a);
   const key = stateKey(a, invitation.invitationId);
@@ -91,12 +108,12 @@ test('invite serve (6): without a saved link the line says to use the link invit
   fixture.values.set(key, { bytes: Buffer.from(JSON.stringify(state)), etag: saved.etag });
   const run = await fixture.launch(a, ['invite', 'serve', invitation.invitationId, '--wait', '1']).done;
   assert.equal(run.code, 1);
-  const next = assertNextLastAfterPending(run.stderr);
-  assert.ok(!next.includes('http'), next);
-  assert.ok(next.includes('invite'), next);
+  const [start] = assertServePending(run.stderr, invitation.invitationId);
+  assert.ok(!start.includes('http'), start);
+  assert.ok(start.includes('invite'), start);
 });
 
-test('invite serve (6): when the invitation is claimed in time (exit 0) no Next line is printed and stdout is the paired JSON', async () => {
+test('invite serve (7): a run that ends paired (exit 0) prints only the start line, as its last stderr line, and stdout is the paired JSON', async () => {
   const a = await fixture.home('next-serve-paired-a');
   const b = await fixture.home('next-serve-paired-b');
   const { invitation } = await pendingInvitation(a);
@@ -105,7 +122,11 @@ test('invite serve (6): when the invitation is claimed in time (exit 0) no Next 
   const done = await serving.done;
   assert.equal(done.code, 0, done.stderr);
   assert.equal(JSON.parse(done.stdout.trim()).status, 'paired');
-  assert.deepEqual(nextLines(done.stderr), []);
+  const next = nextLines(done.stderr);
+  assert.equal(next.length, 1, done.stderr);
+  assert.ok(next[0].includes(invitation.link));
+  assert.equal(lastLine(done.stderr), next[0]);
+  assert.ok(!lines(done.stderr).some((line) => line.includes('run `courier invite serve')), 'no run-again line: the invitation was claimed');
 });
 
 test('no Next line on join, on a refused invite (no consent), or on an invite serve for an unknown invitation', async () => {

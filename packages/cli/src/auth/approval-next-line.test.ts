@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { NodeWasmBindings } from "@tinycloud/node-sdk";
 import { signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
 import { join } from "node:path";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 
 // TC-2360: an agent acts only on what the CLI prints. When an approval wait ends with exit 8, stderr ends with one
 // line written for the agent: hand the owner the link, then run the same command again right away. stdout and the
@@ -83,11 +84,15 @@ async function endedWith(run: () => Promise<unknown>): Promise<{ code: number; s
 }
 const linesOf = (text: string) => text.split("\n");
 const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next: "));
+const realArgv = process.argv;
+/** The command as the user ran it (set as process.argv in each case), shell-quoted, with the program name the CLI knows. */
+const ARGV_COMMAND = `${CLI_NAME} onboard --timeout 60s --label 'my agent'`;
 
 let spies: Array<Mock<(...args: never[]) => unknown>> = [];
 beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
   Object.assign(process.env, fixtureEnvironment);
+  process.argv = ["bun", "/opt/bin/tc", "onboard", "--timeout", "60s", "--label", "my agent"];
   clock = START; stderr = []; stdout = [];
   await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
@@ -101,6 +106,7 @@ beforeEach(async () => {
   ] as never;
 });
 afterEach(async () => {
+  process.argv = realArgv;
   for (const spy of spies) spy.mockRestore();
   fetchSpy?.mockRestore();
   try { await rm(join(profilePath("approval"), "approval-pending.json"), { force: true }); } finally { restoreEnvironment(caseEnvironment); }
@@ -124,6 +130,7 @@ describe("a link created in this run (exit 8 at once)", () => {
     const lines = linesOf(run.stderr);
     const next = nextLines(run.stderr);
     expect(next).toHaveLength(1);
+    expect(next[0]).toContain(`\`${ARGV_COMMAND}\``);
     const link = lines.indexOf(pending.approvalUrl);
     expect(link).toBeGreaterThanOrEqual(0);
     expect(stillWaiting(lines)).toBeGreaterThan(link);
@@ -144,6 +151,7 @@ describe("a resumed request that the deadline cut off (exit 8 after waiting)", (
     const next = nextLines(run.stderr);
     expect(next).toHaveLength(1);
     expect(next[0]).not.toBe(nextLines(created.stderr)[0]);
+    expect(next[0]).toContain(`\`${ARGV_COMMAND}\``);
     expect(lines.indexOf(pending.approvalUrl)).toBeGreaterThanOrEqual(0);
     expect(lines.indexOf(next[0]!)).toBeGreaterThan(stillWaiting(lines));
     expect(lines.filter((line) => line !== "").at(-1)).toBe(next[0]);
@@ -159,6 +167,21 @@ describe("approvalPendingError", () => {
     expect(lastLine(approvalPendingError(pending))).toStartWith("Next: ");
     expect(lastLine(approvalPendingError(pending, true))).not.toBe(lastLine(approvalPendingError(pending, false)));
     expect(lastLine(approvalPendingError(pending))).toBe(lastLine(approvalPendingError(pending, false)));
+  });
+});
+
+describe("the command the Next line names", () => {
+  const pending = { step: 1, of: 1, approvalUrl: "https://openkey.example/a/abc#v=4", expiresAt: "2026-11-01T12:00:00.000Z" };
+  const lastLine = (error: InstanceType<typeof CLIError>) => error.message.split("\n").at(-1)!;
+
+  test("without any command-line arguments (argv unavailable) both lines fall back to 'this same command'", () => {
+    process.argv = ["bun", "/opt/bin/tc"];
+    for (const created of [true, false]) {
+      const line = lastLine(approvalPendingError(pending, created));
+      expect(line).toStartWith("Next: ");
+      expect(line).toContain("this same command");
+      expect(line).not.toContain("`");
+    }
   });
 });
 

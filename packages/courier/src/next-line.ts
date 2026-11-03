@@ -2,36 +2,43 @@ import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 
 /**
- * The lines, on stderr, that tell an agent what to do next while an owner approval is outstanding (TC-2360).
- * Agents act only on what Courier prints, and rewrite the guides they were given: these are the lines they keep.
+ * The lines, on stderr, that tell an agent what to do next while an owner approval or an invitation is outstanding
+ * (TC-2360). Agents act only on what Courier prints, cut everything after the first clause, and rewrite the guides
+ * they were given: the action comes first, in one sentence, and names the exact command. Commands carry the program
+ * name Courier was started as (`courier` or `tinycloud courier`).
  */
 
 /** After the link `init --request` prints: collect the approval in the same turn. */
 export function initRequestNextLine(): string {
-  return `Next: send the owner the link above, then run \`${cmd('init --wait --timeout 60s')}\` now, in this same turn; do not wait for the owner to reply.`;
+  return `Next: send the owner the link above now, then run \`${cmd('init --wait --timeout 60s')}\` right away, in this same turn; do not wait for a reply.`;
 }
 
 /**
- * After a pending `init --wait` (exit 8): `argv` is the command as it was run, without the program name;
- * `created` says the link was made in this run (otherwise the request was resumed and the link may already be sent).
+ * After a pending `init --wait` (exit 8): `argv` is the command as it was run, without the program name; `created`
+ * says the link was made in this run (otherwise the request was resumed and the link may already be sent).
  */
 export function pendingNextLine(argv: string[], created: boolean): string {
   const same = cmd(argv.map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' '));
   return created
-    ? `Next: send the owner the link above, then run \`${same}\` again now, in this same turn; do not wait for the owner to reply (the command sees the approval itself).`
-    : `Next: run \`${same}\` again now, in this same turn, and send the owner the link above first only if you have not sent it yet; do not wait for the owner to reply.`;
+    ? `Next: send the owner the link above now, then run \`${same}\` again right away, in this same turn; do not wait for a reply.`
+    : `Next: run \`${same}\` again now, in this same turn, and first send the owner the link above only if you have not sent it yet; do not wait for a reply.`;
 }
 
 /** The last line of a pending `invite`: the link is on stdout; hand it to the owner, then serve the invitation. */
 export function inviteNextLine(invitationId: string): string {
-  return `Next: send the owner the invitation link above before anything else, then run \`${cmd(`invite serve ${invitationId} --wait 60`)}\` now, in this same turn.`;
+  return `Next: send this invite link to the owner now, then run \`${cmd(`invite serve ${invitationId} --wait 60`)}\` right away, in this same turn; do not wait for a reply.`;
 }
 
-/** The last line of a pending `invite serve`: the saved link `invite` printed, or a pointer to it when none is saved. */
+/** The first line of every `invite serve` run: the saved link `invite` printed, or a pointer to it when none is saved. */
 export function inviteServeNextLine(link: string | undefined): string {
   return typeof link === 'string' && link !== ''
-    ? `Next: if you have not sent the owner the invitation link yet, send it now: ${link} (then run this same command again now, in this same turn).`
-    : 'Next: if you have not sent the owner the invitation link yet, send the invitation link printed by `invite` now (then run this same command again now, in this same turn).';
+    ? `Next: if you have not sent the owner this invitation link yet, send it now: ${link}`
+    : 'Next: if you have not sent the owner this invitation link yet, send the invitation link printed by `invite` now.';
+}
+
+/** The last line of a pending `invite serve`: nobody has joined yet, so run it again. `waitSeconds` is the `--wait` it ran with. */
+export function invitePendingNextLine(invitationId: string, waitSeconds: number): string {
+  return `Next: no one has joined yet; run \`${cmd(`invite serve ${invitationId} --wait ${waitSeconds}`)}\` again now, in this same turn; do not wait for a reply.`;
 }
 
 /**
