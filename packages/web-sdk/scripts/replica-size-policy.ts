@@ -350,8 +350,8 @@ export type Tc2242PathBoundShares = HardeningRatchet & { replicaWorker: { delta:
 export type Tc2276SignedExpiry = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2272 technical expiry limits root admission; non-root buckets carry TC-2276. */
 export type Tc2276TechnicalLimits = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
-/** Exact TC-2380 space hosting root admission; non-root buckets carry TC-2272. */
-export type Tc2380SpaceHosting = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2379 sign-out fence root admission; non-root buckets carry TC-2272. */
+export type Tc2379SignOutFence = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -419,7 +419,7 @@ export type Ledger = {
   tc2242PathBoundShares?: Tc2242PathBoundShares;
   tc2276SignedExpiry?: Tc2276SignedExpiry;
   tc2276TechnicalLimits?: Tc2276TechnicalLimits;
-  tc2380SpaceHosting?: Tc2380SpaceHosting;
+  tc2379SignOutFence?: Tc2379SignOutFence;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1017,7 +1017,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2242PathBoundShares !== undefined) pins.push({ row: "tc2242PathBoundShares", pin: root.tc2242PathBoundShares.sourceCommits.at(-1)! });
   if (root.tc2276SignedExpiry !== undefined) pins.push({ row: "tc2276SignedExpiry", pin: root.tc2276SignedExpiry.sourceCommits.at(-1)! });
   if (root.tc2276TechnicalLimits !== undefined) pins.push({ row: "tc2276TechnicalLimits", pin: root.tc2276TechnicalLimits.sourceCommits.at(-1)! });
-  if (root.tc2380SpaceHosting !== undefined) pins.push({ row: "tc2380SpaceHosting", pin: root.tc2380SpaceHosting.sourceCommits.at(-1)! });
+  if (root.tc2379SignOutFence !== undefined) pins.push({ row: "tc2379SignOutFence", pin: root.tc2379SignOutFence.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1091,7 +1091,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2242PathBoundShares", root.tc2242PathBoundShares?.root.ceiling],
     ["tc2276SignedExpiry", root.tc2276SignedExpiry?.root.ceiling],
     ["tc2276TechnicalLimits", root.tc2276TechnicalLimits?.root.ceiling],
-    ["tc2380SpaceHosting", root.tc2380SpaceHosting?.root.ceiling],
+    ["tc2379SignOutFence", root.tc2379SignOutFence?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2604,21 +2604,21 @@ export const approvedTc2276TechnicalLimits: Tc2276TechnicalLimits = {
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "TC-2272 technical expiry limits row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2276.",
 };
-export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
-  label: "check space hosting on restore and record it at sign-in (TC-2380, #840)",
-  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 81b56f1231031dadefb67ad791f9932bbf025b99 measures 1,479,636/1,422,120 B, +952/+924 B over TC-2272. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
-  base: "759e2cd0482281bc188c0a412f3a57fde15ceb09",
-  sourceCommits: ["81b56f1231031dadefb67ad791f9932bbf025b99"],
+export const approvedTc2379SignOutFence: Tc2379SignOutFence = {
+  label: "sign out locally first, fence a signed-out session, clear only the own session (TC-2379)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head c318990526f9351577b5779493703a34cb135cfb measures 1,479,082/1,421,492 B, +398/+296 B over TC-2272. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "356c6053b4789529ab6c84536a385adf2e4e0c77",
+  sourceCommits: ["c318990526f9351577b5779493703a34cb135cfb"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41582827389",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089/job/125728984144",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089/job/125728984208",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41582827389/job/125741338021",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41582827389/job/125741338049",
     ],
   },
   root: {
-    delta: { "index.mjs": 952, "index.cjs": 924 },
-    ceiling: { "index.mjs": 1479636, "index.cjs": 1422120 },
+    delta: { "index.mjs": 398, "index.cjs": 296 },
+    ceiling: { "index.mjs": 1479082, "index.cjs": 1421492 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
@@ -2630,7 +2630,7 @@ export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
   },
   worker: { delta: 0, ceiling: 776539 },
   replicaWorker: { delta: 0, ceiling: 770467 },
-  reason: "TC-2380 space hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2272.",
+  reason: "TC-2379 sign-out fence row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2272.",
 };
 
 export type GatedOnlyRatchet = {
@@ -2728,7 +2728,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2242PathBoundShares: approvedTc2242PathBoundShares,
   tc2276SignedExpiry: approvedTc2276SignedExpiry,
   tc2276TechnicalLimits: approvedTc2276TechnicalLimits,
-  tc2380SpaceHosting: approvedTc2380SpaceHosting,
+  tc2379SignOutFence: approvedTc2379SignOutFence,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3030,9 +3030,9 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2276SignedExpiry || JSON.stringify(value.tc2276TechnicalLimits) !== JSON.stringify(approvedTc2276TechnicalLimits))) {
     throw new Error("Only Naomi's exact canonical TC-2272 technical expiry limits ratchet is approved.");
   }
-  if (value.tc2380SpaceHosting !== undefined &&
-      (!value.tc2276TechnicalLimits || JSON.stringify(value.tc2380SpaceHosting) !== JSON.stringify(approvedTc2380SpaceHosting))) {
-    throw new Error("Only the exact canonical TC-2380 space hosting ratchet is approved.");
+  if (value.tc2379SignOutFence !== undefined &&
+      (!value.tc2276TechnicalLimits || JSON.stringify(value.tc2379SignOutFence) !== JSON.stringify(approvedTc2379SignOutFence))) {
+    throw new Error("Only the exact canonical TC-2379 sign-out fence ratchet is approved.");
   }
 }
 
@@ -3404,11 +3404,11 @@ export function validateTc2276TechnicalLimitsTransition(base?: Tc2276TechnicalLi
     throw new Error("The TC-2272 technical expiry limits ratchet may be introduced once and cannot change later.");
   }
 }
-/** The TC-2380 space hosting ratchet is introduced once and immutable afterwards. */
-export function validateTc2380SpaceHostingTransition(base?: Tc2380SpaceHosting, current?: Tc2380SpaceHosting): void {
-  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2380SpaceHosting) ||
+/** The TC-2379 sign-out fence ratchet is introduced once and immutable afterwards. */
+export function validateTc2379SignOutFenceTransition(base?: Tc2379SignOutFence, current?: Tc2379SignOutFence): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2379SignOutFence) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
-    throw new Error("The TC-2380 space hosting ratchet may be introduced once and cannot change later.");
+    throw new Error("The TC-2379 sign-out fence ratchet may be introduced once and cannot change later.");
   }
 }
 
