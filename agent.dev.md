@@ -185,10 +185,23 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
+- Personal apps have two layouts, chosen per app as the skill's `layout.sh` does
+  (`src/tc-apps/layout.ts`). `new`: space `applications`, keys under
+  `xyz.tinycloud.tinyapps.<app>/`, discovery entry
+  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, one SQL copy per app at
+  `<root>index`. `legacy`: space `default`, `xyz.tinycloud.agent-data/`, one
+  shared copy. Legacy apps stay legacy until the owner moves them. Keep the
+  two rules in step with the skill: the discovery entry, written last by a
+  move, is what switches an app to `new`. Approvals are per app: a KV path
+  prefix matches only on a `/` boundary, so no single grant covers every app.
 - The rules generator adapts the CLI examples to MCP write inputs: keep the
   vendored CLI attribution intact. MCP put/move values omit top-level `by`,
   including edits of read-back records and catalogs. Keep this restriction
   expressible in the generated JSON Schema; stored/read-back records retain `by`.
+- Personal-app context can bundle one app's folder and the app list via `app`
+  and `access` (`change` by default, or `read`). A change bundle includes app-list
+  put so creating the app needs only the separate older-catalog check; omitting
+  `app` retains per-call approvals. Reads reuse an existing read-only folder grant.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.

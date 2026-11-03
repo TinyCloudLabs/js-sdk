@@ -98,6 +98,9 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     required: expect.arrayContaining(["acknowledgeDatabaseWideAuthority"]),
   });
   expect(sqlExecute?.effects).toEqual(["write", "destructive"]);
+  // Only a record write is destructive: a query refreshes a derived copy, and context saves a timezone.
+  expect(byId.get("tinycloud.apps.write")?.effects).toEqual(["destructive"]);
+  expect(byId.get("tinycloud.apps.query")?.effects).toEqual(["read", "write"]);
 });
 
 test("generated authority results require the complete strict request artifact", async () => {

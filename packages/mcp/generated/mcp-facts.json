@@ -66,8 +66,7 @@
       "operationVersion": 1,
       "effects": [
         "read",
-        "write",
-        "destructive"
+        "write"
       ],
       "postures": [
         "owner-openkey",

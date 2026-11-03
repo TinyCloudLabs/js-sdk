@@ -2349,12 +2349,23 @@
       "id": "tinycloud.apps.context",
       "version": 1,
       "title": "Personal apps context",
-      "description": "Read the connected user's TinyCloud personal-record catalog, local time and record-handling rules. Call first when the user requests a personal-record task. Supplying an IANA timezone saves or replaces their timezone setting for later calls. Do not use personal records to store credentials, payment-card data, government identifiers or protected health information.",
+      "description": "Read the connected user's list of personal apps (each with its layout), local time and record-handling rules. Call first when the user requests a personal-record task. Supplying an IANA timezone saves or replaces their timezone setting for later calls. Do not use personal records to store credentials, payment-card data, government identifiers or protected health information.",
       "input": {
         "type": "object",
         "properties": {
           "timezone": {
             "type": "string"
+          },
+          "app": {
+            "type": "string"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "read",
+              "change"
+            ],
+            "default": "change"
           }
         },
         "additionalProperties": false,
@@ -2374,6 +2385,49 @@
               "string",
               "null"
             ]
+          },
+          "apps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "app": {
+                  "type": "string"
+                },
+                "layout": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "new"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "copy": {
+                  "type": "string",
+                  "enum": [
+                    "present",
+                    "expired",
+                    "none"
+                  ]
+                }
+              },
+              "required": [
+                "app",
+                "layout",
+                "copy"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "legacy": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "not_approved"
+            ],
+            "description": "not_approved: the older layout's app list was not readable, so older apps are not in apps."
           },
           "catalog": {
             "type": "object",
@@ -2441,22 +2495,15 @@
               "keys"
             ],
             "additionalProperties": false
-          },
-          "copy": {
-            "type": "string",
-            "enum": [
-              "present",
-              "expired",
-              "none"
-            ]
           }
         },
         "required": [
           "rules",
           "now",
           "timezone",
-          "catalog",
-          "copy"
+          "apps",
+          "legacy",
+          "catalog"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -3425,6 +3472,49 @@
                   "null"
                 ]
               },
+              "apps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "app": {
+                      "type": "string"
+                    },
+                    "layout": {
+                      "type": "string",
+                      "enum": [
+                        "legacy",
+                        "new"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "copy": {
+                      "type": "string",
+                      "enum": [
+                        "present",
+                        "expired",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "app",
+                    "layout",
+                    "copy"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "legacy": {
+                "type": "string",
+                "enum": [
+                  "listed",
+                  "not_approved"
+                ],
+                "description": "not_approved: the older layout's app list was not readable, so older apps are not in apps."
+              },
               "catalog": {
                 "type": "object",
                 "properties": {
@@ -3491,22 +3581,15 @@
                   "keys"
                 ],
                 "additionalProperties": false
-              },
-              "copy": {
-                "type": "string",
-                "enum": [
-                  "present",
-                  "expired",
-                  "none"
-                ]
               }
             },
             "required": [
               "rules",
               "now",
               "timezone",
-              "catalog",
-              "copy"
+              "apps",
+              "legacy",
+              "catalog"
             ],
             "additionalProperties": false,
             "$schema": "http://json-schema.org/draft-07/schema#"
@@ -3585,10 +3668,18 @@
       "id": "tinycloud.apps.query",
       "version": 1,
       "title": "Query personal records",
-      "description": "Answer the user's question over their personal records using an optional searchable copy. Requires separate copy approval. List every app and kind covered; the server writes or replaces their derived SQL copy before running one SELECT or WITH query with bound params. Canonical records are unchanged. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
+      "description": "Answer the user's question over one app's personal records using an optional searchable copy. Requires separate copy approval. Name the app's layout and every kind covered; the server writes or replaces the app's derived SQL copy before running one SELECT or WITH query with bound params. It refreshes a derived copy; never changes records. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
       "input": {
         "type": "object",
         "properties": {
+          "layout": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "new"
+            ],
+            "description": "The app's layout from tinycloud_apps_context: new for apps in xyz.tinycloud.tinyapps.<app>/, legacy for apps in xyz.tinycloud.agent-data/."
+          },
           "kinds": {
             "type": "array",
             "items": {
@@ -3654,6 +3745,7 @@
           }
         },
         "required": [
+          "layout",
           "kinds",
           "sql"
         ],
@@ -4872,8 +4964,7 @@
       ],
       "effects": [
         "read",
-        "write",
-        "destructive"
+        "write"
       ],
       "sensitivity": {
         "input": true,
@@ -6252,7 +6343,7 @@
                           }
                         ]
                       },
-                      "description": "Record or catalog value without top-level by. Remove by from read-back values before edits or moves; the server supplies it."
+                      "description": "Record, catalog or discovery-entry value without top-level by. Remove by from read-back values before edits or moves; the server supplies it."
                     },
                     "etag": {
                       "type": "string",
