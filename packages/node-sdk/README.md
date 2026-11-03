@@ -1,5 +1,17 @@
 # @tinycloud/node-sdk
 
+## Registry v2 resource routing
+
+Node SDK and the Web SDK's shared Node client use owner-signed registry v2 records by default. Set `tinycloudRegistryUrl` to select a registry; isolated development may use a loopback HTTP origin.
+
+Routing uses the complete space URI, not a short space name or a single account-wide host. Reads use that space's listed members; writes target every listed `read-write` member. Read-only members may register a session and host their listed replica, but do not receive ordinary writes. Advertised node DIDs are checked against `/info` and `/.well-known/tinycloud/node-keys` before use.
+
+Encryption is resolved separately: descriptor reads, network creation, and decrypt requests use the signed `encryptionNode`, including its invocation audience. A data-space host does not become an encryption destination, or vice versa.
+
+Explicit `host`, saved-profile hosts, local discovery, and new-user defaults are hints only for genuine no-entry onboarding. The lookup checks v2 first, then v1 only to distinguish absence from an existing v1 registration. A v1-only registration, an unavailable registry, an empty registered membership, or a missing encryption destination never authorizes fallback. Signed strings are validated without rewriting them.
+
+`NodeNotRespondingError` has code `NODE_NOT_RESPONDING`. Registry refusals and node-identity mismatches remain distinct errors. Multi-node writes are not atomic: `PartialNodeWriteError` exposes `succeeded` URLs and `failed` destinations/statuses/causes so callers do not mistake incomplete writes for success.
+
 ## Signed SIWE metadata
 
 Set `siweConfig.resources` to `urn:tinycloud:recipients:<base64url>` URI strings to include a recipients declaration in the signed SIWE. The payload uses only unpadded base64url characters (`A–Z`, `a–z`, `0–9`, `_`, `-`). Node-sdk inserts these URIs immediately before the original ReCap resource, which remains last. Ordinary sign-in, external/OpenKey preparation, and bootstrap sessions use the same insertion path; completion and session storage retain the signed message unchanged.

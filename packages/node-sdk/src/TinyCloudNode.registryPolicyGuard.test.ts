@@ -69,9 +69,10 @@ function wasmBindings(): IWasmBindings {
   return {
     invoke: async () => undefined,
     prepareSession: (params: Record<string, unknown>) => ({ ...params, siwe: "public session siwe" }),
-    completeSessionSetup: () => ({
+    completeSessionSetup: (params: { spaceId: string }) => ({
       delegationCid: "bafy-public-session",
       delegationHeader: { Authorization: "Bearer public session" },
+      spaceId: params.spaceId,
     }),
     ensureEip55: (address: string) => address,
     makeSpaceId: (address: string, chainId: number, name: string) =>
@@ -82,6 +83,7 @@ function wasmBindings(): IWasmBindings {
     generateHostSIWEMessage: () => "host siwe",
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
+    parseRecapFromSiwe: () => [],
     vault_encrypt: () => new Uint8Array(),
     vault_decrypt: () => new Uint8Array(),
     vault_derive_key: () => new Uint8Array(),

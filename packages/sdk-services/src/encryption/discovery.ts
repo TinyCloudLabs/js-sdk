@@ -7,9 +7,9 @@ import { routingFailure } from "../resourceRouting";
  * 1. The node's authoritative endpoint
  *    `GET /encryption/networks/<networkId>` returns the current
  *    descriptor (`state`, `publicEncryptionKey`, `keyVersion`, ...).
- * 2. If the node is unreachable, fall back to the cached discovery
- *    record at `.well-known/encryption/network/<name>` inside the
- *    owner's public space.
+ * 2. An optional caller-supplied `.well-known/encryption/network/<name>`
+ *    cache may answer an ordinary discovery miss. Typed routing failures
+ *    never fall back; registry-aware adapters also exclude registered owners.
  *
  * The node DB is authoritative on conflict; cached records are
  * advisory only.
@@ -60,8 +60,8 @@ export interface DiscoverNetworkInput {
 }
 
 /**
- * Resolve a network descriptor. The node fetcher is preferred; the
- * well-known fallback is used only on transport failure.
+ * Resolve a network descriptor. The node fetcher is preferred. An optional
+ * well-known cache cannot override a typed registry, identity, or transport failure.
  *
  * The returned descriptor is sanity-checked: `networkId`, `ownerDid`,
  * and `name` must agree with the URN, and the public key field must

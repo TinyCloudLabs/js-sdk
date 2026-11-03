@@ -5,6 +5,7 @@ export interface ResourceDestination { readonly url: string; readonly nodeDid?: 
 export interface ResourceRoutingConfig {
   resolveResource(resource: string, access: ResourceAccess): Promise<readonly ResourceDestination[]>;
   bindAudience(authorization: string, nodeDid: string): Promise<string>;
+  /** Defaults to the raw transport's public node identity checks. */
   verifyDestination?(target: ResourceDestination): Promise<void>;
 }
 
@@ -142,7 +143,8 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
     targets = targets.filter((target, index) => targets.findIndex((other) => other.url === target.url) === index);
     const send = async (target: ResourceDestination): Promise<FetchResponse> => {
       init?.signal?.throwIfAborted();
-      await routing.verifyDestination?.(target);
+      if (routing.verifyDestination) await routing.verifyDestination(target);
+      else await verifyResourceDestination(target, fetchFn);
       const signed = target.nodeDid ? await routing.bindAudience(authorization, target.nodeDid) : authorization;
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
@@ -168,6 +170,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
           failure = error;
         }
       }
+      if (failure) throw new NodeNotRespondingError(targets.map(({ url }) => url), failure);
       if (response) return response;
       throw new NodeNotRespondingError(targets.map(({ url }) => url), failure);
     }
@@ -181,7 +184,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
         if (result.ok) { succeeded.push(target.url); response ??= result; }
         else { failed.push({ url: target.url, status: result.status }); failureResponse ??= result; }
       } catch (error) {
-        if (!routingFailure(error)) throw error;
+        if (!routingFailure(error) && succeeded.length === 0) throw error;
         failed.push({ url: target.url, cause: error });
       }
     }

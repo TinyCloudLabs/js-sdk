@@ -695,11 +695,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (this._address === undefined || this._chainId === undefined) {
       throw new Error("Cannot resolve TinyCloud hosts: sign in or restore a session first.");
     }
-    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId);
+    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId, this._tinyCloudSession?.spaceId);
   }
 
-  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number): Promise<void> {
-    const spaceId = this.resolveSignInCapabilities(address, chainId).spaceId;
+  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number, restoredSpaceId?: string): Promise<void> {
+    const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     const destinations = await this.resolveResourceDestinations(spaceId, "read");
     for (const destination of destinations) await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
     this.tinycloudHosts = destinations.map(({ url }) => url);
@@ -719,6 +719,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       try {
         const resolved = await resolveRegistryResource(subject, resource, access, {
           registryUrl: this.tinycloudRegistryUrl,
+          registryChainId: this.registryChainId,
           sequenceStore: this.registrySequenceStore,
         });
         this.registryVerdict = resolved.verdict;

@@ -94,6 +94,7 @@ export async function createAuthRuntimeFixture(
     await writeJsonAtomic(profileConfigPath(profile), {
       name: profile,
       host: hermetic.host,
+      tinycloudRegistryUrl: hermetic.host,
       chainId: hermetic.restorableSession.chainId,
       spaceName: "secrets",
       spaceId: hermetic.restorableSession.spaceId,
@@ -108,6 +109,7 @@ export async function createAuthRuntimeFixture(
     await writeJsonAtomic(profileConfigPath(ownerProfile), {
       name: ownerProfile,
       host: hermetic.host,
+      tinycloudRegistryUrl: hermetic.host,
       chainId: hermetic.ownerRestorableSession.chainId,
       spaceName: "secrets",
       spaceId: hermetic.ownerRestorableSession.spaceId,
