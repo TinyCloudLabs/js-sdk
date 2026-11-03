@@ -4162,7 +4162,7 @@ export class TinyCloudNode {
   }
 
   /** Refresh full-space membership before any automatic or explicit hosting. */
-  private async assertMayCreateSpace(spaceId = this.spaceId): Promise<void> {
+  private async assertMayCreateSpace(spaceId: string): Promise<void> {
     await this.routingDestinations(spaceId, "host");
   }
 
