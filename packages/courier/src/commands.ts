@@ -7,6 +7,7 @@ import { ulid } from 'ulid';
 import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import type { PortableDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
+import { initRequestNextLine } from './next-line.js';
 import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
@@ -195,6 +196,7 @@ export async function cmdInit(args: ParsedArgs) {
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
     console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    console.error(initRequestNextLine());
     // A resumed request keeps the lifetime it was made with.
     const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
     printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
@@ -262,7 +264,7 @@ async function collectApproval(profile: Profile, key: AgentKey, options: { expir
     console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
   }
   if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
-    throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
+    throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt }, !resumed);
   }
   const active = loadProfile();
   if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);

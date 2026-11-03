@@ -23,6 +23,7 @@ import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
 import { activateSession, INVITATION_MODES, selectedSession, sessionKey, validSessionId } from './guided.js';
 import type { CourierSession, InvitationMode } from './guided.js';
+import { inviteNextLine, invitePendingNextLine, inviteServeNextLine, nextOnInvitePending } from './next-line.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
 const DEFAULT_VIEWER = 'https://courier.tinycloud.xyz';
@@ -259,7 +260,9 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
     if (!state) refuse('No invitation issued by this profile.');
     const body = parseInvitation(state.value.body);
     if (body.issuer !== profile.courierDid || !sameIdentity(body.artifact.from.owner, profile.ownerDid!) || body.host !== profile.host) refuse('Invitation belongs to another issuer.');
-    return serveInvitation(node, profile, body, wait);
+    expiryCheck(body);
+    if (!await getJson(node.kv, winnerKey(id))) console.error(inviteServeNextLine(state.value.link));
+    return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(invitePendingNextLine(id, wait)));
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');
   if (!INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
@@ -293,7 +296,7 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
     expiresAt: new Date(expiresAt), plaintext: new TextEncoder().encode(canonicalJson(body)) });
   await putOverwrite(node.kv, inviteStateKey(id), { body, link: result.link });
   console.log(JSON.stringify({ status: 'invitation', invitationId: id, sessionId: session.sessionId, mode, link: result.link, expiresAt }));
-  return serveInvitation(node, profile, body, wait);
+  return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(inviteNextLine(id)));
 }
 
 async function validateHandle(node: TinyCloudNode, profile: Profile, peer: StoredPeer) {
