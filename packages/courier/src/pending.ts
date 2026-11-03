@@ -93,6 +93,16 @@ function store(records: PendingRecord[]): void {
   else writeDurable(pendingPath(), { v: 1, records });
 }
 
+/** Whether an unexpired record exists. Read-only: unlike the readers around it, it never removes, repairs or rewrites anything. */
+export function hasLivePending(): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pendingPath(), 'utf8')) as PendingFile;
+    return parsed.v === 1 && Array.isArray(parsed.records) && parsed.records.filter(isRecord).some((record) => Date.parse(record.expiresAt) > Date.now());
+  } catch {
+    return false;
+  }
+}
+
 /** The unexpired record saved for this code, if any. */
 export function pendingForCode(code: string): GrantPayload | undefined {
   const hash = codeHash(code);

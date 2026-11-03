@@ -8,6 +8,11 @@ import {
   Crash, crashAtWrite, homeFile, readHome, readySpace, scenario, signedGrant, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
 
+// `main` turns any thrown error into an exit code, so a simulated kill only propagates when the command is called directly.
+const rotateAndDie = () => cmdInit(parseArgs(['--rotate-key', '--request']));
+// A renewal stays with the owner that holds the grant, so the first grant and the renewal are signed by one wallet.
+const OWNER_WALLET = 'a1'.repeat(32);
+
 // TC-2383: `init --rotate-key` discards a saved approval (it is bound to the old key) and says so. When the saved approval already
 // holds a granted result (`resultEnvelope` collected, or `committed`), a live grant may exist: the warning then also names the revoke
 // page. The journal records that fact (non-secret) BEFORE approval-pending.json is deleted, so the warning survives a crash at every
@@ -38,7 +43,7 @@ const MODES = [['--request'], ['--wait', '--timeout', '1s'], ['--resume'], ['--r
 async function readyProfile({ t, request, courier }) {
   stubSpaceProbe(t, readySpace);
   await request();
-  const grant = await signedGrant(readHome('key.json'));
+  const grant = await signedGrant(readHome('key.json'), { wallet: OWNER_WALLET });
   fs.writeFileSync(homeFile('legacy-grant.json'), JSON.stringify(grant));
   assert.equal((await courier('--grant-file', homeFile('legacy-grant.json'))).code, 0);
   fs.rmSync(homeFile('legacy-grant.json'));
@@ -50,7 +55,7 @@ async function readyProfile({ t, request, courier }) {
 async function resultHeld(ctx) {
   await readyProfile(ctx);
   const printed = await ctx.request();
-  await ctx.fx.approve(printed.openkeyUrl);
+  await ctx.fx.approve(printed.openkeyUrl, { grant: { wallet: OWNER_WALLET } });
   const crash = crashAtWrite(ctx.t, 'approval-pending.json', { phase: 'after', when: (c) => c.resultEnvelope !== undefined });
   await assert.rejects(cmdInit(parseArgs(['--wait'])), (error) => error instanceof Crash);
   crash.disarm();
@@ -60,7 +65,7 @@ async function resultHeld(ctx) {
 async function resultCommitted(ctx) {
   await readyProfile(ctx);
   const printed = await ctx.request();
-  await ctx.fx.approve(printed.openkeyUrl);
+  await ctx.fx.approve(printed.openkeyUrl, { grant: { wallet: OWNER_WALLET } });
   const crash = crashAtWrite(ctx.t, 'approval-pending.json', { phase: 'after', when: (c) => c.committed === true });
   await assert.rejects(cmdInit(parseArgs(['--wait'])), (error) => error instanceof Crash);
   crash.disarm();
@@ -112,10 +117,10 @@ scenario('rotate-key over an open request prints no discard or revoke warning', 
 for (const boundary of BOUNDARIES) {
   scenario(`rotation ${boundary.name} over a granted result: the journal records it without secrets`, async (ctx) => {
     await resultHeld(ctx);
-    const crash = boundary.arm(ctx.t);
-    await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
-    crash.disarm();
     const held = readHome('approval-pending.json');
+    const crash = boundary.arm(ctx.t);
+    await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
+    crash.disarm();
     const journal = readHome('rotation.json');
     assert.equal(journal.discardApproval, true);
     assert.equal(journal.grantedResult, true);
@@ -128,7 +133,7 @@ for (const boundary of BOUNDARIES) {
     scenario(`rotation ${boundary.name} over a granted result: \`init ${mode.join(' ')}\` prints the live-grant and revoke warning from the journal`, async (ctx) => {
       await resultHeld(ctx);
       const crash = boundary.arm(ctx.t);
-      await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+      await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
       crash.disarm();
       // The crashed command's own output must not be what carries the warning: only what recovery prints counts.
       ctx.errors.length = 0;
@@ -150,7 +155,7 @@ for (const boundary of BOUNDARIES) {
     const open = readHome('approval-pending.json');
     fs.writeFileSync(homeFile('approval-pending.json'), JSON.stringify({ ...open, resultRef: 'ref', resultExpiresAt: '2999-01-01T00:00:00.000Z' }), { mode: 0o600 });
     const crash = boundary.arm(ctx.t);
-    await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+    await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
     crash.disarm();
     assert.equal(readHome('rotation.json').grantedResult, false);
     ctx.errors.length = 0;

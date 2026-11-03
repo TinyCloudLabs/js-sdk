@@ -1,3 +1,4 @@
+import { adviceFor, deriveState, heldApproval, recoverInterrupted, rotateKey } from './state.js';
 import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -110,17 +111,32 @@ export async function cmdInit(args: ParsedArgs) {
   const grantRaw = grantFile === undefined || args.has('request')
     ? undefined
     : grantFile === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(grantFile, 'utf8');
+  // Explicit recovery before any mode acts: finish an interrupted rotation, remove stray key-bearing temp files; then derive once.
+  recoverInterrupted();
+  const state = deriveState();
+  for (const note of state.notes) console.error(`warning: ${note}`);
+  // A saved approval without its profile or key is never dropped; `--rotate-key` is the explicit way to discard it.
+  if (state.action === 'refuse' && !args.has('rotate-key')) fail('approval-orphaned', adviceFor(state));
+  const HELD_APPROVAL_KEPT = `The saved approval request holds an approval from the owner and was kept: run \`${cmd('init --wait')}\` to collect or acknowledge it.`;
   if (args.has('resume')) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
+    // An approval the owner gave, with no grant saved to install first, is collected by `--wait`, never discarded or shadowed by a cleanup.
+    if (state.action === 'wait' && heldApproval(state.inputs.approval) && profile.status !== 'ready') {
+      console.error(`${adviceFor(state)} Continuing as \`${cmd('init --wait')}\`.`);
+      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+      return;
+    }
     if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
       dropOpenRequest();
+      if (heldApproval(state.inputs.approval)) console.error(HELD_APPROVAL_KEPT);
       await finishInit(profile, profile.host);
       return;
     }
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);
     await resumeGrant(profile, loadKey());
     dropOpenRequest();
+    if (heldApproval(state.inputs.approval)) console.error(HELD_APPROVAL_KEPT);
     await finishInit(profile, profile.host);
     return;
   }
@@ -128,15 +144,9 @@ export async function cmdInit(args: ParsedArgs) {
   const rotate = args.has('rotate-key');
   // A writer must learn that the saved approval is unreadable BEFORE the key, grant or profile is changed.
   if (args.has('request') || args.has('wait')) assertPendingReadable();
-  // Read before the key is replaced: an approval the owner already gave is bound to the old key and is lost by a rotation.
-  const heldApproval = rotate && (() => { const saved = loadPending(); return saved !== undefined && holdsApproval(saved); })();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
-  // A renewal is asked for with `--request`; `--wait` only collects. Starting a request here would hide its link on stderr.
-  if (args.has('wait') && prior && prior.status !== 'awaiting-grant' && !loadPending()) {
-    fail('usage', prior.status === 'awaiting-space'
-      ? `The grant is saved and the "${COURIER_SPACE}" space is still being set up: run \`${cmd('init --resume')}\`. \`${cmd('init --wait')}\` collects an approval that \`${cmd('init --request')}\` asked for.`
-      : `This profile already has a grant and no approval request is pending. To renew it, run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`);
-  }
+  // A renewal is asked for with `--request`; `--wait` only collects. The derived state says when `--wait` goes on.
+  if (args.has('wait') && !rotate && !state.wait) fail('usage', adviceFor(state));
   const key = prior ? loadKey() : newAgentKey();
   const host = hostFlag ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
   const openkeyHost = openkeyHostFlag ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
@@ -154,20 +164,21 @@ export async function cmdInit(args: ParsedArgs) {
   profile.openkeyHost = openkeyHost;
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
+  profile.courierDid = bareDid(key.did);
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;
     profile.spaceId = undefined;
     profile.grantExpiresAt = undefined;
     profile.status = 'awaiting-grant';
-    try { fs.unlinkSync(path.join(profileDir(), 'grant.json')); } catch { /* no prior grant */ }
+    // One journaled step: key, profile, grant and a discarded approval change together, and an interruption is finished by the next init.
+    await rotateKey(key, profile);
+  } else {
+    saveKey(key);
+    saveProfile(profile);
   }
-  profile.courierDid = bareDid(key.did);
-  saveKey(key);
-  saveProfile(profile);
   const request = courierGrantRequest(profile, key, expiry, { openkeyApiHost: apiHostFlag });
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
-  if (heldApproval) console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
 
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
@@ -179,17 +190,7 @@ export async function cmdInit(args: ParsedArgs) {
   }
 
   if (args.has('wait')) {
-    const deadline = Date.now() + waitMs;
-    const { pending, resumed } = await waitApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
-    if (!pending.committed) {
-      console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
-    }
-    if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
-      throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
-    }
-    const active = loadProfile();
-    if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
-    await finishInit(active, active.host);
+    await collectApproval(profile, key, { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
     return;
   }
 
@@ -239,6 +240,21 @@ function dropOpenRequest(): void {
   // Only a request that holds nothing: one with a result reference, the encrypted result or a committed grant is kept for `--wait`.
   const saved = loadPending();
   if (saved && !holdsApproval(saved)) clearPendingQuietly();
+}
+
+/** `init --wait`: create or resume the approval request, wait for the owner, install the result and acknowledge it. `--resume` hands off here while an approval is saved. */
+async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
+  const deadline = Date.now() + options.waitMs;
+  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost });
+  if (!pending.committed) {
+    console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
+  }
+  if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
+    throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
+  }
+  const active = loadProfile();
+  if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
+  await finishInit(active, active.host);
 }
 
 async function finishInit(profile: Profile, host: string): Promise<void> {

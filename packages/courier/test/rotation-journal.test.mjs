@@ -6,6 +6,11 @@ import { loadProfile } from '../dist/profile.js';
 import {
   Crash, crashAtWrite, homeFile, readHome, readySpace, scenario, signedGrant, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
+import { cmdInit } from '../dist/commands.js';
+import { parseArgs } from '../dist/args.js';
+
+// `main` turns any thrown error into an exit code, so a simulated kill only propagates when the command is called directly.
+const rotateAndDie = () => cmdInit(parseArgs(['--rotate-key', '--request']));
 
 // TC-2383: `init --rotate-key` replaces key.json, profile.json and grant.json as ONE journaled step.
 //   1. rotation.json (0600, in the profile directory) is written atomically (temp file in the same directory, fsync, rename, directory fsync)
@@ -56,7 +61,7 @@ for (const boundary of BOUNDARIES) {
     await readyProfile(ctx);
     const oldKey = readHome('key.json');
     const crash = boundary.arm(ctx.t);
-    await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+    await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
     crash.disarm();
     const derived = deriveState();
     assert.equal(derived.state, 'rotation-interrupted');
@@ -73,7 +78,7 @@ for (const boundary of BOUNDARIES) {
     scenario(`rotation ${boundary.name}: \`init ${mode.join(' ')}\` rolls it forward to the journal's key and an empty grant slot`, async (ctx) => {
       await readyProfile(ctx);
       const crash = boundary.arm(ctx.t);
-      await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+      await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
       crash.disarm();
       const newKey = readHome('rotation.json').key;
       await ctx.courier(...mode);
@@ -102,7 +107,7 @@ for (const mode of [['--request'], ['--wait', '--timeout', '1s'], ['--resume'], 
     const keyBefore = fs.readFileSync(homeFile('key.json'));
     const grantBefore = fs.readFileSync(homeFile('grant.json'));
     const crash = crashAtWrite(ctx.t, 'rotation.json', { phase: 'before' });
-    await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+    await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
     crash.disarm();
     fs.writeFileSync(homeFile(STRAY), JSON.stringify({ v: 1, key: { v: 1, jwk: { d: 'new-private-part' }, did: 'did:key:z6Mn', createdAt: 'now' }, profile: {} }), { mode: 0o600 });
     const derived = deriveState();
@@ -185,7 +190,7 @@ scenario('rotation killed before rotation.json is renamed keeps a held approval 
   await readyWithHeldApproval(ctx);
   const pending = fs.readFileSync(homeFile('approval-pending.json'));
   const crash = crashAtWrite(ctx.t, 'rotation.json', { phase: 'before' });
-  await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+  await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
   crash.disarm();
   assert.deepEqual(fs.readFileSync(homeFile('approval-pending.json')), pending);
   assert.equal(deriveState().state, 'ready-approval');
@@ -196,7 +201,7 @@ for (const boundary of BOUNDARIES) {
     await readyWithHeldApproval(ctx);
     const held = readHome('approval-pending.json');
     const crash = boundary.arm(ctx.t);
-    await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+    await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
     crash.disarm();
     assert.equal(readHome('rotation.json').discardApproval, true);
     assert.equal(deriveState().state, 'rotation-interrupted');
@@ -213,7 +218,7 @@ for (const boundary of BOUNDARIES) {
 scenario('a rotation with no approval held writes discardApproval: false and never touches approval-pending.json', async (ctx) => {
   await readyProfile(ctx);
   const crash = crashAtWrite(ctx.t, 'rotation.json', { phase: 'after' });
-  await assert.rejects(ctx.courier('--rotate-key', '--request'), (error) => error instanceof Crash);
+  await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
   crash.disarm();
   assert.equal(readHome('rotation.json').discardApproval, false);
 });

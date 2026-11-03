@@ -34,20 +34,21 @@ const TABLE = [
   [{ profile: 'absent', key: true }, { state: 'key-only', action: 'init' }],
   // a profile without its key cannot be resumed
   [{ key: false }, { state: 'key-missing', action: 'rotate-key' }],
-  // an approval the owner gave (held or committed) outranks a saved delegation, a saved grant, a pending space and a missing grant
-  [{ profile: 'awaiting-grant', approval: HELD }, { state: 'approval-held', action: 'wait' }],
-  [{ profile: 'awaiting-space', approval: HELD }, { state: 'approval-held', action: 'wait' }],
-  [{ profile: 'ready', approval: HELD }, { state: 'ready-approval', action: 'wait' }],
-  // awaiting-grant, nothing held
+  // awaiting-grant: a grant saved and not installed is installed first (`--resume`); a held approval beside it stays on disk
   [{ profile: 'awaiting-grant', pendingGrant: true }, { state: 'saved-delegation', action: 'resume' }],
   [{ profile: 'awaiting-grant', grant: true }, { state: 'saved-grant', action: 'resume' }],
+  // awaiting-grant with nothing saved to install: an approval the owner gave is collected by `--wait`
+  [{ profile: 'awaiting-grant', approval: HELD }, { state: 'approval-held', action: 'wait' }],
   [{ profile: 'awaiting-grant', approval: 'open' }, { state: 'approval-open', action: 'wait' }],
   [{ profile: 'awaiting-grant', approval: 'unreadable' }, { state: 'approval-unreadable', action: 'fix-approval' }],
   [{ profile: 'awaiting-grant' }, { state: 'awaiting-grant', action: 'request' }],
-  // awaiting-space
+  // awaiting-space: a saved grant is finished by `--resume` with any approval kept; without a grant a held approval is collected
+  [{ profile: 'awaiting-space', grant: false, approval: HELD }, { state: 'approval-held', action: 'wait' }],
   [{ profile: 'awaiting-space', grant: false }, { state: 'grant-missing', action: 'request' }],
   [{ profile: 'awaiting-space', spacePending: true }, { state: 'space-pending', action: 'resume' }],
   [{ profile: 'awaiting-space' }, { state: 'space-missing', action: 'resume' }],
+  // ready: a held renewal is collected by `--wait`
+  [{ profile: 'ready', approval: HELD }, { state: 'ready-approval', action: 'wait' }],
   // ready
   [{ profile: 'ready', approval: 'unreadable' }, { state: 'approval-unreadable', action: 'fix-approval' }],
   [{ profile: 'ready', grant: false }, { state: 'grant-missing', action: 'request' }],
@@ -97,8 +98,10 @@ const MUTANTS = {
   'treats a held approval as open while awaiting-space': (i) => classifyState({ ...i, approval: i.approval === 'held' && i.profile === 'awaiting-space' ? 'open' : i.approval }),
   'treats a held approval as open on a ready profile': (i) => classifyState({ ...i, approval: i.approval === 'held' && i.profile === 'ready' ? 'open' : i.approval }),
   'treats a committed approval as none': (i) => classifyState({ ...i, approval: i.approval === 'committed' ? 'none' : i.approval }),
-  'lets a saved delegation outrank a held approval': (i) => classifyState(i.approval === 'held' && i.pendingGrant ? { ...i, approval: 'none' } : i),
-  'lets a saved grant outrank a held approval': (i) => classifyState(i.approval === 'held' && i.grant ? { ...i, approval: 'none' } : i),
+  'lets a held approval outrank a saved delegation': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-grant' && i.pendingGrant ? { ...i, pendingGrant: false, grant: false } : i),
+  'lets a held approval outrank a saved grant': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-grant' && i.grant ? { ...i, pendingGrant: false, grant: false } : i),
+  'lets a held approval outrank a saved grant while awaiting-space': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-space' && i.grant ? { ...i, grant: false } : i),
+  'lets a saved grant outrank a held approval with nothing saved to install': (i) => classifyState(i.approval === 'held' && i.profile === 'awaiting-grant' && !i.grant && !i.pendingGrant ? { ...i, approval: 'none' } : i),
   'lets a missing grant outrank a held approval': (i) => classifyState(i.approval === 'held' && i.profile === 'ready' && !i.grant ? { ...i, approval: 'none' } : i),
   'treats an unreadable approval as none': (i) => classifyState({ ...i, approval: i.approval === 'unreadable' ? 'none' : i.approval }),
   'drops an approval whose key is missing': (i) => classifyState(!i.key && LIVE.includes(i.approval) ? { ...i, approval: 'none' } : i),
@@ -108,6 +111,54 @@ const MUTANTS = {
 for (const [name, mutant] of Object.entries(MUTANTS)) {
   test(`mutation check: a classifier that ${name} is caught by the table`, () => {
     assert.notDeepEqual(disagreements(mutant), []);
+  });
+}
+
+// ---- `init --wait`: collect a saved approval (go on) or advise another command ----
+// An approval the owner gave (a retryable result reference, the saved encrypted result or a commit) is always collected, even beside a
+// grant saved and not installed. An OPEN request beside a saved grant makes `--wait` advise `--resume`, except while the space is being set up.
+
+const WAIT_TABLE = [
+  [{ rotation: true }, false],
+  [{ profile: 'absent', approval: LIVE }, false],
+  [{ key: false, approval: LIVE }, false],
+  [{ profile: 'absent' }, true],
+  [{ key: false }, false],
+  [{ approval: HELD }, true],
+  [{ profile: 'awaiting-space', approval: 'open' }, true],
+  [{ profile: 'awaiting-grant', pendingGrant: true }, false],
+  [{ profile: 'awaiting-grant', grant: true }, false],
+  [{ profile: 'awaiting-grant', approval: 'unreadable' }, false],
+  [{ profile: 'awaiting-grant' }, true],
+  [{ profile: 'awaiting-space', grant: false }, true],
+  [{ profile: 'awaiting-space' }, false],
+  [{ profile: 'ready', approval: 'unreadable' }, false],
+  [{ profile: 'ready', grant: false }, true],
+  [{ profile: 'ready', approval: 'open' }, true],
+  [{ profile: 'ready' }, false],
+];
+const waitExpected = (inputs) => {
+  const row = WAIT_TABLE.find(([pattern]) => matches(pattern, inputs));
+  assert.ok(row, `no wait row for ${JSON.stringify(inputs)}`);
+  return row[1];
+};
+const waitDisagreements = (classify) => [...combinations()].filter((inputs) => classify(inputs).wait !== waitExpected(inputs));
+
+test('classifyState says when --wait goes on for every combination', () => {
+  assert.deepEqual(waitDisagreements(classifyState), []);
+});
+
+const WAIT_MUTANTS = {
+  'advises --resume for a held result beside a saved grant': (i) => classifyState(HELD.includes(i.approval) && (i.grant || i.pendingGrant) ? { ...i, approval: 'open' } : i),
+  'treats a result reference alone like an open request': (i) => classifyState(i.approval === 'held' ? { ...i, approval: 'open' } : i),
+  'advises --resume for an open request while the space is being set up': (i) => classifyState(i.approval === 'open' && i.profile === 'awaiting-space' ? { ...i, approval: 'none' } : i),
+  'goes on for an open request beside a saved grant': (i) => ({ ...classifyState(i), wait: i.approval === 'open' && (i.grant || i.pendingGrant) ? true : classifyState(i).wait }),
+  'goes on while a rotation is interrupted': (i) => ({ ...classifyState(i), wait: i.rotation ? true : classifyState(i).wait }),
+  'goes on for an orphaned approval': (i) => ({ ...classifyState(i), wait: classifyState(i).state === 'approval-orphaned' ? true : classifyState(i).wait }),
+};
+for (const [name, mutant] of Object.entries(WAIT_MUTANTS)) {
+  test(`mutation check: a classifier that ${name} is caught by the wait table`, () => {
+    assert.notDeepEqual(waitDisagreements(mutant), []);
   });
 }
 
