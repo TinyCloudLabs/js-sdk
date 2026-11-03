@@ -365,3 +365,57 @@ test('linux: a zombie holder is dead in the same pid namespace whatever the time
   acquireLock(file, { identity: here('M', 'linux:b') })();
   t.mock.restoreAll();
 });
+
+// ---- procfs identity: the mount must belong to this pid namespace ----
+
+const nsLink = (override) => (t) => {
+  const readlink = fs.readlinkSync;
+  t.mock.method(fs, 'readlinkSync', (f, ...rest) => {
+    const answer = override(String(f));
+    if (answer === 'throw') throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    return answer ?? readlink(f, ...rest);
+  });
+};
+
+test('linux: pid and parent pid both coincide but /proc/1 is in another pid namespace than /proc/self: not our procfs, the live holder is kept', linux, async (t) => {
+  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' });
+  const file = lock('nsmismatch');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, content, { mode: 0o600 });
+  nsLink((f) => (f === '/proc/1/ns/pid' ? 'pid:[4026539999]' : undefined))(t); // /proc/self and its parent look right; init's namespace differs from self's
+  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked' && /cannot tell/.test(e.message));
+  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(file, 'utf8'), content, 'the lock is untouched');
+  fs.rmSync(file);
+});
+
+test('linux: when the pid namespace of /proc/1 cannot be read (no ptrace rights), /proc is not trusted: the lock is kept, and nothing is recorded from it', linux, async (t) => {
+  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' });
+  const file = lock('nsunreadable');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, content, { mode: 0o600 });
+  nsLink((f) => (f === '/proc/1/ns/pid' ? 'throw' : undefined))(t);
+  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked');
+  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(file, 'utf8'), content);
+  fs.rmSync(file);
+  const written = lock('nsunreadable-writer');
+  fs.rmSync(written, { force: true });
+  nsLink((f) => (f === '/proc/1/ns/pid' ? 'throw' : undefined))(t);
+  const release = acquireLock(written, { identity: here('M', 'linux:b') });
+  t.mock.restoreAll();
+  const record2 = JSON.parse(fs.readFileSync(written, 'utf8'));
+  assert.equal('start' in record2 || 'timens' in record2, false);
+  release();
+});
+
+test('linux: /proc/1 and /proc/self in the same pid namespace (our own procfs) keep the old behaviour: a different start time proves a reused pid', linux, async () => {
+  assert.equal((await take('nsown', record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' }), here('M', 'linux:b'))).taken, true);
+});
+
+test('linux: a gone pid and a true boot-id change are recovered even when /proc/1 cannot be read', linux, async (t) => {
+  nsLink((f) => (f === '/proc/1/ns/pid' ? 'throw' : undefined))(t);
+  assert.equal((await take('nsunreadable-gone', record({ pid: await gone(), machine: 'M', boot: 'linux:b' }), here('M', 'linux:b'))).taken, true);
+  assert.equal((await take('nsunreadable-reboot', record({ pid: process.pid, machine: 'M', boot: 'linux:old' }), here('M', 'linux:new'))).taken, true);
+  t.mock.restoreAll();
+});

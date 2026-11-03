@@ -127,17 +127,20 @@ function procInfo(pid: number): { state: string; start: string | undefined } | u
 }
 
 /**
- * Whether /proc is this process's own view. `/proc/self` must name this pid AND that process's parent pid must be ours (`getppid` is the
- * kernel's answer in our own namespace): after `unshare -p` without a remount, or in another mount namespace, /proc is served from a pid
- * namespace where this pid number names a different process, and a coincidence of the pid alone is possible but of both is not. Not Linux:
- * no /proc evidence exists at all. (Comparing `ns/pid` of /proc/1 with ours would need ptrace rights on init and fail for ordinary users.)
+ * Whether /proc is this process's own view, proved by the kernel: `/proc/1` (the init of the pid namespace the procfs was mounted in) and
+ * `/proc/self` must name the same pid namespace (`ns/pid` links). A procfs from another pid namespace shows a different init, whatever pid
+ * numbers happen to coincide. The pid and parent pid must also agree with what the kernel tells this process (`getpid`, `getppid`), as a
+ * further check, never instead of the namespace one. Not Linux, or any of these unreadable (reading `/proc/1/ns/pid` needs ptrace rights on init,
+ * which an ordinary user usually lacks): false, so no /proc evidence is recorded or trusted and an unproven holder stays `unknown`.
  */
 function ownProc(): boolean {
   if (process.platform !== 'linux') return false;
   try {
     if (fs.readlinkSync('/proc/self') !== String(process.pid)) return false;
     const stat = fs.readFileSync('/proc/self/stat', 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1] === String(process.ppid);
+    if (stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1] !== String(process.ppid)) return false;
+    const init = fs.readlinkSync('/proc/1/ns/pid');
+    return init === fs.readlinkSync('/proc/self/ns/pid');
   } catch {
     return false;
   }
