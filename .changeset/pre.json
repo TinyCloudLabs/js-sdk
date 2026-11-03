@@ -44,6 +44,7 @@
     "signed-expiry-node-sdk",
     "signed-expiry-sdk-core",
     "signed-expiry-web-sdk",
+    "tc-2464-temp-identity",
     "technical-expiry-limits-node-sdk",
     "technical-expiry-limits-sdk-core",
     "technical-expiry-limits-web-sdk"
