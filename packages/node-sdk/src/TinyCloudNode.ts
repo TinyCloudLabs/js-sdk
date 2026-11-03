@@ -1706,7 +1706,7 @@ export class TinyCloudNode {
    * the session delegation with the node once and asks again once. Network
    * failures, 5xx and a 5 s timeout answer `unknown`; this never throws.
    *
-   * `hosted` is remembered for this instance and `not-hosted` never is. The
+   * `hosted` is remembered for the session and `not-hosted` never is. The
    * answer for the primary space is also what {@link spaceHosting} reports; a
    * `unknown` answer leaves the previous one in place.
    */
