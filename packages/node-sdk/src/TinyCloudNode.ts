@@ -212,6 +212,8 @@ import {
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
+  linkAbortSignal,
+  releaseWithBody,
   tinyCloudDebugLogger,
   type RequestLogReader,
   type RequestSink,
@@ -615,12 +617,23 @@ class ServiceGraphLifetime {
     return this.invokeAnyFn(session, entries, facts);
   };
 
+  // The graph signal stays linked until the response body is done, so retiring the graph still cancels a body being
+  // read; `releaseWithBody` unlinks it then.
   readonly fetch: FetchFunction = (url, init) => {
     this.assertActive();
-    return this.fetchFn(url, {
-      ...init,
-      signal: this.combineSignals(init?.signal),
-    });
+    const { signal, release } = linkAbortSignal(this.abortController.signal, init?.signal);
+    try {
+      return this.fetchFn(url, { ...init, signal }).then(
+        (response) => releaseWithBody(response, release),
+        (error: unknown) => {
+          release();
+          throw error;
+        },
+      );
+    } catch (error) {
+      release();
+      throw error;
+    }
   };
 
   track(context: ServiceContext): ServiceContext {
@@ -661,19 +674,6 @@ class ServiceGraphLifetime {
     if (this.retired) {
       throw new Error("Service graph has been retired: its session was replaced or signed out.");
     }
-  }
-
-  private combineSignals(signal?: AbortSignal): AbortSignal {
-    if (!signal) return this.abortController.signal;
-    const combined = new AbortController();
-    const abort = () => combined.abort();
-    if (signal.aborted || this.abortController.signal.aborted) {
-      abort();
-    } else {
-      signal.addEventListener("abort", abort, { once: true });
-      this.abortController.signal.addEventListener("abort", abort, { once: true });
-    }
-    return combined.signal;
   }
 }
 

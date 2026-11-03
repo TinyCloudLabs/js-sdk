@@ -141,6 +141,9 @@ export type {
 export { ServiceContext } from "./context";
 export type { ServiceContextConfig } from "./context";
 
+// Abort plumbing shared with @tinycloud/node-sdk's service graph (not part of the documented API)
+export { linkAbortSignal, releaseWithBody } from "./abortLink";
+
 // Developer request log
 export type { RequestEvent, RequestLog, RequestLogReader, RequestSink, RequestService } from "./telemetry/requestLog";
 
