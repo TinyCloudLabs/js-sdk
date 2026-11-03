@@ -1785,15 +1785,59 @@ describe("space hosting on restore (TC-2380)", () => {
   type Hosting = "hosted" | "not-hosted" | "unknown";
 
   /** A TinyCloudWeb over a fake node whose probe is `probe`; `node.spaceHosting` is what the probe last recorded. */
-  async function webWith(
-    probe: (node: { spaceHosting: Hosting }) => Promise<Hosting>,
-    options: { hasSigner?: boolean; confirm?: boolean; openkey?: boolean } = {},
-  ) {
-    const storage = { save: mock(async () => undefined), load: mock(async () => persisted), clear: mock(async () => undefined), activeAddress: () => address };
+  async function webWith(probe: (node: { spaceHosting: Hosting }) => Promise<Hosting>) {
+    const storage = { save: mock(async () => undefined), load: mock(async () => persisted), clear: mock(async () => undefined) };
     const walletRequest = mock(async (_request: { method: string }): Promise<never> => {
       throw new Error("wallet is closed in this test");
     });
-    const confirm = mock(async () => options.confirm ?? true);
+    const tcw = new TinyCloudWeb({
+      sessionStorage: storage,
+      provider: { request: walletRequest },
+      includeAccountRegistryPermissions: false,
+      autoBootstrapAccount: false,
+    });
+    await tcw._initPromise;
+    walletRequest.mockClear();
+    const statusDuringProbe: string[] = [];
+    const node = {
+      spaceHosting: "unknown" as Hosting,
+      spaceId: persisted.tinycloudSession.spaceId,
+      hasRuntimePermissions: mock(() => true),
+      restoreSession: mock(async () => undefined),
+      signIn: mock(async () => undefined),
+      checkSpaceHosting: mock(async () => {
+        statusDuringProbe.push(tcw.sessionRestoreStatus);
+        return probe(node);
+      }),
+    };
+    tcw._node = node;
+    tcw._initPromise = Promise.resolve();
+    return { tcw, node, walletRequest, statusDuringProbe };
+  }
+  /** A TinyCloudWeb fixture with a signer and a recording space-creation handler. */
+  async function webWithCreation(
+    probe: (node: { spaceHosting: Hosting }) => Promise<Hosting>,
+    options: {
+      hasSigner?: boolean;
+      confirm?: boolean;
+      confirmFn?: () => Promise<boolean>;
+      openkey?: boolean;
+      walletAddress?: string;
+    } = {},
+  ) {
+    const storage = {
+      save: mock(async () => undefined),
+      load: mock(async () => persisted),
+      clear: mock(async () => undefined),
+      activeAddress: () => address,
+    };
+    const walletRequest = mock(async (request: { method: string }): Promise<unknown> => {
+      if (request.method === "eth_accounts" || request.method === "eth_requestAccounts") {
+        return [options.walletAddress ?? address];
+      }
+      throw new Error(`Unexpected wallet request: ${request.method}`);
+    });
+    const confirm = mock(async () => options.confirmFn ? options.confirmFn() : options.confirm ?? true);
     const tcw = new TinyCloudWeb({
       sessionStorage: storage,
       ...(options.hasSigner === false ? {} : { provider: { request: walletRequest } }),
@@ -1808,11 +1852,13 @@ describe("space hosting on restore (TC-2380)", () => {
     const node = {
       spaceHosting: "unknown" as Hosting,
       spaceId: persisted.tinycloudSession.spaceId,
+      restorableSession: { address, chainId: 1, spaceId: persisted.tinycloudSession.spaceId },
       hasRuntimePermissions: mock(() => true),
       restoreSession: mock(async () => undefined),
       signIn: mock(async () => undefined),
       ensurePrimarySpaceHosted: mock(async () => {
-        if (await confirm()) node.spaceHosting = "hosted";
+        const spaceId = node.spaceId;
+        if (await confirm() && node.spaceId === spaceId) node.spaceHosting = "hosted";
       }),
       checkSpaceHosting: mock(async () => {
         statusDuringProbe.push(tcw.sessionRestoreStatus);
@@ -1825,7 +1871,7 @@ describe("space hosting on restore (TC-2380)", () => {
   }
 
   test("a restored session whose space is not hosted stays restored, reports not-hosted and prompts for nothing", async () => {
-    const { tcw, node, walletRequest, statusDuringProbe, confirm } = await webWith(async (n) => {
+    const { tcw, node, walletRequest, statusDuringProbe } = await webWith(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
     });
@@ -1837,27 +1883,45 @@ describe("space hosting on restore (TC-2380)", () => {
     expect(tcw.sessionRestoreStatus).toBe("restored");
     expect(tcw.spaceHosting).toBe("not-hosted");
     expect(node.checkSpaceHosting).toHaveBeenCalledTimes(1);
+    // The probe runs while the restore is still in progress, before "restored".
     expect(statusDuringProbe).toEqual(["restoring"]);
     expect(node.signIn).not.toHaveBeenCalled();
     expect(walletRequest).not.toHaveBeenCalled();
-    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  test("a hung probe delays the restore only up to the cap and a throwing probe never fails it", async () => {
+    const hung = await webWith(() => new Promise<Hosting>(() => undefined));
+    hung.tcw.spaceHostingCapMs = 50;
+    const started = Date.now();
+    const result = await hung.tcw.restoreSession(address);
+    expect(result.status).toBe("restored");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(hung.tcw.spaceHosting).toBe("unknown");
+
+    const failing = await webWith(async () => {
+      throw new Error("node unreachable");
+    });
+    expect((await failing.tcw.restoreSession(address)).status).toBe("restored");
+    expect(failing.tcw.spaceHosting).toBe("unknown");
   });
 
   test("prepareSignIn on a restored not-hosted session does not prompt", async () => {
-    const { tcw, node, confirm } = await webWith(async (n) => {
+    const { tcw, node, confirm, walletRequest } = await webWithCreation(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
-    }, { openkey: true, hasSigner: false });
+    }, { openkey: true });
 
     await tcw.prepareSignIn();
 
+    expect(walletRequest.mock.calls.map(([request]) => request.method)).toContain("eth_accounts");
     expect(node.checkSpaceHosting).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
     expect(node.signIn).not.toHaveBeenCalled();
   });
 
   test("a restored not-hosted session signs only the host delegation and returns the same session", async () => {
-    const { tcw, node, confirm, walletRequest } = await webWith(async (n) => {
+    const { tcw, node, confirm, walletRequest } = await webWithCreation(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
     });
@@ -1871,12 +1935,13 @@ describe("space hosting on restore (TC-2380)", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledWith("not-hosted");
     expect(node.signIn).not.toHaveBeenCalled();
+    // eth_accounts is a silent read; no account request or signature was made.
     expect(walletRequest.mock.calls.map(([request]) => request.method).filter((method) => method !== "eth_accounts")).toEqual([]);
     expect(tcw.spaceHosting).toBe("hosted");
   });
 
   test("ensureSpaceHosted shares one in-flight approval", async () => {
-    const { tcw, node, confirm } = await webWith(async (n) => {
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
     });
@@ -1888,8 +1953,43 @@ describe("space hosting on restore (TC-2380)", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledTimes(1);
   });
+  test("a new primary space starts its own approval while the prior session is pending", async () => {
+    const approvals: Array<(approved: boolean) => void> = [];
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, {
+      confirmFn: () => {
+        const approval = Promise.withResolvers<boolean>();
+        approvals.push(approval.resolve);
+        return approval.promise;
+      },
+    });
+    await tcw.restoreSession(address);
+
+    const first = tcw.ensureSpaceHosted();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(confirm).toHaveBeenCalledTimes(1);
+
+    node.spaceId = `${address}:secondary`;
+    node.restorableSession = {
+      address,
+      chainId: 1,
+      spaceId: node.spaceId,
+    };
+    node.spaceHosting = "not-hosted";
+    const second = tcw.ensureSpaceHosted();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledTimes(2);
+    approvals[1]!(true);
+    expect(await second).toBe("hosted");
+    approvals[0]!(true);
+    expect(await first).toBe("hosted");
+  });
   test("ensureSpaceHosted skips creation without a signer", async () => {
-    const { tcw, node, confirm } = await webWith(async (n) => {
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
     }, { hasSigner: false });
@@ -1899,8 +1999,23 @@ describe("space hosting on restore (TC-2380)", () => {
     expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
   });
 
+  test("a restored session and a different connected signer do not request hosting", async () => {
+    const otherAddress = "0x0000000000000000000000000000000000000002";
+    const { tcw, node, confirm, walletRequest } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, { walletAddress: otherAddress });
+    await tcw.restoreSession(address);
+
+    expect(await tcw.ensureSpaceHosted()).toBe("not-hosted");
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
+    expect(walletRequest.mock.calls.some(([request]) => request.method === "eth_sign" || request.method === "personal_sign")).toBe(false);
+  });
+
   test("a declined confirmation leaves the restored space not-hosted", async () => {
-    const { tcw, node, confirm } = await webWith(async (n) => {
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
     }, { confirm: false });
@@ -1911,14 +2026,14 @@ describe("space hosting on restore (TC-2380)", () => {
   });
 
   test("unknown hosting does not prompt", async () => {
-    const { tcw, node, confirm } = await webWith(async () => "unknown");
+    const { tcw, node, confirm } = await webWithCreation(async () => "unknown");
     expect(await tcw.ensureSpaceHosted()).toBe("unknown");
     expect(confirm).not.toHaveBeenCalled();
     expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
   });
 
   test("ensureSpaceHosted does not prompt or request when already hosted", async () => {
-    const { tcw, node, walletRequest, confirm } = await webWith(async (n) => {
+    const { tcw, node, walletRequest, confirm } = await webWithCreation(async (n) => {
       n.spaceHosting = "hosted";
       return "hosted";
     });

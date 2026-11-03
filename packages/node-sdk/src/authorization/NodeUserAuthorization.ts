@@ -1338,29 +1338,42 @@ export class NodeUserAuthorization implements IUserAuthorization {
     targetSpaceId?: string,
     purpose?: SignRequest["purpose"],
     signal?: AbortSignal,
+    expectedSession?: TinyCloudSession,
   ): Promise<SpaceHostResult> {
-    if (!this._tinyCloudSession || !this._address || !this._chainId) {
+    const session = expectedSession ?? this._tinyCloudSession;
+    const address = expectedSession?.address ?? this._address;
+    const chainId = expectedSession?.chainId ?? this._chainId;
+    if (!session || !address || chainId === undefined) {
       throw new Error("Must be signed in to host space");
     }
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (expectedSession && this._tinyCloudSession !== expectedSession) {
+        throw new Error("Space hosting session changed");
+      }
+    };
 
+    assertCurrent();
     await this.ensureTinyCloudHosts();
+    assertCurrent();
     const host = this.primaryTinyCloudHost;
-    const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
+    const spaceId = expectedSession?.spaceId ?? targetSpaceId ?? session.spaceId;
 
     // Get peer ID from TinyCloud server
     const peerId = await fetchPeerId(host, spaceId, signal);
+    assertCurrent();
 
     // Generate host SIWE message
     const siwe = this.wasm.generateHostSIWEMessage({
-      address: this._address,
-      chainId: this._chainId,
+      address,
+      chainId,
       domain: this.domain,
       issuedAt: new Date().toISOString(),
       spaceId,
       peerId,
     });
 
-    if (signal?.aborted) throw signal.reason;
+    assertCurrent();
     const signing = this.signMessage(siwe, purpose);
     let signature: string;
     if (!signal) {
@@ -1382,9 +1395,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
         signal.removeEventListener("abort", onAbort);
       }
     }
-    if (signal?.aborted) throw signal.reason;
+    assertCurrent();
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
+    assertCurrent();
     return submitHostDelegation(host, headers, signal);
   }
 
@@ -1466,13 +1480,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @throws Error if the creation handler fails or times out, or hosting fails
    */
   async ensurePrimarySpaceHosted(hosting: SpaceHosting, signal?: AbortSignal): Promise<void> {
+    const session = this._tinyCloudSession;
     if (hosting !== "not-hosted") {
       return;
     }
-    const session = this._tinyCloudSession;
     if (!session) {
       throw new Error("Must be signed in to host the primary space");
     }
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (this._tinyCloudSession !== session) {
+        throw new Error("Space hosting session changed");
+      }
+    };
+    assertCurrent();
 
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence
@@ -1488,30 +1509,41 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
 
     await this.ensureTinyCloudHosts();
-    signal?.throwIfAborted();
+    assertCurrent();
     const host = this.primaryTinyCloudHost;
     const primarySpaceId = session.spaceId;
     const creationContext = {
       spaceId: primarySpaceId,
-      address: this._address!,
-      chainId: this._chainId!,
+      address: session.address,
+      chainId: session.chainId,
       host,
     };
 
     // Not a static import on purpose: the creation sequence is rare, and web-sdk's root has no room for it.
     const { createPrimarySpace } = await import("../space-hosting.js");
+    assertCurrent();
     await createPrimarySpace({
       handler,
       context: creationContext,
       guard: async () => {
-        signal?.throwIfAborted();
+        assertCurrent();
         await this.guardSpaceCreation(handler, creationContext);
-        signal?.throwIfAborted();
+        assertCurrent();
       },
-      host: () => this.hostSpace(primarySpaceId, undefined, signal),
-      onHosted: () => { this._spaceHosting = "hosted"; },
-      activate: () => activateSessionWithHost(host, session.delegationHeader),
+      host: async () => {
+        assertCurrent();
+        return this.hostSpace(primarySpaceId, undefined, signal, session);
+      },
+      onHosted: () => {
+        assertCurrent();
+        this._spaceHosting = "hosted";
+      },
+      activate: () => {
+        assertCurrent();
+        return activateSessionWithHost(host, session.delegationHeader);
+      },
       signal,
+      assertCurrent,
     });
   }
 

@@ -151,13 +151,15 @@ export interface PrimarySpaceCreationPorts {
   context: SpaceCreationContext;
   /** `assertMayCreateSpace`, reporting a refusal to the handler. */
   guard(): Promise<void>;
-  /** Submit the host delegation for the primary space. */
+  /** Confirm that the host delegation should be submitted. */
   host(): Promise<SpaceHostResult>;
   /** Called once the node has the host delegation. */
   onHosted(): void;
   /** Register the session delegation again. */
   activate(): Promise<SpaceHostResult>;
   signal?: AbortSignal;
+  /** Reject if the session that started creation is no longer current. */
+  assertCurrent?(): void;
 }
 
 /** `<status> - <server text>` for a failed host call. */
@@ -171,12 +173,26 @@ function describeFailure(result: SpaceHostResult): string {
  * space. A declined confirmation ends it quietly; a failure is reported to the
  * handler and thrown.
  */
-export async function createPrimarySpace({ handler, context, guard, host, onHosted, activate, signal }: PrimarySpaceCreationPorts): Promise<void> {
-  signal?.throwIfAborted();
+export async function createPrimarySpace({
+  handler,
+  context,
+  guard,
+  host,
+  onHosted,
+  activate,
+  signal,
+  assertCurrent,
+}: PrimarySpaceCreationPorts): Promise<void> {
+  const checkCurrent = () => {
+    signal?.throwIfAborted();
+    assertCurrent?.();
+  };
+  checkCurrent();
   await guard();
-  signal?.throwIfAborted();
-  if (!await handler.confirmSpaceCreation(context)) return;
-  signal?.throwIfAborted();
+  checkCurrent();
+  const approved = await handler.confirmSpaceCreation(context);
+  checkCurrent();
+  if (!approved) return;
 
   try {
     const created = await host();
@@ -190,13 +206,15 @@ export async function createPrimarySpace({ handler, context, guard, host, onHost
     handler.onSpaceCreationFailed?.(context, error instanceof Error ? error : new Error(String(error)));
     throw error;
   }
-  signal?.throwIfAborted();
+  checkCurrent();
   onHosted();
 
   // Small delay to allow space creation to propagate
   await new Promise((resolve) => setTimeout(resolve, 100));
+  checkCurrent();
 
   const retry = await activate();
+  checkCurrent();
   if (!retry.success) {
     const err = Object.assign(
       new Error(`Failed to activate session after creating space: ${describeFailure(retry)}`),

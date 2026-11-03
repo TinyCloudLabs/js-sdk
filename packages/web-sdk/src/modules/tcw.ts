@@ -87,6 +87,7 @@ import {
   createLocalStorageRegistrySequenceStore,
   type StorageFullEvent,
   type IStorageService,
+  canonicalizeAddress,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
@@ -1070,13 +1071,18 @@ export class TinyCloudWeb {
     }
   }
 
+  private spaceHostingInFlight?: {
+    run: Promise<SpaceHosting>;
+    signOuts: number;
+    spaceId: string | undefined;
+  };
+
   /**
    * Host a restored session's primary space only when the node reports it
    * missing. Reuses that session and its existing creation confirmation.
    * Call from a user gesture so the approval popup can open.
    */
-  private spaceHostingInFlight?: Promise<SpaceHosting>;
-  private async restoredSessionNotHosted(node: TinyCloudNode, restored: ClientSession): Promise<ClientSession> {
+  private async restoredSessionNotHosted(restored: ClientSession): Promise<ClientSession> {
     await this.ensureSpaceHosted();
     return restored;
   }
@@ -1086,16 +1092,41 @@ export class TinyCloudWeb {
     const node = await this.ensureNode();
     const hosting = node.spaceHosting;
     if (hosting !== "not-hosted") return hosting;
-    if (this.spaceHostingInFlight) return this.spaceHostingInFlight;
-    const hasCreationPath = this.walletSigner !== undefined &&
+
+    const signOuts = this.signOutCount;
+    const spaceId = node.spaceId;
+    const session = node.restorableSession;
+    const existing = this.spaceHostingInFlight;
+    if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
+      return existing.run;
+    }
+
+    const signer = this.walletSigner;
+    const hasCreationPath = signer !== undefined &&
       (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
-    if (!hasCreationPath) return "not-hosted";
+    if (!hasCreationPath || !session) return "not-hosted";
+    if (canonicalizeAddress(await signer.getAddress()) !== session.address) return "not-hosted";
+    if (
+      this._node !== node ||
+      this.signOutCount !== signOuts ||
+      this.signOutInFlight > 0 ||
+      node.spaceId !== spaceId ||
+      node.restorableSession !== session
+    ) return "not-hosted";
+    const currentInFlight = this.spaceHostingInFlight;
+    if (
+      currentInFlight &&
+      currentInFlight.signOuts === signOuts &&
+      currentInFlight.spaceId === spaceId
+    ) return currentInFlight.run;
+
     const run = node.ensurePrimarySpaceHosted("not-hosted").then(() => node.spaceHosting);
-    this.spaceHostingInFlight = run;
+    const inFlight = { run, signOuts, spaceId };
+    this.spaceHostingInFlight = inFlight;
     try {
       return await run;
     } finally {
-      if (this.spaceHostingInFlight === run) this.spaceHostingInFlight = undefined;
+      if (this.spaceHostingInFlight === inFlight) this.spaceHostingInFlight = undefined;
     }
   }
 
@@ -1234,7 +1265,7 @@ export class TinyCloudWeb {
         if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
           assertNotSignedOut();
           return restoredNode.spaceHosting === "not-hosted"
-            ? this.restoredSessionNotHosted(restoredNode, restored.session)
+            ? this.restoredSessionNotHosted(restored.session)
             : restored.session;
         }
         await this.clearPersistedSession(restored.session.address);
@@ -1296,7 +1327,7 @@ export class TinyCloudWeb {
       ? [...this.pendingRestoreAddresses.keys()]
       : undefined;
     this.signOutCount++;
-    this.runtimeSigner = undefined;
+    this.spaceHostingInFlight = undefined;
     this.openkeySession = undefined;
     this.invalidatePreparedSignIn();
     this.signOutInFlight++;
