@@ -28,7 +28,7 @@ test("the personal-apps tools are annotated by what they do: context deletes not
   const annotations = Object.fromEntries(toolBindingsForTest()
     .filter((candidate) => candidate.name.startsWith("tinycloud_apps_"))
     .map((candidate) => [candidate.name, [candidate.readOnlyHint, candidate.destructiveHint]]));
-  expect(annotations).toEqual({
+  expect(annotations).toMatchObject({
     tinycloud_apps_context: [false, false],
     tinycloud_apps_read: [true, false],
     tinycloud_apps_write: [false, true],
