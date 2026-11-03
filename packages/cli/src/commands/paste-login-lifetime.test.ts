@@ -329,6 +329,15 @@ describe("the verifier does not crash on a signed expiry a signed message cannot
     }
   });
 
+  test("the 60 second rule is exact: 60.000 s from now is refused, 60.001 s is accepted", () => {
+    const now = Date.parse("2030-01-01T00:00:00.000Z");
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect(() => withExpiry(new Date(now + 60_000).toISOString())).toThrow(expect.objectContaining({ code: "OPENKEY_EXPIRY_TOO_SHORT" }));
+      expect(withExpiry(new Date(now + 60_001).toISOString()).expiresAt).toBe(new Date(now + 60_001).toISOString());
+    } finally { clock.mockRestore(); }
+  });
+
   test("the last signable instant is accepted", () => {
     expect(withExpiry("9999-12-31T23:59:59.000Z").expiresAt).toBe("9999-12-31T23:59:59.000Z");
   });
