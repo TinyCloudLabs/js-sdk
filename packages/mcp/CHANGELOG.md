@@ -1,5 +1,22 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.3
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` remain annotated as potentially destructive: context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. They are not read-only. The query accepts one read-only SELECT and does not change canonical records; context only changes the timezone when one is supplied. Only `tinycloud_apps_write` mutates app records.
+  Details: TC-2416
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
 ## 0.9.1-beta.2
 
 ### Patch Changes

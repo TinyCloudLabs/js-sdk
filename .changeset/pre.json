@@ -32,6 +32,9 @@
     "signout-local-first-fence",
     "space-hosting-probe-node-sdk",
     "space-hosting-probe-web-sdk",
+    "tc-2416-app-task-bundle",
+    "tc-2416-apps-context-annotation",
+    "tc-2416-apps-layout",
     "tc2380-q2"
   ]
 }
