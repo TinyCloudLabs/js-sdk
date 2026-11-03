@@ -106,3 +106,35 @@ scenario('the pending init --wait line differs between a link created in this ru
   assert.notEqual(first, second);
   for (const next of [first, second]) assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
 });
+
+// The line echoes the user's command line. A flag that can carry a secret, or a value that looks like a one-time code, a
+// long token or a JSON document, must never reach stderr: the line then says `this same command` and names no command.
+const SECRET = 's3cretValue1';
+for (const [name, args] of [
+  ['--token', ['--token', SECRET]],
+  ['--code=VALUE', [`--code=${SECRET}`]],
+  ['--secret-file', ['--secret-file', SECRET]],
+  ['--Passphrase (any case)', ['--Passphrase', SECRET]],
+  ['a long base64 token as a value', [`${SECRET}${'A'.repeat(40)}`]],
+  ['a JSON value', [`{"delegation":"${SECRET}"}`]],
+]) {
+  scenario(`a pending init --wait with ${name} on the command line echoes none of it and says 'this same command'`, async ({ t, courier, errors }) => {
+    fakeTime(t);
+    for (const attempt of ['created', 'resumed']) {
+      errors.length = 0;
+      const run = await courier('--wait', '--timeout', '5s', ...args);
+      assert.equal(run.code, 8, `${attempt}: ${run.stderr}`);
+      assert.ok(!run.stderr.includes(SECRET) && !run.stdout.includes(SECRET), `${attempt}: the value reached the output`);
+      const next = assertNextLast(run.stderr, JSON.parse(run.stdout).pending.approvalUrl);
+      assert.ok(next.includes('this same command'), next);
+      assert.ok(!next.includes('`'), next);
+    }
+  });
+}
+
+scenario('a pending init --wait without such flags or values is still echoed in full', async ({ t, courier }) => {
+  fakeTime(t);
+  const run = await courier('--wait', '--timeout', '5s', '--label', 'my agent', '--handle', 'ops');
+  assert.equal(run.code, 8);
+  assert.ok(nextLines(run.stderr)[0].includes("`courier init --wait --timeout 5s --label 'my agent' --handle ops`"), run.stderr);
+});

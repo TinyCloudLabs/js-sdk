@@ -183,6 +183,39 @@ describe("the command the Next line names", () => {
       expect(line).not.toContain("`");
     }
   });
+
+  // The line echoes the user's command line. A flag that can carry a secret, or a value that looks like a one-time
+  // code, a long token or a JSON document, must never reach stderr: the line then says `this same command`.
+  const SECRET = "s3cretValue1";
+  const withSecret: Array<[string, string[]]> = [
+    ["--code", ["onboard", "--code", SECRET, "--timeout", "60s"]],
+    ["--code=VALUE", ["onboard", `--code=${SECRET}`, "--timeout", "60s"]],
+    ["--token", ["auth", "grant", "request.json", "--token", SECRET, "--timeout", "60s"]],
+    ["--secret-file", ["auth", "grant", "--secret-file", SECRET, "--timeout", "60s"]],
+    ["--Passphrase (any case)", ["onboard", "--Passphrase", SECRET, "--timeout", "60s"]],
+    ["a long base64 token as a value", ["onboard", `${SECRET}${"A".repeat(40)}`, "--timeout", "60s"]],
+    ["a JSON value", ["auth", "grant", `{"delegation":"${SECRET}"}`, "--timeout", "60s"]],
+  ];
+
+  test.each(withSecret)("a pending exit 8 with %s on the command line echoes none of it and says 'this same command'", async (_name, args) => {
+    process.argv = ["bun", "/opt/bin/tc", ...args];
+    for (const deadline of [60_000, 6_000]) {
+      stderr = []; stdout = []; clock = START;
+      const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(deadline)));
+      expect(run.code).toBe(8);
+      expect(run.stderr + run.stdout).not.toContain(SECRET);
+      const next = nextLines(run.stderr);
+      expect(next).toHaveLength(1);
+      expect(next[0]).toContain("this same command");
+      expect(next[0]).not.toContain("`");
+    }
+  });
+
+  test("a command line without such flags or values is still echoed in full", async () => {
+    process.argv = ["bun", "/opt/bin/tc", "onboard", "--timeout", "60s", "--profile", "work", "--label", "my agent"];
+    const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    expect(nextLines(run.stderr)[0]).toContain(`\`${CLI_NAME} onboard --timeout 60s --profile work --label 'my agent'\``);
+  });
 });
 
 describe("exits that are not an approval still waiting", () => {
