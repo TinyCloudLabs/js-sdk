@@ -1,5 +1,18 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.2
+
+### Minor Changes
+
+- 9ff4cf2: Expose `ensureSpaceHosted()` and allow restored sessions to host a missing primary space from a user gesture. Signing out during approval dismisses the prompt and rejects with an explicit cancellation error.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
 ## 3.12.0-beta.1
 
 ### Minor Changes
