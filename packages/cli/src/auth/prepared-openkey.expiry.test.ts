@@ -233,3 +233,19 @@ describe("without --expiry the default 30 day request is the ceiling", () => {
     expect(await ProfileManager.getSession("owner")).not.toBeNull();
   });
 });
+
+// TC-2276 (PR B): only the PLAIN paste link opts in and skips the pre-consent "would shorten the live session" check.
+// A prepared login with --paste uses the prepared handoff, which never sends the opt-in, so it keeps that check.
+describe("prepared login with --paste", () => {
+  test("still refuses before approval when --expiry would shorten the live session", async () => {
+    pickedLifetimeMs = 30 * 24 * HOUR;
+    await refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, replication: { prefixes: ["notes/"] }, expiry: "30d", replaceSession: true, noPopup: true,
+    });
+    created.length = 0;
+    await expect(refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, replication: { prefixes: ["notes/"] }, expiry: "7d", paste: true, noPopup: true,
+    })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+    expect(created).toHaveLength(0);
+  });
+});

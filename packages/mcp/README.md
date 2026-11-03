@@ -149,7 +149,8 @@ inactive one. A 200 answer with `active: false` is answered with 401
 seconds. A 401 from the endpoint (`invalid_client`) is logged once and refused
 with 500 `server_error`. If OpenKey cannot be reached or answers otherwise
 (429, 5xx, timeout), a call is served only when OpenKey itself answered that
-same token active to this server, and only until the token expires; every other
+same token active to this server within the last 60 seconds (and the token has
+not expired), however long the token lives; every other
 call is answered with 500 `server_error`.
 
 The account owner can see the hosted MCP's delegation, and revoke it, on the
