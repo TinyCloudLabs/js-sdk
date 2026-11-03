@@ -166,6 +166,18 @@ describe("v2-first owner lookup", () => {
     }
   });
 
+  it("rejects duplicate JSON keys as malformed v2 without probing v1", async () => {
+    const requests: string[] = [];
+    const result = await policy.resolveOwnerHosts(vectors.publicTestIdentities.owner, {
+      registryUrl: "https://registry.test",
+      fetch: responseQueue([
+        response(200, '{"record":{"version":2,"version":2}}'),
+      ], requests),
+    });
+    expect(result).toMatchObject({ status: "unavailable", reason: "malformed-response" });
+    expect(requests).toEqual([v2LookupUrl]);
+  });
+
   it("does not downgrade v2 errors or a remembered v2 registration", async () => {
     const requests: string[] = [];
     const store = policy.createInMemoryRegistrySequenceStore();
