@@ -99,19 +99,20 @@ export type TechnicalExpiryKind = "siwe" | "ucan";
 /**
  * Why `expiresAt` cannot be written into a message of this kind, or `null` when
  * it can. These are the only upper limits on a lifetime the owner chooses; they
- * are technical, not policy. An invalid Date, NaN and Infinity are refused too,
- * because `toISOString()` throws a bare `RangeError` on them.
+ * are technical, not policy. An invalid Date, NaN, Infinity and an instant before
+ * 1970 are refused too, because `toISOString()` throws a bare `RangeError` on the
+ * first three and writes a negative year the WASM cannot read for the last.
  */
 export function technicalExpiryRefusal(expiresAt: Date | number, kind: TechnicalExpiryKind): string | null {
   const ms = Number(expiresAt);
   const siwe = kind === "siwe";
   const last = siwe ? "9999-12-31" : "2255-06-05";
-  if (!Number.isFinite(ms)) return `expiry is not a valid date or is too far away to hold; choose one before ${last}`;
+  if (!Number.isFinite(ms) || ms < 0) return `expiry is not a valid date or is too far away to hold; choose one before ${last}`;
   if (ms <= (siwe ? MAX_SIWE_EXPIRY_MS : MAX_UCAN_EXPIRY_MS)) return null;
   return `expiry is later than ${last}, ${
     siwe
-      ? "the latest date a TinyCloud sign-in message can carry"
-      : "the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31"
+      ? "the latest date a TinyCloud signed message can carry"
+      : "the latest date an agent or share delegation can carry (UCAN limit); a delegation signed by the wallet (delegateTo with forceWalletSign: true) can go to 9999-12-31"
   }; choose an earlier expiry`;
 }
 

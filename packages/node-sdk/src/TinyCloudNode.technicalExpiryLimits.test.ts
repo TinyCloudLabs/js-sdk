@@ -20,9 +20,9 @@ import { TinyCloudNode } from "./TinyCloudNode";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
 const SIWE_DATED =
-  "expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is later than 9999-12-31, the latest date a TinyCloud signed message can carry; choose an earlier expiry";
 const UCAN_DATED =
-  "expiry is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31; choose an earlier expiry";
+  "expiry is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); a delegation signed by the wallet (delegateTo with forceWalletSign: true) can go to 9999-12-31; choose an earlier expiry";
 const NOT_A_DATE =
   "expiry is not a valid date or is too far away to hold; choose one before 9999-12-31";
 const WASM_UCAN_RANGE = "Out of valid microsecond-precision range of NumericDate";
@@ -423,6 +423,7 @@ describe("the wallet-signed paths refuse before the wallet is asked", () => {
       [new Date(8.64e15), {}, SIWE_DATED],
       [new Date(Number.NaN), {}, NOT_A_DATE],
       [new Date(MAX_SIWE_EXPIRY_MS), { expiryMs: 3.15e18 }, NOT_A_DATE],
+      [new Date(MAX_SIWE_EXPIRY_MS), { expiryMs: -1e14 }, NOT_A_DATE],
     ] as const) {
       const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
       const refusal = await s.node.createSubDelegation(parentOf(parent), { ...child, ...extra }).catch((error: unknown) => error);
@@ -518,5 +519,39 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
     const s = deliveryNode();
     await s.deliver("9999-12-31T23:59:59Z").catch(() => undefined);
     expect(s.requests[0]?.expiresAt).toBe("9999-12-31T23:59:59.000Z");
+  });
+});
+
+describe("createRootDelegationForSharing (the share link's wallet-signed root)", () => {
+  const rootParams = (s: Awaited<ReturnType<typeof ownerNode>>, requestedExpiry: Date) => ({
+    shareKeyDID: s.audience,
+    spaceId: s.spaceId,
+    path: "shares/doc.md",
+    actions: ["tinycloud.kv/get"],
+    requestedExpiry,
+  });
+  const createRoot = (s: Awaited<ReturnType<typeof ownerNode>>, requestedExpiry: Date) =>
+    (s.node as unknown as { createRootDelegationForSharing(p: unknown): Promise<unknown> }).createRootDelegationForSharing(
+      rootParams(s, requestedExpiry),
+    );
+
+  test("a share past 9999 or with an invalid date reports the dated refusal, not a missing authorization", async () => {
+    for (const [requestedExpiry, message] of [
+      [new Date(MAX_SIWE_EXPIRY_MS + 1000), SIWE_DATED],
+      [new Date(Number.NaN), NOT_A_DATE],
+    ] as const) {
+      const s = await ownerNode();
+      await expect(createRoot(s, requestedExpiry)).rejects.toThrow(message);
+      expect(s.signMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  test("a share inside the limit gets its wallet-signed root, and any other failure still falls back to undefined", async () => {
+    const ok = await ownerNode();
+    expect(await createRoot(ok, new Date(Date.now() + 100 * YEAR_MS))).toBeDefined();
+
+    const failing = await ownerNode();
+    globalThis.fetch = (async () => new Response("denied", { status: 403 })) as typeof fetch;
+    expect(await createRoot(failing, new Date(Date.now() + 100 * YEAR_MS))).toBeUndefined();
   });
 });

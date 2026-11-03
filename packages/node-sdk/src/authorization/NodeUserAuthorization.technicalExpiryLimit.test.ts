@@ -13,7 +13,7 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
 const DATED =
-  "expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is later than 9999-12-31, the latest date a TinyCloud signed message can carry; choose an earlier expiry";
 const NOT_A_DATE =
   "expiry is not a valid date or is too far away to hold; choose one before 9999-12-31";
 
@@ -71,6 +71,16 @@ describe("prepareSessionForSigning", () => {
       const refusal = await s.auth.prepareSessionForSigning().catch((error: unknown) => error);
       expect(refusal).toBeInstanceOf(Error);
       expect(refusal).not.toBeInstanceOf(RangeError);
+      expect((refusal as Error).message).toBe(NOT_A_DATE);
+      expect(s.prepareSession).not.toHaveBeenCalled();
+    }
+  });
+
+  test("refuses a negative lifetime that lands before 1970 (a negative year) before the WASM is called", async () => {
+    for (const ms of [-5e13, -1e14, -8e15]) {
+      const s = create(ms);
+      const refusal = await s.auth.prepareSessionForSigning().catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(Error);
       expect((refusal as Error).message).toBe(NOT_A_DATE);
       expect(s.prepareSession).not.toHaveBeenCalled();
     }

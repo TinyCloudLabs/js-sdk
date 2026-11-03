@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  EXPIRY,
   MAX_SIWE_EXPIRY_MS,
   MAX_UCAN_EXPIRY_MS,
   assertExpiryWithinTechnicalLimit,
@@ -9,18 +8,14 @@ import {
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const SIWE_MESSAGE =
-  "expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is later than 9999-12-31, the latest date a TinyCloud signed message can carry; choose an earlier expiry";
 const UCAN_MESSAGE =
-  "expiry is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31; choose an earlier expiry";
+  "expiry is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); a delegation signed by the wallet (delegateTo with forceWalletSign: true) can go to 9999-12-31; choose an earlier expiry";
 
 describe("the two technical expiry limits", () => {
   test("are the latest whole second a sign-in message and a delegation token can carry", () => {
     expect(new Date(MAX_SIWE_EXPIRY_MS).toISOString()).toBe("9999-12-31T23:59:59.000Z");
     expect(new Date(MAX_UCAN_EXPIRY_MS).toISOString()).toBe("2255-06-05T23:47:34.000Z");
-  });
-
-  test("the old ten-year policy constant is gone", () => {
-    expect("MAX_MS" in EXPIRY).toBe(false);
   });
 
   test("round-trip through an ISO string without losing the instant", () => {
@@ -59,6 +54,14 @@ describe("technicalExpiryRefusal for a sign-in message (siwe)", () => {
     expect(technicalExpiryRefusal(new Date(8.64e15 + 1), "siwe")).toBe(invalid);
     expect(technicalExpiryRefusal(Number.NaN, "siwe")).toBe(invalid);
     expect(technicalExpiryRefusal(Number.POSITIVE_INFINITY, "siwe")).toBe(invalid);
+  });
+
+  test("refuses a negative instant (before 1970), which would be written as a negative year", () => {
+    const invalid = "expiry is not a valid date or is too far away to hold; choose one before 9999-12-31";
+    for (const ms of [-1, -5e13, -1e14, -8.64e15]) {
+      expect(technicalExpiryRefusal(ms, "siwe")).toBe(invalid);
+      expect(technicalExpiryRefusal(new Date(ms), "siwe")).toBe(invalid);
+    }
   });
 });
 

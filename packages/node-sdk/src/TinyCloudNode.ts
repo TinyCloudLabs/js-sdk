@@ -6221,6 +6221,8 @@ export class TinyCloudNode {
     actions: string[];
     requestedExpiry: Date;
   }, assertActive?: () => void): Promise<Delegation | undefined> {
+    // A share past the technical limit is a clear refusal, not a swallowed failure below.
+    assertExpiryWithinTechnicalLimit(params.requestedExpiry, "siwe");
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
