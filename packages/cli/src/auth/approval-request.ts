@@ -185,7 +185,7 @@ export async function commitApprovalCommand(profile: string, approval: object,
     if (prior && canonicalJson(prior.result) !== canonicalJson(JSON.parse(JSON.stringify(result)))) {
       throw invalid("A different result is already saved for this command.");
     }
-    const parentResult = openedResult(entry);
+    const parentResult = savableParent(entry);
     await updateApprovals(profile, (entries) => entries.map((item) => item.requestId === entry.requestId
       ? withCli(item, { command: { request, result, parent: parentResult } }) : item));
     await persistCommandFiles(profile, result);
@@ -276,6 +276,27 @@ function openedResult(entry: ApprovalEntry): Record<string, unknown> {
   const parent = cliOf(entry).command?.parent;
   if (parent !== undefined) return parent;
   throw invalid("No encrypted approval result is available.");
+}
+
+/** Whether any object in `value` has a property named `d` (a private JWK scalar). */
+function holdsPrivateScalar(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  if (Array.isArray(value)) return value.some(holdsPrivateScalar);
+  return Object.entries(value).some(([name, inner]) => name === "d" || holdsPrivateScalar(inner));
+}
+
+/**
+ * The parent a command entry keeps beside its saved child (`ext.cli.command.parent`): the opened, owner-signed result. It is checked to
+ * hold NO private or content key before it is saved: no `d`, no relay key, no staged signing key, nothing of the approval URL's fragment
+ * (which carries the content key). Refuses (and the command stops) rather than save a key under `ext`.
+ */
+export function savableParent(entry: ApprovalEntry): Record<string, unknown> {
+  const parent = openedResult(entry);
+  const text = JSON.stringify(parent);
+  const secrets = [entry.keys?.relayPrivateKey, entry.keys?.stagedSigningKey?.d, entry.approvalUrl?.split("#")[1]]
+    .filter((secret): secret is string => typeof secret === "string" && secret.length > 0);
+  if (holdsPrivateScalar(parent) || secrets.some((secret) => text.includes(secret))) throw invalid("The approved result holds key material; it was not saved with the command.");
+  return parent;
 }
 
 function verifyPendingResult(entry: ApprovalEntry, key: Ed25519PrivateJwk): {
@@ -380,6 +401,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   const matching = (await loadApprovals(profile, { now: clock.now() })).entries.filter((item) => {
     const cli = cliOf(item);
     if (cli.commandIntent !== options.commandIntent) return false;
+    // An acknowledged entry migrated from 1.6.x holds no key and no parent: its approval cannot be opened again, so the repeated command asks once more.
+    if (item.phase === "acked" && cli.command?.parent === undefined) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
     const { permissions: nextPermissions, ...next } = spec;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin ||
@@ -434,7 +457,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     if (!options.onApprovalRequest) {
       console.error(`Approve this request in OpenKey (open the complete link):\n${approvalUrl}\n`);
       if (!options.noPopup && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") await tryOpenBrowser(approvalUrl);
-      console.error(approvalNextLine({ step, of, approvalUrl, expiresAt }));
+      const next = approvalNextLine({ step, of, approvalUrl, expiresAt });
+      if (next !== undefined) console.error(next);
     }
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
     if (createdThisRun && approvalWait) {

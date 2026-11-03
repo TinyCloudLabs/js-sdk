@@ -10,7 +10,8 @@ import { createApprovalFixture, SYNTHETIC_ACK_ID, type OpenKeyAction, type OpenK
 // pin the CLI rows of spec 5a: the exit number, the code string, and what happens to the saved request and its keys.
 
 const fx = await createApprovalFixture("TC2377-approval-machine");
-const { acquireApprovalRequest, completeApprovalResult, pendingApprovalKey, dropApprovalsHoldingKey, approvalHoldsKey, dropRefusedApproval } = await import("./approval-request.js");
+const { acquireApprovalRequest, completeApprovalResult, pendingApprovalKey, dropApprovalsHoldingKey, approvalHoldsKey, dropRefusedApproval, savableParent } = await import("./approval-request.js");
+const { registerNextLineHelper } = await import("./approval-next-line.js");
 const { isMaybeGranted } = await import("./refusal.js");
 const { CLIError } = fx;
 
@@ -190,18 +191,28 @@ describe("a request created in this run", () => {
     expect((await fx.entries())[0]!.requestId).toBe(entry.requestId);
   });
 
-  test("with the CLI's own printing, the link goes to stderr after it is saved and that print ends with the Next: line", async () => {
-    fx.override = async (action) => { if (action === "discover" && fx.results.size === 0) await fx.approve(); return undefined; };
-    const options = { ...fx.options(), onApprovalRequest: undefined };
-    const result = await capture(() => acquire(options));
+  test("with the CLI's own printing, the link goes to stderr after it is saved and, with a Next: helper registered, that print ends with its line", async () => {
+    registerNextLineHelper(() => "Next: (fake helper)");
+    try {
+      fx.override = async (action) => { if (action === "discover" && fx.results.size === 0) await fx.approve(); return undefined; };
+      const options = { ...fx.options(), onApprovalRequest: undefined };
+      const result = await capture(() => acquire(options));
 
+      expect(result.error).toBeUndefined();
+      const [saved] = await fx.entries();
+      const printed = result.output.join("\n").split("\n");
+      const linkAt = printed.findIndex((line) => line.includes(saved!.approvalUrl!));
+      expect(linkAt).toBeGreaterThanOrEqual(0);
+      expect(lastLine(result.output)).toBe("Next: (fake helper)");
+      expect(printed.lastIndexOf("Next: (fake helper)")).toBeGreaterThan(linkAt);
+    } finally { registerNextLineHelper(undefined); }
+  });
+
+  test("by default (no helper until #834 lands) the link print is not followed by any Next: line", async () => {
+    fx.override = async (action) => { if (action === "discover" && fx.results.size === 0) await fx.approve(); return undefined; };
+    const result = await capture(() => acquire({ ...fx.options(), onApprovalRequest: undefined }));
     expect(result.error).toBeUndefined();
-    const [saved] = await fx.entries();
-    const printed = result.output.join("\n").split("\n");
-    const linkAt = printed.findIndex((line) => line.includes(saved!.approvalUrl!));
-    expect(linkAt).toBeGreaterThanOrEqual(0);
-    expect(lastLine(result.output)).toMatch(/^Next: /);
-    expect(printed.lastIndexOf(lastLine(result.output)!)).toBeGreaterThan(linkAt);
+    expect(result.output.join("\n")).not.toMatch(/^\s*Next:/m);
   });
 });
 
@@ -319,6 +330,39 @@ describe("several saved requests of one profile (command intents)", () => {
     // The completion has nothing to acknowledge for it.
     await completeApprovalResult("approval", got);
     expect(fx.acks).toEqual([]);
+  });
+
+  test("the parent kept beside a saved command holds NO key: no d, no relay key, no staged signing key, nothing of the approval URL's fragment; a result that carried one is refused", async () => {
+    const built = await fx.buildRequest();
+    const delegation = await fx.signedDelegation();
+    const entry = await fx.v2Entry(built, { phase: "fetched", delegation, stagedKey: fx.key, commandIntent: COMMAND_A });
+    const parent = savableParent(entry);
+    const text = JSON.stringify(parent);
+    expect(parent).toMatchObject({ requestId: entry.requestId, ownerDid: fx.ownerDid });
+    for (const secret of [fx.key.d, entry.keys!.relayPrivateKey, entry.approvalUrl!.split("#")[1]!]) expect(text).not.toContain(secret);
+    expect(text).not.toContain('"d"');
+    expect(text).not.toContain('"keys"');
+    expect(text).not.toContain("approvalUrl");
+
+    // A result whose delegation carries a private scalar (it must never) is refused, not saved.
+    const leaking = await fx.v2Entry(await fx.buildRequest(), { phase: "fetched", delegation: { ...delegation, jwk: { ...fx.key } } });
+    expect(() => savableParent(leaking)).toThrow(/key material/);
+  });
+
+  test("an acknowledged command entry migrated from 1.6.x holds no parent: its first repeat asks for ONE new approval, and the old entry stays untouched", async () => {
+    const built = await fx.buildRequest();
+    const childExpiry = new Date(fx.clock + 3600_000).toISOString();
+    const legacy = await fx.v1Entry(built, { phase: "committed", acknowledged: true, commandIntent: COMMAND_A, command: { request: {}, result: { expiry: childExpiry } } });
+    await fx.writeState([legacy]);
+
+    const error = await fx.caught(() => acquire(fx.options({ deadlineMs: fx.clock + 30_000 }, { commandIntent: COMMAND_A })));
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect(fx.counters.linkPosts).toBe(1);
+    expect(fx.openkeyCalls).toBe(0);
+    const entries = await fx.entries();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ requestId: built.requestId, phase: "acked" });
+    expect(entries[0]!.keys).toBeUndefined();
   });
 });
 

@@ -3,8 +3,8 @@ import { APPROVAL_EXIT, type Outcome } from "@tinycloud/share-envelope/links";
 import { CLIError, approvalPendingOf, handleError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { APPROVAL_ERROR_CODES, approvalOutcomeError, approvalOutcomeWarning, type OutcomeContext } from "./approval-outcome.js";
-import { approvalNextLine } from "./approval-next-line.js";
-import { isMaybeGranted } from "./refusal.js";
+import { approvalNextLine, registerNextLineHelper } from "./approval-next-line.js";
+import { isMaybeGranted, isPermanentRefusal, markClockDependent } from "./refusal.js";
 
 // TC-2377 / TC-2378 spec 5a: every outcome of the approval requester machine becomes ONE CLI error: its code STRING (never renamed;
 // scripts and watchers grep them), its exit number (from the machine's APPROVAL_EXIT, nowhere else) and a message that says what to do.
@@ -106,6 +106,17 @@ describe("each outcome becomes one CLI error", () => {
     expect(approvalOutcomeError({ kind: "refused", reason: "verification", grantMayBeLive: "yes" }, { ...approved, cause })).toBe(cause);
   });
 
+  test("a clock-dependent ceiling found by the CLI's own check keeps its code string and message but exits 12; it is never read as a permanent refusal", () => {
+    const cause = new CLIError("OPENKEY_EXPIRY_EXCEEDED", "The signed lifetime exceeds the request.", ExitCode.PERMISSION_DENIED);
+    markClockDependent(cause);
+    const error = approvalOutcomeError({ kind: "clock" }, { ...approved, cause })!;
+    expect(error.code).toBe("OPENKEY_EXPIRY_EXCEEDED");
+    expect(error.message).toBe(cause.message);
+    expect(error.exitCode).toBe(12);
+    expect(error.exitCode).toBe(APPROVAL_EXIT.clock);
+    expect(isPermanentRefusal(error)).toBe(false);
+  });
+
   test("a refusal raised from the poll is marked maybe-granted: the CLI never learned what the owner did", () => {
     const maybe = approvalOutcomeError({ kind: "refused", reason: "request_binding", grantMayBeLive: "maybe" }, open)!;
     expect(isMaybeGranted(maybe)).toBe(true);
@@ -158,20 +169,33 @@ describe("the Next: line (TC-2360): only with exit 8, and last on stderr", () =>
     return { stderr: written.join("").split("\n").filter((line) => line.length > 0), stdout: out.join(""), exit: exitCode };
   }
 
-  test("exit 8 prints the pending JSON on stdout and the Next: line as the LAST line of stderr", async () => {
+  const FAKE = "Next: (fake helper) run the same command again";
+  const withFakeHelper = () => registerNextLineHelper(() => FAKE);
+  afterEach(() => registerNextLineHelper(undefined));
+
+  test("with no helper registered (the default until #834 lands) nothing is printed, with exit 8 or any other", async () => {
+    expect(approvalNextLine({ step: 1, of: 1, approvalUrl: LINK, expiresAt: "2026-11-03T12:00:00.000Z" })).toBeUndefined();
+    const error = approvalOutcomeError({ kind: "pending", expiresAt: EXPIRES_AT, confirmedLiveAt: EXPIRES_AT - 1 }, open)!;
+    const result = await print(error);
+    expect(result.exit).toBe(8);
+    expect(result.stderr).toEqual([error.message]);
+  });
+
+  test("exit 8 prints the pending JSON on stdout and the helper's line as the LAST line of stderr", async () => {
+    withFakeHelper();
     const error = approvalOutcomeError({ kind: "pending", expiresAt: EXPIRES_AT, confirmedLiveAt: EXPIRES_AT - 1 }, open)!;
     const result = await print(error);
     expect(result.exit).toBe(8);
     expect(JSON.parse(result.stdout)).toMatchObject({ pending: { approvalUrl: LINK } });
-    const pending = approvalPendingOf(error)!;
-    expect(result.stderr.at(-1)).toBe(approvalNextLine(pending));
-    expect(result.stderr.at(-1)).toMatch(/^Next: /);
+    expect(result.stderr.at(-1)).toBe(FAKE);
+    expect(result.stderr.length).toBeGreaterThan(1);
   });
 
-  test.each(rows.filter((row) => row.exit !== 8))("exit $exit ($name) prints no Next: line", async ({ outcome, context }) => {
+  test.each(rows.filter((row) => row.exit !== 8))("exit $exit ($name) prints no Next: line even with a helper registered", async ({ outcome, context }) => {
+    withFakeHelper();
     const error = approvalOutcomeError(outcome, context)!;
     const result = await print(error);
     expect(result.exit).toBe(error.exitCode);
-    expect([...result.stderr, result.stdout].join("\n")).not.toMatch(/^\s*Next:/m);
+    expect([...result.stderr, result.stdout].join("\n")).not.toContain(FAKE);
   });
 });

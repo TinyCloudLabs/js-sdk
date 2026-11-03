@@ -8,7 +8,7 @@
  */
 import { exitCodeOf, type ApprovalEntry, type Outcome } from "@tinycloud/share-envelope/links";
 import { CLIError, type ApprovalPending } from "../output/errors.js";
-import { markMaybeGranted } from "./refusal.js";
+import { markClockDependent, markMaybeGranted } from "./refusal.js";
 
 export const APPROVAL_ERROR_CODES: readonly string[] = [
   "APPROVAL_ACK_PENDING", "APPROVAL_CLOCK", "APPROVAL_DENIED", "APPROVAL_PENDING", "APPROVAL_REQUEST_CONTEXT_REQUIRED",
@@ -90,8 +90,14 @@ export function approvalOutcomeError(outcome: Outcome, context: OutcomeContext):
     case "denied":
       return new CLIError("APPROVAL_DENIED", "The owner declined this approval request in OpenKey. Nothing was granted. Start a new request only if they want to try again.", exit);
     case "clock":
-      // A clock-dependent ceiling found by the CLI's own check keeps the error it raised (its code and message); the machine only holds the request.
-      return context.cause instanceof CLIError ? context.cause : new CLIError("APPROVAL_CLOCK", clockMessage(outcome.skewMs, outcome.grantSaved === true), exit);
+      // A clock-dependent ceiling found by the CLI's own check keeps its code STRING and message (OPENKEY_EXPIRY_EXCEEDED...) but exits
+      // with the machine's clock number (spec T21); the request is only held. Marked so `refusing()` never reads it as a permanent refusal.
+      if (context.cause instanceof CLIError) {
+        const held = new CLIError(context.cause.code, context.cause.message, exit, context.cause.metadata);
+        markClockDependent(held);
+        return held;
+      }
+      return new CLIError("APPROVAL_CLOCK", clockMessage(outcome.skewMs, outcome.grantSaved === true), exit);
     case "internal":
       return new CLIError("APPROVAL_REQUEST_UNAVAILABLE", "The saved approval request could not be resumed. Retry the command to resume.", exit);
   }
