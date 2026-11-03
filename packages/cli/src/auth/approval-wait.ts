@@ -1,15 +1,14 @@
 import { ExitCode } from "../config/constants.js";
-import { CLIError, type ApprovalPending } from "../output/errors.js";
+import { COLLECT_GRACE_MS } from "@tinycloud/share-envelope/links";
+import { CLIError } from "../output/errors.js";
 
 /** The longest `--timeout` wait, as for `secrets wait --timeout`: 9 minutes. */
 export const MAX_APPROVAL_TIMEOUT_MS = 9 * 60_000;
-/** Between two checks for the owner's approval. */
-export const APPROVAL_POLL_INTERVAL_MS = 2_000;
 /**
- * Once the owner has approved, collecting the result may run this long past the
- * deadline before the command gives up. The result is saved locally either way.
+ * Once the owner has approved, collecting the result may run this long past the deadline before the command gives up. The result is
+ * saved locally either way. It is the requester machine's constant: the CLI has no second one.
  */
-export const APPROVAL_COLLECT_GRACE_MS = 30_000;
+export const APPROVAL_COLLECT_GRACE_MS = COLLECT_GRACE_MS;
 
 const APPROVAL_TIMEOUT = /^(\d+)([sm])$/;
 
@@ -40,18 +39,11 @@ export interface ApprovalWait {
   /** Test seams: the clock and the sleep between two checks. */
   readonly now?: () => number;
   readonly sleep?: (ms: number) => Promise<void>;
-  /** Test seam: the grace after the deadline for collecting an approval the owner already gave. */
-  readonly graceMs?: number;
 }
 
-/** The longest one request waits for OpenKey. */
-const REQUEST_TIMEOUT_MS = 10_000;
-/** A request that starts at the limit still gets this long to answer. */
-const MIN_REQUEST_TIMEOUT_MS = 1_000;
-
-/** When the command must be done with OpenKey: the deadline, plus the grace once the owner has approved. */
+/** When the command must be done with OpenKey: the deadline, plus the machine's collect grace once the owner has approved. */
 export function approvalLimitMs(wait: ApprovalWait, approved: boolean): number {
-  return wait.deadlineMs + (approved ? wait.graceMs ?? APPROVAL_COLLECT_GRACE_MS : 0);
+  return wait.deadlineMs + (approved ? COLLECT_GRACE_MS : 0);
 }
 
 /** The least `onboard --timeout` leaves for OpenKey to host a new account's space: enough for a first probe or two. */
@@ -63,27 +55,6 @@ const MIN_SPACE_SETUP_MS = 15_000;
  */
 export function spaceSetupTimeoutMs(wait: ApprovalWait): number {
   return Math.max(MIN_SPACE_SETUP_MS, approvalLimitMs(wait, true) - (wait.now ?? Date.now)());
-}
-
-/**
- * How long one request to OpenKey may take. Without a deadline: 10 s as always. With one, never past its limit
- * (by more than the minimum a request needs to answer), so the whole command is bounded by the timeout plus the
- * grace, not by timeout plus the grace plus a slow request.
- */
-export function approvalRequestTimeoutMs(wait: ApprovalWait | undefined, approved: boolean): number {
-  if (!wait) return REQUEST_TIMEOUT_MS;
-  const left = approvalLimitMs(wait, approved) - (wait.now ?? Date.now)();
-  return Math.min(REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, left));
-}
-
-/** Exit 8 with `{"pending":{...}}` on stdout. It is the approval only; OpenKey being unavailable has its own errors. */
-export function approvalPendingError(pending: ApprovalPending): CLIError {
-  return new CLIError(
-    "APPROVAL_PENDING",
-    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.`,
-    ExitCode.PENDING,
-    { pending },
-  );
 }
 
 export const APPROVAL_TIMEOUT_OPTION_DESCRIPTION =

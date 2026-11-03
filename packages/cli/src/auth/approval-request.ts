@@ -1,15 +1,18 @@
-import { createECDH, createHash, createPrivateKey, randomBytes, randomUUID, sign } from "node:crypto";
+import { createECDH, createHash, randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
-import { join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { tryOpenBrowser } from "../lib/browser.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
-import { createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
+import {
+  approvalEntrySchema, callApproval, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, driveApproval, localExpiry, reduce, requesterState, signerFromJwk,
+  type ApprovalEntry, type ApprovalTransport, type ApprovalVerdict, type CallOptions, type CallResult, type Ed25519PrivateJwk,
+  type OpenKeyApprovalRequestV1, type Outcome,
+} from "@tinycloud/share-envelope/links";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
-import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
+import { syncAuthCredentialFiles } from "../config/storage.js";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { loadAdditionalDelegations } from "../lib/permissions.js";
@@ -17,56 +20,60 @@ import * as commandGrants from "../lib/permissions.js";
 import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-preset.js";
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
 import { dropCommittedDelegation } from "./pending-code.js";
-import { carryRefusedDelegation, isPermanentRefusal, markMaybeGranted } from "./refusal.js";
+import { carryRefusedDelegation, isClockDependent, isPermanentRefusal } from "./refusal.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
-import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, type ApprovalWait } from "./approval-wait.js";
+import type { ApprovalWait } from "./approval-wait.js";
+import { fileApprovalStore, loadApprovals, updateApprovals } from "./approval-store.js";
+import { approvalOutcomeError, approvalOutcomeWarning } from "./approval-outcome.js";
+import { approvalNextLine } from "./approval-next-line.js";
 
-interface PendingApproval {
-  version: 1;
-  request: OpenKeyApprovalRequestV1;
-  requestId: string;
-  bodyCid: string;
-  approvalUrl: string;
-  requestExpiresAt: string;
-  record: LinkRecord;
-  apiOrigin: string;
-  linkApiOrigin: string;
-  openkeyOrigin: string;
-  signingKey?: Ed25519PrivateJwk;
-  relayPrivateKey: string;
+/**
+ * CLI-only fields of an approval entry, kept under `ext.cli` (the machine round-trips `ext` untouched). The relay result of a
+ * command entry is opened once, so its owner-signed parent is kept beside the saved child: once the request is acknowledged the
+ * entry holds no key, and the repeated command still needs the parent to prove the child is bound to it.
+ */
+interface CliExt {
   expectedOwner?: string;
-  resultRef?: string;
-  resultExpiresAt?: string;
-  resultEnvelope?: unknown;
-  ackId: string;
-  committed?: boolean;
   commandIntent?: string;
-  command?: { request: AuthRequestArtifact; result: AuthDelegationArtifact };
-  acknowledged?: boolean;
+  command?: { request: AuthRequestArtifact; result: AuthDelegationArtifact; parent?: Record<string, unknown> };
 }
+
+function cliOf(entry: ApprovalEntry): CliExt {
+  const ext = entry.ext.cli;
+  if (typeof ext !== "object" || ext === null) return {};
+  const owner = "expectedOwner" in ext && typeof ext.expectedOwner === "string" ? ext.expectedOwner : undefined;
+  const intent = "commandIntent" in ext && typeof ext.commandIntent === "string" ? ext.commandIntent : undefined;
+  // Written by this module and checked again by `verifyApprovalCommand` (canonical JSON of request and result) before any use.
+  const command: CliExt["command"] = "command" in ext && typeof ext.command === "object" && ext.command !== null ? ext.command as CliExt["command"] : undefined;
+  return { ...(owner === undefined ? {} : { expectedOwner: owner }), ...(intent === undefined ? {} : { commandIntent: intent }), ...(command === undefined ? {} : { command }) };
+}
+
+const withCli = (entry: ApprovalEntry, change: Partial<CliExt>): ApprovalEntry => ({ ...entry, ext: { ...entry.ext, cli: { ...cliOf(entry), ...change } } });
+
+/** The grant (and the clock and `--timeout` its approval ran under) behind a delegation this module returned. */
+interface Acquired { readonly requestId: string; readonly clock: Clock }
+interface Clock { readonly now: () => number; readonly sleep: (ms: number) => Promise<void> }
+
 /** Carry transport completion alongside a verified portable grant, never inside its signed claims. */
 export function trackApprovalResult(source: object, verified: object): void {
   const entry = acquisitions.get(source);
   if (entry) acquisitions.set(verified, entry);
 }
 
-const acquisitions = new WeakMap<object, PendingApproval>();
-/** The `--timeout` a request was acquired under; its acknowledgement is bounded by the same limit. */
-const approvalWaits = new WeakMap<PendingApproval, ApprovalWait>();
+const acquisitions = new WeakMap<object, Acquired>();
 
 /** Remote results require the durable login commit before their delivery can be acknowledged. */
 export function approvalResultNeedsAck(delegation: object): boolean {
   return acquisitions.has(delegation);
 }
-const STATE_FILE = "approval-pending.json";
 
 /** Local identity of the complete prepared request, independent of file spelling. */
 export function approvalCommandIntent(request: AuthRequestArtifact): string {
   return "auth-grant:" + createHash("sha256").update(canonicalJson(request)).digest("hex");
 }
 
-async function commandParent(profile: string, entry: PendingApproval) {
+async function commandParent(profile: string, entry: ApprovalEntry) {
   const key = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
   const current = await ProfileManager.getProfile(profile);
   if (!key || current.authSignedOut === true || signerFromJwk(key).did !== entry.request.targetDid ||
@@ -78,10 +85,10 @@ async function commandParent(profile: string, entry: PendingApproval) {
   return verified;
 }
 
-async function verifyApprovalCommand(profile: string, entry: PendingApproval, request: AuthRequestArtifact,
+async function verifyApprovalCommand(profile: string, entry: ApprovalEntry, request: AuthRequestArtifact,
   result: AuthDelegationArtifact, checkedParent?: ReturnType<typeof verifyPendingResult>): Promise<void> {
   const parent = checkedParent ?? await commandParent(profile, entry);
-  if (entry.commandIntent !== approvalCommandIntent(request) || result.kind !== "tinycloud.auth.delegation" ||
+  if (cliOf(entry).commandIntent !== approvalCommandIntent(request) || result.kind !== "tinycloud.auth.delegation" ||
     result.version !== 1 || result.requestId !== request.requestId || result.delegationCid !== result.delegation.cid ||
     result.prompted !== true) throw invalid("Saved grant does not match this prepared command.");
   const requested = finalizeSigningEntries(await commandGrants.resolvePermissionSpaces(entriesForSigning(request.requested), profile));
@@ -140,22 +147,28 @@ async function persistCommandFiles(profile: string, result: AuthDelegationArtifa
   await syncCommandFiles(profile, result);
 }
 
+/** The one saved request of this command, or an error when none or several match: no result is ever picked for it. */
+async function commandEntry(profile: string, request: AuthRequestArtifact, acquired: Acquired): Promise<ApprovalEntry> {
+  const { entries } = await loadApprovals(profile);
+  const matching = entries.filter((item) => cliOf(item).commandIntent === approvalCommandIntent(request));
+  if (matching.length !== 1 || matching[0]!.requestId !== acquired.requestId) throw invalid("Ambiguous command approval.");
+  return matching[0]!;
+}
+
 /** A retry returns the saved child, not a newly minted delegation. */
 export async function recoverApprovalCommand(profile: string, approval: object,
   request: AuthRequestArtifact): Promise<AuthDelegationArtifact | undefined> {
   const acquired = acquisitions.get(approval);
   if (!acquired) return undefined;
   return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? [];
-    const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
-    if (matching.length !== 1 || matching[0]!.requestId !== acquired.requestId) throw invalid("Ambiguous command approval.");
-    const entry = matching[0]!;
-    if (!entry.command) return undefined;
-    if (canonicalJson(entry.command.request) !== canonicalJson(request)) throw invalid("Prepared command changed.");
-    await verifyApprovalCommand(profile, entry, request, entry.command.result);
-    await persistCommandFiles(profile, entry.command.result);
-    acquisitions.set(approval, entry);
-    return entry.command.result;
+    const entry = await commandEntry(profile, request, acquired);
+    const saved = cliOf(entry).command;
+    if (!saved) return undefined;
+    if (canonicalJson(saved.request) !== canonicalJson(request)) throw invalid("Prepared command changed.");
+    await verifyApprovalCommand(profile, entry, request, saved.result);
+    await persistCommandFiles(profile, saved.result);
+    acquisitions.set(approval, acquired);
+    return saved.result;
   }, { requireProfile: true });
 }
 
@@ -165,18 +178,18 @@ export async function commitApprovalCommand(profile: string, approval: object,
   const acquired = acquisitions.get(approval);
   if (!acquired) throw invalid("Command approval is not tracked.");
   await ProfileManager.withLock(profile, async () => {
-    const entries = await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? [];
-    const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
-    if (matching.length !== 1 || matching[0]!.requestId !== acquired.requestId) throw invalid("Ambiguous command approval.");
-    const entry = matching[0]!;
-    await verifyApprovalCommand(profile, entry, request, result);
-    if (entry.command && canonicalJson(entry.command.result) !== canonicalJson(JSON.parse(JSON.stringify(result)))) {
+    const entry = await commandEntry(profile, request, acquired);
+    const parent = await commandParent(profile, entry);
+    await verifyApprovalCommand(profile, entry, request, result, parent);
+    const prior = cliOf(entry).command;
+    if (prior && canonicalJson(prior.result) !== canonicalJson(JSON.parse(JSON.stringify(result)))) {
       throw invalid("A different result is already saved for this command.");
     }
-    entry.command = { request, result };
-    await writeJsonDurable(join(profilePath(profile), STATE_FILE), entries);
+    const parentResult = openedResult(entry);
+    await updateApprovals(profile, (entries) => entries.map((item) => item.requestId === entry.requestId
+      ? withCli(item, { command: { request, result, parent: parentResult } }) : item));
     await persistCommandFiles(profile, result);
-    acquisitions.set(approval, entry);
+    acquisitions.set(approval, acquired);
   }, { requireProfile: true });
 }
 
@@ -202,43 +215,35 @@ function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
   return seconds;
 }
 
-async function updatePending(profile: string, update: (pending: PendingApproval[]) => PendingApproval[]): Promise<void> {
-  await ProfileManager.withLock(profile, async () => {
-    const directory = await ProfileManager.ensureProfileDir(profile);
-    const path = join(directory, STATE_FILE);
-    await writeJsonDurable(path, update(await readJson<PendingApproval[]>(path) ?? []));
-  }, { requireProfile: true });
-}
-
-async function activePending(profile: string): Promise<PendingApproval[]> {
-  const path = join(profilePath(profile), STATE_FILE);
-  if (!(await readJson<PendingApproval[]>(path))?.length) return [];
-  return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson<PendingApproval[]>(path) ?? [];
-    const now = Date.now();
-    const active = entries.filter((entry) => {
-      // A saved command remains recoverable until its child expires, independently of transport retention.
-      const expiry = entry.command ? entry.command.result.expiry : entry.resultExpiresAt;
-      return expiry === undefined || !(Date.parse(expiry) <= now);
-    });
-    if (active.length !== entries.length) await writeJsonDurable(path, active);
-    return active;
-  }, { requireProfile: true });
-}
-
+/**
+ * The session key a first sign-in or a rotation staged in a pending request (the key exists nowhere else) while no command and no
+ * committed grant owns it: what `auth login` needs to resume.
+ */
 export async function pendingApprovalKey(profile: string): Promise<Ed25519PrivateJwk | undefined> {
-  const entries = await activePending(profile);
-  return entries.find((entry) => entry.commandIntent === undefined && !entry.committed)?.signingKey;
+  const { entries } = await loadApprovals(profile);
+  return entries.find((entry) => cliOf(entry).commandIntent === undefined && entry.phase !== "committed" && entry.phase !== "acked")?.keys?.stagedSigningKey;
 }
 
-async function forgetApproval(profile: string, entry: PendingApproval): Promise<void> {
-  await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+interface Abandoned { readonly entry: ApprovalEntry; readonly outcome: Outcome }
+
+/** Remove the entries the machine's `abandon` event drops: each leaves the file with its keys, and its outcome says whether a grant may be live. */
+async function abandonEntries(profile: string, matches: (entry: ApprovalEntry) => boolean, reason: "key-sweep" | "superseded"): Promise<Abandoned[]> {
+  const dropped: Abandoned[] = [];
+  const now = Date.now();
+  await updateApprovals(profile, (entries) => entries.filter((entry) => {
+    if (!matches(entry)) return true;
+    const step = reduce(requesterState(entry), { type: "abandon", now, reason });
+    if (step.state.entry !== undefined || step.state.settled === undefined) return true;
+    dropped.push({ entry, outcome: step.state.settled });
+    return false;
+  }), { now });
+  return dropped;
 }
 
 /** Drop the pending request a refused result came from, with the result key and reference it holds. No-op for a result not acquired here. */
 export async function dropRefusedApproval(profile: string, delegation: object): Promise<void> {
-  const entry = acquisitions.get(delegation);
-  if (entry) await forgetApproval(profile, entry);
+  const acquired = acquisitions.get(delegation);
+  if (acquired) await abandonEntries(profile, (entry) => entry.requestId === acquired.requestId, "superseded");
 }
 
 /**
@@ -248,90 +253,40 @@ export async function dropRefusedApproval(profile: string, delegation: object): 
  */
 export async function dropApprovalsHoldingKey(profile: string, x: unknown): Promise<{ dropped: boolean; approved: boolean; latestEnd?: string }> {
   if (typeof x !== "string") return { dropped: false, approved: false };
-  const held = (await activePending(profile)).filter((entry) => entry.signingKey?.x === x);
+  const held = await abandonEntries(profile, (entry) => entry.keys?.stagedSigningKey?.x === x, "key-sweep");
   if (held.length === 0) return { dropped: false, approved: false };
-  await updatePending(profile, (items) => items.filter((item) => item.signingKey?.x !== x));
-  const ends = held.filter((entry) => entry.resultRef !== undefined)
-    .map((entry) => Date.parse(entry.requestExpiresAt) + entry.request.grantLifetimeSeconds * 1000).filter(Number.isFinite);
-  return { dropped: true, approved: ends.length > 0 || held.some((entry) => entry.resultRef !== undefined),
+  const approvedEntries = held.filter(({ outcome }) => outcome.kind === "abandoned" && outcome.grantMayBeLive === "yes");
+  const ends = approvedEntries.map(({ entry }) => localExpiry(entry) + entry.request.grantLifetimeSeconds * 1000).filter(Number.isFinite);
+  return { dropped: true, approved: approvedEntries.length > 0,
     ...(ends.length > 0 ? { latestEnd: new Date(Math.max(...ends)).toISOString() } : {}) };
 }
 
 /** Whether a pending request of this profile still holds the session key `x` (a first sign-in's key lives only there). */
 export async function approvalHoldsKey(profile: string, x: unknown): Promise<boolean> {
-  return (await activePending(profile)).some((entry) => entry.signingKey?.x === x);
+  return (await loadApprovals(profile)).entries.some((entry) => entry.keys?.stagedSigningKey?.x === x);
 }
 
-/** Existing OpenKey session proof, purpose- and exact-resource-bound by its credential hash. */
-export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | "bodyCid" | "apiOrigin"> & { signingKey: Ed25519PrivateJwk },
-  action: "discover" | "fetch" | "ack", resultRef = "", ackId = ""): string {
-  const jwk = entry.signingKey;
-  const jkt = createHash("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
-  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
-  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: jkt, typ: "openkey-session-proof+jwt" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({
-    client_id: "openkey-approval-result-v1",
-    cred_hash: createHash("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
-    htm: "POST", htu: entry.apiOrigin + path, iat: Math.floor(Date.now() / 1000), jti: randomBytes(24).toString("base64url"),
-  })).toString("base64url");
-  const input = `${header}.${payload}`;
-  return `${input}.${sign(null, Buffer.from(input), createPrivateKey({
-    key: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, d: jwk.d }, format: "jwk",
-  })).toString("base64url")}`;
+/** The owner-signed result of an entry, opened: from its envelope and relay key, or from the parent a command entry kept. */
+function openedResult(entry: ApprovalEntry): Record<string, unknown> {
+  if (entry.resultEnvelope !== undefined && entry.keys !== undefined) {
+    const relay = createECDH("prime256v1");
+    relay.setPrivateKey(Buffer.from(entry.keys.relayPrivateKey, "base64url"));
+    return decryptRelayResult(entry.resultEnvelope, entry.requestId, relay);
+  }
+  const parent = cliOf(entry).command?.parent;
+  if (parent !== undefined) return parent;
+  throw invalid("No encrypted approval result is available.");
 }
 
-async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack", signingKey: Ed25519PrivateJwk, timeoutMs = 10_000): Promise<Response> {
-  const ref = action === "discover" ? "" : entry.resultRef ?? "";
-  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
-  const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature }
-    : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...(action === "ack" ? { ackId: entry.ackId } : {}) };
-  return fetch(entry.apiOrigin + path, {
-    method: "POST", credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
-    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
-  });
-}
-async function throwRemoteError(profile: string, entry: PendingApproval, response: Response, action: "discover" | "fetch"): Promise<never> {
-  const body = await response.clone().json().catch(() => null) as { code?: unknown } | null;
-  const code = typeof body?.code === "string" ? body.code : "";
-  if (code === "expired_request") {
-    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
-    throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Start a new request.", ExitCode.AUTH_REQUIRED);
-  }
-  if (code === "expired_result") {
-    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
-    throw new CLIError("APPROVAL_RESULT_EXPIRED", "The approved result expired before it was saved. Start a new request.", ExitCode.AUTH_REQUIRED);
-  }
-  if (code === "acknowledged") {
-    throw new CLIError("APPROVAL_RESULT_ACKNOWLEDGED", "OpenKey has acknowledged this result; its local commit may already be complete.", ExitCode.PENDING);
-  }
-  if (code === "not_found") {
-    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
-    throw new CLIError(action === "discover" ? "APPROVAL_REQUEST_NOT_FOUND" : "APPROVAL_RESULT_NOT_FOUND",
-      action === "discover" ? "OpenKey cannot find this approval request." : "OpenKey cannot find this approval result.", ExitCode.AUTH_REQUIRED);
-  }
-  if (code === "ack_conflict") throw invalid("OpenKey rejected a conflicting approval ACK intent.");
-  if (code === "request_binding" || code === "invalid_proof") {
-    // From the poll (no result reference yet) the CLI cannot tell whether the owner already approved.
-    const rejected = invalid("OpenKey rejected the request or requester binding.");
-    throw action === "discover" ? markMaybeGranted(rejected) : rejected;
-  }
-  throw new CLIError(action === "discover" ? "APPROVAL_REQUEST_UNAVAILABLE" : "APPROVAL_RESULT_UNAVAILABLE",
-    `OpenKey could not ${action === "discover" ? "discover this request" : "fetch this result"} (HTTP ${response.status}). Retry the command to resume.`, ExitCode.PENDING);
-}
-
-function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
+function verifyPendingResult(entry: ApprovalEntry, key: Ed25519PrivateJwk): {
   delegation: Record<string, unknown>;
   session: ReturnType<typeof verifyScopedLogin>["session"];
 } {
-  if (!entry.resultRef || !entry.resultEnvelope) throw invalid("No encrypted approval result is available.");
   // The result the owner approved, once opened: a refusal carries it so the caller can name the refused delegation.
   let seen: unknown;
   try {
     const signer = signerFromJwk(key);
-    const relay = createECDH("prime256v1");
-    relay.setPrivateKey(Buffer.from(entry.relayPrivateKey, "base64url"));
-    const opened = decryptRelayResult(entry.resultEnvelope, entry.requestId, relay);
+    const opened = openedResult(entry);
     seen = opened.delegation;
     if (opened.resultVersion !== 1 || opened.requestId !== entry.requestId || opened.requestDigest !== entry.bodyCid ||
       opened.requesterDid !== entry.request.issuer || opened.targetDid !== entry.request.targetDid ||
@@ -342,7 +297,7 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
     const delegation = opened.delegation as Record<string, unknown>;
     const verified = verifyScopedLogin(delegation, key, entry.request.targetDid,
       entry.request.permissions as PermissionEntry[], {
-        expectedOwner: entry.expectedOwner ?? opened.ownerDid,
+        expectedOwner: cliOf(entry).expectedOwner ?? opened.ownerDid,
         expiry: { durationMs: entry.request.grantLifetimeSeconds * 1000 },
         exactApproval: true,
       });
@@ -355,81 +310,46 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
     throw error;
   }
 }
-
-/** The wait ended with the owner's approval still outstanding: nothing is lost, the same link stays pending. */
-function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CLIError {
-  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
-}
-
 /**
- * A response body read that the request's own timeout, an abort or the connection ended, never a malformed body.
- * Node reports a reset connection as a TypeError; Bun raises a plain Error with code ECONNRESET.
+ * The machine's verdict on the CLI's own verification of an opened result. A permanent refusal drops the request; a clock-dependent
+ * ceiling keeps it. AUTH_EXPIRED is `expiredMeans`: while the result is being acquired a clock running AHEAD looks the same, so it is kept
+ * ("clock", as before); once the grant is saved the approval is over, so it is dropped ("ended", as before).
  */
-function bodyCutOff(error: unknown): boolean {
-  return error instanceof TypeError ||
-    (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError" || (error as { code?: unknown }).code === "ECONNRESET"));
+function verdictOf(error: unknown, expiredMeans: "clock" | "ended"): ApprovalVerdict | undefined {
+  if (!(error instanceof CLIError)) return undefined;
+  const { code } = error;
+  if (isPermanentRefusal(error)) return "refused";
+  if (isClockDependent(error)) return "clock";
+  return code === "AUTH_EXPIRED" ? expiredMeans : undefined;
 }
 
-/**
- * How long OpenKey serves an approved result after the approval: production APPROVAL_RESULT_RETENTION_SECONDS=600
- * (OpenKey repo, docker-compose.prod.yml:28). A request approved just before its expiry can still be collected until
- * then, so a stored request is not dropped locally before its expiry plus this. If OpenKey changes that setting,
- * change this with it.
- */
-const RESULT_RETENTION_MS = 600_000;
-/** Clock skew allowed on top: a local clock that runs ahead must never drop a request OpenKey would still serve. */
-const EXPIRY_SKEW_MS = 60_000;
-
-/** Whether a stored request has been expired for so long that no result can still be served for it. */
-function lapsedPastRetention(entry: PendingApproval, now: number): boolean {
-  return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
+const droppedWithError = new WeakMap<object, { approved: boolean; latestEnd?: string }>();
+/** For a rotation's cleanup: what the request the machine removed with this error would have reported (`dropApprovalsHoldingKey`'s answer). */
+export function droppedApprovalOf(error: unknown): { approved: boolean; latestEnd?: string } | undefined {
+  return typeof error === "object" && error !== null ? droppedWithError.get(error) : undefined;
 }
 
-/**
- * An approval request that expired before anyone approved it. Production OpenKey answers a discover after the
- * request's expiry with 400 invalid_request unless the request was approved, in which case it serves the result until
- * its retention ends; so an entry that holds no result may be dropped once OpenKey says so, or once the retention has
- * passed, and the next run makes a new request. `drop: false` leaves it in place for a run that may still ask OpenKey.
- */
-async function expiredRequest(profile: string, entry: PendingApproval, drop: boolean): Promise<CLIError> {
-  if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
-  return new CLIError("APPROVAL_REQUEST_EXPIRED",
-    "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.", ExitCode.AUTH_REQUIRED);
+/** The two ends of one run that are not outcomes: the result is verified and the caller commits it. */
+class HandBack extends Error {}
+
+/** One transport call of the machine, signed with `signingKey`; the clock measures the skew against the reply's `Date`. */
+function transportFor(signingKey: Ed25519PrivateJwk, clock: Clock): ApprovalTransport {
+  const state = (entry: ApprovalEntry) => ({ requestId: entry.requestId, bodyCid: entry.bodyCid, record: entry.record, apiOrigin: entry.apiOrigin, signingKey });
+  return {
+    discover: (entry: ApprovalEntry, call: CallOptions): Promise<CallResult> => callApproval(state(entry), "discover", {}, { timeoutMs: call.timeoutMs, now: clock.now }),
+    fetch: (entry: ApprovalEntry, call: CallOptions): Promise<CallResult> => callApproval(state(entry), "fetch",
+      { resultRef: entry.resultRef!, resultExpiresAt: entry.resultExpiresAt! }, { timeoutMs: call.timeoutMs, now: clock.now }),
+    ack: (entry: ApprovalEntry, call: CallOptions): Promise<CallResult> => callApproval(state(entry), "ack",
+      { resultRef: entry.resultRef!, ackId: entry.ackId }, { timeoutMs: call.timeoutMs, now: clock.now }),
+  };
 }
 
-/** OpenKey's answer to a discover for a request past its expiry: HTTP 400 invalid_request ("invalid or expired"), not expired_request. */
-async function discoverRefusedAsExpired(entry: PendingApproval, response: Response, now: number): Promise<boolean> {
-  if (response.status !== 400 || entry.resultRef !== undefined || now < Date.parse(entry.requestExpiresAt)) return false;
-  const body = await response.clone().json().catch(() => null) as { code?: unknown; error?: unknown } | null;
-  return body?.code === "invalid_request" || (typeof body?.error === "string" && /expired/i.test(body.error));
-}
-
-/**
- * The pause between two attempts to learn the outcome. Without a deadline it is the fixed 2 s. With one, the pause
- * ends at the deadline, after which one last attempt is made. Once the owner has approved (a result reference
- * exists) the deadline no longer applies: collecting the result gets a bounded grace and ends as "result
- * unavailable", which a re-run resumes from the saved reference, never as a pending approval.
- * `reached` says OpenKey answered the last attempt (the request is still open); otherwise it could not be asked.
- */
-async function pauseBetweenAttempts(profile: string, entry: PendingApproval, approvalWait: ApprovalWait | undefined, reached = false): Promise<void> {
-  if (!approvalWait) {
-    await wait(2000);
-    return;
-  }
-  const now = approvalWait.now ?? Date.now;
-  const approved = entry.resultRef !== undefined;
-  const remaining = approvalLimitMs(approvalWait, approved) - now();
-  if (remaining <= 0) {
-    if (approved) {
-      throw new CLIError("APPROVAL_RESULT_UNAVAILABLE",
-        "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
-    }
-    // OpenKey could not be asked (a network failure) and the link has run out: never hand out a dead link as pending.
-    // The entry stays until no result can be served for it any more, since one approved just before the expiry may be.
-    if (!reached && now() >= Date.parse(entry.requestExpiresAt)) throw await expiredRequest(profile, entry, lapsedPastRetention(entry, now()));
-    throw pendingApproval(entry, approvalWait);
-  }
-  await (approvalWait.sleep ?? ((ms: number) => wait(ms)))(Math.min(APPROVAL_POLL_INTERVAL_MS, remaining));
+function clockOf(options: Pick<AuthFlowOptions, "approvalWait" | "approvalClock">): Clock {
+  const wait_ = options.approvalWait;
+  return {
+    now: wait_?.now ?? options.approvalClock?.now ?? Date.now,
+    sleep: wait_?.sleep ?? options.approvalClock?.sleep ?? ((ms: number) => wait(ms)),
+  };
 }
 
 /** Retryable reads never acknowledge or consume. The private result key is synced before the URL is exposed. */
@@ -439,7 +359,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
   }
   const signingKey = options.jwk as Ed25519PrivateJwk;
-  const approvalWait = options.approvalWait;
+  const approvalWait: ApprovalWait | undefined = options.approvalWait;
+  const clock = clockOf(options);
   const signer = signerFromJwk(signingKey);
   const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
   const apiOrigin = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ??
@@ -455,8 +376,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }
-  const matching = (await activePending(profile)).filter((item) => {
-    if (item.commandIntent !== options.commandIntent) return false;
+  const store = fileApprovalStore(profile, clock);
+  const matching = (await loadApprovals(profile, { now: clock.now() })).entries.filter((item) => {
+    const cli = cliOf(item);
+    if (cli.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
     const { permissions: nextPermissions, ...next } = spec;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin ||
@@ -465,12 +388,12 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     // Saving the first signed result resolves logical space names to its owner.
     // Compare that spelling only after re-verifying the original encrypted result.
     let owner: string | undefined;
-    try { owner = item.resultEnvelope ? verifyPendingResult(item, signingKey).session.ownerDid : item.expectedOwner; }
+    try { owner = item.resultEnvelope !== undefined || cli.command?.parent !== undefined ? verifyPendingResult(item, signingKey).session.ownerDid : cli.expectedOwner; }
     catch (error) {
       if (error instanceof CLIError && error.code === "AUTH_EXPIRED") return false;
       throw error;
     }
-    if ((item.expectedOwner !== undefined || options.expectedOwner !== undefined) &&
+    if ((cli.expectedOwner !== undefined || options.expectedOwner !== undefined) &&
       (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
     return priorPermissions.every(({ space, ...permission }, index) => {
       const { space: nextSpace, ...nextPermission } = nextPermissions[index]!;
@@ -480,97 +403,80 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
-  const isNewRequest = entry === undefined;
-  // Under --timeout a stored request that holds no result and expired so long ago that OpenKey cannot serve one any
-  // more is decided here, before OpenKey is asked and before its dead link is shown again. A younger expired request
-  // is left to OpenKey: it may be an approval given just before the expiry.
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
-  }
+  const createdThisRun = entry === undefined;
   if (!entry) {
     const relay = createECDH("prime256v1");
     relay.generateKeys();
+    const relayKey = relay.getPrivateKey();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
-    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin, now: clock.now() });
     const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
-    entry = { version: 1, request, requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link,
-      requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,
-      ...(profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey }),
-      relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, ackId: randomUUID(),
+    const cli: CliExt = { ...(options.expectedOwner === undefined ? {} : { expectedOwner: options.expectedOwner }),
       ...(options.commandIntent === undefined ? {} : { commandIntent: options.commandIntent }) };
-    await updatePending(profile, (items) => [...items, entry!]);
+    // A machine-written entry always passes the schema; parsing here makes that a fact, not a hope.
+    entry = approvalEntrySchema.parse({
+      requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link, request, record: created.record,
+      apiOrigin, linkApiOrigin, openkeyOrigin,
+      keys: { relayPrivateKey: Buffer.concat([Buffer.alloc(32 - relayKey.length), relayKey]).toString("base64url"),
+        ...(profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { stagedSigningKey: signingKey }) },
+      phase: "open", ackId: randomUUID(), createdAt: created.record.header.issuedAt,
+      ext: Object.keys(cli).length === 0 ? {} : { cli },
+    });
+    // Write-before-act: the request and its keys are on disk before its link is shown to anyone.
+    await store.write(entry);
   }
-  if (!entry.resultRef && !entry.resultEnvelope) {
-    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\n`);
-    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
-      await tryOpenBrowser(entry.approvalUrl);
+  const step = approvalWait?.step ?? 1;
+  const of = approvalWait?.of ?? 1;
+  if (entry.phase === "open") {
+    const approvalUrl = entry.approvalUrl!;
+    const expiresAt = entry.record.header.expiresAt;
+    options.onApprovalRequest?.({ approvalUrl, requestId: entry.requestId, expiresAt });
+    if (!options.onApprovalRequest) {
+      console.error(`Approve this request in OpenKey (open the complete link):\n${approvalUrl}\n`);
+      if (!options.noPopup && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") await tryOpenBrowser(approvalUrl);
+      console.error(approvalNextLine({ step, of, approvalUrl, expiresAt }));
     }
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
-    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait);
-  }
-  if (!entry.resultEnvelope) {
-    for (;;) {
-      let response: Response;
-      try { response = await post(entry, "discover", signingKey, approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined)); }
-      catch {
-        await pauseBetweenAttempts(profile, entry, approvalWait);
-        continue;
-      }
-      if (response.status === 202) {
-        await pauseBetweenAttempts(profile, entry, approvalWait, true);
-        continue;
-      }
-      if (!response.ok && await discoverRefusedAsExpired(entry, response, (approvalWait?.now ?? Date.now)())) {
-        throw await expiredRequest(profile, entry, true);
-      }
-      if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
-      let discovered: { resultRef?: unknown; expiresAt?: unknown };
-      try { discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown }; } catch (error) {
-        // Under --timeout a body the request cap or the connection cut off is a network failure like a lost request,
-        // but OpenKey did answer (200): it is reached, so the expiry check does not apply.
-        if (!approvalWait || !bodyCutOff(error)) throw error;
-        await pauseBetweenAttempts(profile, entry, approvalWait, true);
-        continue;
-      }
-      if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) ||
-        typeof discovered.expiresAt !== "string" || !Number.isFinite(Date.parse(discovered.expiresAt))) {
-        throw invalid("Invalid approval result reference.");
-      }
-      entry.resultRef = discovered.resultRef;
-      entry.resultExpiresAt = discovered.expiresAt;
-      await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
-      let fetched: Response;
-      try { fetched = await post(entry, "fetch", signingKey, approvalRequestTimeoutMs(approvalWait, true)); } catch {
-        // The owner approved: collect past the deadline, paced, for a bounded grace.
-        if (approvalWait) await pauseBetweenAttempts(profile, entry, approvalWait);
-        continue;
-      }
-      if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
-      let result: Record<string, unknown>;
-      try { result = await fetched.json() as Record<string, unknown>; } catch (error) {
-        if (!approvalWait || !bodyCutOff(error)) throw error;
-        await pauseBetweenAttempts(profile, entry, approvalWait, true);
-        continue;
-      }
-      if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid ||
-        result.resultRef !== entry.resultRef || result.expiresAt !== entry.resultExpiresAt ||
-        !result.relay || typeof result.relay !== "object") throw invalid("Result reference does not match this request.");
-      entry.resultEnvelope = result.relay;
-      break;
+    if (createdThisRun && approvalWait) {
+      throw approvalOutcomeError({ kind: "pending", expiresAt: localExpiry(entry), confirmedLiveAt: clock.now() }, { entry, step, of })!;
     }
   }
-  let verified: ReturnType<typeof verifyPendingResult>;
-  try { verified = verifyPendingResult(entry, signingKey); } catch (error) {
-    // A refused result is never served from this entry again: its result key and reference are dropped now, as for an
-    // expired or unknown result. AUTH_EXPIRED and every other error keep the entry so the same command can resume.
-    if (isPermanentRefusal(error)) await forgetApproval(profile, entry);
-    throw error;
+
+  let verified: ReturnType<typeof verifyPendingResult> | undefined;
+  let verification: unknown;
+  const verify = async (current: ApprovalEntry): Promise<ApprovalVerdict> => {
+    try { verified = verifyPendingResult(current, signingKey); return "ok"; } catch (error) {
+      verification = error;
+      const verdict = verdictOf(error, "clock");
+      if (verdict === undefined) throw error;
+      return verdict;
+    }
+  };
+  if (entry.phase === "committed" || entry.phase === "acked") {
+    // The grant is already saved: only its verified result is wanted back (for the command's own recovery); the ack is the completion's job.
+    try { verified = verifyPendingResult(entry, signingKey); } catch (error) {
+      if (isPermanentRefusal(error)) await store.remove(entry.requestId);
+      throw error;
+    }
+  } else {
+    try {
+      const result = await driveApproval({
+        store, transport: transportFor(signingKey, clock), verify, now: clock.now, sleep: clock.sleep,
+        commit: async () => { throw new HandBack(); },
+      }, entry.requestId, { ...(approvalWait === undefined ? {} : { deadline: approvalWait.deadlineMs }), ...(createdThisRun ? { createdThisRun: true } : {}) });
+      const error = approvalOutcomeError(result.outcome, { entry: result.entry ?? entry, step, of, cause: verification }) ?? invalid("The approval ended without a result.");
+      // The machine removed a request OpenKey refused (or may have approved): a rotation's sweep will not find it, so the error carries what the sweep would have said.
+      if (result.outcome.kind === "refused" && result.outcome.reason !== "verification" && result.entry === undefined) {
+        const approved = result.outcome.grantMayBeLive === "yes";
+        droppedWithError.set(error, { approved, ...(approved ? { latestEnd: new Date(localExpiry(entry) + entry.request.grantLifetimeSeconds * 1000).toISOString() } : {}) });
+      }
+      throw error;
+    } catch (error) {
+      if (!(error instanceof HandBack)) throw error;
+    }
   }
-  await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
-  acquisitions.set(verified.delegation, entry);
-  if (approvalWait) approvalWaits.set(entry, approvalWait);
-  return verified.delegation as DelegationData;
+  acquisitions.set(verified!.delegation, { requestId: entry.requestId, clock });
+  return verified!.delegation as DelegationData;
 }
 
 /** Call only after committing authority. Re-check stored evidence under the profile lock and sync it before ACK intent. */
@@ -578,76 +484,89 @@ export async function completeApprovalResult(profile: string, delegation?: objec
   // A pasted short code's local copy is dropped only now: every caller reaches here after its durable commit.
   if (delegation) await dropCommittedDelegation(profile, delegation);
   const acquired = delegation ? acquisitions.get(delegation) : undefined;
-  const entries = acquired ? [acquired] : await activePending(profile);
-  for (const entry of entries) {
-    if (!acquired && entry.commandIntent !== undefined) continue;
-    if (!entry.resultRef || !entry.resultEnvelope) continue;
-    let saved = false;
-    let expired = false;
-    let ackKey: Ed25519PrivateJwk | undefined;
-    await ProfileManager.withLock(profile, async () => {
-      const key = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
-      if (!key || signerFromJwk(key).did !== entry.request.targetDid) return;
-      let verified: ReturnType<typeof verifyPendingResult>;
-      try { verified = verifyPendingResult(entry, key); }
-      catch (error) {
-        if (!(error instanceof CLIError) || error.code !== "AUTH_EXPIRED") throw error;
-        await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
-        expired = true;
-        return;
-      }
-      const { delegation: verifiedDelegation, session: verifiedSession } = verified;
-      const current = await ProfileManager.getProfile(profile);
-      if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
-      const session = await ProfileManager.getSession(profile) as Record<string, unknown> | null;
-      if (session && session.delegationCid === verifiedDelegation.delegationCid &&
-        session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
-        await syncAuthCredentialFiles(profilePath(profile));
-        await ProfileManager.setProfileDurable(profile, current);
-        saved = true;
-      } else {
-        const grants = await loadAdditionalDelegations(profile);
-        const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid &&
-          item.delegation.siweProof?.siwe === verifiedDelegation.siwe &&
-          item.delegation.siweProof?.signature === verifiedDelegation.signature);
-        if (stored) {
-          const file = await open(additionalDelegationsPath(profile), "r");
-          try { await file.sync(); } finally { await file.close(); }
-          const directory = await open(profilePath(profile), "r");
-          try { await directory.sync(); } finally { await directory.close(); }
-          saved = true;
-        }
-      }
-      if (entry.commandIntent !== undefined) {
-        if (!entry.command) throw invalid("The command result has not been durably saved; no ACK was sent.");
-        await verifyApprovalCommand(profile, entry, entry.command.request, entry.command.result,
-          { delegation: verifiedDelegation, session: verifiedSession });
-        await syncCommandFiles(profile, entry.command.result);
-        saved = true;
-      }
-      if (saved) {
-        entry.committed = true;
-        ackKey = key;
-        delete entry.signingKey;
-        await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
-      }
-    }, { requireProfile: true });
-    if (expired) continue;
-    if (!saved || !ackKey) {
+  const clock = acquired?.clock ?? clockOf({});
+  const { entries } = await loadApprovals(profile, { now: clock.now() });
+  const candidates = acquired ? entries.filter((entry) => entry.requestId === acquired.requestId) : entries;
+  for (const entry of candidates) {
+    if (!acquired && cliOf(entry).commandIntent !== undefined) continue;
+    if (entry.phase !== "fetched" && entry.phase !== "committed") continue;
+    const key = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
+    if (!key || signerFromJwk(key).did !== entry.request.targetDid) {
       if (acquired) throw invalid("Approval has not been durably saved; no ACK was sent.");
       continue;
     }
-    if (entry.acknowledged) continue;
-    let response: Response;
-    try { response = await post(entry, "ack", ackKey, approvalRequestTimeoutMs(approvalWaits.get(entry), true)); }
-    catch { throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING); }
-    const result = await response.json().catch(() => null) as { ackId?: string; status?: string; code?: string } | null;
-    const terminal = !response.ok && ["expired_result", "not_found", "acknowledged"].includes(result?.code ?? "");
-    if (!terminal && (!response.ok || result?.ackId !== entry.ackId || result?.status !== "acknowledged")) {
-      throw new CLIError("APPROVAL_ACK_PENDING", `Approval is saved; ACK is pending (HTTP ${response.status}). Retry this command.`, ExitCode.PENDING);
+    let notSaved = false;
+    let verification: unknown;
+    const result = await driveApproval({
+      store: fileApprovalStore(profile, clock), transport: transportFor(key, clock), now: clock.now, sleep: clock.sleep,
+      verify: async (current) => {
+        try { verifyPendingResult(current, key); return "ok"; } catch (error) {
+          verification = error;
+          const verdict = verdictOf(error, "ended");
+          if (verdict === undefined) throw error;
+          return verdict;
+        }
+      },
+      commit: async (current) => {
+        const retainUntil = await ProfileManager.withLock(profile, () => commitEvidence(profile, current, key), { requireProfile: true });
+        if (retainUntil === "not-saved") { notSaved = true; throw new HandBack(); }
+        return retainUntil === undefined ? undefined : { retainUntil };
+      },
+    }, entry.requestId).catch((error: unknown) => {
+      if (error instanceof HandBack) return undefined;
+      throw error;
+    });
+    if (notSaved) {
+      if (acquired) throw invalid("Approval has not been durably saved; no ACK was sent.");
+      continue;
     }
-    await updatePending(profile, (items) => entry.command
-      ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item)
-      : items.filter((item) => item.requestId !== entry.requestId));
+    if (result === undefined) continue;
+    const warning = approvalOutcomeWarning(result.outcome);
+    if (warning) process.stderr.write(`${warning}\n`);
+    // A delegation that ended before the ack ran is dropped quietly: the grant was committed (and is as good as it ever was).
+    if (result.outcome.kind === "gone" && result.outcome.reason === "ended") continue;
+    const error = approvalOutcomeError(result.outcome, { entry: result.entry ?? entry, cause: verification });
+    if (error) throw error;
   }
+}
+
+/**
+ * Under the profile lock: is what the approval granted durably saved (the profile's session, or a stored grant, or the command's
+ * result)? Returns when the key-free entry should be kept after the ack (a command entry, until its child expires), `undefined` when
+ * it is not kept, or `"not-saved"`. Syncs every file it relied on before any ACK intent is sent.
+ */
+async function commitEvidence(profile: string, entry: ApprovalEntry, key: Ed25519PrivateJwk): Promise<number | undefined | "not-saved"> {
+  const verified = verifyPendingResult(entry, key);
+  const { delegation: verifiedDelegation, session: verifiedSession } = verified;
+  const current = await ProfileManager.getProfile(profile);
+  if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return "not-saved";
+  let saved = false;
+  const session = await ProfileManager.getSession(profile) as Record<string, unknown> | null;
+  if (session && session.delegationCid === verifiedDelegation.delegationCid &&
+    session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
+    await syncAuthCredentialFiles(profilePath(profile));
+    await ProfileManager.setProfileDurable(profile, current);
+    saved = true;
+  } else {
+    const grants = await loadAdditionalDelegations(profile);
+    const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid &&
+      item.delegation.siweProof?.siwe === verifiedDelegation.siwe &&
+      item.delegation.siweProof?.signature === verifiedDelegation.signature);
+    if (stored) {
+      const file = await open(additionalDelegationsPath(profile), "r");
+      try { await file.sync(); } finally { await file.close(); }
+      const directory = await open(profilePath(profile), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+      saved = true;
+    }
+  }
+  const cli = cliOf(entry);
+  if (cli.commandIntent !== undefined) {
+    if (!cli.command) throw invalid("The command result has not been durably saved; no ACK was sent.");
+    await verifyApprovalCommand(profile, entry, cli.command.request, cli.command.result, verified);
+    await syncCommandFiles(profile, cli.command.result);
+    saved = true;
+  }
+  if (!saved) return "not-saved";
+  return cli.command === undefined ? undefined : Date.parse(cli.command.result.expiry);
 }

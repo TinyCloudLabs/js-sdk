@@ -41,6 +41,12 @@ export const ExitCode = {
   PENDING: 8,
   /** A write was refused because the owner's TinyCloud storage is full. */
   STORAGE_FULL: 10,
+  /** An approval request the owner declined in OpenKey (`APPROVAL_DENIED`). Nothing was granted; the request is gone. */
+  APPROVAL_DENIED: 11,
+  /** OpenKey rejected the requester's proof and this machine's clock is measurably off (`APPROVAL_CLOCK`). The request is kept; fix the clock and run the command again. */
+  APPROVAL_CLOCK: 12,
+  /** `tc share`: the output file already exists and will not be overwritten. Only the entry exists in this change; `tc share` still exits 8 until it adopts it. */
+  OUTPUT_EXISTS: 13,
   /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
   CANCELLED: 130,
 } as const;
