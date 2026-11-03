@@ -210,8 +210,10 @@ const CALL_OF_PHASE: Readonly<Record<ApprovalPhase, ApprovalAction | undefined>>
 const S = APPROVAL_CLOCK_SKEW_MS;
 const CALL_BOUND_SLACK_MS = 1000;
 const isoOf = (ms: number): string => new Date(ms).toISOString();
-/** A clock value `Date` can represent: `NaN`, infinities and out-of-range numbers are illegal events, never exceptions. */
-const validTime = (ms: number): boolean => Number.isFinite(new Date(ms).getTime());
+/** The last millisecond whose ISO string is a canonical four-digit-year timestamp, the only kind the entry schema reads back. */
+const MAX_ISO_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+/** A clock value the machine can write into an entry: `NaN`, infinities and anything outside 1970..9999 are illegal events, never exceptions. */
+const validTime = (ms: number): boolean => Number.isFinite(ms) && ms >= 0 && ms <= MAX_ISO_MS;
 const clockOff = (skewMs: number | undefined): boolean => skewMs !== undefined && Math.abs(skewMs) > CLOCK_DISAGREEMENT_MS;
 
 function replyCall(reply: Reply, phase: ApprovalPhase): ApprovalAction | undefined {
@@ -360,13 +362,14 @@ function onPending(live: LiveState, now: number, skewMs: number | undefined): St
 
 function onReady(live: LiveState, now: number, reply: Extract<Reply, { kind: "ready" }>): Step {
   // `Reply` is a public type: an adapter may build one. A result expiry that is not canonical would make the purge time unreadable.
-  if (parseLinkTimestamp(reply.resultExpiresAt) === null) return onFailure(live, now, "unexpected");
+  if (typeof reply.resultRef !== "string" || reply.resultRef === "" || parseLinkTimestamp(reply.resultExpiresAt) === null) return onFailure(live, now, "unexpected");
   const entry: ApprovalEntry = { ...live.entry, phase: "discovered", resultRef: reply.resultRef, resultExpiresAt: reply.resultExpiresAt };
   const collectUntil = Math.max(live.run.deadline ?? now, now) + COLLECT_GRACE_MS;
   return advance(live.entry, { entry, run: { ...live.run, unexpectedStreak: 0, firstCheckDone: true, collectUntil } }, now);
 }
 
 function onEnvelope(live: LiveState, now: number, reply: Extract<Reply, { kind: "envelope" }>): Step {
+  if (reply.envelope === undefined) return onFailure(live, now, "unexpected");
   const entry: ApprovalEntry = { ...live.entry, phase: "fetched", resultEnvelope: reply.envelope };
   return advance(live.entry, { entry, run: { ...live.run, unexpectedStreak: 0 } }, now);
 }
@@ -440,10 +443,11 @@ function onVerdict(live: LiveState, now: number, verdict: ApprovalVerdict): Step
 
 function onCommitted(live: LiveState, now: number, retainUntil: number | undefined): Step {
   const { entry } = live;
-  if (entry.phase !== "fetched" || entry.keys === undefined || (retainUntil !== undefined && !validTime(retainUntil))) return illegal(live);
+  if (entry.phase !== "fetched" || entry.keys === undefined || (retainUntil !== undefined && !Number.isFinite(retainUntil))) return illegal(live);
   const committed: ApprovalEntry = {
     ...entry, phase: "committed", keys: { relayPrivateKey: entry.keys.relayPrivateKey },
-    ...(retainUntil === undefined ? {} : { retainUntil: isoOf(retainUntil) }),
+    // A retention beyond the representable range is clamped, never written as a timestamp the schema would refuse.
+    ...(retainUntil === undefined ? {} : { retainUntil: isoOf(Math.min(Math.max(retainUntil, 0), MAX_ISO_MS)) }),
   };
   const next: LiveState = { entry: committed, run: { ...live.run, unexpectedStreak: 0 } };
   const step = advance(entry, next, now);
@@ -481,11 +485,18 @@ export function reduce(state: RequesterState, event: Event): Step {
   if (event.type === "start") return validTime(event.now) ? onStart(state, event) : settle(state.entry, state.run, { kind: "internal", reason: "illegal-event" });
   if (state.settled !== undefined) return { state, effects: [{ type: "finish", outcome: state.settled }] };
   if (!validTime(event.now)) return illegal(state);
-  // The purge time WINS over any event, not only a tick: a reply that lands after it (a delayed 401, a slow failure) must not
-  // keep, hold or persist an entry whose keys are due. The caller's commit, if it just succeeded, is not a failure.
-  if (event.type !== "tick" && event.type !== "abandon" && event.now >= purgeAt(state.entry)) {
+  const step = apply(state, event);
+  // The purge time WINS over a step that would still hold the entry's keys (keep, hold, persist, or leave it unchanged): a reply that
+  // lands after it (a delayed 401, a slow failure) must not extend a key's life. A step that already removes the entry or its keys
+  // (denied, refused, an ack success, ...) keeps its own outcome. The caller's commit, if it just succeeded, is not a failure.
+  const keepsKeys = event.type === "committed" || step.state.entry?.keys !== undefined;
+  if (event.type !== "tick" && event.type !== "abandon" && event.now >= purgeAt(state.entry) && keepsKeys) {
     return event.type === "committed" && state.entry.phase === "fetched" ? drop(state, { kind: "completed", warning: "ack-expired" }) : dropPurged(state);
   }
+  return step;
+}
+
+function apply(state: LiveState, event: Exclude<Event, { type: "start" }>): Step {
   switch (event.type) {
     case "tick": return beforeCall(state, event.now);
     case "reply": return onReply(state, event);

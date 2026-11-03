@@ -36,10 +36,14 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
   state holds a key, held or not.
 - **Nothing is kept forever.** `E` is the signed header's `expiresAt`, `S` = 30 s, `R` = 600 s. A run ends by `E + S` (one final
   poll at `E + S`), by the caller's deadline, or by the collect grace (30 s) once approved.
-- **The purge time wins over every event.** An event of any kind that lands at or after `purgeAt` (a reply delayed by the network,
-  a slow failure) purges the entry like a tick at `purgeAt` would: `lapsed` (open), `gone` (discovered, fetched), or `completed` with
-  an `ack-expired` warning (committed, or the caller's commit that just succeeded). A keep, a hold or a `persist` is never returned
-  for an entry at or past its purge time.
+- **The purge time wins over a step that would keep keys.** An event that lands at or after `purgeAt` (a reply delayed by the network,
+  a slow failure) and would keep, hold or persist the entry purges it like a tick at `purgeAt` would: `lapsed` (open), `gone`
+  (discovered, fetched), or `completed` with an `ack-expired` warning (committed, or the caller's commit that just succeeded). A reply
+  that was already terminal (denied, refused, an ack success, a 410 on an approved request) keeps its own outcome; its keys are
+  purged exactly once, before the remove. A keep, a hold or a `persist` is never returned for an entry at or past its purge time.
+- **A machine-written entry always passes `approvalEntrySchema`.** Inputs an adapter builds itself are validated: an empty result
+  reference, a non-canonical result expiry or a missing envelope is an unexpected reply; `retainUntil` is clamped to 1970..9999; a clock
+  outside 1970..9999 is an illegal event.
 - **First check.** A resumed approval (no `createdThisRun`) completes at least one full status check, made with the full request
   limit however late the deadline is, before it reports pending; a first check that gets no answer is `unreachable` (exit 6), with
   the entry and its keys kept. A request created in this run (`createdThisRun`, the links API just answered 201) is live until `E` by
