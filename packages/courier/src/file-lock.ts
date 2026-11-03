@@ -195,7 +195,8 @@ export type Liveness = 'alive' | 'dead' | 'unknown';
  * never judged. (2) Two true boot ids of the same kind that differ prove a reboot: `dead`. Wall-clock boot values never decide. (3) Otherwise
  * only positive evidence about the pid counts: gone (`ESRCH`), exited (a zombie, Linux), or a different process start time (Linux, where
  * /proc gives one). A pid namespace that differs is `unknown`. A live pid that cannot be told from a reused one (no start time to compare,
- * every platform but Linux) is `unknown`, never `dead`.
+ * every platform but Linux) is `unknown`, never `dead`. On Linux a record and this process must both name a pid namespace, and the same one,
+ * before any pid evidence counts.
  */
 export function recordLiveness(record: LockRecord, here: { machine?: string; boot?: string } = currentIdentity()): Liveness {
   if (record.machine === undefined || here.machine === undefined || record.machine !== here.machine) return 'unknown';
@@ -204,7 +205,12 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
     const [kindA, kindB] = [record.boot.split(':', 1)[0], here.boot.split(':', 1)[0]];
     if ((kindA === 'linux' || kindA === 'macos') && kindA === kindB && record.boot !== here.boot) return 'dead';
   }
-  if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
+  if (process.platform === 'linux') {
+    // A pid means something only inside one pid namespace: a writer that could not name its namespace, or a reader that cannot name its own,
+    // may be looking at a different pid table, where a live holder's pid is simply absent.
+    const ns = pidNamespace();
+    if (record.pidns === undefined || ns === undefined || record.pidns !== ns) return 'unknown';
+  } else if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
   try {
     process.kill(record.pid, 0);
   } catch (error) {
@@ -253,7 +259,7 @@ export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, pl
       : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
         : `is held by ${holder}, and another Courier command is already working on clearing it`;
   const remove = platform === 'win32'
-    ? `Remove-Item -LiteralPath '${file.replace(/'/g, "''")}' -Force` // PowerShell: single quotes are literal, a quote is doubled
+    ? `Remove-Item -LiteralPath '${file.replace(/['\u2018-\u201B]/g, (quote) => quote + quote)}' -Force` // PowerShell: single quotes are literal; ' and its typographic forms U+2018 to U+201B each end the string unless doubled
     : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
   return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: ${remove}`;
 }

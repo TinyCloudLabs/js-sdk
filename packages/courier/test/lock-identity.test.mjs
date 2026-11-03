@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { acquireLock, lockRefusal, machineIdentity } from '../dist/file-lock.js';
+import { removalCommand } from './support/lock-identity.mjs';
 
 const HOME = process.env.COURIER_HOME;
 fs.mkdirSync(HOME, { recursive: true, mode: 0o700 });
@@ -62,7 +63,8 @@ test('any other platform: no identity at all', () => {
 
 const HOST = os.hostname();
 const here = (machine, boot) => () => ({ machine, ...(boot === undefined ? {} : { boot }) });
-const record = (over) => JSON.stringify({ pid: 2147483000, nonce: 'n', host: HOST, ...over });
+const PIDNS = (() => { try { return fs.readlinkSync('/proc/self/ns/pid'); } catch { return undefined; } })();
+const record = (over) => JSON.stringify({ pid: 2147483000, nonce: 'n', host: HOST, pidns: PIDNS, ...over });
 const gone = async () => { const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' }); const { pid } = child; await new Promise((r) => child.once('exit', r)); return pid; };
 async function take(name, content, identity) {
   const file = lock(name);
@@ -88,7 +90,7 @@ test('the host is compared before the boot: a renamed host after a reboot keeps 
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
   assert.match(run.message, /only after confirming no Courier command is running/);
-  assert.ok(run.message.includes('rm -f --'));
+  assert.ok(run.message.endsWith(removalCommand(run.file)), run.message);
 });
 
 test('a machine-id shared by two hosts (a cloned image) never lets one judge the other\'s lock', async () => {
@@ -172,4 +174,61 @@ test('a hostile host name in a lock record cannot break the one-line refusal', (
   const message = lockRefusal({ file: '/x/p.lock', reason: 'unknown', pid: 7, host, record: JSON.stringify({ pid: 7, host }) }, 'linux');
   assert.equal(/[\u0000-\u001f\u007f]/.test(message), false, 'no control characters');
   assert.ok(message.includes('evil'));
+});
+
+// ---- pid namespace: on Linux a pid means something only inside one pid namespace ----
+
+const linux = { skip: process.platform !== 'linux' && 'Linux pid namespaces' };
+
+test('linux: a record without a pid namespace is not judged by its pid, even if the pid is gone here', linux, async () => {
+  const content = record({ pid: await gone(), machine: 'M', boot: 'linux:b', pidns: undefined });
+  const run = await take('nopidns', content, here('M', 'linux:b'));
+  assert.equal(run.taken, false);
+  assert.equal(run.kept, content);
+  assert.match(run.message, /cannot tell/);
+});
+
+test('linux: when this process cannot read its own pid namespace nothing is judged by pid', linux, async (t) => {
+  const content = record({ pid: await gone(), machine: 'M', boot: 'linux:b' });
+  const file = lock('nocurrentns');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, content, { mode: 0o600 });
+  const readlink = fs.readlinkSync;
+  t.mock.method(fs, 'readlinkSync', (f, ...rest) => { if (String(f) === '/proc/self/ns/pid') throw Object.assign(new Error('no'), { code: 'ENOENT' }); return readlink(f, ...rest); });
+  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked');
+  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(file, 'utf8'), content, 'the lock is untouched');
+  fs.rmSync(file);
+});
+
+test('linux: a reboot is still proven without a pid namespace (the true boot id changed on the same host)', linux, async () => {
+  const run = await take('nopidns-reboot', record({ pid: process.pid, machine: 'M', boot: 'linux:old', pidns: undefined }), here('M', 'linux:new'));
+  assert.equal(run.taken, true);
+});
+
+// ---- PowerShell quoting ----
+
+/** Reads the single-quoted PowerShell literal after `-LiteralPath`, as PowerShell does: any of its single-quote characters (' and U+2018 to U+201B) ends the string unless doubled. */
+function powershellLiteral(command) {
+  const quotes = /['\u2018-\u201B]/;
+  const start = command.indexOf("-LiteralPath '") + "-LiteralPath ".length;
+  let out = '';
+  for (let i = start + 1; i < command.length; i += 1) {
+    const c = command[i];
+    if (quotes.test(c)) {
+      if (command[i + 1] === c) { out += c; i += 1; continue; }
+      assert.equal(command.slice(i + 1), ' -Force', `the literal ended early at index ${i}: ${command}`);
+      return out;
+    }
+    out += c;
+  }
+  throw new Error(`unterminated literal: ${command}`);
+}
+
+test('windows recovery: every PowerShell single-quote character in the path is doubled, so the path stays one literal', () => {
+  for (const file of ["C:\\Users\\o'brien\\p.lock", 'C:\\Users\\o\u2019brien\\p.lock', 'C:\\a\u2018b\u201Ac\u201Bd\u201Ce\\p.lock'.replace('\u201C', "'")]) {
+    const line = lockRefusal({ file, reason: 'unknown', pid: 7, host: 'h' }, 'win32');
+    const command = line.slice(line.indexOf('Remove-Item'));
+    assert.equal(powershellLiteral(command), file);
+  }
 });

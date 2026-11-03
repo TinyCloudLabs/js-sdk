@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { LOCAL } from './support/lock-identity.mjs';
+import { LOCAL, removalCommand } from './support/lock-identity.mjs';
 import { acquireLock, emptyState, ensureRealDir, readState, writeNew, writeReplace } from '../dist/intake/queue.js';
 
 const DEAD_PID = 2147483646;
@@ -192,7 +192,7 @@ test('an intake lock held by an unknown holder is kept, and the refusal is one l
     assert.equal(e.code, 'locked');
     assert.equal(e.message.includes('\n'), false, 'one line');
     assert.ok(e.message.includes(file) && e.message.includes('4242') && e.message.includes('other-host.example'), e.message);
-    assert.ok(e.message.endsWith(`rm -f -- '${file}'`), e.message);
+    assert.ok(e.message.endsWith(removalCommand(file)), e.message);
     assert.match(e.message, /only after confirming no Courier command is running/);
     return true;
   });

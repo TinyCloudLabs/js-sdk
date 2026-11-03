@@ -8,7 +8,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { acquireLock } from '../dist/file-lock.js';
-import { LOCAL } from './support/lock-identity.mjs';
+import { LOCAL, removalCommand } from './support/lock-identity.mjs';
 import { loadProfile, saveProfile, writeSecure } from '../dist/profile.js';
 
 const HOME = process.env.COURIER_HOME;
@@ -194,8 +194,8 @@ test('a profile save refused by a lock it cannot judge prints one recovery line 
   assert.throws(() => saveProfile(profile), (e) => {
     assert.equal(e.code, 'profile-locked');
     assert.equal(e.message.split('\n').length, 1, 'one line');
-    assert.ok(e.message.includes(`rm -f -- ${quoted(LOCK)}`), e.message);
-    assert.match(e.message, /only after confirming no Courier command is running[^:]*: rm -f -- /, 'the removal command is conditioned on confirming no Courier process runs');
+    assert.ok(e.message.endsWith(removalCommand(LOCK)), e.message);
+    assert.match(e.message, /only after confirming no Courier command is running[^:]*: (rm -f -- |Remove-Item )/, 'the removal command is conditioned on confirming no Courier process runs');
     assert.ok(e.message.includes(LOCK) && e.message.includes('2147483000') && e.message.includes('other-host.example'), e.message);
     return true;
   });
@@ -348,7 +348,7 @@ test('a profile save that meets an old pid-only lock refuses with the one-line r
   fs.writeFileSync(LOCK, content, { mode: 0o600 });
   const profile = loadProfile();
   profile.label = 'refused';
-  assert.throws(() => saveProfile(profile), (e) => e.code === 'profile-locked' && !e.message.includes('\n') && e.message.includes(`rm -f -- ${quoted(LOCK)}`) && /only after confirming no Courier command is running/.test(e.message));
+  assert.throws(() => saveProfile(profile), (e) => e.code === 'profile-locked' && !e.message.includes('\n') && e.message.endsWith(removalCommand(LOCK)) && /only after confirming no Courier command is running/.test(e.message));
   assert.equal(fs.readFileSync(LOCK, 'utf8'), content);
 });
 
@@ -382,7 +382,7 @@ test('a refusal because another command is clearing the lock does not claim the 
     assert.equal(e.message.includes('\n'), false);
     assert.doesNotMatch(e.message, /\bdead\b/);
     assert.ok(e.message.includes('stale-nonce-1'), e.message);
-    assert.ok(e.message.includes(`rm -f -- '${file}'`) && /only after confirming/.test(e.message));
+    assert.ok(e.message.endsWith(removalCommand(file)) && /only after confirming/.test(e.message));
     return true;
   });
   fs.rmSync(file); fs.rmSync(`${file}.break.stale-nonce-1.1`);
