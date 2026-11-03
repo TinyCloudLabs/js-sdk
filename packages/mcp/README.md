@@ -63,7 +63,13 @@ local CLI or skill installation. A new app lives in the owner's `applications`
 space under `xyz.tinycloud.tinyapps.<app>/` with a discovery entry at
 `xyz.tinycloud.tinyapps.catalog/<app>/entry`, as `tc-apps` skill 0.3.10 does.
 An app created earlier in the `default` space under `xyz.tinycloud.agent-data/`
-stays there, readable and writable, until it is moved.
+stays there, readable and writable, until the owner asks to move it:
+`tinycloud_apps_move` (dry run first) copies that app into its new folder
+without overwriting anything, reads it back, and only then adds its discovery
+entry; the older records are never changed or deleted. The move tool is on the
+hosted `/mcp` surface only: the public ChatGPT plugin (`/chatgpt/mcp`) keeps its
+reviewed tool list, so an owner who uses ChatGPT only cannot move older apps
+yet (TC-2432); their older apps keep working in place.
 Approvals are per app, one OpenKey space at a time (OpenKey signs one space per
 delegation): first use asks for the app list; a new app asks for that app's
 folder, then for a read-only look at the older catalog
