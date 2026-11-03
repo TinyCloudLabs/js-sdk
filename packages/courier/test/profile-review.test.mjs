@@ -162,3 +162,49 @@ test('a command whose peer was revoked meanwhile fails and publishes no artifact
   assert.equal(result.stdout, '', 'no artifact C was printed');
   assert.deepEqual(diskProfile(issuer).peers, {}, 'the revoked peer stays revoked');
 });
+
+// ---- round 2 ----
+
+test('re-pairing a handle whose pending pairing expired on disk succeeds', () => {
+  const home = process.env.COURIER_HOME;
+  fs.rmSync(`${home}/profile.json.lock`, { force: true });
+  writeSecure(path.join(home, 'profile.json'), {
+    version: 3, host: 'http://127.0.0.1:1', openkeyHost: 'https://openkey.so', label: 'courier · test', courierDid: 'did:key:zself', status: 'ready',
+    peers: { bob: peerOf('bob', 'pending-A', { pairedAt: iso(-8 * DAY) }), carl: peerOf('carl', 'awaiting-C', { pairedAt: iso(-8 * DAY) }) },
+  });
+  const profile = loadProfile(); // the expired entries are not returned
+  assert.deepEqual(Object.keys(profile.peers), []);
+  profile.peers.bob = peerOf('bob', 'pending-A');
+  saveProfile(profile); // the expired entry still on disk is not "another command's" pairing
+  assert.equal(diskProfile(home).peers.bob.status, 'pending-A');
+  assert.equal(diskProfile(home).peers.carl, undefined, 'the other expired entry is gone');
+});
+
+test('accept A: a pairing that completes while delegateTo runs is refused with a warning naming the live delegation and where to revoke it', async (t) => {
+  const wallet = randomBytes(32).toString('hex');
+  const issuer = await makeHome('w-issuer', 'issuer', wallet);
+  const receiver = await makeHome('w-receiver', 'receiver', wallet);
+  const artA = await run(issuer, ['pair', 'start', 'issuer-one', '--call-me', 'friend']);
+  const original = TinyCloudNode.prototype.delegateTo;
+  let created;
+  t.mock.method(TinyCloudNode.prototype, 'delegateTo', async function (...args) {
+    const result = await original.apply(this, args);
+    created = result.delegation.cid ?? result.delegation.delegationCid;
+    setPeers(receiver, (peers) => { peers.friend = peerOf('friend', 'paired'); }); // another command finishes pairing while this one is delegating
+    return result;
+  });
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => { errors.push(args.join(' ')); });
+  const written = [];
+  t.mock.method(process.stdout, 'write', (chunk) => { written.push(String(chunk)); return true; });
+  const code = await inHome(receiver, () => main(['pair', 'accept', JSON.stringify(artA)]));
+  t.mock.restoreAll();
+  assert.notEqual(code, 0);
+  assert.ok(created, 'a delegation was created');
+  const stderr = errors.join('\n');
+  assert.match(stderr, /Already paired with friend/);
+  assert.ok(stderr.includes(created), `the warning names the delegation ${created}: ${stderr}`);
+  assert.ok(stderr.includes('https://account.tinycloud.xyz/delegations'), 'the warning says where to revoke it');
+  assert.equal(written.join(''), '', 'no artifact was printed');
+  assert.equal(diskProfile(receiver).peers.friend.status, 'paired');
+});

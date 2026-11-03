@@ -49,14 +49,23 @@ export function writeNew(dir: string, name: string, body: string, mode: number):
   }
 }
 
-/** `pid` and `nonce` are the ownership record; `start` (Linux process start ticks), `host` and `pidns` say which process that pid was, so a reused pid is not mistaken for the holder. */
+/**
+ * `pid` and `nonce` are the ownership record. `start` (Linux process start ticks) says which process that pid was, so a reused pid is not
+ * mistaken for the holder; `machine` (machine-id) and `boot` (boot id) say which machine and boot it ran on, `host` and `pidns` are
+ * for people and for the pid namespace check.
+ */
 interface LockRecord {
   pid: number;
   nonce: string;
   start?: string;
   host?: string;
   pidns?: string;
+  machine?: string;
+  boot?: string;
 }
+
+const MAX_FIELD = 128;
+const OPTIONAL_FIELDS = ['start', 'host', 'pidns', 'machine', 'boot'] as const;
 
 type LockRead = { kind: 'missing' } | { kind: 'corrupt' } | { kind: 'held'; record: LockRecord };
 
@@ -69,13 +78,15 @@ function parseRecord(text: string): LockRecord | undefined {
   try {
     const value: unknown = JSON.parse(text);
     if (typeof value !== 'object' || value === null) return undefined;
-    const { pid, nonce, start, host, pidns } = value as Record<string, unknown>;
+    const fields = value as Record<string, unknown>;
+    const { pid, nonce } = fields;
     if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
-    if (typeof nonce !== 'string' || nonce.length === 0) return undefined;
+    if (typeof nonce !== 'string' || nonce.length === 0 || nonce.length > MAX_FIELD) return undefined;
     const record: LockRecord = { pid, nonce };
-    for (const [key, field] of [['start', start], ['host', host], ['pidns', pidns]] as const) {
+    for (const key of OPTIONAL_FIELDS) {
+      const field = fields[key];
       if (field === undefined) continue;
-      if (typeof field !== 'string') return undefined;
+      if (typeof field !== 'string' || field.length > MAX_FIELD) return undefined; // an oversized or mistyped field is a corrupt record
       record[key] = field;
     }
     return record;
@@ -109,23 +120,39 @@ function readLock(file: string): LockRead {
   return record ? { kind: 'held', record } : { kind: 'corrupt' };
 }
 
-/** Start time of `pid` in clock ticks since boot (Linux /proc), or undefined when it cannot be read. */
-export function processStart(pid: number): string | undefined {
+/** State and start time (clock ticks since boot) of `pid` from Linux /proc, or undefined when it cannot be read. */
+function procInfo(pid: number): { state: string; start: string | undefined } | undefined {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] || undefined;
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return { state: fields[0] ?? '', start: fields[19] || undefined };
   } catch {
     return undefined;
   }
+}
+
+export function processStart(pid: number): string | undefined {
+  return procInfo(pid)?.start;
+}
+
+function readLine(file: string): string | undefined {
+  try { return fs.readFileSync(file, 'utf8').trim() || undefined; } catch { return undefined; }
 }
 
 function pidNamespace(): string | undefined {
   try { return fs.readlinkSync('/proc/self/ns/pid'); } catch { return undefined; }
 }
 
-/** What this process records about itself: enough to recognize it later, and to tell another host or pid namespace's records apart. */
-function identity(pid: number): Pick<LockRecord, 'start' | 'host' | 'pidns'> {
-  const out: Pick<LockRecord, 'start' | 'host' | 'pidns'> = { host: os.hostname() };
+/** The machine (machine-id) and the boot (boot id) this process runs on. A pid means something only on the same machine, in the same boot. */
+function machineIdentity(): { machine?: string; boot?: string } {
+  const machine = readLine('/etc/machine-id') ?? readLine('/var/lib/dbus/machine-id');
+  const boot = readLine('/proc/sys/kernel/random/boot_id');
+  return { ...(machine === undefined ? {} : { machine }), ...(boot === undefined ? {} : { boot }) };
+}
+
+/** What this process records about itself: enough to recognize it later, and to tell another machine's, boot's or pid namespace's records apart. */
+function identity(pid: number): Pick<LockRecord, 'start' | 'host' | 'pidns' | 'machine' | 'boot'> {
+  const out: Pick<LockRecord, 'start' | 'host' | 'pidns' | 'machine' | 'boot'> = { host: os.hostname(), ...machineIdentity() };
   const start = processStart(pid);
   if (start !== undefined) out.start = start;
   const ns = pidNamespace();
@@ -136,28 +163,36 @@ function identity(pid: number): Pick<LockRecord, 'start' | 'host' | 'pidns'> {
 export type Liveness = 'alive' | 'dead' | 'unknown';
 
 /**
- * Whether the process that wrote `record` still runs. `dead` only when that is established: the pid is gone, or the pid now belongs to
- * a process that started at a different time. A record from another host or pid namespace, or a live pid whose start time cannot be
- * compared, is `unknown`, and an unknown holder is never broken.
+ * Whether the process that wrote `record` still runs. `dead` only when that is established on THIS machine: the pid is gone, has exited
+ * (a zombie), or now belongs to a process that started at a different time. A record from another machine, another boot, another pid
+ * namespace, or one that names a host without a machine identity, is `unknown`: a shared home directory can hold a live remote pid that
+ * looks dead here. A live pid whose start time cannot be compared is `unknown` too, and an unknown holder is never broken. A record with
+ * no identity at all (an old `pid` lock) is judged by its pid alone, as before.
  */
 export function recordLiveness(record: LockRecord): Liveness {
-  if (record.host !== undefined && record.host !== os.hostname()) return 'unknown';
-  if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
+  if (record.machine !== undefined || record.boot !== undefined || record.host !== undefined || record.pidns !== undefined) {
+    const here = machineIdentity();
+    if (record.machine === undefined || record.boot === undefined || record.machine !== here.machine || record.boot !== here.boot) return 'unknown';
+    if (record.host !== undefined && record.host !== os.hostname()) return 'unknown';
+    if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
+  }
   try {
     process.kill(record.pid, 0);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM' ? 'alive' : 'dead';
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown';
+    // EPERM: the process exists but belongs to someone else. Its start time still tells a reused pid from the holder.
   }
+  const info = procInfo(record.pid);
+  if (info?.state === 'Z' || info?.state === 'X') return 'dead'; // exited, only not yet reaped
   if (record.start === undefined) return 'alive';
-  const now = processStart(record.pid);
-  if (now === undefined) return 'unknown';
-  return now === record.start ? 'alive' : 'dead';
+  if (info?.start === undefined) return 'unknown';
+  return info.start === record.start ? 'alive' : 'dead';
 }
 
 /** Why a lock was refused: shown by the caller as one line naming the file, the holder and the safe manual way out. */
 export interface LockRefusal {
   file: string;
-  /** `alive`: a running holder; `unknown`: its death cannot be established; `corrupt`: the record cannot be read. */
+  /** `alive`: a running holder; `unknown`: its death cannot be established; `corrupt`: the record cannot be read; `contended`: another command is already breaking a dead lock. */
   reason: 'alive' | 'unknown' | 'corrupt' | 'contended';
   pid?: number;
   host?: string;
@@ -193,15 +228,28 @@ export function acquireLock(file: string, opts: LockOptions = {}): () => void {
     throw new CourierError('locked', (opts.refusal ?? INTAKE_REFUSAL)({ file, ...info }));
   };
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (writeNew(dir, name, recordBody(self), 0o600)) {
-      return () => {
-        const current = readLock(file);
-        if (current.kind === 'held' && current.record.nonce === self.nonce) fs.rmSync(file, { force: true });
-      };
+    let seen = readLock(file);
+    if (seen.kind === 'missing') {
+      // Only a missing lock costs a temp file and two fsyncs: a held one is judged from a read, so a waiter polling every 10 ms writes nothing.
+      let created: boolean;
+      try {
+        created = writeNew(dir, name, recordBody(self), 0o600);
+      } catch (error) {
+        const now = readLock(file); // linked, then a later step (the directory fsync) failed: do not leave a live-looking lock nobody holds
+        if (now.kind === 'held' && now.record.nonce === self.nonce) fs.rmSync(file, { force: true });
+        throw error;
+      }
+      if (created) {
+        return () => {
+          const current = readLock(file);
+          if (current.kind === 'held' && current.record.nonce === self.nonce) fs.rmSync(file, { force: true });
+        };
+      }
+      seen = readLock(file);
+      if (seen.kind === 'missing') continue;
     }
-    const seen = readLock(file);
-    if (seen.kind === 'missing') continue;
     if (seen.kind === 'corrupt') return refuse({ reason: 'corrupt' });
+    if (seen.kind !== 'held') continue;
     const holder = { pid: seen.record.pid, ...(seen.record.host === undefined ? {} : { host: seen.record.host }) };
     const live = state(seen.record);
     if (live !== 'dead') return refuse({ reason: live, ...holder });
@@ -219,7 +267,10 @@ export function acquireLock(file: string, opts: LockOptions = {}): () => void {
  */
 function breakDead(file: string, stale: LockRecord, self: LockRecord, state: (record: LockRecord) => Liveness): boolean {
   const dir = path.dirname(file);
-  const tag = `${path.basename(file)}.break.${stale.nonce.trim().replace(/[^A-Za-z0-9_-]/g, '_')}.`;
+  const tag = `${path.basename(file)}.break.${stale.nonce.trim().replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64)}.`;
+  const sweep = (): void => {
+    for (const entry of fs.readdirSync(dir)) if (entry.startsWith(tag)) fs.rmSync(path.join(dir, entry), { force: true });
+  };
   const body = recordBody(self);
   let claimed = false;
   for (let k = 1; k <= MAX_BREAK_GUARDS && !claimed; k++) {
@@ -231,14 +282,16 @@ function breakDead(file: string, stale: LockRecord, self: LockRecord, state: (re
     const holder = readRecordFile(path.join(dir, candidate));
     if (!holder || state(holder) !== 'dead') return false;
   }
-  if (!claimed) return false;
+  if (!claimed) {
+    // Every slot holds a guard whose breaker is dead: clear them, or the break could never run again. The lock itself is still removed only by exact nonce.
+    sweep();
+    return true;
+  }
   try {
     const now = readLock(file);
     if (now.kind === 'held' && now.record.nonce === stale.nonce) fs.rmSync(file, { force: true });
     return true;
   } finally {
-    for (const entry of fs.readdirSync(dir)) {
-      if (entry.startsWith(tag)) fs.rmSync(path.join(dir, entry), { force: true });
-    }
+    sweep();
   }
 }

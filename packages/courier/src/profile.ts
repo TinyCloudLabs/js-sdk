@@ -284,8 +284,8 @@ function lockRefusal({ file, reason, pid, host }: LockRefusal): string {
   const why = reason === 'alive' ? `is held by a running Courier command (${holder})`
     : reason === 'corrupt' ? 'has a record Courier cannot read'
       : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
-        : `is being taken over by another Courier command (${holder})`;
-  return `${file} ${why}. Try again; only after confirming no Courier command is running anywhere that uses this profile, clear it with: rm -f -- ${shellQuote(file)}`;
+        : `is held by ${holder}, which is dead, and another Courier command is clearing it`;
+  return `${file} ${why}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this profile, clear it with: rm -f -- ${shellQuote(file)}`;
 }
 
 /**
@@ -351,7 +351,11 @@ export function saveProfile(profile: Profile): void {
   withProfileLock(() => {
     const base = baselines.get(profile);
     let result: Profile = profile;
-    if (base && fs.existsSync(file)) result = mergeProfile(base, profile, readProfile(profileDir()));
+    if (base && fs.existsSync(file)) {
+      const disk = readProfile(profileDir());
+      dropExpiredPending(disk.peers); // an expired pairing is not another command's: it must not block starting that handle again
+      result = mergeProfile(base, profile, disk);
+    }
     dropExpiredPending(result.peers);
     writeSecure(file, result);
     if (result !== profile) adopt(profile as unknown as Record<string, unknown>, result as unknown as Record<string, unknown>);
