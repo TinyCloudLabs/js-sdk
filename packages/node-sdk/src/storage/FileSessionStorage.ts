@@ -66,11 +66,12 @@ export class FileSessionStorage implements ISessionStorage {
     const data = JSON.stringify(session, null, 2);
     // Write a sibling temp file, then rename over the target: a crash or a failed write
     // never leaves a half-written session where the previous one was.
-    // This body is synchronous, so saves in one process never interleave; another process has another pid.
-    const tempPath = `${filePath}.${process.pid}.tmp`;
+    // A fresh name per call, created exclusively: concurrent saves (other processes, worker threads) never share a temp file,
+    // and the file always gets the owner-only mode.
+    const tempPath = `${filePath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
     try {
       // The session holds a key: the temp file, and so the file renamed over the target, is owner-only.
-      writeFileSync(tempPath, data, { mode: 0o600 });
+      writeFileSync(tempPath, data, { mode: 0o600, flag: "wx" });
       renameSync(tempPath, filePath);
     } catch (error) {
       try {
