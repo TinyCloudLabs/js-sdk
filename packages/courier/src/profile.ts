@@ -278,7 +278,7 @@ function sleepSync(ms: number): void {
 
 /**
  * Exclusive, held only while a save reads, merges and writes (milliseconds). The lock is intake's: created whole with a `{pid, nonce}` owner
- * record, released only by its nonce, and broken only when its holder is established dead (a true boot-id change on the same host, or its pid is absent in the same pid namespace).
+ * record, released only by its nonce, and broken only when its holder is established dead (a true boot-id change on the same host, or its pid is absent; on Linux the record and this process must name the same pid namespace).
  * A live holder, or one whose liveness cannot be established, is waited for and then refused: age alone never breaks a lock.
  */
 function withProfileLock<T>(fn: () => T): T {
