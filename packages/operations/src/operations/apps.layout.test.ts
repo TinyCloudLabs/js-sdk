@@ -128,10 +128,15 @@ describe("personal apps new layout: records", () => {
       expect((await write(withGrants(context, []), attempt)).output.ops[0]?.outcome).toBe("ok");
       applications.seed(`${DISCOVERY}fitness/entry`, { v: 1, app: "fitness", id: `${ID}fitness`, title: "Fitness" });
       const writesBefore = kv.writes.length;
-      const moved = await write(withGrants(context, [discoveryGrant]), [{ op: "put", key: legacyKey, etag: `"blake3-${"b".repeat(64)}"`, value: { data: { kg: 71 } } }]);
-      expect(moved.output.ops[0]?.outcome).toBe("INVALID");
-      expect(moved.output.ops[0]?.warnings?.[0]).toContain(`${ID}fitness/`);
-      expect(kv.writes.length).toBe(writesBefore);
+      // The node reports a grant one action at a time; a grant on the whole applications space also covers the app list.
+      const perAction = discoveryGrant.actions.map((action) => ({ ...discoveryGrant, actions: [action] }));
+      const wholeSpace = { service: "tinycloud.kv", space: NEW_SPACE, path: "", actions: ["tinycloud.kv/get"] };
+      for (const granted of [[discoveryGrant], perAction, [wholeSpace]]) {
+        const moved = await write(withGrants(context, granted), [{ op: "put", key: legacyKey, etag: `"blake3-${"b".repeat(64)}"`, value: { data: { kg: 71 } } }]);
+        expect(moved.output.ops[0]?.outcome).toBe("INVALID");
+        expect(moved.output.ops[0]?.warnings?.[0]).toContain(`${ID}fitness/`);
+        expect(kv.writes.length).toBe(writesBefore);
+      }
     });
   });
   test("moves and deletes stay inside one app", async () => {

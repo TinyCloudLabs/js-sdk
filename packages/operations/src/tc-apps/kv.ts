@@ -103,10 +103,10 @@ export async function markAppsKindStale(kv: AppsKv, layout: Layout, app: string,
   requireKv(await kv.put(staleKey(layout, app, kind), jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
 }
 
-/** Whether the session already holds read access to the app list; layout checks that need it are skipped without it. */
+/** Whether the session already holds read access to the app list (a grant reported one action at a time counts); layout checks that need it are skipped without it. */
 export function hasDiscoveryAccess(context: OperationContext): boolean {
-  const expected = discoveryPermission(context);
-  return context.runtime!.granted.some((grant) => grant.service === expected.service && grant.space === expected.space && grant.path === expected.path && Array.isArray(grant.actions) && grant.actions.includes("tinycloud.kv/get"));
+  const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
+  return evaluateOperationAuthority(context.runtime!.granted as never, [discoveryPermission(context, ["tinycloud.kv/get"])] as never, resolve).satisfied;
 }
 /** True when the app's discovery entry exists, i.e. its records now live in the applications space. Best effort: false without access. */
 export async function appHasMoved(context: OperationContext, app: string): Promise<boolean> {
