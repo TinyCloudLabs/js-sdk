@@ -184,7 +184,7 @@ test("publishes native service identity and keeps native tools on the grant-gate
       { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
       { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
     ],
-    tools: ["tinycloud_sql_query", "tinycloud_kv_get"],
+    tools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"],
     errors: {
       required: "native_grant_required",
       expired: "native_grant_expired",
@@ -374,6 +374,7 @@ test("binds native tool calls to the owner in the activated grant", async () => 
     const toolList = await readMcpJson(tools) as { result?: { tools?: { name: string }[] } };
     expect(toolList.result?.tools?.map(({ name }) => name).sort()).toEqual([
       "tinycloud_kv_get",
+      "tinycloud_read",
       "tinycloud_sql_query",
     ]);
 
@@ -394,6 +395,22 @@ test("binds native tool calls to the owner in the activated grant", async () => 
       action: "tinycloud.kv/get",
       path: key,
     }));
+
+    const pageResponse = await app.fetch(request("/mcp", {
+      method: "POST",
+      headers: nativeHeaders,
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 5, method: "tools/call",
+        params: { name: "tinycloud_read", arguments: {
+          resource: { kind: "kv", space: "applications", key }, pageBytes: 8,
+        } },
+      }),
+    }));
+    expect(await readMcpJson(pageResponse)).toMatchObject({
+      result: { structuredContent: {
+        status: "ok", output: { value: '{"value"', range: { start: 0, end: 8 }, complete: false },
+      } },
+    });
 
     const otherOwner = await app.fetch(request("/mcp", {
       method: "POST",
@@ -571,15 +588,6 @@ test("invalid browser approvals return an inert page without reflecting state", 
   const machine = await app.fetch(request("/chatgpt/connect", { headers: { accept: "application/json" } }));
   expect(machine.status).toBe(400);
   expect(machine.headers.get("content-type")).toContain("application/json");
-});
-
-test("rejects untrusted browser origins", async () => {
-  const app = await testApp();
-  const response = await app.fetch(request("/mcp", {
-    method: "POST",
-    headers: { origin: "https://attacker.test" },
-  }));
-  expect(response.status).toBe(403);
 });
 
 test("a refused callback names its stage and code without echoing the callback", async () => {

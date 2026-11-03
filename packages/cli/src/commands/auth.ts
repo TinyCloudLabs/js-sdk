@@ -89,6 +89,7 @@ import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
+import { previousSignInNotice } from "../auth/previous-sign-in.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -1016,11 +1017,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           const openkeyHost = resolveOpenKeyHost(profile);
           const grants: StagedOpenKeyGrant[] = [];
           const expiryCap = expiryOption === undefined ? undefined : parseRequestedExpiry(expiryOption);
+          // An agent preset keeps the 7-day agent policy (a product ruling): its link does not opt in, so the user can
+          // shorten the proposed lifetime but not extend it. Custom --cap/--permission/--manifest grants opt in.
+          const grantLinkOptsIn = options.paste === true && preset === undefined;
           const proof: PortableGrantProof = {
             key,
             sessionDid: profile.sessionDid ?? profile.did,
             expectedOwner: pinnedOwner(profile),
             expiry: expiryCap,
+            // Only a plain paste link for a custom grant opts in; the device and approval-request paths, and the agent
+            // preset, keep the --expiry ceiling.
+            ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
           };
           const declined: PermissionEntry[] = [];
           const groups = groupPermissionsBySpace(requested);
@@ -1062,6 +1069,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                   noPopup: options.popup === false,
                   paste: options.paste,
+                  ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
                 });
               }
               seen.result = delegationData;
@@ -2350,6 +2358,8 @@ export interface PortableGrantProof {
   sessionDid: string;
   expectedOwner?: string;
   expiry?: RequestedExpiry;
+  /** The grant's link was a plain paste link that carried the expiryChangeable opt-in: no `expiry` ceiling applies to the signed expiry. */
+  expiryChangeable?: boolean;
   /** Agent request: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
 }
@@ -2380,6 +2390,7 @@ export function verifyOpenKeyApproval(
   const { session, legacyNested } = verifyScopedLogin(data, proof.key, proof.sessionDid, requested, {
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
+    ...(proof.expiryChangeable === true ? { expiryChangeable: true } : {}),
     purpose: "grant",
     exactApproval: proof.exactApproval,
   });
@@ -2475,6 +2486,9 @@ async function rotateAuthKey(
     return generateKey();
   });
 
+  // The session this rotation replaces, read now: the commit overwrites it, and the CLI cannot revoke its delegation.
+  const previousNotice = previousSignInNotice(await ProfileManager.getSession(profileName) as Record<string, unknown> | null, profile);
+
   // key.json is not touched until OpenKey's approval is verified: the new key is held in memory (paste) or in the pending
   // request's file, mode 0600 (default flow), and refreshOpenKeySession commits key, session and profile in one
   // compare-and-commit, so a refused or interrupted rotation leaves the old key and login exactly as they were. A concurrent change to the profile makes that commit refuse. A named-keys profile signs in through
@@ -2487,6 +2501,8 @@ async function rotateAuthKey(
       : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
+  // Only a rotation that went through (every refusal and failure threw above) tells the owner that the sign-in it replaced stays live.
+  if (previousNotice !== undefined) process.stderr.write(`${previousNotice}\n`);
 }
 
 function outputRotationResult(
@@ -3087,8 +3103,13 @@ export async function refreshOpenKeySession(
   if (permissions !== undefined) {
     assertNotLocalOwner(profileName, profile, "Scoped browser login");
   }
+  // Only the plain paste link below carries the expiryChangeable opt-in. The prepared logins (replica, --keys) use a
+  // prepared handoff and the non-paste login uses a signed approval request; both keep the --expiry ceiling.
+  const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === undefined;
   if (permissions !== undefined && options.replaceSession !== true) {
-    const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
+    // An opted-in link lets the user pick the lifetime, so `--expiry` is not a lifetime this login will have. Do not
+    // refuse before consent for "shortening" a live session on that guess: the commit re-checks with the signed expiry.
+    const estimatedExpiry = expiry === undefined || plainPasteLink ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   if (options.keys !== undefined && replication.prefixes.length === 0) {
@@ -3134,6 +3155,8 @@ export async function refreshOpenKeySession(
     // owner is verified below.
     permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
+    // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
+    ...(plainPasteLink ? { expiryChangeable: true } : {}),
     ...(permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
   seen.result = delegationData;
@@ -3147,14 +3170,14 @@ export async function refreshOpenKeySession(
   let declined: PermissionEntry[] = [];
   let legacyNested: PermissionEntry[] = [];
   if (permissions) {
-    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
     sanitizedSession = verified.session;
     legacyNested = verified.legacyNested;
     verifiedOwner = sanitizedSession.ownerDid as string;
     declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
     // A delegation without a verifiable proof for this key is refused, never saved (TC-1053).
-    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
     // The session's space must belong to the signing owner, as on the scoped path.
     const spaceId = String(delegationData.spaceId);
     if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
