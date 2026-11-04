@@ -2247,6 +2247,37 @@ export class TinyCloudNode {
     return destinations;
   }
 
+  /** Transport hints cannot override verified full-resource registry routing. */
+  async resolveRegisteredDelegationHost(permissions: readonly PermissionEntry[], noEntryHost: string): Promise<string | undefined> {
+    const resources = new Map<string, "host" | "encryption">();
+    let hasData = false;
+    for (const permission of permissions) {
+      const encryption = this.isEncryptionNetworkOperation(this.invocationServiceName(permission.service), permission.path, permission.space);
+      const resource = encryption ? permission.path.split("/")[0] : permission.space;
+      if (!resource) throw new ResourceNotRoutedError("delegation");
+      resources.set(resource, encryption ? "encryption" : "host");
+      hasData ||= !encryption;
+    }
+    let dataHost: string | undefined;
+    let encryptionHost: string | undefined;
+    let unserved: NodeNotFoundError | undefined;
+    for (const [resource, access] of resources) {
+      try {
+        const destinations = await this.routingDestinations(resource, access, [noEntryHost]);
+        if (destinations.some(({ nodeDid }) => nodeDid === undefined)) return undefined;
+        if (access === "host") dataHost ??= destinations[0]?.url;
+        else encryptionHost ??= destinations[0]?.url;
+      } catch (error) {
+        if (!(error instanceof NodeNotFoundError) || error.verdict.status !== "registered") throw error;
+        // Mixed grants may carry unserved extras, but those never establish a host.
+        unserved ??= error;
+      }
+    }
+    const host = hasData ? dataHost : encryptionHost;
+    if (!host) throw unserved ?? new ResourceNotRoutedError("delegation");
+    return host;
+  }
+
   private async bindRoutedAudience(authorization: string, nodeDid: string, stagedSession?: ServiceSession): Promise<string> {
     const payload: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(authorization.split(".")[1])));
     const issuer = typeof payload === "object" && payload !== null && "iss" in payload ? payload.iss : undefined;

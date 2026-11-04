@@ -671,10 +671,8 @@ test("a stored CID is published only when it is the CID of the stored authorizat
 
     const result = await invokeOperation("tinycloud.secrets.get", 1, { profile: fixture.profile }, { name: "KEY" });
 
-    expect(result.warnings).toEqual([
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
-    ]);
+    expect(result.status).toBe("authority_required");
+    expect(JSON.stringify(result)).not.toContain(first.cid);
     expect(JSON.stringify(result)).not.toContain(cidCanary);
   } finally {
     fixture.hermetic.stop();

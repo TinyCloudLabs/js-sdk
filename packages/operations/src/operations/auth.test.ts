@@ -7,8 +7,9 @@ import {
   siweRuntimeDelegation,
   type PortableDelegation,
   type RuntimeDelegationActivator,
+  type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { signLocationRecordV2, type PermissionEntry } from "@tinycloud/sdk-core";
 import { z } from "zod";
 
 import { canonicalizeCapabilities } from "../authority.js";
@@ -23,6 +24,7 @@ import * as registry from "../registry.js";
 import {
   additionalDelegationsPath,
   authRequestsPath,
+  profileConfigPath,
   profileStoreMetadataPath,
   readJson,
   readAdditionalDelegations,
@@ -992,3 +994,55 @@ async function storeLegacyRequest(
   }]);
   return requestId;
 }
+
+test("a verified full-resource registry accepts a grant's current data host while preserving the original request/profile hint", async () => {
+  const fixture = await createAuthRuntimeFixture({ secretPayloadValue: "tc2481-host-cutover-dummy" });
+  let proxy: ReturnType<typeof Bun.serve> | undefined;
+  let registryServer: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    const { nodeId } = await (await fetch(`${fixture.hermetic.host}/info`)).json() as { nodeId: string };
+    proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/.well-known/tinycloud/node-keys") {
+        return Response.json({ nodeDid: nodeId, shareInvitationPublicKey: "A".repeat(43) });
+      }
+      return fetch(new Request(`${fixture.hermetic.host}${url.pathname}${url.search}`, request));
+    } });
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    let record = await signLocationRecordV2({
+      version: 2, subject: fixture.hermetic.ownerDid,
+      nodes: [{ did: nodeId, url: proxy.url.origin }],
+      spaces: [{ space: fixture.hermetic.restorableSession.spaceId, nodes: [{ did: nodeId, mode: "read-write" }] }],
+      encryptionNode: nodeId, updated_at: new Date().toISOString(), sequence: 0,
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    registryServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ record }) });
+    const profile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
+    await writeJsonAtomic(profileConfigPath(fixture.profile), {
+      ...profile, tinycloudRegistryUrl: registryServer.url.origin,
+    });
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = { ...await fixture.hermetic.mintDelegation(), host: proxy.url.origin };
+    const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+    expect(result).toMatchObject({ status: "ok", output: { cid: delegation.cid, activated: true } });
+    expect(await (runtime.runtime.node as TinyCloudNode).readSecret({ space: fixture.hermetic.restorableSession.spaceId, name: "HERMETIC_DELEGATION_CANARY" })).toMatchObject({
+      status: "ok", value: "tc2481-host-cutover-dummy",
+    });
+    expect((await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile)))?.host).toBe(fixture.hermetic.host);
+    expect((await readAuthRequestRecords(fixture.profile)).find((entry) => entry.requestId === requestId)?.host).toBe(fixture.hermetic.host);
+    // A registered owner/encryption node alone cannot substitute for data membership.
+    const stored = await readAdditionalDelegations(fixture.profile);
+    record = await signLocationRecordV2({
+      version: 2, subject: record.subject, nodes: record.nodes, spaces: [],
+      encryptionNode: record.encryptionNode, sequence: 1, updated_at: new Date().toISOString(),
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "error", error: { code: "NODE_NOT_FOUND" },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(stored);
+  } finally {
+    registryServer?.stop(true);
+    proxy?.stop(true);
+    fixture.hermetic.stop();
+  }
+});

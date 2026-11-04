@@ -335,9 +335,6 @@ async function importRequestBoundDelegation(
     if (explicitHost !== undefined && typeof explicitHost !== "string") {
       return invalidDelegation();
     }
-    if (typeof explicitHost === "string" && normalizeHost(explicitHost) !== normalizeHost(host)) {
-      return hostMismatch(host, explicitHost);
-    }
     const expiry = normalizeExpiry(rawDelegation.expiry);
     if (expiry === undefined) return invalidDelegation();
     if (expiry.getTime() <= Date.now()) return expiredDelegation();
@@ -366,6 +363,7 @@ async function importRequestBoundDelegation(
       const reason = typeof error === "object" && error !== null && "reason" in error ? error.reason : undefined;
       // Validated activation read an expiry that has passed: the delegation expired, it was not otherwise refused.
       if (reason === "expired") return expiredDelegation();
+      if (reason === "host_mismatch") return hostMismatch(host, typeof explicitHost === "string" ? explicitHost : host);
       // The stable rejection reason (e.g. `activation_rejected` when the node's
       // `/delegate` refused it) is diagnostic only; the redaction allowlist
       // drops anything that is not a known reason.

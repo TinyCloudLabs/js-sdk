@@ -129,6 +129,11 @@ export interface RuntimeDelegationActivator {
    * key. Required to activate a CACAO grant; compact UCANs do not use it.
    */
   verifySessionGrant?(grant: SessionGrantProof): VerifiedSessionGrant;
+  /** A verified full-resource registry host; undefined retains no-entry host binding. */
+  resolveRegisteredDelegationHost?(
+    permissions: readonly PermissionEntry[],
+    noEntryHost: string,
+  ): Promise<string | undefined>;
 }
 
 /** The installed authority returned by {@link activateValidatedRuntimeDelegation}. */
@@ -653,13 +658,8 @@ export async function activateValidatedRuntimeDelegation(
     authorize?: (effectivePermissions: readonly PermissionEntry[]) => boolean;
   },
 ): Promise<ValidatedRuntimeDelegation> {
-  const host = normalizedHost(options.host);
-  if (delegation.host !== undefined && normalizedHost(delegation.host) !== host) {
-    reject(
-      "host_mismatch",
-      `Runtime delegation host '${delegation.host}' does not match expected host '${options.host}'.`,
-    );
-  }
+  let host = normalizedHost(options.host);
+  const differentHost = delegation.host !== undefined && normalizedHost(delegation.host) !== host;
   if (!(delegation.expiry instanceof Date) || Number.isNaN(delegation.expiry.getTime())) {
     reject("authority_invalid", "Runtime delegation has an invalid expiry.");
   }
@@ -707,6 +707,13 @@ export async function activateValidatedRuntimeDelegation(
   }
   if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
     throw new Error("Runtime delegation is not authorized for this runtime.");
+  }
+  if (differentHost) {
+    const registeredHost = await node.resolveRegisteredDelegationHost?.(signed.permissions, host);
+    if (registeredHost === undefined) {
+      reject("host_mismatch", `Runtime delegation host '${delegation.host}' does not match expected host '${options.host}'.`);
+    }
+    host = normalizedHost(registeredHost);
   }
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()
