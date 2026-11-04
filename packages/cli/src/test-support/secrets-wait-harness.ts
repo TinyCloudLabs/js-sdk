@@ -1,3 +1,4 @@
+import "../../../operations/test-support/test-bootstrap.mjs";
 import { createHash } from "node:crypto";
 import { lstat, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +13,12 @@ import {
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 
+
+// Test-only shared guard is outside the CLI rootDir, like the WASM fixtures below.
+const { assertPrivateTestEnvironment, assertPrivateTestHome } = await import(
+  new URL("../../../operations/test-support/private-home.mjs", import.meta.url).href
+);
+assertPrivateTestEnvironment();
 /** `bin/tc`; spawned tests need a fresh `bun run --cwd packages/cli build`. */
 export const TC_BIN = join(import.meta.dir, "../../bin/tc");
 
@@ -73,6 +80,7 @@ export function makeHome(): Promise<string> {
 }
 
 export function removeHome(home: string): Promise<void> {
+  assertPrivateTestHome(home);
   return rm(home, { recursive: true, force: true });
 }
 
@@ -94,6 +102,7 @@ export async function writeDelegateProfile(
   name: string,
   options: { session?: boolean; space?: boolean; grant?: StoredDelegation } = {},
 ): Promise<void> {
+  assertPrivateTestEnvironment(process.env, home);
   const session = hermetic.restorableSession;
   const did = session.verificationMethod.split("#", 1)[0]!;
   await withTinyCloudStateRoot(home, async () => {
@@ -122,6 +131,7 @@ export async function writeDelegateProfile(
 
 /** Write raw stored-grant records (e.g. an unbound compact record that needs the migration). */
 export async function writeStoredGrants(home: string, name: string, records: readonly unknown[]): Promise<void> {
+  assertPrivateTestEnvironment(process.env, home);
   await withTinyCloudStateRoot(home, () => writeJsonAtomic(additionalDelegationsPath(name), records));
 }
 
@@ -132,6 +142,7 @@ export async function writeOwnerOpenKeyProfile(
   name: string,
   options: { grant?: StoredDelegation; session?: boolean } = {},
 ): Promise<void> {
+  assertPrivateTestEnvironment(process.env, home);
   const session = hermetic.ownerRestorableSession;
   await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(name), {
@@ -169,6 +180,7 @@ export async function writeCompactSessionProfileWithoutOwner(
   hermetic: WaitHermetic,
   name: string,
 ): Promise<void> {
+  assertPrivateTestEnvironment(process.env, home);
   const manager = new NodeWasmBindings().createSessionManager();
   const sessionDid = manager.getDID("default");
   const jwk: unknown = JSON.parse(manager.jwk("default")!);
@@ -207,6 +219,7 @@ export async function writeLocalOwnerProfile(
   name: string,
   options: { session?: boolean } = {},
 ): Promise<void> {
+  assertPrivateTestEnvironment(process.env, home);
   const session = hermetic.ownerRestorableSession;
   await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(name), {
@@ -229,6 +242,7 @@ export async function writeLocalOwnerProfile(
 
 /** Every entry under `root`: path, kind, size, sha256 and mtime. */
 export async function snapshotHome(root: string): Promise<string[]> {
+  assertPrivateTestEnvironment(process.env, root);
   const entries: string[] = [];
   async function walk(directory: string): Promise<void> {
     const children = await readdir(directory, { withFileTypes: true });
@@ -281,11 +295,13 @@ export async function runTc(
     onSpawn?: (pid: number) => void | Promise<void>;
   } = {},
 ): Promise<TcRun> {
+  assertPrivateTestEnvironment(process.env, home);
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home, TC_HIDE_BANNER: "1" };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
   delete env.TC_PROFILE;
   Object.assign(env, options.env);
+  assertPrivateTestEnvironment(env, home);
   const started = performance.now();
   const child = Bun.spawn([process.env.NODE_BINARY ?? "node", TC_BIN, ...args], {
     env,

@@ -42,6 +42,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Preserve installed Rust paths for isolated tests
+        run: |
+          rustup_home="$(rustup show home)"
+          echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
       - name: Restore Rust/Cargo cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -105,23 +111,23 @@ jobs:
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
         run: |
-          bun test packages/cli/src/commands/secrets.test.ts
-          bun test packages/cli/src/commands/secrets-owner-retry.test.ts
-          bun test packages/cli/src/commands/auth.test.ts
-          bun test packages/cli/src/auth/device-auth.test.ts
-          bun test packages/cli/src/lib/sdk-bootstrap.test.ts
-          bun test packages/cli/src/config/profiles.test.ts
-          bun test packages/cli/src/auth/scoped-login.test.ts
-          bun test packages/cli/src/commands/context.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/secrets.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/secrets-owner-retry.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/auth.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/auth/device-auth.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/lib/sdk-bootstrap.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/config/profiles.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/auth/scoped-login.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/context.test.ts
           bun run --cwd packages/cli check:skill-pack
-          bun run --cwd packages/courier test
-          bun test packages/cli/src/commands/courier.test.ts
-          bun test packages/cli/src/lib/permissions.test.ts
-          bun test packages/cli/src/output/errors.test.ts
-          bun test tests/packed-runtime/cli.test.ts
-          bun test tests/mcp-sdk-contract/contract.test.ts
-          bun test tests/mcp-sdk-contract/prerequisites.test.ts
-          bun run --cwd tests/mcp-sdk-contract test:public-api
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun run --cwd packages/courier test
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/courier.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/lib/permissions.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/output/errors.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test tests/packed-runtime/cli.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test tests/mcp-sdk-contract/contract.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test tests/mcp-sdk-contract/prerequisites.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun run --cwd tests/mcp-sdk-contract test:public-api
 
       - name: Verify Node 20 packed-graph boundary
         env:
@@ -133,7 +139,7 @@ jobs:
         run: |
           test "$(node --version)" = "v20.19.4"
           test "$(node -p 'process.versions.node.split(".")[0]')" = "20"
-          bun test tests/packed-runtime/entrypoints.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test tests/packed-runtime/entrypoints.test.ts
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')

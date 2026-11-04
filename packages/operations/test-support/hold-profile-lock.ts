@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Holds one profile lock in a child process and records overlapping holders.
 // The lock is the release TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts).
 // Exit 0: held and released. Exit 3: timed out without ever holding it.
