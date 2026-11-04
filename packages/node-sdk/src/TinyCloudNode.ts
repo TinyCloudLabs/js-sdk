@@ -2182,17 +2182,20 @@ export class TinyCloudNode {
     return this._requestLog === undefined ? undefined : readOnlyRequestLog(this._requestLog);
   }
 
+  private throwRegistryRefusal(status: number, text: string): void {
+    if ((status !== 403 && status !== 503) ||
+      (!text.startsWith("registry_unavailable:") && !text.startsWith("registry_hosting_denied:"))) return;
+    const code = status === 503 ? "registry_unavailable" : "node_registry_entry_exists";
+    throw Object.assign(new Error(status === 503 ? "The location registry is unavailable for this resource." : "The registry does not authorize this node for the requested resource."), { code, meta: { status } });
+  }
+
   private createServiceGraphLifetime(session?: ServiceSession): ServiceGraphLifetime {
     const routedFetch = createResourceRoutingFetch(
       async (url, init) => {
         try {
           const response = await globalThis.fetch(url, init);
           if (response.status === 403 || response.status === 503) {
-            const text = await response.clone().text();
-            if (text.startsWith("registry_unavailable:") || text.startsWith("registry_hosting_denied:")) {
-              const code = response.status === 503 ? "registry_unavailable" : "node_registry_entry_exists";
-              throw Object.assign(new Error(response.status === 503 ? "The location registry is unavailable for this resource." : "The registry does not authorize this node for the requested resource."), { code, meta: { status: response.status } });
-            }
+            this.throwRegistryRefusal(response.status, await response.clone().text());
           }
           return response;
         } catch (error) {
@@ -7050,6 +7053,7 @@ export class TinyCloudNode {
         const timeout = AbortSignal.timeout(5_000);
         const result = await activateSessionWithHost(target.url, delegationHeader,
           signal ? AbortSignal.any([signal, timeout]) : timeout);
+        this.throwRegistryRefusal(result.status, result.error ?? "");
         if (result.success) {
           const skipped = result.skipped?.find((space) => spaces.some((expected) => this.spaceIdsEqual(space, expected)));
           if (skipped) {
@@ -7097,7 +7101,7 @@ export class TinyCloudNode {
     signal?: AbortSignal,
   ): Promise<SpaceHostResult> {
     const resources = this.parseRecapWithCaveats(siwe).map((entry) =>
-      this.isEncryptionPermissionEntry(entry) ? entry.path.split("/")[0]!
+      this.isEncryptionNetworkOperation(this.invocationServiceName(entry.service), entry.path, entry.space) ? entry.path.split("/")[0]!
         : entry.space.startsWith("tinycloud:") ? entry.space : session.spaceId,
     );
     return this.activateResourceSession(session.delegationHeader,

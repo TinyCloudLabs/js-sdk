@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 
 // Keep the value import namespace-shaped so modules that import this one stay
 // compatible with lightweight node-sdk test doubles.
@@ -345,6 +346,7 @@ function skipped(reason: StoredGrantSkipReason): StoredDelegationReplay {
  * The single stored-grant replay path for CLI and canonical runtimes.
  * Migration runs before the store read; CID deduplication affects authority
  * only, not the per-record fixed-code skip diagnostics.
+ * Routing failures abort replay rather than labeling valid authority skipped.
  */
 export async function replayProfileDelegations(
   profile: string,
@@ -520,6 +522,7 @@ async function assess(
     });
     return { status: "installed", delegation: installed };
   } catch (error) {
+    if (routingFailure(error)) throw error;
     if (outsideRequest) return skipped("outside_request");
     if (effectivePermissions !== undefined && !mode.activate) {
       return { status: "verified", cid: delegation.cid, effectivePermissions, expiry: delegation.expiry };

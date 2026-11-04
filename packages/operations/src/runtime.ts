@@ -15,7 +15,7 @@ import {
   type RuntimeOperationContext,
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
-import { operationError, type OperationError } from "./errors.js";
+import { activationRoutingOperationError, operationError, type OperationError } from "./errors.js";
 import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
@@ -259,8 +259,8 @@ export async function createInvocationRuntime(
         runtime,
       },
     };
-  } catch {
-    return failed(summary, operationError(
+  } catch (error) {
+    return failed(summary, activationRoutingOperationError(error) ?? operationError(
       "NODE_ERROR",
       "The selected profile runtime could not be initialized.",
       { retryable: true },
@@ -394,8 +394,8 @@ async function createRestoredRuntime(
         runtime,
       },
     };
-  } catch {
-    return failed(summary, operationError(
+  } catch (error) {
+    return failed(summary, activationRoutingOperationError(error) ?? operationError(
       "NODE_ERROR",
       "The selected profile runtime could not be initialized.",
       { retryable: true },

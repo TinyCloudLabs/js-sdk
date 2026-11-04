@@ -32,7 +32,7 @@ import type {
   RuntimeOperationContext,
   TinyCloudPosture,
 } from "../contract.js";
-import { operationError } from "../errors.js";
+import { activationRoutingOperationError, operationError } from "../errors.js";
 import { lookupOperation } from "../registry.js";
 import {
   readAdditionalDelegations,
@@ -361,6 +361,8 @@ async function importRequestBoundDelegation(
         { host },
       );
     } catch (error) {
+      const routing = activationRoutingOperationError(error);
+      if (routing) return { status: "error", error: routing };
       const reason = typeof error === "object" && error !== null && "reason" in error ? error.reason : undefined;
       // Validated activation read an expiry that has passed: the delegation expired, it was not otherwise refused.
       if (reason === "expired") return expiredDelegation();

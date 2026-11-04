@@ -6,6 +6,7 @@ import {
   PermissionEntry,
   principalDidEquals,
 } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 
 /**
  * A portable delegation that can be transported between users.
@@ -640,6 +641,9 @@ function resourcesMatch(
  * `options.authorize`, when given, sees the signed capabilities before
  * anything is activated or installed; returning `false` refuses the
  * delegation.
+ *
+ * Typed routing failures propagate unchanged; they do not invalidate the
+ * signed authority or require another approval.
  */
 export async function activateValidatedRuntimeDelegation(
   node: RuntimeDelegationActivator,
@@ -760,6 +764,7 @@ export async function activateValidatedRuntimeDelegation(
       await node.useRuntimeDelegation(installedCandidate);
     }
   } catch (error) {
+    if (routingFailure(error)) throw error;
     reject(
       activationRejectionReason(error),
       error instanceof Error ? error.message : String(error),

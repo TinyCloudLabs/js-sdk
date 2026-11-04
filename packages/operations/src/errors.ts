@@ -1,3 +1,5 @@
+import { PartialNodeWriteError, routingFailure } from "@tinycloud/sdk-services";
+
 export const OPERATION_ERROR_CODES = [
   "INPUT_INVALID",
   "OPERATION_NOT_FOUND",
@@ -18,6 +20,12 @@ export const OPERATION_ERROR_CODES = [
   "ENCRYPTION_NETWORK_UNRESOLVED",
   "NODE_UNREACHABLE",
   "NODE_NOT_RESPONDING",
+  "NODE_IDENTITY_MISMATCH",
+  "PARTIAL_NODE_WRITE",
+  "RESOURCE_NOT_ROUTED",
+  "REGISTRY_UNAVAILABLE",
+  "NODE_NOT_FOUND",
+  "NODE_REGISTRY_ENTRY_EXISTS",
   "NODE_ERROR",
   "STORAGE_QUOTA_EXCEEDED",
   "KV_NOT_FOUND",
@@ -100,6 +108,38 @@ export function nodeRetryOperationError(error: unknown): OperationError | undefi
   }
   if (code !== "NODE_BUSY" && code !== "REQUEST_TIMEOUT") return undefined;
   return operationError("NODE_ERROR", "The TinyCloud node was busy and applied nothing; try again shortly.", { retryable: true });
+}
+
+const ACTIVATION_ROUTING_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof routingFailure>>["code"], OperationError>> = {
+  NODE_NOT_RESPONDING: { code: "NODE_NOT_RESPONDING", message: "The place where your data is at is not responsive right now. Please try again.", retryable: true },
+  NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "The TinyCloud node identity does not match the signed registry.", retryable: false },
+  PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "The grant was not registered on every required node.", retryable: false },
+  RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "The signed registry has no destination for this resource.", retryable: false },
+  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "The location registry is unavailable.", retryable: true },
+  node_not_found: { code: "NODE_NOT_FOUND", message: "No TinyCloud node is registered for this resource.", retryable: false },
+  node_registry_entry_exists: { code: "NODE_REGISTRY_ENTRY_EXISTS", message: "The selected node is not authorized by the signed registry.", retryable: false },
+};
+
+/** Activation availability is not missing authority; never project private rejection details. */
+export function activationRoutingOperationError(error: unknown): OperationError | undefined {
+  const failure = routingFailure(error);
+  if (!failure) return undefined;
+  const partial = error instanceof PartialNodeWriteError ? error : undefined;
+  const failed = partial?.failed.map(({ url, status, cause }) => {
+    const code = routingFailure(cause)?.code;
+    return { url, ...(status === undefined ? {} : { status }), ...(code === undefined ? {} : { code }) };
+  });
+  // Retrying the same grant registration is safe: no operation data has been written.
+  const unavailable = failed !== undefined && failed.length > 0 &&
+    failed.every(({ code }) => code === "NODE_NOT_RESPONDING");
+  const projected = ACTIVATION_ROUTING_ERRORS[unavailable ? "NODE_NOT_RESPONDING" : failure.code];
+  return operationError(projected.code, projected.message, {
+    retryable: projected.retryable,
+    ...(partial === undefined ? {} : { details: {
+      succeeded: partial.succeeded,
+      failed,
+    } }),
+  });
 }
 
 /**

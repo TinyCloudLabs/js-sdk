@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { REGISTRY_NOT_FOUND_BODY, httpUrlToMultiaddr, signLocationRecord, type LocationRecord, type LocationRecordV2, type PermissionEntry } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, httpUrlToMultiaddr, parseSignedCompactUcanAttenuation, signLocationRecord, type LocationRecord, type LocationRecordV2, type PermissionEntry } from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
@@ -24,6 +24,7 @@ interface ScopedClientFixture {
   staleRequests: string[];
   refuseEncryption(): void;
   setActivationMode(mode: ActivationMode): void;
+  probeDecrypt(authorization: string, cid: string): Promise<Response>;
   useV1OnlyRegistry(): Promise<void>;
   useAbsentRegistry(): void;
 }
@@ -37,6 +38,8 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
   let legacyRecord: LocationRecord | undefined;
   const signer = new PrivateKeySigner(ownerKey);
   const bindings = new NodeWasmBindings();
+  let node!: TinyCloudNode;
+  const proofs = new Map([[box.did, new Set<string>()], [encryption.did, new Set<string>()]]);
   const activeSpace = bindings.makeSpaceId(record.subject.slice(record.subject.lastIndexOf(":") + 1), 1, "secrets");
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
@@ -64,16 +67,26 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
       if (encryptionRefused && target.did === encryption.did) return new Response("registry_unavailable: fixture unavailable", { status: 503 });
       const skipListed = signedIn && activationMode === "listed-skipped" && target.did === box.did;
       const repeated = signedIn && activationMode === "mixed-repeat";
+      const cid = node.computeDelegationCid(new Headers(init?.headers).get("authorization")!);
+      proofs.get(target.did)!.add(cid);
       return Response.json({
-        cid: "bafkqaaa",
+        cid,
         activated: target.did === box.did && !skipListed && !repeated ? [activeSpace] : [],
         skipped: target.did === encryption.did || skipListed ? [activeSpace] : [],
       });
     }
+    if (method === "POST" && url.pathname === "/invoke" && target.did === encryption.did) {
+      const authorization = new Headers(init?.headers).get("authorization")!;
+      const verified = parseSignedCompactUcanAttenuation(authorization);
+      const payload = JSON.parse(Buffer.from(authorization.split(".")[1]!, "base64url").toString()) as { prf: string[] };
+      const registered = payload.prf.some((cid) => proofs.get(encryption.did)!.has(cid));
+      const decrypt = verified.payload.att[network]?.["tinycloud.encryption/decrypt"];
+      return new Response(registered && decrypt ? "network permission accepted" : "network proof not registered", { status: registered && decrypt ? 200 : 401 });
+    }
     throw new Error(`Unexpected fixture endpoint: ${method} ${url.origin}${url.pathname}`);
   }) as typeof fetch;
   try {
-    const node = new TinyCloudNode({
+    node = new TinyCloudNode({
       signer,
       wasmBindings: bindings,
       host: stale,
@@ -96,6 +109,12 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
       node, staleRequests,
       refuseEncryption: () => { encryptionRefused = true; },
       setActivationMode: (mode) => { activationMode = mode; },
+      probeDecrypt: async (authorization, cid) => {
+        const headers = bindings.invokeAny({
+          ...node.restorableSession!, delegationHeader: { Authorization: authorization }, delegationCid: cid,
+        }, [{ resource: network, service: "encryption", path: "", action: "tinycloud.encryption/decrypt" }], undefined);
+        return fetch(`${encryption.url}/invoke`, { method: "POST", headers });
+      },
       useV1OnlyRegistry: async () => {
         legacyRecord = await signLocationRecord({
           version: 1, subject: record.subject.replace(":1:", ":137:"),
@@ -125,16 +144,16 @@ test("a scoped client installs a newly approved decrypt grant at its encryption 
 test("a refused encryption activation never installs decrypt authority", async () => {
   await withScopedClient(async ({ node, refuseEncryption }) => {
     refuseEncryption();
-    await expect(node.grantRuntimePermissions([decryptPermission])).rejects.toMatchObject({ cause: { status: 503 } });
+    await expect(node.grantRuntimePermissions([decryptPermission])).rejects.toMatchObject({ code: "registry_unavailable" });
     expect(node.hasRuntimePermissions([decryptPermission])).toBe(false);
   });
 });
 
-test("mixed registration does not report an already-active data space as skipped by its encryption-only node", async () => {
-  await withScopedClient(async ({ node, setActivationMode }) => {
+test("a mixed owner receipt is usable at its encryption-only node even when data hosting was already active", async () => {
+  await withScopedClient(async ({ node, setActivationMode, probeDecrypt }) => {
     setActivationMode("mixed-repeat");
     const receipt = await node.createOwnerDelegation({
-      delegateDid: box.did,
+      delegateDid: node.sessionDid!,
       spaceId: record.spaces[0]!.space,
       expiresAt: new Date(Date.now() + 60_000),
       permissions: [
@@ -144,6 +163,9 @@ test("mixed registration does not report an already-active data space as skipped
     });
     expect(receipt.nodeReceipt.activated).toEqual([]);
     expect(receipt.nodeReceipt.skipped).toEqual([]);
+    const accepted = await probeDecrypt(receipt.delegation.authHeader, receipt.delegation.cid);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.text()).toBe("network permission accepted");
   });
 });
 

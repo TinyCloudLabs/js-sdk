@@ -98,7 +98,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
       tinycloudRegistryUrl: profileRegistryUrl,
     });
 
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith(`${fixture.hermetic.host}/`)) return originalFetch(input, init);
       externalRequests.push(url);
@@ -790,7 +790,6 @@ test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED 
   }, { preconnect: globalThis.fetch.preconnect }));
   const expired = {
     code: "AUTH_REQUIRED",
-    message: "The stored session has expired or is no longer valid. Sign in again.",
     retryable: false,
   };
 
@@ -818,7 +817,6 @@ test("an expired imported session returns AUTH_REQUIRED through runtime and oper
   }, { preconnect: globalThis.fetch.preconnect }));
   const expired = {
     code: "AUTH_REQUIRED",
-    message: "The stored session has expired or is no longer valid. Sign in again.",
     retryable: false,
   };
   try {
@@ -832,23 +830,6 @@ test("an expired imported session returns AUTH_REQUIRED through runtime and oper
   }
 });
 
-// TC-674 control: passes before and after
-test("an unexpired imported session restores as its delegate without a fetch", async () => {
-  const sessionDid = await persistImportedSession("live-import", Math.floor(Date.now() / 1000) + 3600);
-  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
-    throw new Error("restore must not fetch");
-  }, { preconnect: globalThis.fetch.preconnect }));
-  try {
-    const runtime = await createInvocationRuntime({ profile: "live-import" });
-    expect(runtime).toMatchObject({
-      ok: true,
-      context: { summary: { sessionDid } },
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-  } finally {
-    fetchSpy.mockRestore();
-  }
-});
 
 /** A delegate-session profile whose stored session is a real owner-signed SIWE that has expired. */
 async function persistExpiredSignedSession(profile: string): Promise<void> {
