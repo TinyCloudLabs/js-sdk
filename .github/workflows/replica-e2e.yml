@@ -345,6 +345,8 @@ jobs:
     name: Replica (Chromium, browser worker + IndexedDB)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
     steps:
       - uses: actions/checkout@v4
         with:
@@ -436,7 +438,7 @@ jobs:
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ms-playwright
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Build the packages the browser bundle needs
