@@ -1,12 +1,13 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, RuntimeOperationContext } from "../contract.js";
-import type { AppsPermission } from "../tc-apps/kv.js";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
 import { knowledgeOperationDefinitions } from "./knowledge.js";
 import { HEALTHLOG_DATABASE, HEALTHLOG_DAY_CARD, HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_INSERT, HEALTHLOG_MEAL_READBACK, HEALTHLOG_MEAL_UPDATE, HEALTHLOG_WEIGHT_INSERT, HEALTHLOG_WEIGHT_READBACK, HEALTHLOG_WEIGHT_TODAY } from "../tc-apps/preamble.js";
+import type { AppsPermission } from "../tc-apps/kv.js";
 import { sqlOperationDefinitions } from "./sql.js";
 import { definition, fixture, NEW_SPACE, SPACE, withGrants } from "./apps.fixtures.js";
 
@@ -38,13 +39,13 @@ describe("catalog task approvals", () => {
       }, input: unknown) => {
         let active = withGrants(runtime, grants);
         const plan = await operation.authority(active, input as never);
-        const missing = evaluateOperationAuthority(grants, plan).missing;
+        const missing = evaluateOperationAuthority(grants, plan as unknown as readonly PermissionEntry[]).missing;
         if (missing.length) {
           requests.push([...missing] as AppsPermission[]);
           grants = [...grants, ...missing] as AppsPermission[];
           active = withGrants(runtime, grants);
         }
-        expect(evaluateOperationAuthority(grants, await operation.authority(active, input as never)).missing).toEqual([]);
+        expect(evaluateOperationAuthority(grants, (await operation.authority(active, input as never)) as unknown as readonly PermissionEntry[]).missing).toEqual([]);
         const outcome = await operation.execute(active, input as never);
         expect(outcome.status).toBe("ok");
         return outcome.output;
@@ -74,12 +75,12 @@ describe("catalog task approvals", () => {
         expect((await definition("context").execute(context, { app: "recipes", access })).status).toBe("ok");
         for (const concept of ["index", "app"]) {
           const read = knowledgeOperationDefinitions.find((operation) => operation.id === "tinycloud.knowledge.read")!;
-          expect(evaluateOperationAuthority(plan, await read.authority(context, { app_id: "xyz.tinycloud.sample.recipes", concept } as never)).missing).toEqual([]);
+          expect(evaluateOperationAuthority(plan as unknown as readonly PermissionEntry[], (await read.authority(context, { app_id: "xyz.tinycloud.sample.recipes", concept } as never)) as unknown as readonly PermissionEntry[]).missing).toEqual([]);
         }
         const listing = knowledgeOperationDefinitions.find((operation) => operation.id === "tinycloud.knowledge.list")!;
-        expect(evaluateOperationAuthority(plan, await listing.authority(context, { app_id: "xyz.tinycloud.sample.recipes" } as never)).missing).toEqual([]);
+        expect(evaluateOperationAuthority(plan as unknown as readonly PermissionEntry[], (await listing.authority(context, { app_id: "xyz.tinycloud.sample.recipes" } as never)) as unknown as readonly PermissionEntry[]).missing).toEqual([]);
         const sqlRead = await sqlDefinition("tinycloud.sql.query").authority(context, { space: "applications", database: "notes-chosen-database" } as never);
-        expect(evaluateOperationAuthority(plan, sqlRead).missing).toEqual(sqlRead);
+        expect(evaluateOperationAuthority(plan as unknown as readonly PermissionEntry[], sqlRead as unknown as readonly PermissionEntry[]).missing).toEqual(sqlRead as unknown as readonly PermissionEntry[]);
         expect(tcAppsApprovalReason(plan)).toContain("Recipes app's notes");
         expect(tcAppsApprovalReason(plan)).not.toContain("change entries");
       }
@@ -93,9 +94,9 @@ describe("catalog task approvals", () => {
       const read = await definition("context").authority(context, { app: "healthlog", access: "read" });
       expect(tcAppsApprovalReason(read)).toContain("without changing it");
       const readPlan = await sqlDefinition("tinycloud.sql.query").authority(context, { space: "applications", database: HEALTHLOG_DATABASE } as never);
-      expect(evaluateOperationAuthority(read, readPlan).missing).toEqual([]);
+      expect(evaluateOperationAuthority(read as unknown as readonly PermissionEntry[], readPlan as unknown as readonly PermissionEntry[]).missing).toEqual([]);
       const writePlan = await sqlDefinition("tinycloud.sql.execute").authority(context, { space: "applications", database: HEALTHLOG_DATABASE } as never);
-      expect(evaluateOperationAuthority(read, writePlan).missing).toMatchObject([{ service: "tinycloud.sql", space: NEW_SPACE, path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/write"] }]);
+      expect(evaluateOperationAuthority(read as unknown as readonly PermissionEntry[], writePlan as unknown as readonly PermissionEntry[]).missing).toMatchObject([{ service: "tinycloud.sql", space: NEW_SPACE, path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/write"] }]);
       for (const app of ["catalog", "index-stale", "../healthlog", "Healthlog", "xyz.tinycloud.sample.healthlog"]) {
         expect((await definition("context").execute(context, { app })).error.code).toBe("INPUT_INVALID");
       }

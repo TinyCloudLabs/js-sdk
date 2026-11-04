@@ -18,7 +18,7 @@ const LayoutSchema = z.enum(["legacy", "new"]);
 const CopyStateSchema = z.enum(["present", "expired", "none"]);
 const ContextInputSchema = z.object({
   timezone: z.string().refine(validTimezone, "An IANA timezone is required.").optional(),
-  app: z.string().refine((app) => Object.hasOwn(TC_APPS_CATALOG_PERMISSIONS, app) || newApp(app), "A valid app id is required.").optional().describe("Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."),
+  app: z.string().refine((app) => Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, app) || newApp(app), "A valid app id is required.").optional().describe("Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."),
   access: z.enum(["read", "change"]).default("change").describe("Use read for a question that changes nothing; change requests the app's supported write access too."),
 }).strict();
 const ReadInputSchema = z.object({ prefixes: z.array(PrefixSchema).optional(), keys: z.array(KeySchema).max(100).optional() }).strict();
@@ -92,7 +92,7 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
 }
 const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => {
   if (input.app === undefined) return [discoveryPermission(context)];
-  if (Object.hasOwn(TC_APPS_CATALOG_PERMISSIONS, input.app)) {
+  if (Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, input.app)) {
     const catalog = TC_APPS_CATALOG_PERMISSIONS[input.app]!;
     return [discoveryPermission(context, TC_APPS_CATALOG_READ_ACTIONS), {
       ...catalog, space: appsSpace(context, "new"),
