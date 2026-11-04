@@ -982,6 +982,39 @@ async function updateProfileStoreWhileLocked<T, Result>(
   return next.result;
 }
 
+type RegistryProfileStore = "registry-cache" | "registry-sequences";
+/** Shared across bundled entry points, but never across profile-lock acquisitions. */
+const registryStoreUpdates: WeakMap<HeldProfileLock, Map<RegistryProfileStore, Promise<unknown>>> =
+  (globalThis as unknown as Record<symbol, WeakMap<HeldProfileLock, Map<RegistryProfileStore, Promise<unknown>>> | undefined>)[
+    Symbol.for("tinycloud.operations.registryStoreUpdates.v1")
+  ] ??= new WeakMap();
+
+async function withRegistryStoreUpdate<Result>(
+  profile: string,
+  store: RegistryProfileStore,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  // Acquire the profile first: an outside waiter must not reserve a queue
+  // needed by an already-held caller. Reentrant siblings share this acquisition.
+  return withProfileLock(profile, async () => {
+    // This acquisition already binds the canonical pinned profile; queue
+    // identity must not survive into another root or a later acquisition.
+    const lockPath = profileLockPath(profile);
+    const ownership = heldProfileLocks.getStore()!.find((held) => held.active && held.lockPath === lockPath)!;
+    let updates = registryStoreUpdates.get(ownership);
+    if (!updates) registryStoreUpdates.set(ownership, updates = new Map());
+    const next = (updates.get(store) ?? Promise.resolve()).then(action);
+    const settled = next.catch(() => undefined);
+    updates.set(store, settled);
+    try {
+      return await next;
+    } finally {
+      if (updates.get(store) === settled) updates.delete(store);
+      if (updates.size === 0) registryStoreUpdates.delete(ownership);
+    }
+  });
+}
+
 /** Plain, owner-only profile file with the same atomic writer and process lock as grants. */
 export function createProfileRegistryCacheStore(profile: string): RegistryCacheStore {
   const find = (records: readonly RegistryCacheEntry[], key: string): RegistryCacheEntry | undefined => {
@@ -999,11 +1032,12 @@ export function createProfileRegistryCacheStore(profile: string): RegistryCacheS
       return find((await readProfileStore<RegistryCacheEntry>(profile, "registry-cache")).records, key);
     },
     update(key, update) {
-      return updateProfileStore<RegistryCacheEntry, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
-        const entry = await update(find(records, key));
-        if (entry.ownerKey !== key) throw new Error("Registry cache owner mismatch");
-        return { records: [...records.filter((current) => current.ownerKey !== key), entry], result: entry };
-      });
+      return withRegistryStoreUpdate(profile, "registry-cache", () =>
+        updateProfileStoreWhileLocked<RegistryCacheEntry, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
+          const entry = await update(find(records, key));
+          if (entry.ownerKey !== key) throw new Error("Registry cache owner mismatch");
+          return { records: [...records.filter((current) => current.ownerKey !== key), entry], result: entry };
+        }));
     },
   };
 }
@@ -1035,16 +1069,17 @@ export function createProfileRegistrySequenceStore(profile: string): RegistrySeq
       // Match the browser sequence adapter: a failed disk write must not
       // make this client forget registration it has already verified.
       memory.set(key, Math.max(memory.get(key) ?? -1, sequence));
-      await updateProfileStore<Sequence, void>(profile, "registry-sequences", (records) => {
-        const current = find(records, key);
-        const highWater = Math.max(current ?? -1, memory.get(key) ?? -1);
-        memory.set(key, highWater);
-        return {
-          records: current !== undefined && current >= highWater ? records
-            : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, sequence: highWater }],
-          result: undefined,
-        };
-      });
+      await withRegistryStoreUpdate(profile, "registry-sequences", () =>
+        updateProfileStoreWhileLocked<Sequence, void>(profile, "registry-sequences", (records) => {
+          const current = find(records, key);
+          const highWater = Math.max(current ?? -1, memory.get(key) ?? -1);
+          memory.set(key, highWater);
+          return {
+            records: current !== undefined && current >= highWater ? records
+              : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, sequence: highWater }],
+            result: undefined,
+          };
+        }));
     },
   };
 }

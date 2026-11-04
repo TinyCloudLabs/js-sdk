@@ -101,7 +101,9 @@ export function createInMemoryRegistrySequenceStore(): RegistrySequenceStore {
  * read-only storage) is still remembered for this page. A storage read that
  * throws, or a corrupt stored value, throws instead of being reset:
  * forgetting a sequence would let a registry not-found read as
- * `unregistered`. Remove `storageKey` to reset.
+ * `unregistered`. Persistent merges require a storage-key Web Lock; write
+ * failures still retain per-page memory and the resolver's best-effort policy.
+ * Remove `storageKey` to reset persisted history.
  */
 export function createLocalStorageRegistrySequenceStore(
   storage?: WebStorageLike,
@@ -140,10 +142,23 @@ export function createLocalStorageRegistrySequenceStore(
     },
     set: async (subject, sequence) => {
       await memory.set(subject, sequence);
-      const sequences = read();
-      if ((sequences.get(subject) ?? -1) >= sequence) return;
-      sequences.set(subject, sequence);
-      backing.setItem(storageKey, JSON.stringify(Object.fromEntries(sequences)));
+      // All owners share one JSON object, so its entire merge needs one lock.
+      // Cache-entry locks are separate and are never acquired from this callback.
+      const navigator = globalThis.navigator as unknown as {
+        locks?: { request<T>(name: string, action: () => Promise<T>): Promise<T> };
+      } | undefined;
+      const locks = navigator?.locks;
+      if (!locks) throw new Error("Persistent registry sequence store requires Web Locks");
+      await locks.request(storageKey, async () => {
+        const remembered = await memory.get(subject);
+        const sequences = read();
+        const previous = sequences.get(subject);
+        const highest = Math.max(previous ?? -1, remembered ?? -1, sequence);
+        await memory.set(subject, highest);
+        if (previous !== undefined && previous >= highest) return;
+        sequences.set(subject, highest);
+        backing.setItem(storageKey, JSON.stringify(Object.fromEntries(sequences)));
+      });
     },
   };
 }
@@ -198,7 +213,7 @@ export async function resolveOwnerHosts(
       void refreshOwnerRegistry(subject, options).catch(() => undefined);
       return verdict;
     }
-    return refreshOwnerRegistry(subject, options);
+    return refreshCachedOwnerRegistry(subject, options, options.cacheStore, ownerKey, remembered);
   }
   return fetchOwnerRegistry(subject, options, remembered);
 }
@@ -211,21 +226,50 @@ export async function refreshOwnerRegistry(subject: string, options: ResolveOwne
   const cache = options.cacheStore;
   if (!cache) return resolveOwnerHosts(subject, options);
   const key = registryOwnerKeyV2(subject);
+  return refreshCachedOwnerRegistry(subject, options, cache, key, await options.sequenceStore?.get(key));
+}
+
+async function refreshCachedOwnerRegistry(
+  subject: string,
+  options: ResolveOwnerHostsOptions,
+  cache: RegistryCacheStore,
+  key: string,
+  remembered: number | undefined,
+): Promise<RegistryVerdict> {
   let active = refreshes.get(cache);
   if (!active) refreshes.set(cache, active = new Map());
-  const pending = active.get(key);
-  if (pending) return pending;
-  const next = (async () => {
-    const remembered = await options.sequenceStore?.get(key);
-    // Refuse corrupt storage even if the network could replace it.
-    const current = await cache.get(key);
-    if (current !== undefined) await verifyRegistryCacheEntry(subject, key, current, remembered);
-    const highWater = Math.max(remembered ?? -1, current?.sequence ?? -1);
-    return fetchOwnerRegistry(subject, options, highWater < 0 ? undefined : highWater, current);
-  })();
-  active.set(key, next);
-  void next.finally(() => active!.delete(key)).catch(() => undefined);
-  return next;
+  let next = active.get(key);
+  if (!next) {
+    next = (async () => {
+      // Refuse corrupt storage even if the network could replace it.
+      const current = await cache.get(key);
+      if (current !== undefined) {
+        const verified = await verifyRegistryCacheEntry(subject, key, current, remembered);
+        await rememberAcceptedSequence(options.sequenceStore, key, remembered, verified);
+      }
+      const highWater = Math.max(remembered ?? -1, current?.sequence ?? -1);
+      return fetchOwnerRegistry(subject, options, highWater < 0 ? undefined : highWater, current);
+    })();
+    active.set(key, next);
+    void next.finally(() => active!.delete(key)).catch(() => undefined);
+  }
+  const verdict = await next;
+  if (verdict.status !== "unregistered") return verdict;
+  // Cold authorization is caller-specific, not inherited from an older flight.
+  // Recheck at the end of shared I/O and retain evidence observed before joining.
+  const current = await cache.get(key);
+  const latest = await options.sequenceStore?.get(key);
+  const highWater = Math.max(remembered ?? -1, latest ?? -1);
+  if (current !== undefined) {
+    const verified = await verifyRegistryCacheEntry(subject, key, current, highWater < 0 ? undefined : highWater);
+    await rememberAcceptedSequence(options.sequenceStore, key, latest, verified);
+    return verified;
+  }
+  if (highWater >= 0) return {
+    status: "unavailable", subject, source: "offchain", reason: "not-found-after-registered",
+    message: "owner registration was remembered before registry absence could authorize onboarding", hosts: [],
+  };
+  return verdict;
 }
 
 async function fetchOwnerRegistry(

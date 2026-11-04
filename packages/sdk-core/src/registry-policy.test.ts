@@ -1,7 +1,8 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 
 import type * as PolicyModule from "./registry-policy";
+import { installTestWebLocks } from "./test-support/web-locks";
 
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
@@ -178,6 +179,9 @@ describe("resolveOwnerHosts", () => {
 });
 
 describe("createLocalStorageRegistrySequenceStore", () => {
+  let platform: ReturnType<typeof installTestWebLocks>;
+  beforeEach(() => { platform = installTestWebLocks(); });
+  afterEach(() => platform.restore());
   it("keeps a registration across store instances on the same storage", async () => {
     const storage = memoryStorage();
     const body = await recordBody(["/dns4/my.node.example/tcp/443/https"], 2);
