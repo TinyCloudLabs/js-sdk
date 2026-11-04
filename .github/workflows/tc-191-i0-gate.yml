@@ -42,6 +42,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Preserve installed Rust paths for isolated tests
+        run: |
+          rustup_home="$(rustup show home)"
+          echo "RUSTUP_HOME=$rustup_home" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_ENV"
       - name: Restore Rust/Cargo cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
