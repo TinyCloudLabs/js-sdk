@@ -256,6 +256,7 @@ const SERVICE_BY_SHORT_NAME: Record<string, string> = {
   sql: "tinycloud.sql",
   duckdb: "tinycloud.duckdb",
   hooks: "tinycloud.hooks",
+  capabilities: "tinycloud.capabilities",
 };
 
 function authorizationWithoutBearer(authorization: string): string {
@@ -432,14 +433,14 @@ function signedAuthorityFromCompactUcan(
     }
 
     // `<space>/kv` (no trailing slash) is the whole service in the space: path "".
-    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/(kv|sql|duckdb|hooks)(?:\/|$)(.*)$/.exec(resource);
-    if (!match) {
+    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/([^/]+)(?:\/|$)(.*)$/.exec(resource);
+    if (!match || !Object.prototype.hasOwnProperty.call(SERVICE_BY_SHORT_NAME, match[3]!)) {
       throw new Error(
         `Validated runtime delegation has an unsupported signed resource '${resource}'.`,
       );
     }
     const [, policySpace, nativeSpace, shortService, path] = match;
-    // The pattern admits only the four services in SERVICE_BY_SHORT_NAME.
+    // One explicit allowlist defines supported services; namespaces are not open-ended.
     const service = SERVICE_BY_SHORT_NAME[shortService!]!;
     permissions.push(...groupedSignedEntries(
       service,
