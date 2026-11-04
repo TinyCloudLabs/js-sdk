@@ -42,7 +42,8 @@ test("fresh delegate profile preserves data identity and distinct decryption fai
     proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === "/info") {
-        return Response.json({ ...await (await fetch(`${fixture.host}/info`)).json(), nodeId: boxDid });
+        const info = await (await fetch(`${fixture.host}/info`)).json() as Record<string, unknown>;
+        return Response.json({ ...info, nodeId: boxDid });
       }
       if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: mismatchedNodeKeys ? nodeId : boxDid, shareInvitationPublicKey: "A".repeat(43) });
       if (url.pathname.startsWith("/encryption/")) {
