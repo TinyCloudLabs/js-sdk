@@ -289,6 +289,63 @@ test("a known-zero caller cannot inherit an older cold refresh's default authori
   expect(freshWarnings).toEqual(["registry unavailable; using the default node"]);
 });
 
+test("a shared registered refresh respects independent caller highwaters and remembers each accepted result", async () => {
+  const backing = createInMemoryRegistryCacheStore();
+  const firstSequence = createInMemoryRegistrySequenceStore(), knownSequence = createInMemoryRegistrySequenceStore();
+  const freshSequence = createInMemoryRegistrySequenceStore();
+  const latest = await body(7, "read-write", "https://current.TEST-node.invalid");
+  const retired = await body(0, "read-write", "https://retired.TEST-node.invalid");
+  expect(await resolveOwnerHosts(subject, { sequenceStore: knownSequence, fetch: answer(latest) }))
+    .toMatchObject({ status: "registered", sequence: 7 });
+  let onEmptyRead: (() => void) | undefined;
+  const cacheStore: RegistryCacheStore = {
+    update: backing.update,
+    async get(key) {
+      const current = await backing.get(key);
+      // The awaiting caller resumes before the test gate, so it joins before I/O is released.
+      if (current === undefined && onEmptyRead) queueMicrotask(onEmptyRead);
+      return current;
+    },
+  };
+  const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+  let requests = 0;
+  const fetchFn = Object.assign(async () => { requests++; started.resolve(); return reply.promise; }, { preconnect: fetch.preconnect });
+  const first = refreshOwnerRegistry(subject, { cacheStore, sequenceStore: firstSequence, fetch: fetchFn });
+  const pending: Promise<unknown>[] = [first];
+  try {
+    await started.promise;
+    expect(await knownSequence.get(owner.address)).toBe(7);
+    const knownRead = Promise.withResolvers<void>(), warnings: string[] = [];
+    onEmptyRead = knownRead.resolve;
+    const joined = resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore, sequenceStore: knownSequence, fetch: fetchFn, autoDiscoverLocalNode: false,
+      newUserHost: "https://unlisted.invalid", onRegistryFallback: (reason) => { warnings.push(reason); },
+    });
+    pending.push(joined);
+    const outcome = joined.then(() => undefined, (error: unknown) => error);
+    await knownRead.promise;
+    const freshRead = Promise.withResolvers<void>();
+    onEmptyRead = freshRead.resolve;
+    const fresh = resolveOwnerHosts(subject, { cacheStore, sequenceStore: freshSequence, fetch: fetchFn });
+    pending.push(fresh);
+    await freshRead.promise;
+    onEmptyRead = undefined;
+    reply.resolve(new Response(retired));
+    expect(await first).toMatchObject({ status: "registered", sequence: 0 });
+    expect(await outcome).toMatchObject({ code: "registry_unavailable" });
+    expect(await fresh).toMatchObject({ status: "registered", sequence: 0 });
+    expect(await firstSequence.get(owner.address)).toBe(0);
+    expect(await knownSequence.get(owner.address)).toBe(7);
+    expect(await freshSequence.get(owner.address)).toBe(0);
+    expect((await cacheStore.get(owner.address))?.responseBody).toBe(retired);
+    expect(requests).toBe(1);
+    expect(warnings).toEqual([]);
+  } finally {
+    reply.resolve(new Response(retired));
+    await Promise.allSettled(pending);
+  }
+});
+
 test("direct refresh repairs restored highwater before outage I/O and later cache absence", async () => {
   const persisted = createInMemoryRegistryCacheStore();
   await resolveOwnerHosts(subject, { cacheStore: persisted, fetch: answer(await body(73)) });

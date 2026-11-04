@@ -254,8 +254,8 @@ async function refreshCachedOwnerRegistry(
     void next.finally(() => active!.delete(key)).catch(() => undefined);
   }
   const verdict = await next;
-  if (verdict.status !== "unregistered") return verdict;
-  // Cold authorization is caller-specific, not inherited from an older flight.
+  if (verdict.status === "unavailable") return verdict;
+  // Routing authority is caller-specific, even when cache identity is shared.
   // Recheck at the end of shared I/O and retain evidence observed before joining.
   const current = await cache.get(key);
   const latest = await options.sequenceStore?.get(key);
@@ -264,6 +264,15 @@ async function refreshCachedOwnerRegistry(
     const verified = await verifyRegistryCacheEntry(subject, key, current, highWater < 0 ? undefined : highWater);
     await rememberAcceptedSequence(options.sequenceStore, key, latest, verified);
     return verified;
+  }
+  if (verdict.status === "registered") {
+    // The cache may disappear after I/O; the verified result still needs this caller's bound.
+    if (verdict.sequence < highWater) return {
+      status: "unavailable", subject, source: "offchain", reason: "rollback",
+      message: `registry refresh sequence ${verdict.sequence} is below remembered sequence ${highWater}`, hosts: [],
+    };
+    await rememberAcceptedSequence(options.sequenceStore, key, latest, verdict);
+    return verdict;
   }
   if (highWater >= 0) return {
     status: "unavailable", subject, source: "offchain", reason: "not-found-after-registered",
