@@ -1,9 +1,25 @@
+import "../test-support/test-bootstrap.mjs";
 import { expect, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
+import { withTinyCloudStateRoot } from "./state.js";
+
+function isolatedTest(name: string, action: () => Promise<void>): void {
+  test(name, async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc2481-operation-registry-"));
+    try {
+      await withTinyCloudStateRoot(home, action);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+}
 
 const expectedOperationIds = [
   "tinycloud.account.applications.list",
@@ -58,7 +74,7 @@ test("registry resolves each v1 operation and rejects unknown versions", () => {
   });
 });
 
-test("real registry-keyed invocation reaches safe status and capabilities paths", async () => {
+isolatedTest("real registry-keyed invocation reaches safe status and capabilities paths", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {
     const status = await invokeOperation("tinycloud.status.get", 1, { profile: fixture.profile }, {});
@@ -82,7 +98,7 @@ test("real registry-keyed invocation reaches safe status and capabilities paths"
   }
 });
 
-test("registered auth.request plans a registered operation without executing its handler", async () => {
+isolatedTest("registered auth.request plans a registered operation without executing its handler", async () => {
   const fixture = await createAuthRuntimeFixture();
   const target = authOperationDefinitions.find((definition) => definition.id === "tinycloud.auth.capabilities");
   if (target === undefined) throw new Error("missing registered capabilities definition");
