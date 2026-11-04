@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 import {
   additionalDelegationsPath,
   profileConfigPath,
@@ -5,6 +6,7 @@ import {
   writeJsonAtomic,
 } from "../src/state.js";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { assertPrivateTestEnvironment } from "./private-home.mjs";
 
 export interface StoredRuntimeDelegation {
   readonly cid: string;
@@ -76,6 +78,7 @@ export interface AuthRuntimeFixture {
 export async function createAuthRuntimeFixture(
   options: AuthRuntimeFixtureOptions = {},
 ): Promise<AuthRuntimeFixture> {
+  assertPrivateTestEnvironment();
   const moduleUrl = new URL(
     "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
     import.meta.url,
@@ -140,6 +143,7 @@ export async function persistRuntimeDelegations(
   fixture: AuthRuntimeFixture,
   delegations: readonly StoredRuntimeDelegation[],
 ): Promise<void> {
+  assertPrivateTestEnvironment();
   await writeJsonAtomic(
     additionalDelegationsPath(fixture.profile),
     delegations.map((delegation) => ({

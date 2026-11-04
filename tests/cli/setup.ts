@@ -1,3 +1,5 @@
+import "../../packages/operations/test-support/test-bootstrap.mjs";
+import { assertPrivateTestEnvironment } from "../../packages/operations/test-support/private-home.mjs";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -41,6 +43,7 @@ export async function checkServerHealth(): Promise<void> {
  * a CLI profile so that `tc --profile cli-test` commands work.
  */
 export async function setupCliProfile(): Promise<TinyCloudNode> {
+  assertPrivateTestEnvironment(process.env, CONFIG_DIR);
   const node = new TinyCloudNode({
     privateKey: TEST_KEY,
     host: SERVER_URL,
@@ -104,6 +107,7 @@ export async function setupCliProfile(): Promise<TinyCloudNode> {
 }
 
 async function runTc(args: string[], input?: string): Promise<TcResult> {
+  assertPrivateTestEnvironment(process.env, CONFIG_DIR);
   const proc = Bun.spawn(
     ["bun", TC_BIN, "--profile", PROFILE_NAME, "--host", SERVER_URL, "--json", "--quiet", ...args],
     {
@@ -150,6 +154,7 @@ export async function tcWithInput(input: string, ...args: string[]): Promise<TcR
  * Clean up the test profile directory.
  */
 export async function cleanupCliProfile(): Promise<void> {
+  assertPrivateTestEnvironment(process.env, CONFIG_DIR);
   const profileDir = join(PROFILES_DIR, PROFILE_NAME);
   try {
     await rm(profileDir, { recursive: true });

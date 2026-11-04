@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Takes one profile lock `iterations` times, recording overlapping holders.
 // The lock is the release TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts).
 import { rm, writeFile } from "node:fs/promises";
