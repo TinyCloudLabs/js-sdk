@@ -74,3 +74,14 @@ test("activation-only partial registration preserves availability, accepted outc
   });
   expect(JSON.stringify(activationRoutingOperationError(wrongIdentity))).not.toContain("PRIVATE_IDENTITY_URL");
 });
+
+test("projects decryption transport failure separately from the unchanged data-node error and drops private causes", () => {
+  const projected = routingOperationError({
+    code: "DECRYPTION_DEPENDENCY_UNAVAILABLE", message: "PRIVATE_DECRYPTION_CAUSE",
+    cause: new Error("PRIVATE_RESPONSE_BODY"), meta: { authorization: "PRIVATE_AUTHORIZATION" },
+  });
+  expect(projected).toMatchObject({ code: "DECRYPTION_DEPENDENCY_UNAVAILABLE", retryable: true });
+  expect(projected?.message).toMatch(/decryption service/i);
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
+  expect(routingOperationError(new NodeNotRespondingError([]))).toMatchObject({ code: "NODE_NOT_RESPONDING", retryable: true });
+});

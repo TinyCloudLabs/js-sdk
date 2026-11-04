@@ -18,4 +18,6 @@ Accept supported capabilities/read in compact signed grants using the same close
 
 Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
 
+Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
 Details: TC-2481

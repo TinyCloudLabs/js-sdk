@@ -20,6 +20,7 @@ export const OPERATION_ERROR_CODES = [
   "ENCRYPTION_NETWORK_UNRESOLVED",
   "NODE_UNREACHABLE",
   "NODE_NOT_RESPONDING",
+  "DECRYPTION_DEPENDENCY_UNAVAILABLE",
   "NODE_IDENTITY_MISMATCH",
   "PARTIAL_NODE_WRITE",
   "RESOURCE_NOT_ROUTED",
@@ -112,6 +113,7 @@ export function nodeRetryOperationError(error: unknown): OperationError | undefi
 
 const ROUTING_OPERATION_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof routingFailure>>["code"], OperationError>> = {
   NODE_NOT_RESPONDING: { code: "NODE_NOT_RESPONDING", message: "The place where your data is at is not responsive right now. Please try again.", retryable: true },
+  DECRYPTION_DEPENDENCY_UNAVAILABLE: { code: "DECRYPTION_DEPENDENCY_UNAVAILABLE", message: "The decryption service is not responsive right now. Please try again.", retryable: true },
   NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "The TinyCloud node identity does not match the signed registry.", retryable: false },
   PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "The operation did not complete on every required node.", retryable: false },
   RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "The signed registry has no destination for this resource.", retryable: false },

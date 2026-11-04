@@ -68,7 +68,7 @@ export class PartialNodeWriteError extends Error {
 }
 
 export type RoutingFailureCode =
-  | "NODE_NOT_RESPONDING" | "PARTIAL_NODE_WRITE" | "NODE_IDENTITY_MISMATCH" | "RESOURCE_NOT_ROUTED"
+  | "NODE_NOT_RESPONDING" | "DECRYPTION_DEPENDENCY_UNAVAILABLE" | "PARTIAL_NODE_WRITE" | "NODE_IDENTITY_MISMATCH" | "RESOURCE_NOT_ROUTED"
   | "registry_unavailable" | "node_not_found" | "node_registry_entry_exists";
 export interface RoutingFailure {
   code: RoutingFailureCode;
@@ -78,6 +78,7 @@ export interface RoutingFailure {
 }
 const ROUTING_FAILURE_CODES: Record<RoutingFailureCode, true> = {
   NODE_NOT_RESPONDING: true, PARTIAL_NODE_WRITE: true, NODE_IDENTITY_MISMATCH: true, RESOURCE_NOT_ROUTED: true,
+  DECRYPTION_DEPENDENCY_UNAVAILABLE: true,
   registry_unavailable: true, node_not_found: true, node_registry_entry_exists: true,
 };
 function isRoutingFailureCode(code: string): code is RoutingFailureCode {

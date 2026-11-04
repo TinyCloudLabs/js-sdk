@@ -52,6 +52,7 @@ import {
   type DecryptResponseBody,
   type EncryptionCrypto,
   type EncryptionError,
+  type EncryptionErrorInput,
   type InlineEncryptedEnvelope,
   type NetworkDescriptor,
   toError,
@@ -70,6 +71,17 @@ function encOk<T>(data: T): Result<T, EncryptionError> {
 }
 function encErr<T = never>(error: EncryptionError): Result<T, EncryptionError> {
   return { ok: false, error };
+}
+
+/** Preserve the failing dependency without reclassifying HTTP refusals or cancellation. */
+function decryptionError(input: EncryptionErrorInput): EncryptionError {
+  const unavailable = input.code === "NODE_NOT_RESPONDING" ||
+    (input.code === "TRANSPORT_ERROR" && input.cause.name !== "AbortError");
+  return encryptionError(unavailable ? {
+    ...input,
+    code: "DECRYPTION_DEPENDENCY_UNAVAILABLE",
+    message: "The decryption service is not responsive right now. Please try again.",
+  } : input);
 }
 
 /**
@@ -211,7 +223,7 @@ export class EncryptionService
         descriptor = options.descriptor;
       } else {
         const discovered = await this.discoverNetwork(envelope.networkId);
-        if (!discovered.ok) return discovered;
+        if (!discovered.ok) return encErr(decryptionError(discovered.error));
         descriptor = discovered.data;
       }
       const usable = ensureNetworkUsableForDecrypt(descriptor);
@@ -303,7 +315,7 @@ export class EncryptionService
         this.assertActive();
       } catch (error) {
         const routing = routingFailure(error);
-        if (routing) return encErr(encryptionError(routing));
+        if (routing) return encErr(decryptionError(routing));
         if (error instanceof DecryptTransportResponseError) {
           return encErr(
             encryptionError(
@@ -326,7 +338,7 @@ export class EncryptionService
           );
         }
         return encErr(
-          encryptionError({
+          decryptionError({
             code: "TRANSPORT_ERROR",
             cause: toError(error),
           }),
@@ -356,7 +368,7 @@ export class EncryptionService
       return encOk(plaintext);
     } catch (error) {
       const routing = routingFailure(error);
-      if (routing) return encErr(encryptionError(routing));
+      if (routing) return encErr(decryptionError(routing));
       return encErr(
         encryptionError({
           code: "INVALID_RESPONSE",

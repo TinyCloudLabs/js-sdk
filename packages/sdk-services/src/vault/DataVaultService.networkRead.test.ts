@@ -378,8 +378,8 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     fixture.setDecrypt(async () => {
       throw new Error("node transport failure canary");
     });
-    const transport = await fixture.vault.readNetworkEncrypted("secrets/API_KEY");
-    expect(transport).toEqual({ status: "node_unreachable" });
+    const transport = await fixture.vault.readNetworkEncrypted("secrets/API_KEY").catch((error: unknown) => error);
+    expect(transport).toMatchObject({ code: "DECRYPTION_DEPENDENCY_UNAVAILABLE" });
     expect(JSON.stringify(transport)).not.toContain("canary");
     expect(JSON.stringify(transport)).not.toContain("sensitive value");
   });
