@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { evaluateOperationAuthority } from "../authority.js";
 import { operationSpaceResolver } from "../secrets.js";
 import { TC_APPS_CATALOG_PERMISSIONS, TC_APPS_CATALOG_READ_ACTIONS } from "../tc-apps.js";
@@ -51,7 +52,7 @@ const QueryOutputSchema = z.union([
 ]);
 type QueryInput = z.infer<typeof QueryInputSchema>;
 export type QueryOutput = z.infer<typeof QueryOutputSchema>;
-type ContextInput = z.infer<typeof ContextInputSchema>;
+type ContextInput = z.input<typeof ContextInputSchema>;
 export type ContextOutput = z.infer<typeof ContextOutputSchema>;
 type ReadInput = z.infer<typeof ReadInputSchema>;
 export type ReadOutput = z.infer<typeof ReadOutputSchema>;
@@ -84,7 +85,7 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
   const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
   const scopes = [...entries.values()].map((entry) => {
     if (!forWrite) return entry;
-    const actions = entry.actions.filter((action) => !evaluateOperationAuthority(context.runtime!.granted, [{ ...entry, actions: [action] }], resolve).satisfied);
+    const actions = entry.actions.filter((action) => !evaluateOperationAuthority(context.runtime!.granted as unknown as readonly PermissionEntry[], [{ ...entry, actions: [action] }], resolve).satisfied);
     return actions.length > 0 ? { ...entry, actions } : entry;
   });
   return oneSpaceAtATime(context, scopes);
@@ -103,7 +104,7 @@ const contextAuthority = async (context: RuntimeOperationContext, input: Context
 };
 const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]).map((entry) => {
   const read = { ...entry, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
-  return evaluateOperationAuthority(context.runtime!.granted, [read], operationSpaceResolver(context.runtime!.node, context.summary.space)).satisfied ? read : entry;
+  return evaluateOperationAuthority(context.runtime!.granted as unknown as readonly PermissionEntry[], [read], operationSpaceResolver(context.runtime!.node, context.summary.space)).satisfied ? read : entry;
 });
 const writeAuthority = async (context: RuntimeOperationContext, input: WriteInput) => scopesFor(
   context,

@@ -15,6 +15,7 @@ const expectedOperationIds = [
   "tinycloud.apps.write",
   "tinycloud.auth.capabilities",
   "tinycloud.auth.import",
+  "tinycloud.auth.read_scope",
   "tinycloud.auth.request",
   "tinycloud.auth.status",
   "tinycloud.knowledge.list",
@@ -24,6 +25,7 @@ const expectedOperationIds = [
   "tinycloud.kv.head",
   "tinycloud.kv.list",
   "tinycloud.kv.put",
+  "tinycloud.read",
   "tinycloud.secrets.get",
   "tinycloud.secrets.status",
   "tinycloud.sql.execute",
@@ -35,13 +37,12 @@ const expectedOperationIds = [
 test("registry contains exactly the reviewed v1 operations", () => {
   const definitions = operationDefinitionsForCatalog();
 
-  expect(definitions.map((definition) => definition.id).sort()).toEqual([...expectedOperationIds]);
-  expect(definitions.every((definition) => definition.version === 1)).toBe(true);
-  expect(new Set(definitions.map((definition) => definition.id)).size).toBe(definitions.length);
+  expect(definitions.map((definition) => `${definition.id}@${definition.version}`).sort())
+    .toEqual(expectedOperationIds.map((id) => `${id}@1`));
 });
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {
-  for (const operationId of expectedOperationIds) {
+  for (const { id: operationId } of operationDefinitionsForCatalog()) {
     expect(lookupOperation(operationId, 1)).toMatchObject({
       status: "found",
       definition: { id: operationId, version: 1 },

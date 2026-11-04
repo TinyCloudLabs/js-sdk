@@ -1,5 +1,80 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.2
+
+### Minor Changes
+
+- 9ff4cf2: Expose `ensureSpaceHosted()` and allow restored sessions to host a missing primary space from a user gesture. Signing out during approval dismisses the prompt and rejects with an explicit cancellation error.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 3.12.0-beta.1
+
+### Minor Changes
+
+- 55d52f7: `TinyCloudWeb.restoreSession()` now makes one bounded node read before it reports `"restored"`: it asks the node whether the restored session's primary space is hosted, waiting at most 5 seconds. It never prompts and never fails or delays the restore past that cap; an answer it cannot get is `"unknown"`. Read the result from the new `TinyCloudWeb.spaceHosting` getter (`"hosted"`, `"not-hosted"` or `"unknown"`). `signIn()` on a restored session whose space is not hosted returns the restored session, as before. Exports the `SpaceHosting` type.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 3.11.1-beta.0
+
+### Patch Changes
+
+- 5817c2b: `TinyCloudWeb.signOut()` clears local state first. The node's sign-out starts at once, but `signOut()` waits for it for at most 3 seconds after the persisted session is cleared, so a node call that never answers (for example after a revoked grant) no longer leaves the tab signed in. When the 3 seconds pass, `signOut()` resolves while the node's own cleanup may still be running; the local session is already gone, but callers should not assume the node-side cleanup has finished. Errors the node's sign-out raises within that time still reject `signOut()`, as before. A session whose stored record could not be removed is now fenced in `BrowserSessionStorage` (`markSignedOut` / `isSignedOut`), so a reload cannot restore it; a successful `clear` or a different saved session lifts the fence. Other `ISessionStorage` implementations keep only the in-memory block, and a sign-out with no live session (a restore still pending) fences nothing: only the in-memory block applies there.
+
+  `signOut()` in both SDKs clears the stored session only when it is still the session being signed out (same signature): a sign-out that finishes after a newer sign-in for the same address no longer erases the newer saved copy.
+
+  `FileSessionStorage.save` writes a temp file (mode 0600, so the saved file is owner-only) and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
+
+  Details: TC-2379
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 3.11.0
+
+### Minor Changes
+
+- 75c0432: `openkey.expiryChangeable` is a new TinyCloudWeb option. When true, the OpenKey request tells OpenKey the user may change the session expiry, and the session is built with the expiry the user signed. It is a pass-through: `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards it and the option is inert on 0.12.x, so nothing changes until the app also updates `@openkey/sdk`.
+
+  `openkey.maxExpiresAt` (epoch milliseconds, a `Date`, or a function read when the approval comes back) sets the latest expiry the app accepts; a later signed expiry is refused before the session is built or stored, and the value is never sent to OpenKey.
+
+  Details: TC-2276
+
+### Patch Changes
+
+- cb0c6ce: When an app opts in with `openkey.expiryChangeable`, TinyCloudWeb now accepts a changed session expiry of any length up to 9999-12-31, including 11 or 100 years. It no longer refuses an expiry more than 10 years away. An expiry later than 9999-12-31, or one that is not a date, is refused with a message that names the date.
+
+  Details: TC-2272
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+  - @tinycloud/replica@0.4.4
+
+## 3.11.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/replica@0.4.4-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
 ## 3.11.0-beta.1
 
 ### Patch Changes

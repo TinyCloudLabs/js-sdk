@@ -209,6 +209,15 @@ version metadata and make the immutable release checkout fail the clean-tree pub
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.
+- Generic retrieval lives in `packages/operations/src/operations/read.ts` and
+  `read-scope.ts`. Explicit subtree/database consent uses the existing
+  request-bound approval kernel; GET/HEAD must never broaden implicitly.
+  `tinycloud.read` reacquires bounded KV/SQL data for each digest-bound page.
+  Continuations bind host, source owner, canonical locator/query, hash and
+  length, never sender credentials. Recipient authority remains independent.
+  Preserve byte-exact KV vs derived SQL provenance and fail closed on changes.
+  Keep these private tools out of the public ChatGPT binding set; native read
+  exposure must remain inside the existing signed grant ceiling.
 - Meals, food, calories, body weight and recipes are not generic personal
   records: the rules route them to Health Log and Recipes through the generic
   knowledge and SQL tools. The routing table is extracted from the vendored

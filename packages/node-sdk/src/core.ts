@@ -121,6 +121,7 @@ export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
   type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
 } from "./authorization/NodeUserAuthorization";
 export { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./authorization/openKeyBridge";
 export { refuseCaveated } from "./authorization/caveatRefusal";

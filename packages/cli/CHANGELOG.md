@@ -1,5 +1,128 @@
 # @tinycloud/cli
 
+## 1.6.3-beta.3
+
+### Patch Changes
+
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
+## 1.6.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+  - @tinycloud/operations@0.8.1-beta.2
+
+## 1.6.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+  - @tinycloud/operations@0.8.1-beta.1
+
+## 1.6.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+  - @tinycloud/operations@0.8.1-beta.0
+
+## 1.6.2
+
+### Patch Changes
+
+- 7062e9f: When `onboard --timeout` or `auth grant --timeout` ends with exit 8 because the owner has not answered yet, stderr now ends with one `Next:` line after the link and the "Still waiting" message. The line asks the agent only to send the owner the link in its reply now, and to run the command again when the owner next writes to it; it no longer asks for the re-run in the same reply. For a link created in this run it says to send the link above now; for a resumed wait that reached its deadline it says to send the link only if it has not been sent yet. It never claims the owner already has the link. This works best with a short `--timeout` (for example `1s`), so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. The line names the command as it was run (with the program name `tc` or `tinycloud`) only when every part of the command line is known to be harmless: the subcommand words, a `.json` request file, and the flags `--timeout`, `--profile`, `--host`, `--json`, `--yes`, `--quiet`, `--verbose`, `--no-cache`, `--no-retry`, `--replication` with plain values. For anything else (any other flag, short flags, `--flag=value`, a code or token, a JWT-like or long value, any control character) it says `this same command` and echoes nothing from the command line. When `auth grant` reads its request from stdin (`--stdin`, `--paste`, a bare `-`, or no source) it says `this same command ... again with the same input`, because the command alone would read an empty stdin. stdout (`{"pending":{...}}`) and the exit code are unchanged, and no other exit prints the line.
+
+  A resumed approval now completes at least one status check of OpenKey before `onboard` or `auth grant` reports it as pending, whatever the `--timeout` (a new link still exits 8 at once, with no check). Before, with `--timeout 1s` the status request was cut off after about a second, so an OpenKey answer that took 1.5 s made an approval the owner had already given read as pending (exit 8). The command can now take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that first check at all it exits 6 instead of reporting the approval as pending; an approval OpenKey has already accepted (a saved result reference) keeps its earlier outcome.
+
+  Details: TC-2360
+
+## 1.6.2-beta.0
+
+### Patch Changes
+
+- 7062e9f: When `onboard --timeout` or `auth grant --timeout` ends with exit 8 because the owner has not answered yet, stderr now ends with one `Next:` line after the link and the "Still waiting" message. The line asks the agent only to send the owner the link in its reply now, and to run the command again when the owner next writes to it; it no longer asks for the re-run in the same reply. For a link created in this run it says to send the link above now; for a resumed wait that reached its deadline it says to send the link only if it has not been sent yet. It never claims the owner already has the link. This works best with a short `--timeout` (for example `1s`), so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. The line names the command as it was run (with the program name `tc` or `tinycloud`) only when every part of the command line is known to be harmless: the subcommand words, a `.json` request file, and the flags `--timeout`, `--profile`, `--host`, `--json`, `--yes`, `--quiet`, `--verbose`, `--no-cache`, `--no-retry`, `--replication` with plain values. For anything else (any other flag, short flags, `--flag=value`, a code or token, a JWT-like or long value, any control character) it says `this same command` and echoes nothing from the command line. When `auth grant` reads its request from stdin (`--stdin`, `--paste`, a bare `-`, or no source) it says `this same command ... again with the same input`, because the command alone would read an empty stdin. stdout (`{"pending":{...}}`) and the exit code are unchanged, and no other exit prints the line.
+
+  A resumed approval now completes at least one status check of OpenKey before `onboard` or `auth grant` reports it as pending, whatever the `--timeout` (a new link still exits 8 at once, with no check). Before, with `--timeout 1s` the status request was cut off after about a second, so an OpenKey answer that took 1.5 s made an approval the owner had already given read as pending (exit 8). The command can now take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that first check at all it exits 6 instead of reporting the approval as pending; an approval OpenKey has already accepted (a saved result reference) keeps its earlier outcome.
+
+  Details: TC-2360
+
+## 1.6.1
+
+### Patch Changes
+
+- a2253b8: A login by paste now accepts the lifetime the owner chose in OpenKey, longer than 10 years included. `tc auth login --paste`, `tc auth rotate --paste` (on a profile without named keys), `tc init --paste` and `tc auth request --grant --paste` (custom `--cap`, `--permission` and `--manifest` grants) tell OpenKey the owner may choose the session lifetime (their link carries `expiryChangeable=true`), and the CLI saves the lifetime that was signed, however long, with no upper cap. It refuses only a signed lifetime of 60 seconds or less (`OPENKEY_EXPIRY_TOO_SHORT`), one that no signed message can carry (after 9999-12-31: OpenKey cannot produce it, and one presented anyway is refused as an invalid proof (`OPENKEY_PROOF_INVALID`) or as `OPENKEY_EXPIRY_UNREPRESENTABLE`, never accepted), and one that has already ended (`AUTH_EXPIRED`). The first two are refusals of an approval OpenKey already granted, so they get the same cleanup and notice as the other refusals (no saved code, no key this login created, one notice).
+
+  Logins that do not send the opt-in keep the `--expiry` ceiling, so a longer lifetime is still refused there with `OPENKEY_EXPIRY_EXCEEDED`: the approval-request login, the device login, the prepared replica and `--keys` logins, and `tc auth request --grant --preset apps-agent --paste` (agent presets keep the 7-day agent policy: the lifetime can be shortened on the OpenKey page but not extended).
+
+  A paste login no longer refuses before approval because `--expiry` is shorter than a live session; the check runs again on the signed lifetime when the login is saved. A long paste session makes a later, shorter scoped login on the same profile ask for `--replace-session`, which is the existing policy for replacing a live session with a shorter one.
+
+  Details: TC-2276
+
+- 83d1d3d: When the CLI refuses an approval OpenKey already granted (a wrong owner, a scope that does not match, a grant broader or narrower than asked, a bad proof, a signed lifetime above `--expiry`), the delegation is live even though nothing was saved, and the CLI cannot revoke it itself (a login's approval carries no revoke ability). The CLI now says so once, on stderr: the delegation's CID, until when OpenKey granted it, whether its key was deleted or still exists on this device (the delegation's CID is printed only when it looks like a CID), and where to revoke it (https://account.tinycloud.xyz/delegations). It also stops keeping what would let the refused result be used or served again:
+  - `tc auth login`, `tc init`, `tc onboard`, `tc auth rotate`, `tc auth request --grant`, `tc auth login --device` and the agent grant commands drop the saved copy of a pasted short code and the pending approval request (its result key and reference) of a refused result.
+  - The profile's key is deleted only when this command created it: a profile it created (which is removed again, with the previous default profile restored) or a key that exists only in memory or in the refused pending request. A key that already existed, which other grants or sessions may use, is kept.
+  - `tc auth rotate` no longer touches `key.json` or the session until the approval is verified: the new key waits in memory (`--paste`) or in the pending approval request's file (mode 0600, the default flow) and is written with the new session only then. A refused rotation leaves the old key and the old login exactly as they were, and any failed rotation drops the pending request that holds the new key (and says so when the owner had already approved, adding that the current login and its key are unchanged); before, the old session was cleared and the new key written first.
+  - A pasted short code that OpenKey no longer has (already used, expired or refused) now says to approve again in OpenKey, instead of telling you to re-run the same command with the same code.
+
+  When OpenKey rejects this computer's poll of a rotation's approval request (a clock behind OpenKey's), the CLI cannot tell whether the owner approved; it then drops the request and prints a notice that says OpenKey may already have granted the approval, without claiming a CID or date.
+
+  A refusal that only means the approval cannot be saved yet (an expired approval, a lifetime that only looks too long because this computer's clock is behind OpenKey's, a session in use, a profile changed or locked meanwhile, a replica logout) keeps the saved approval so the same command can finish it, and prints no notice. A successful login or rotation is unchanged.
+
+  Details: TC-2363
+
+- 4ea5add: `tc auth rotate` now says that the previous sign-in stays live until its expiry, and where to revoke it. This CLI cannot revoke the OpenKey login delegation a rotation replaces, so after a rotation that succeeded and replaced a live session it prints one line on stderr: `The previous sign-in (<CID>) stays live until <expiry> unless you have already revoked it, because this CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.` The CID part is left out when the old session does not hold one, and `until it expires` stands in for an unknown date. Nothing is printed on a first login, when there was no previous session, when it had already ended, or when the rotation was refused or failed. stdout, the JSON output and exit codes are unchanged.
+
+  Details: TC-2412
+
+- 75c0432: The prepared OpenKey login accepts a shorter session lifetime picked on the OpenKey page instead of refusing the signed message, and saves the lifetime that was signed. A lifetime beyond the requested `--expiry` (plus 30 seconds) is still refused with `OPENKEY_EXPIRY_EXCEEDED`. The replica login now builds its node with the requested `--expiry` as the session lifetime, as the `--keys` login already did.
+
+  Details: TC-2276
+
+- Updated dependencies [dc48089]
+- Updated dependencies [dc48089]
+- Updated dependencies [3b759cf]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-services@3.11.0
+  - @tinycloud/operations@0.8.0
+  - @tinycloud/sdk-core@3.11.0
+
+## 1.6.1-beta.6
+
+### Patch Changes
+
+- Updated dependencies [3b759cf]
+  - @tinycloud/operations@0.8.0-beta.3
+
+## 1.6.1-beta.5
+
+### Patch Changes
+
+- 4ea5add: `tc auth rotate` now says that the previous sign-in stays live until its expiry, and where to revoke it. This CLI cannot revoke the OpenKey login delegation a rotation replaces, so after a rotation that succeeded and replaced a live session it prints one line on stderr: `The previous sign-in (<CID>) stays live until <expiry> unless you have already revoked it, because this CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.` The CID part is left out when the old session does not hold one, and `until it expires` stands in for an unknown date. Nothing is printed on a first login, when there was no previous session, when it had already ended, or when the rotation was refused or failed. stdout, the JSON output and exit codes are unchanged.
+
+  Details: TC-2412
+
+## 1.6.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/sdk-services@3.11.0-beta.2
+  - @tinycloud/operations@0.7.11-beta.2
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
 ## 1.6.1-beta.3
 
 ### Patch Changes

@@ -43,12 +43,13 @@ import type { McpOperationInvocation } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
 
 const REQUIRED_SCOPE = "tinycloud:mcp";
+const MCP_CORS_ALLOWED_HEADERS =
+  "Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, Mcp-Method, Mcp-Name";
 const LOCAL_CLI_PACKAGE = ["@tinycloud", "cli"].join("/");
 const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
 
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
-  readonly allowedOrigins?: readonly string[];
   /**
    * OpenKey token introspection client (`TC_MCP_INTROSPECTION_URL` and client
    * credentials). The hosted server always sets this; without it only the
@@ -139,8 +140,8 @@ function createHostedSurface(
         instructions: nativeOwner === undefined
           ? surface === "public"
             ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
-            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as workouts, goals or todos, call tinycloud_apps_context first."
-          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads.",
+            : "Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for approval before retrying unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first. Other app data can be discovered with account-space listing, KV cursors and SQL schema/query tools without a knowledge bundle. If the user wants reusable read access, explicitly select prefixes/databases with tinycloud_auth_read_scope; never silently broaden a key read. Use tinycloud_read for complete bounded KV/SQL delivery and replay its continuation with the original resource."
+          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads. Use tinycloud_read for large values, retaining the original resource and returned digest-bound continuation.",
       },
     );
     registerTinyCloudTools(server, {
@@ -150,7 +151,7 @@ function createHostedSurface(
       allowOwnerProfile: false,
       stateRoot,
       ...(nativeOwner === undefined ? {} : {
-        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get"] as const,
+        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"] as const,
       }),
       beforeOperation: nativeOwner === undefined
         ? () => store.validateTenant(subject, ownerDids)
@@ -324,7 +325,7 @@ function createHostedSurface(
               { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
               { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
             ],
-            tools: ["tinycloud_sql_query", "tinycloud_kv_get"],
+            tools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"],
             errors: {
               required: NATIVE_GRANT_REQUIRED,
               expired: NATIVE_GRANT_EXPIRED,
@@ -512,11 +513,9 @@ function createHostedSurface(
         });
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
-      const originFailure = validateOrigin(request, config.allowedOrigins);
-      if (originFailure !== undefined) return originFailure;
+      if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
       const auth = await authenticate(request);
-      if (auth instanceof Response) return auth;
-      return handler.fetch(request, { authInfo: auth });
+      return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
     close: () => handler.close(),
   };
@@ -621,11 +620,30 @@ function requiredState(url: URL): string {
   return state;
 }
 
-function validateOrigin(request: Request, allowed: readonly string[] | undefined): Response | undefined {
-  const origin = request.headers.get("origin");
-  if (origin === null) return undefined;
-  const allowlist = allowed ?? [];
-  return allowlist.includes(origin) ? undefined : json({ error: "Origin is not allowed." }, 403);
+/**
+ * Any browser Origin may call the MCP endpoint: it is authenticated by the
+ * `Authorization: Bearer` header alone (no cookies or other ambient
+ * credentials), so the Origin carries no authority. The wildcard origin can
+ * never be combined with credentials, so `Access-Control-Allow-Credentials`
+ * is not set. Only the bearer challenge header is exposed to scripts, and a
+ * preflight allows a fixed list of the headers MCP clients send; the native
+ * service headers are not in it. A request without an Origin header (not a
+ * browser cross-origin call) gets no CORS headers. `Vary: Origin` is appended
+ * to every answer because the CORS headers depend on the request's Origin.
+ */
+function mcpCors(response: Response, request: Request): Response {
+  const headers = new Headers(response.headers);
+  headers.append("vary", "Origin");
+  if (request.headers.has("origin")) {
+    headers.set("access-control-allow-origin", "*");
+    headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+    // The server is stateless, so only the bearer challenge is exposed. If sessions
+    // are ever enabled, `Mcp-Session-Id` must be added here or browser clients
+    // cannot read it.
+    headers.set("access-control-expose-headers", "WWW-Authenticate");
+    if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function validateCallbackOrigin(request: Request, openkeyHost: string): Response | undefined {

@@ -1,5 +1,123 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.4
+
+### Minor Changes
+
+- b09d4c0: The hosted personal-records tools keep new apps in the owner's `applications` space under `xyz.tinycloud.tinyapps.<app>/`, with a discovery entry, so records saved through the connector match the CLI skill's (`tc-apps` 0.3.10). Apps already in the `default` space under `xyz.tinycloud.agent-data/` stay there until moved. The approval screens change: first use asks for the app list (`xyz.tinycloud.tinyapps.catalog/`); a new app asks for its own folder (`xyz.tinycloud.tinyapps.<app>/`), then for a read-only look at the older catalog (`xyz.tinycloud.agent-data/catalog/`) unless an older grant covers it, because OpenKey signs one space per delegation; later apps ask for their own folder only. The fast copy is one database per app, `xyz.tinycloud.tinyapps.<app>/index`. `tinycloud_apps_query` now needs a `layout` and one app per call; `tinycloud_apps_context` returns `apps` and `legacy`.
+  Details: TC-2416
+
+## 0.10.0-beta.3
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` remain annotated as potentially destructive: context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. They are not read-only. The query accepts one read-only SELECT and does not change canonical records; context only changes the timezone when one is supplied. Only `tinycloud_apps_write` mutates app records.
+  Details: TC-2416
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
+## 0.9.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+  - @tinycloud/operations@0.8.1-beta.2
+
+## 0.9.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+  - @tinycloud/operations@0.8.1-beta.1
+
+## 0.9.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+  - @tinycloud/operations@0.8.1-beta.0
+
+## 0.9.0
+
+### Minor Changes
+
+- 3b759cf: Add explicit reusable read-only consent for selected KV prefixes and exact SQL databases in one owner space, without widening ordinary exact-key GET or HEAD approval requests.
+
+  Add complete, bounded KV and SQL retrieval through `tinycloud.read` / `tinycloud_read`, with digest-bound byte continuations, provenance, independent recipient authorization, and explicit errors for changed sources or mismatched retrieval contexts. Hosted oversized reads now point callers to the bounded retrieval path. Existing acquisition, query, and response limits remain in place.
+
+  Expose opaque KV listing continuations and return nonretryable input errors for rejected cursors, with restart guidance. Preserve handoff identity when optional SQL options are explicitly undefined. Public ChatGPT tool exposure and the native MCP service's signed capability ceiling remain unchanged.
+
+  Details: TC-1401
+
+- d55eacc: The MCP HTTP endpoint (hosted and self-hosted) now answers calls and CORS preflights from any browser Origin instead of an allowlist. Every call is still authorized only by the OAuth access token in the `Authorization: Bearer` header: a call without a valid token gets 401 with `WWW-Authenticate`, whatever its Origin. Responses carry `Access-Control-Allow-Origin: *` and `Vary: Origin`, never `Access-Control-Allow-Credentials`, and expose only `WWW-Authenticate`; a preflight allows a fixed list of the headers MCP clients send. The `allowedOrigins` config option and the `TC_MCP_ALLOWED_ORIGINS` environment variable are removed: a set `TC_MCP_ALLOWED_ORIGINS` is now ignored, and `allowedOrigins` is removed from the `createHostedMcpApp` config type, so TypeScript callers that set it get a compile error (JavaScript callers' value is ignored). The native-service path still refuses any request that carries an Origin.
+
+  Details: TC-2394
+
+### Patch Changes
+
+- 14be44e: When OpenKey's token introspection cannot answer, the hosted MCP now serves a token that OpenKey confirmed active only for 60 seconds after the confirming question was sent to OpenKey (and until the token expires), counted on a monotonic clock so that a wall-clock step cannot extend it, instead of for the token's whole lifetime. A token revoked during an introspection outage therefore stops working within about 60 seconds, however long the token lives. Tokens OpenKey never confirmed to this server, and tokens answered inactive, are still refused. The 30-second active-answer cache is unchanged.
+
+  Details: TC-2395
+
+- Updated dependencies [dc48089]
+- Updated dependencies [3b759cf]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/operations@0.8.0
+
+## 0.9.0-beta.5
+
+### Minor Changes
+
+- 3b759cf: Add explicit reusable read-only consent for selected KV prefixes and exact SQL databases in one owner space, without widening ordinary exact-key GET or HEAD approval requests.
+
+  Add complete, bounded KV and SQL retrieval through `tinycloud.read` / `tinycloud_read`, with digest-bound byte continuations, provenance, independent recipient authorization, and explicit errors for changed sources or mismatched retrieval contexts. Hosted oversized reads now point callers to the bounded retrieval path. Existing acquisition, query, and response limits remain in place.
+
+  Expose opaque KV listing continuations and return nonretryable input errors for rejected cursors, with restart guidance. Preserve handoff identity when optional SQL options are explicitly undefined. Public ChatGPT tool exposure and the native MCP service's signed capability ceiling remain unchanged.
+
+  Details: TC-1401
+
+### Patch Changes
+
+- Updated dependencies [3b759cf]
+  - @tinycloud/operations@0.8.0-beta.3
+
+## 0.9.0-beta.4
+
+### Minor Changes
+
+- d55eacc: The MCP HTTP endpoint (hosted and self-hosted) now answers calls and CORS preflights from any browser Origin instead of an allowlist. Every call is still authorized only by the OAuth access token in the `Authorization: Bearer` header: a call without a valid token gets 401 with `WWW-Authenticate`, whatever its Origin. Responses carry `Access-Control-Allow-Origin: *` and `Vary: Origin`, never `Access-Control-Allow-Credentials`, and expose only `WWW-Authenticate`; a preflight allows a fixed list of the headers MCP clients send. The `allowedOrigins` config option and the `TC_MCP_ALLOWED_ORIGINS` environment variable are removed: a set `TC_MCP_ALLOWED_ORIGINS` is now ignored, and `allowedOrigins` is removed from the `createHostedMcpApp` config type, so TypeScript callers that set it get a compile error (JavaScript callers' value is ignored). The native-service path still refuses any request that carries an Origin.
+
+  Details: TC-2394
+
+## 0.8.7-beta.3
+
+### Patch Changes
+
+- 14be44e: When OpenKey's token introspection cannot answer, the hosted MCP now serves a token that OpenKey confirmed active only for 60 seconds after the confirming question was sent to OpenKey (and until the token expires), counted on a monotonic clock so that a wall-clock step cannot extend it, instead of for the token's whole lifetime. A token revoked during an introspection outage therefore stops working within about 60 seconds, however long the token lives. Tokens OpenKey never confirmed to this server, and tokens answered inactive, are still refused. The 30-second active-answer cache is unchanged.
+
+  Details: TC-2395
+
+## 0.8.7-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/operations@0.7.11-beta.2
+
 ## 0.8.7-beta.1
 
 ### Patch Changes
