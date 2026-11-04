@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { assertPrivateTestEnvironment } from "./private-home.mjs";
 
 // Every child starts with real, private HOME+TC_HOME. Negative cases only pass
-// synthetic strings to the pure guard; they never change the process environment.
+// synthetic strings to the guard; they never change the process environment.
 assertPrivateTestEnvironment();
 const [mode, marker] = process.argv.slice(2);
 if (!mode || !marker) throw new Error("Expected a private guard case and marker");
