@@ -908,6 +908,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
    * Unlike {@link getNetworkEncrypted}, this is intentionally message-free so
    * an operation layer can distinguish an authorized absence from a failed
    * read without receiving node, envelope, plaintext, or key material.
+   * Typed routing failures reject unchanged rather than becoming an ordinary
+   * read/decrypt failure; the operation boundary projects their safe code.
    */
   async readNetworkEncrypted<T = unknown>(
     key: string,
@@ -921,11 +923,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     let valueResult: Awaited<ReturnType<IKVService["get"]>>;
     try {
       valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true, source: "network" });
-    } catch {
+    } catch (error) {
+      if (routingFailure(error)) throw error;
       return { status: "node_unreachable" };
     }
 
     if (!valueResult.ok) {
+      if (routingFailure(valueResult.error)) throw valueResult.error;
       const permissionHint = parsePermissionHint(valueResult.error.meta?.permissionHint);
       if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== undefined) {
         return { status: "permission_required", hint: permissionHint };
@@ -971,11 +975,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     try {
       const proof = await this.decryptCapabilityProof();
       plaintextResult = await config.service.decryptEnvelope(envelope, proof);
-    } catch {
+    } catch (error) {
+      if (routingFailure(error)) throw error;
       return { status: "decrypt_failed" };
     }
 
     if (!plaintextResult.ok) {
+      if (routingFailure(plaintextResult.error)) throw plaintextResult.error;
       const permissionHint = parsePermissionHint(
         (plaintextResult.error as { permissionHint?: unknown }).permissionHint,
       );

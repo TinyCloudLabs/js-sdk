@@ -7,6 +7,7 @@ import {
   internalOperationError,
   nodeRetryOperationError,
   operationError,
+  routingOperationError,
   sanitizeThrownOperationError,
 } from "./errors.js";
 import { appsFailure } from "./tc-apps/kv.js";
@@ -53,6 +54,12 @@ test("activation-only partial registration preserves availability, accepted outc
     details: { succeeded: [accepted], failed: [{ url: offline, code: "NODE_NOT_RESPONDING" }] },
   });
   expect(JSON.stringify(projected)).not.toContain("PRIVATE_ACTIVATION_CAUSE");
+  const dataFailure = routingOperationError(unavailable);
+  expect(dataFailure).toMatchObject({
+    code: "PARTIAL_NODE_WRITE", retryable: false,
+    details: { succeeded: [accepted], failed: [{ url: offline, code: "NODE_NOT_RESPONDING" }] },
+  });
+  expect(JSON.stringify(dataFailure)).not.toContain("PRIVATE_ACTIVATION_CAUSE");
 
   const wrongIdentity = new PartialNodeWriteError([accepted], [
     ...unavailable.failed,

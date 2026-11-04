@@ -110,36 +110,50 @@ export function nodeRetryOperationError(error: unknown): OperationError | undefi
   return operationError("NODE_ERROR", "The TinyCloud node was busy and applied nothing; try again shortly.", { retryable: true });
 }
 
-const ACTIVATION_ROUTING_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof routingFailure>>["code"], OperationError>> = {
+const ROUTING_OPERATION_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof routingFailure>>["code"], OperationError>> = {
   NODE_NOT_RESPONDING: { code: "NODE_NOT_RESPONDING", message: "The place where your data is at is not responsive right now. Please try again.", retryable: true },
   NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "The TinyCloud node identity does not match the signed registry.", retryable: false },
-  PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "The grant was not registered on every required node.", retryable: false },
+  PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "The operation did not complete on every required node.", retryable: false },
   RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "The signed registry has no destination for this resource.", retryable: false },
   registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "The location registry is unavailable.", retryable: true },
   node_not_found: { code: "NODE_NOT_FOUND", message: "No TinyCloud node is registered for this resource.", retryable: false },
   node_registry_entry_exists: { code: "NODE_REGISTRY_ENTRY_EXISTS", message: "The selected node is not authorized by the signed registry.", retryable: false },
 };
 
-/** Activation availability is not missing authority; never project private rejection details. */
-export function activationRoutingOperationError(error: unknown): OperationError | undefined {
+function partialRoutingDetails(partial: PartialNodeWriteError) {
+  return {
+    succeeded: partial.succeeded,
+    failed: partial.failed.map(({ url, status, cause }) => {
+      const code = routingFailure(cause)?.code;
+      return { url, ...(status === undefined ? {} : { status }), ...(code === undefined ? {} : { code }) };
+    }),
+  };
+}
+
+/** Preserve routing codes without exposing node response bodies or private causes. */
+export function routingOperationError(error: unknown): OperationError | undefined {
   const failure = routingFailure(error);
   if (!failure) return undefined;
-  const partial = error instanceof PartialNodeWriteError ? error : undefined;
-  const failed = partial?.failed.map(({ url, status, cause }) => {
-    const code = routingFailure(cause)?.code;
-    return { url, ...(status === undefined ? {} : { status }), ...(code === undefined ? {} : { code }) };
-  });
-  // Retrying the same grant registration is safe: no operation data has been written.
-  const unavailable = failed !== undefined && failed.length > 0 &&
-    failed.every(({ code }) => code === "NODE_NOT_RESPONDING");
-  const projected = ACTIVATION_ROUTING_ERRORS[unavailable ? "NODE_NOT_RESPONDING" : failure.code];
+  const projected = ROUTING_OPERATION_ERRORS[failure.code];
   return operationError(projected.code, projected.message, {
     retryable: projected.retryable,
-    ...(partial === undefined ? {} : { details: {
-      succeeded: partial.succeeded,
-      failed,
-    } }),
+    ...(error instanceof PartialNodeWriteError ? { details: partialRoutingDetails(error) } : {}),
   });
+}
+
+/** Only grant registration may project all-unavailable partials as retryable availability. */
+export function activationRoutingOperationError(error: unknown): OperationError | undefined {
+  if (!(error instanceof PartialNodeWriteError)) return routingOperationError(error);
+  const details = partialRoutingDetails(error);
+  // Retrying the same grant registration is safe: no operation data has been written.
+  const unavailable = details.failed.length > 0 &&
+    details.failed.every(({ code }) => code === "NODE_NOT_RESPONDING");
+  const projected = ROUTING_OPERATION_ERRORS[unavailable ? "NODE_NOT_RESPONDING" : "PARTIAL_NODE_WRITE"];
+  return operationError(projected.code,
+    unavailable ? projected.message : "The grant was not registered on every required node.", {
+      retryable: projected.retryable,
+      details,
+    });
 }
 
 /**

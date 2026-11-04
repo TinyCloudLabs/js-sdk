@@ -23,7 +23,7 @@ const { createHermeticEncryptedNode } = await import(
   new URL("../../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href
 ) as { createHermeticEncryptedNode(options: object): Promise<HermeticNode> };
 
-test("fresh delegate profile imports the exact three-service owner runtime grant and reads without owner/space seeding", async () => {
+test("fresh delegate profile imports the exact three-service grant, reads, and preserves identity refusal without authority rewrites", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc-registry-fresh-import-"));
   const root = resolve(import.meta.dir, "../../../..");
   const fixture = await createHermeticEncryptedNode({ secretPayloadValue: "fresh-three-service-dummy" });
@@ -32,9 +32,12 @@ test("fresh delegate profile imports the exact three-service owner runtime grant
   try {
     fixture.provisionSecret();
     const { nodeId } = await (await fetch(`${fixture.host}/info`)).json() as { nodeId: string };
+    let mismatchedNodeKeys = false;
+    let forwardedAuthorizationAfterMismatch = false;
     proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       const url = new URL(request.url);
-      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: nodeId, shareInvitationPublicKey: "A".repeat(43) });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: mismatchedNodeKeys ? "did:key:wrong-fixture-node" : nodeId, shareInvitationPublicKey: "A".repeat(43) });
+      if (mismatchedNodeKeys && request.headers.has("authorization")) forwardedAuthorizationAfterMismatch = true;
       return fetch(new Request(`${fixture.host}${url.pathname}${url.search}`, request));
     } });
     const signer = new PrivateKeySigner(fixture.ownerPrivateKey);
@@ -99,6 +102,11 @@ test("fresh delegate profile imports the exact three-service owner runtime grant
     const read = await cli(["--profile", profile, "secrets", "get", "HERMETIC_DELEGATION_CANARY", "--raw"]);
     expect({ code: read.code, error: read.errorCode }).toEqual({ code: 0, error: undefined });
     expect(read.stdout.trim()).toBe("fresh-three-service-dummy");
+    mismatchedNodeKeys = true;
+    const refused = await cli(["--profile", profile, "secrets", "get", "HERMETIC_DELEGATION_CANARY", "--raw"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.errorCode).toBe("NODE_IDENTITY_MISMATCH");
+    expect(forwardedAuthorizationAfterMismatch).toBe(false);
     const after = JSON.parse((await cli(["--json", "profile", "show", profile])).stdout) as Record<string, unknown>;
     expect(after.sessionDid).toBe(initial.sessionDid);
     expect(after.host).toBe(initial.host);

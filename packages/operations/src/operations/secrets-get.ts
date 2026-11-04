@@ -12,7 +12,7 @@ import {
   type RuntimeOperationContext,
   type TinyCloudPosture,
 } from "../contract.js";
-import { OperationInvocationError, operationError } from "../errors.js";
+import { OperationInvocationError, operationError, routingOperationError } from "../errors.js";
 import { missingSecretRecovery, ownerOfSpace } from "../secret-request.js";
 import {
   normalizeSecretsGetInput,
@@ -151,23 +151,13 @@ async function executeSecretGet(
       ...(reference.scope === undefined ? {} : { scope: reference.scope }),
     });
   } catch (error) {
-    const isNodeNotResponding =
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "NODE_NOT_RESPONDING";
     return {
       status: "error",
-      error: isNodeNotResponding
-        ? operationError(
-          "NODE_NOT_RESPONDING",
-          NODE_NOT_RESPONDING_MESSAGE,
-          { retryable: true },
-        )
-        : operationError(
-          "NODE_ERROR",
-          "The TinyCloud node could not read the secret.",
-          { retryable: true },
-        ),
+      error: routingOperationError(error) ?? operationError(
+        "NODE_ERROR",
+        "The TinyCloud node could not read the secret.",
+        { retryable: true },
+      ),
     };
   }
 
