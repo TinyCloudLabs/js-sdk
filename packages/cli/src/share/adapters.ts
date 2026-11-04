@@ -12,7 +12,8 @@ import { ProfileManager } from "../config/profiles.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
-import { writeJsonAtomic } from "@tinycloud/operations/state";
+import { recordRegistryFallbackWarning } from "../output/warnings.js";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, writeJsonAtomic } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   ArtifactError,
@@ -1134,7 +1135,21 @@ export function createShareAuthorityAdapters(input: {
   };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
     const { TinyCloudNode } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host: string | undefined) => new TinyCloudNode({ ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false }).sharing);
+    let sharing = input.nativeSharing;
+    if (sharing === undefined) {
+      const selectedProfile = await profileName();
+      const selected = await ProfileManager.profileExists(selectedProfile)
+        ? await ProfileManager.getProfile(selectedProfile) : undefined;
+      const registry = selected === undefined ? {} : {
+        registryCacheStore: createProfileRegistryCacheStore(selectedProfile),
+        registrySequenceStore: createProfileRegistrySequenceStore(selectedProfile),
+        tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl,
+      };
+      sharing = (host: string | undefined) => new TinyCloudNode({
+        ...registry, ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false,
+        onRegistryFallback: recordRegistryFallbackWarning,
+      }).sharing;
+    }
     const token = parseNativeShareUrl(link);
     const decoded = sharing(undefined).decodeLink(token) as { readonly host?: unknown };
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");

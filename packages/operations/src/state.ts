@@ -1,3 +1,4 @@
+import type { RegistryCacheEntry, RegistryCacheStore, RegistrySequenceStore } from "@tinycloud/sdk-core";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from "node:fs";
@@ -374,7 +375,9 @@ async function sweepLiveness(acquisition: AcquisitionLiveness): Promise<void> {
 export type ProfileStoreName =
   | "session"
   | "additional-delegations"
-  | "auth-requests";
+  | "auth-requests"
+  | "registry-cache"
+  | "registry-sequences";
 
 export interface StoreMetadata {
   formatVersion: number;
@@ -524,7 +527,7 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 /** A profile's direct JSON files must not resolve through a child alias. */
-async function readProfileJson<T>(profile: string, filePath: string): Promise<T | null> {
+async function readProfileJson<T>(profile: string, filePath: string, rejectNull = false): Promise<T | null> {
   // On platforms without descriptor-relative profile paths, check the named file on
   // both sides of the read so a replacement cannot silently redirect it.
   const before = process.platform !== "linux"
@@ -557,7 +560,9 @@ async function readProfileJson<T>(profile: string, filePath: string): Promise<T 
           throw new ProfileSymlinkError(profile, "changed while reading its file");
         }
       }
-      return JSON.parse(contents) as T;
+      const value = JSON.parse(contents) as T;
+      if (rejectNull && value === null) throw new Error("Invalid registry store");
+      return value;
     } finally {
       await handle.close();
     }
@@ -647,7 +652,7 @@ export async function readStoreMetadata(
   store: ProfileStoreName,
 ): Promise<StoreMetadata> {
   return withPinnedProfileDirectory(profile, async (directory) => {
-    const metadata = directory ? await readProfileJson<StoreMetadata>(profile, profileStoreMetadataPath(profile, store)) : null;
+    const metadata = directory ? await readProfileJson<StoreMetadata>(profile, profileStoreMetadataPath(profile, store), store === "registry-cache" || store === "registry-sequences") : null;
     if (metadata === null) return { formatVersion: 1 };
     if (
       typeof metadata !== "object" ||
@@ -667,8 +672,11 @@ export async function readProfileStore<T>(
     if (!directory) return { formatVersion: 1, records: [] };
     const [metadata, raw] = await Promise.all([
       readStoreMetadata(profile, store),
-      readProfileJson<unknown>(profile, profileStorePath(profile, store)),
+      readProfileJson<unknown>(profile, profileStorePath(profile, store), store === "registry-cache" || store === "registry-sequences"),
     ]);
+    if ((store === "registry-cache" || store === "registry-sequences") && raw !== null && !Array.isArray(raw)) {
+      throw new Error("Invalid registry cache store");
+    }
     return {
       formatVersion: metadata.formatVersion,
       records: Array.isArray(raw) ? raw as T[] : [],
@@ -974,6 +982,72 @@ async function updateProfileStoreWhileLocked<T, Result>(
   return next.result;
 }
 
+/** Plain, owner-only profile file with the same atomic writer and process lock as grants. */
+export function createProfileRegistryCacheStore(profile: string): RegistryCacheStore {
+  const find = (records: readonly RegistryCacheEntry[], key: string): RegistryCacheEntry | undefined => {
+    const keys = new Set<string>();
+    for (const entry of records) {
+      if (!entry || typeof entry.ownerKey !== "string" || keys.has(entry.ownerKey)) {
+        throw new Error("Invalid registry cache store");
+      }
+      keys.add(entry.ownerKey);
+    }
+    return records.find((entry) => entry.ownerKey === key);
+  };
+  return {
+    async get(key) {
+      return find((await readProfileStore<RegistryCacheEntry>(profile, "registry-cache")).records, key);
+    },
+    update(key, update) {
+      return updateProfileStore<RegistryCacheEntry, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
+        const entry = await update(find(records, key));
+        if (entry.ownerKey !== key) throw new Error("Registry cache owner mismatch");
+        return { records: [...records.filter((current) => current.ownerKey !== key), entry], result: entry };
+      });
+    },
+  };
+}
+
+/** Independent high-water state survives an absent cache file without inventing absence. */
+export function createProfileRegistrySequenceStore(profile: string): RegistrySequenceStore {
+  type Sequence = { ownerKey: string; sequence: number };
+  const memory = new Map<string, number>();
+  const find = (records: readonly Sequence[], key: string): number | undefined => {
+    const keys = new Set<string>();
+    for (const entry of records) {
+      if (!entry || typeof entry.ownerKey !== "string" || keys.has(entry.ownerKey) ||
+          !Number.isSafeInteger(entry.sequence) || entry.sequence < 0) {
+        throw new Error("Invalid registry sequence store");
+      }
+      keys.add(entry.ownerKey);
+    }
+    return records.find((entry) => entry.ownerKey === key)?.sequence;
+  };
+  return {
+    async get(key) {
+      const stored = find((await readProfileStore<Sequence>(profile, "registry-sequences")).records, key);
+      const sequence = Math.max(stored ?? -1, memory.get(key) ?? -1);
+      if (sequence < 0) return undefined;
+      memory.set(key, sequence);
+      return sequence;
+    },
+    async set(key, sequence) {
+      // Match the browser sequence adapter: a failed disk write must not
+      // make this client forget registration it has already verified.
+      memory.set(key, Math.max(memory.get(key) ?? -1, sequence));
+      await updateProfileStore<Sequence, void>(profile, "registry-sequences", (records) => {
+        const current = find(records, key);
+        const highWater = Math.max(current ?? -1, memory.get(key) ?? -1);
+        memory.set(key, highWater);
+        return {
+          records: current !== undefined && current >= highWater ? records
+            : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, sequence: highWater }],
+          result: undefined,
+        };
+      });
+    },
+  };
+}
 export async function writeSession<T extends object>(
   profile: string,
   session: T,

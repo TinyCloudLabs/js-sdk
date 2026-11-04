@@ -8,13 +8,28 @@ Routing uses the complete space URI, not a short space name or a single account-
 
 Encryption is resolved separately: descriptor reads, network creation, and decrypt requests use the signed `encryptionNode`, including its invocation audience. A data-space host does not become an encryption destination, or vice versa.
 
-Explicit `host`, saved-profile hosts, local discovery, and new-user defaults are hints only for genuine no-entry onboarding. The lookup checks v2 first, then v1 only to distinguish absence from an existing v1 registration. A v1-only registration, an unavailable registry, an empty registered membership, or a missing encryption destination never authorizes fallback. Signed strings are validated without rewriting them.
+Explicit `host`, saved-profile hosts, local discovery, and new-user defaults are onboarding hints. The lookup checks v2 first, then v1 to distinguish absence from an existing v1 registration. Cold HTTP5xx, transport errors and timeouts without cached or remembered registration retain configured/default-host compatibility, including direct Core callers without a cache adapter; the verdict is marked `offline`, not genuine registry absence. HTTP4xx refusals, v1-only registrations, corrupt caches, invalid responses, remembered registrations, empty registered memberships and missing encryption destinations never authorize fallback. Signed strings are validated without rewriting them.
 
 `NodeNotRespondingError` has code `NODE_NOT_RESPONDING`. Registry refusals and node-identity mismatches remain distinct errors. Multi-node writes are not atomic: `PartialNodeWriteError` exposes `succeeded` URLs and `failed` destinations/statuses/causes so callers do not mistake incomplete writes for success.
 
 Mixed signed grants register unchanged on the union of their listed data destinations and `encryptionNode`. Restoring a stored valid grant does not request new consent when a destination is unavailable: canonical operations preserve `NODE_NOT_RESPONDING`, `NODE_IDENTITY_MISMATCH`, and `REGISTRY_UNAVAILABLE` separately from invalid or expired authority.
 
 Request-bound imports keep the original request/profile binding. A differing grant transport host is accepted only after validated permissions resolve through verified full-resource registry memberships; the derived destination replaces neither the saved hint nor signed bytes. Genuine no-entry still requires the original host match.
+
+### Signed registry cache
+
+`registryCacheStore` accepts a `RegistryCacheStore` from `@tinycloud/sdk-core`; the default is in-memory. The store keeps the exact fetched UTF-8 response text separately from `ownerKey`, `sequence` and `fetchedAt` metadata. EOA keys use the canonical EIP-55 address across wallet chains; `did:key` keys remain exact. Every read and replacement comparison reuses the canonical signed-v2 verifier.
+
+Persistent adapters implement `get` and an atomic `update` callback. Serialize the entire callback/read/compare/write across processes or tabs. Only a strictly higher verified sequence replaces an entry; equal sequences do not change its bytes or fetch age. Cache read errors and invalid cached entries are refusals, not missing records. Keep `registrySequenceStore` when migrating high-water state: a verified cache read establishes that history before refresh, so later cache loss is not fresh-device absence. Profile and browser sequence adapters retain the highest seen sequence in memory when persistence fails, without masking corrupt or unreadable stored state.
+
+Warm routing returns the verified cache without waiting for network refresh. Sign-in/restore starts an early refresh for the authenticated owner; validated held delegations add owners derived from their signed resources. Refreshes coalesce per owner while in flight, switch only to newer entries, and add no retry loop or polling daemon.
+
+Actual cold fallback logs `registry unavailable; using the default node` once per owner/client cache. `onRegistryFallback(reason)` can collect that value-free diagnostic instead of the default console warning. Background lookups do not warn unless a fallback route is actually selected; warm verified-cache routing never warns or falls back.
+
+This is a client cache: a node that performs online registry admission still needs its own registry connectivity. It is not a whole-service-outage guarantee.
+
+Details: TC-2481
+
 
 ## Signed SIWE metadata
 

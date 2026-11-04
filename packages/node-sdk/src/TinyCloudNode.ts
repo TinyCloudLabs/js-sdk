@@ -173,9 +173,14 @@ import {
   pkhDid,
   parseSpaceUri,
   resolveRegistryResource,
+  warnRegistryDefaultNode,
   NodeNotFoundError,
   exactHttpOrigin,
   createInMemoryRegistrySequenceStore,
+  createInMemoryRegistryCacheStore,
+  refreshOwnerRegistry,
+  registryOwnerKeyV2,
+  type RegistryCacheStore,
   publishLocationRecord,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
@@ -895,6 +900,10 @@ export interface TinyCloudNodeConfig {
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
   registrySequenceStore?: RegistrySequenceStore;
+  /** Exact signed-v2 responses; pass a persistent adapter to survive restarts. */
+  registryCacheStore?: RegistryCacheStore;
+  /** Value-free warning after actual cold default-node selection; defaults to console.warn. */
+  onRegistryFallback?: (reason: string) => void;
   /** Retry or abort when registry resolution fails; `use-host` is accepted only for genuine no-entry onboarding. */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe configured local nodes only for genuine no-entry onboarding. Default: true. */
@@ -1337,6 +1346,7 @@ export class TinyCloudNode {
 
   private config: TinyCloudNodeConfig;
   private readonly explicitHost?: string;
+  private readonly registryRefreshOwners = new Set<string>();
   private signer: ISigner | null = null;
   private auth: NodeUserAuthorization | null = null;
   private readonly consumedOpenKeyPendings = new WeakSet<PreparedOpenKeyAuthorization>();
@@ -1956,6 +1966,7 @@ export class TinyCloudNode {
       // One store for every authorization this client creates.
       registrySequenceStore:
         config.registrySequenceStore ?? createInMemoryRegistrySequenceStore(),
+      registryCacheStore: config.registryCacheStore ?? createInMemoryRegistryCacheStore(),
     };
     if (this.config.replication?.enabled) {
       const runtime = getNodeReplicationLoaders()
@@ -2235,13 +2246,16 @@ export class TinyCloudNode {
       registryUrl: this.config.tinycloudRegistryUrl,
       registryChainId: this.config.registryChainId,
       sequenceStore: this.config.registrySequenceStore,
+      cacheStore: this.config.registryCacheStore,
     });
     if (resolved.verdict.status === "unregistered") {
       const hint = noEntryHosts === undefined ? this.explicitHost ?? this.config.host : noEntryHosts[0];
       const host = hint ?? this.config.newUserHost ??
         (this.config.tinycloudFallbackHosts === undefined ? DEFAULT_HOST : this.config.tinycloudFallbackHosts?.[0]);
       if (!host || (!hint && this.config.newUserHost === null)) throw new NodeNotFoundError(subject, resolved.verdict);
-      return [{ url: exactHttpOrigin(host, "new-user host") }];
+      const url = exactHttpOrigin(host, "new-user host");
+      warnRegistryDefaultNode(resolved.verdict, this.config.registryCacheStore, this.config.onRegistryFallback);
+      return [{ url }];
     }
     const destinations = resolved.hosts.flatMap((host) => host.urls.map((url) => ({ url, nodeDid: host.nodeDid })));
     return destinations;
@@ -2421,6 +2435,36 @@ export class TinyCloudNode {
   getVerifiedSessionCapabilities(): PermissionEntry[] {
     const session = this.currentTinyCloudSession();
     return session?.siwe ? this.projectSignedRecapCapabilities(session.siwe) : [];
+  }
+
+  /** Start one background refresh for each owner derived from verified authority. */
+  refreshRegistryForCapabilities(permissions: readonly PermissionEntry[]): void {
+    for (const permission of permissions) {
+      try {
+        const owner = permission.service === "tinycloud.encryption" && permission.path.startsWith("urn:tinycloud:encryption:")
+          ? parseNetworkId(permission.path.split("/")[0]).ownerDid
+          : permission.space ? this.ownerDidFromSpaceId(permission.space) : undefined;
+        if (owner) this.refreshRegistryOwner(owner);
+      } catch {
+        // Unsupported resources never become owner hints or routing authority.
+      }
+    }
+  }
+
+  private refreshRegistryOwner(owner: string): void {
+    if (this.config.tinycloudRegistryUrl === null) return;
+    const subject = owner.startsWith("did:pkh:")
+      ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1)
+      : owner;
+    const key = registryOwnerKeyV2(subject);
+    if (this.registryRefreshOwners.has(key)) return;
+    this.registryRefreshOwners.add(key);
+    void refreshOwnerRegistry(subject, {
+      registryUrl: this.config.tinycloudRegistryUrl,
+      registryChainId: this.config.registryChainId,
+      sequenceStore: this.config.registrySequenceStore,
+      cacheStore: this.config.registryCacheStore,
+    }).catch(() => undefined);
   }
 
   /** Normalize signed capabilities without collapsing nested encryption into raw authority. */
@@ -2944,6 +2988,8 @@ export class TinyCloudNode {
     const primarySession = this.currentTinyCloudSession();
     if (primarySession) {
       this.registerPrimarySessionGrant(primarySession);
+      this.refreshRegistryOwner(pkhDid(primarySession.address, primarySession.chainId));
+      this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
       // The activation says nothing about the primary space when both of its
       // lists are empty: ask the node with a read the session holds.
       if (this.auth?.spaceHosting === "unknown") {
@@ -4210,10 +4256,10 @@ export class TinyCloudNode {
   /** Registry-policy settings shared by every authorization this client creates. */
   private registryPolicyConfig(): Pick<
     TinyCloudNodeConfig,
-    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "onNodeNotFound"
+    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "onNodeNotFound" | "onRegistryFallback"
   > {
-    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound } = this.config;
-    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound };
+    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback } = this.config;
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback };
   }
 
   /**
@@ -4704,6 +4750,8 @@ export class TinyCloudNode {
       if (attempt === this.latestSessionAttempt) await this.endSession();
       this.assertSessionEpoch(epoch, "Session restore");
     }
+    if (stagedAddress !== undefined) this.refreshRegistryOwner(pkhDid(stagedAddress, stagedChainId));
+    this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
   }
 
   private stagePrimarySessionState(

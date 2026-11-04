@@ -517,6 +517,9 @@ async function assess(
         outsideRequest = !delegationWithinRequest(limit, effective, options.resolveSpace);
         if (outsideRequest) return false;
         effectivePermissions = effective;
+        // Start all verified owners before activation can block on one node.
+        // Inspection remains strictly read-only and network-free.
+        if (mode.activate) node.refreshRegistryForCapabilities?.(effective);
         return mode.activate;
       },
     });

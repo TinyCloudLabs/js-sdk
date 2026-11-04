@@ -11,6 +11,7 @@ import {
   REGISTRY_NOT_FOUND_BODY,
   RegistryUnavailableError,
   pkhDid,
+  createInMemoryRegistrySequenceStore,
   signLocationRecord,
   signLocationRecordV2,
   type ISessionManager,
@@ -380,12 +381,14 @@ test("a v1-only entry is unavailable and cannot use explicit or persisted stale 
   expect(owner.signatures).toEqual([]);
 });
 
-test("an unavailable registry cannot be bypassed with use-host", async () => {
+test("a known-owner registry outage cannot be bypassed with use-host", async () => {
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  await sequenceStore.set(await ownerKey.getAddress(), 0);
   const owner = await restoredOwner({
     registry: ["down"],
     host: STALE_HOST,
     persistedHosts: [STALE_HOST],
-    config: { onNodeNotFound: () => ({ action: "use-host", host: HOST }) },
+    config: { registrySequenceStore: sequenceStore, onNodeNotFound: () => ({ action: "use-host", host: HOST }) },
   });
 
   await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(RegistryUnavailableError);
@@ -395,10 +398,12 @@ test("an unavailable registry cannot be bypassed with use-host", async () => {
   expect(owner.signatures).toEqual([]);
 });
 
-test("the not-found callback can retry and resolve the current signed route", async () => {
+test("a known-owner unavailable callback can retry and resolve the current signed route", async () => {
   const attempts: number[] = [];
   const address = await ownerKey.getAddress();
   const defaultSpace = spaceId(address, 1, "default");
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  await sequenceStore.set(address, 0);
   const owner = await restoredOwner({
     registry: [
       "down",
@@ -408,6 +413,7 @@ test("the not-found callback can retry and resolve the current signed route", as
       },
     ],
     config: {
+      registrySequenceStore: sequenceStore,
       onNodeNotFound: ({ attempt }) => {
         attempts.push(attempt);
         return { action: "retry" };

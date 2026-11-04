@@ -11,7 +11,7 @@ import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PEN
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
 import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -33,6 +33,7 @@ import {
   withSpinner,
 } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
+import { recordRegistryFallbackWarning } from "../output/warnings.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
@@ -1420,7 +1421,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           if (recovered) {
             grant = recovered;
           } else {
-            const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+            const approvalNode = await nodeFromOpenKeyApproval(ctx, approval.session);
             grant = {
               ...(await grantAuthRequest(approvalNode, resolvedRequest, {
                 expiry: approval.delegation.expiry.getTime() - Date.now(),
@@ -2028,9 +2029,15 @@ export async function acquireOpenKeyApproval(params: {
  * A node restored from one verified OpenKey approval. It holds that approval's
  * authority and expiry, not the owner's stored session.
  */
-async function nodeFromOpenKeyApproval(host: string, session: VerifiedScopedSession): Promise<TinyCloudNode> {
+async function nodeFromOpenKeyApproval(ctx: CLIContext, session: VerifiedScopedSession): Promise<TinyCloudNode> {
   const ownerParts = session.ownerDid.split(":");
-  const node = new TinyCloudNode({ host });
+  const host = ctx.host;
+  const node = new TinyCloudNode({
+    host, registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl,
+  });
   await node.restoreSession({
     delegationHeader: session.delegationHeader as { Authorization: string },
     delegationCid: session.delegationCid as string,
@@ -2630,8 +2637,10 @@ async function handleLocalAuth(
     return localKeySignIn({
       privateKey,
       host,
+      profile: profileName,
+      tinycloudRegistryUrl: profile?.tinycloudRegistryUrl,
       ...(namedKeys === undefined ? {} : { keyAbilities: keyAbilitiesFor(namedKeys) }),
-      ...(replication?.prefixes.length ? { profile: profileName, replication } : {}),
+      ...(replication?.prefixes.length ? { replication } : {}),
     });
   });
   // TinyCloudNode signs with its own fresh session JWK. Persist that exact
@@ -2822,6 +2831,10 @@ async function refreshPreparedOpenKeySession(params: {
     permissions,
   }], { includeAccountRegistryPermissions: false });
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(profileName),
+    registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host, signer: ownerIdentitySigner(owner), capabilityRequest,
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     replication: replicationConfig,
@@ -2973,6 +2986,10 @@ async function refreshPreparedKeysSession(params: {
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(profileName),
+    registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host, signer: ownerIdentitySigner(owner),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,

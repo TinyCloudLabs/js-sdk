@@ -93,6 +93,8 @@ export interface UnregisteredRegistryVerdict {
   readonly subject: string;
   readonly source: RegistryVerdictSource;
   readonly hosts: readonly [];
+  /** Cold transport outage compatibility, not an authenticated registry absence. */
+  readonly offline?: true;
 }
 
 export interface UnavailableRegistryVerdict {
@@ -511,7 +513,8 @@ function parseStrictJson(text: string): JsonValue {
   return value;
 }
 
-function registryOwnerKeyV2(subject: string): string {
+/** Settled chain-independent key shared by lookup, cache storage and signature owner binding. */
+export function registryOwnerKeyV2(subject: string): string {
   return subject.startsWith("did:pkh:")
     ? subject.slice(subject.lastIndexOf(":") + 1)
     : subject;

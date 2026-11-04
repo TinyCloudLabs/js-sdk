@@ -59,6 +59,22 @@ value when explicitly requested; MCP hosts control their own transcript
 retention. Owner authority is an explicit posture choice, not an automatic
 fallback for delegated execution.
 
+## Inspect signed registry placement
+
+```bash
+tinycloud --profile agent registry show
+tinycloud --profile agent registry show did:pkh:eip155:1:0x...
+tinycloud --json --profile agent registry show
+```
+
+`registry show [did]` verifies the local signed cache and reports owner, sequence, fetch age, full space placement, node hostnames, read-write/read-only modes and encryption destination. Without a DID it uses the selected profile's owner, not its agent/session key. It performs no sign-in, grant activation, registry request or profile write.
+
+The independently readable plain file is `~/.tinycloud/profiles/<profile>/registry-cache.json` (`0600`, directory `0700`). Each entry contains untouched signed response text plus separate fetch/owner/sequence metadata. CLI and canonical Operations runtimes share the profile lock and atomic writer. Every cached read reverifies the response; only a strictly higher sequence replaces it.
+
+Authenticated startup refreshes the owner and verified held-delegation resource owners in the background. Warm cached routing does not wait for that request or fall back to an unlisted node. Cold HTTP5xx (including503), transport errors and timeouts without cached or remembered registration retain configured/default-host compatibility. Actual cold fallback emits one value-free warning line on stderr, never secret/raw stdout; JSON mode uses code `REGISTRY_UNAVAILABLE`, reason `using_default_node`. Invalid/cache-corrupt/known-registration state and HTTP4xx refusals never authorize fallback. Background lookup failures alone do not warn. This client guarantee does not change node-side online admission.
+
+Details: TC-2481
+
 ## Quick Start
 
 ```bash

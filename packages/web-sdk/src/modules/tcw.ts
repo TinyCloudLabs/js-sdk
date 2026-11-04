@@ -84,6 +84,8 @@ import {
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
+  createLocalStorageRegistryCacheStore,
+  type RegistryCacheStore,
   type StorageFullEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
@@ -196,6 +198,10 @@ export interface Config extends ClientConfig {
   registryChainId?: number;
   /** Highest signed v2 sequence seen per owner. Default: a `localStorage`-backed store. */
   registrySequenceStore?: RegistrySequenceStore;
+  /** Exact signed responses in browser storage, reverified on every routing read. */
+  registryCacheStore?: RegistryCacheStore;
+  /** Called after actual cold default-node selection; defaults to an SDK console warning. */
+  onRegistryFallback?: (reason: string) => void;
   /** Called only when no host resolves for a genuinely unregistered owner. */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe local nodes only for owners absent from both registry namespaces. Default: true. */
@@ -592,7 +598,9 @@ export class TinyCloudWeb {
       registrySequenceStore:
         this.config.registrySequenceStore ??
         createLocalStorageRegistrySequenceStore(),
+      registryCacheStore: this.config.registryCacheStore ?? createLocalStorageRegistryCacheStore(),
       onNodeNotFound: this.config.onNodeNotFound,
+      onRegistryFallback: this.config.onRegistryFallback,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,

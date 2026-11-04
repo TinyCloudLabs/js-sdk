@@ -20,6 +20,8 @@ import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, 
 import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
 import {
+  createProfileRegistryCacheStore,
+  createProfileRegistrySequenceStore,
   profilePath,
   readAdditionalDelegations,
   readJson,
@@ -39,6 +41,7 @@ export type InvocationRuntimeResolution =
     ok: false;
     context: RuntimeOperationContext["summary"];
     error: OperationError;
+    warnings?: readonly OperationWarning[];
   }>;
 
 interface StoredSession extends Record<string, unknown> {
@@ -112,6 +115,7 @@ export async function createInvocationRuntime(
   }
 
   const profileName = summary.profile;
+  const warnings: OperationWarning[] = [];
   try {
     // Keep the value import namespace-shaped so projection modules remain
     // compatible with lightweight node-sdk test doubles.
@@ -162,6 +166,9 @@ export async function createInvocationRuntime(
     }
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: () => collectRegistryFallbackWarning(warnings),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(privateKey === undefined ? {} : { privateKey }),
     });
@@ -217,7 +224,6 @@ export async function createInvocationRuntime(
     // from an SDK private field or a second parse of signed authority here.
     const livePermissions: PermissionEntry[] = [...node.getVerifiedSessionCapabilities()];
     const resolveSpace = operationSpaceResolver(node, authenticatedSpace ?? summary.space);
-    const warnings: OperationWarning[] = [];
     let replayedGrants = 0;
     // A local sign-in without a persisted session has a fresh session key.
     // Neither that key nor an explicit private-key override may inherit this
@@ -239,9 +245,9 @@ export async function createInvocationRuntime(
       node,
       granted: canonicalizeCapabilities(livePermissions),
       replayedGrants,
-      ...(warnings.length === 0 ? {} : { warnings }),
+      get warnings() { return warnings.length === 0 ? undefined : warnings; },
       localOwner: explicitPrivateKeyOverride || isLocalOwnerProfile(profile),
-      skippedGrantReasons: warnings.map((warning) => warning.reason),
+      skippedGrantReasons: warnings.flatMap((warning) => warning.code === "STORED_GRANT_SKIPPED" ? [warning.reason] : []),
     };
     return {
       ok: true,
@@ -264,16 +270,15 @@ export async function createInvocationRuntime(
       "NODE_ERROR",
       "The selected profile runtime could not be initialized.",
       { retryable: true },
-    ));
+    ), warnings);
   }
 }
 
 /**
- * The `"restored"` runtime: the profile's stored session and stored grants,
- * and nothing else. It never signs in, never migrates, never takes a profile
- * lock and writes nothing under TC_HOME; every file access is a lock-free
- * read. Its only node requests are `/delegate` re-registrations of unchanged
- * stored grants (and the operation's own invocations).
+ * The `"restored"` runtime uses the stored session and stored grants, never
+ * signs in or migrates authority. Authentication files remain lock-free reads;
+ * signed registry cache/high-water refresh uses its own atomic profile updates.
+ * Node requests re-register unchanged grants and perform the operation itself.
  */
 async function createRestoredRuntime(
   target: InvocationTarget,
@@ -292,6 +297,7 @@ async function createRestoredRuntime(
     ));
   }
 
+  const warnings: OperationWarning[] = [];
   try {
     const actualPosture = resolvePosture(profile);
     const selectedPosture = profile.authMethod === "local" ? "local-owner-key" : summary.posture;
@@ -347,6 +353,9 @@ async function createRestoredRuntime(
     // Wallet-mode restore needs the profile's own key when it has one.
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: () => collectRegistryFallbackWarning(warnings),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
     });
@@ -374,14 +383,15 @@ async function createRestoredRuntime(
     for (const installed of replay.installed) {
       livePermissions.push(...installed.effectivePermissions);
     }
+    warnings.push(...replay.warnings);
 
     const runtime: OperationRuntime = {
       node,
       granted: canonicalizeCapabilities(livePermissions),
       replayedGrants: replay.installed.length,
-      ...(replay.warnings.length === 0 ? {} : { warnings: replay.warnings }),
+      get warnings() { return warnings.length === 0 ? undefined : warnings; },
       localOwner: isLocalOwnerProfile(profile),
-      skippedGrantReasons: replay.warnings.map((warning) => warning.reason),
+      skippedGrantReasons: replay.warnings.flatMap((warning) => warning.code === "STORED_GRANT_SKIPPED" ? [warning.reason] : []),
     };
     return {
       ok: true,
@@ -399,7 +409,7 @@ async function createRestoredRuntime(
       "NODE_ERROR",
       "The selected profile runtime could not be initialized.",
       { retryable: true },
-    ));
+    ), warnings);
   }
 }
 
@@ -459,11 +469,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function collectRegistryFallbackWarning(warnings: OperationWarning[]): void {
+  if (!warnings.some(({ code }) => code === "REGISTRY_UNAVAILABLE")) {
+    warnings.push({ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" });
+  }
+}
+
 function failed(
   context: RuntimeOperationContext["summary"],
   error: OperationError,
+  warnings: readonly OperationWarning[] = [],
 ): InvocationRuntimeResolution {
-  return { ok: false, context, error };
+  return { ok: false, context, error, ...(warnings.length === 0 ? {} : { warnings }) };
 }
 
 function unresolvedSummary(target: InvocationTarget): RuntimeOperationContext["summary"] {

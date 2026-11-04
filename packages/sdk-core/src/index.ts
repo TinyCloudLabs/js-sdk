@@ -1088,6 +1088,7 @@ export {
   registryOwnerSubjectV1,
   resolveFailClosedTinyCloudHosts,
   resolveOwnerHosts,
+  warnRegistryDefaultNode,
   type FailClosedHostOptions,
   type FailClosedHosts,
   type LookupOwnerRegistryVerdictOptions,
@@ -1108,6 +1109,16 @@ export {
 export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
 export { resolveRegistryResource } from "./registry-policy";
 
+export {
+  createInMemoryRegistryCacheStore,
+  createLocalStorageRegistryCacheStore,
+  verifyRegistryCacheEntry,
+  DEFAULT_REGISTRY_CACHE_STORAGE_KEY,
+  type RegistryCacheEntry,
+  type RegistryCacheStore,
+} from "./registry-cache";
+export { refreshOwnerRegistry } from "./registry-policy";
+export { registryOwnerKeyV2 } from "./registry-verdict";
 // Capability subset checking and recap parsing
 export {
   // Errors

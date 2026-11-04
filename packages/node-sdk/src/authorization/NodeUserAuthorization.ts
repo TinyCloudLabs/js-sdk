@@ -32,6 +32,7 @@ import {
   resourceCapabilitiesToSpaceAbilitiesMap,
   type ResourceCapability,
   resolveRegistryResource,
+  warnRegistryDefaultNode,
   parseSpaceUri,
   NodeNotFoundError,
   RegistryUnavailableError,
@@ -39,6 +40,8 @@ import {
   exactHttpOrigin,
   assertSpaceCreationAllowed,
   createInMemoryRegistrySequenceStore,
+  createInMemoryRegistryCacheStore,
+  type RegistryCacheStore,
   registryOwnerSubjectV1,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
@@ -296,6 +299,9 @@ export interface NodeUserAuthorizationConfig {
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory. */
   registrySequenceStore?: RegistrySequenceStore;
+  registryCacheStore?: RegistryCacheStore;
+  /** Value-free warning after actual cold default-node selection; defaults to console.warn. */
+  onRegistryFallback?: (reason: string) => void;
   /**
    * `fail-closed` only: called when sign-in resolves no host
    * (`NodeNotFoundError` or `RegistryUnavailableError`) to retry, use another
@@ -422,7 +428,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly newUserHost?: string | null;
   private readonly registryChainId?: number;
   private readonly registrySequenceStore: RegistrySequenceStore;
+  private readonly registryCacheStore: RegistryCacheStore;
   private readonly onNodeNotFound?: OnNodeNotFound;
+  private readonly onRegistryFallback?: (reason: string) => void;
   /** Verdict from the last `fail-closed` host resolution, reused by {@link assertMayCreateSpace}. */
   private registryVerdict?: RegistryVerdict;
   private readonly autoDiscoverLocalNode?: boolean;
@@ -523,7 +531,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.registryChainId = config.registryChainId;
     this.registrySequenceStore =
       config.registrySequenceStore ?? createInMemoryRegistrySequenceStore();
+    this.registryCacheStore = config.registryCacheStore ?? createInMemoryRegistryCacheStore();
     this.onNodeNotFound = config.onNodeNotFound;
+    this.onRegistryFallback = config.onRegistryFallback;
     this.autoDiscoverLocalNode = config.autoDiscoverLocalNode;
     this.localNodeUrl = config.localNodeUrl;
     this.localLinkName = config.localLinkName;
@@ -721,6 +731,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           registryUrl: this.tinycloudRegistryUrl,
           registryChainId: this.registryChainId,
           sequenceStore: this.registrySequenceStore,
+          cacheStore: this.registryCacheStore,
         });
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {
@@ -731,12 +742,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
               expectedNodeDid: this.expectedNodeDid,
               identityStore: this.localNodeIdentityStore,
             });
-            if (local) return [{ url: local.url }];
+            if (local) {
+              warnRegistryDefaultNode(resolved.verdict, this.registryCacheStore, this.onRegistryFallback);
+              return [{ url: local.url }];
+            }
           }
           const host = noEntryHosts[0] ?? this.newUserHost ??
             (this.tinycloudFallbackHosts === undefined ? "https://node.tinycloud.xyz" : this.tinycloudFallbackHosts?.[0]);
           if (!host || (this.newUserHost === null && noEntryHosts.length === 0)) throw new NodeNotFoundError(subject, resolved.verdict);
-          return [{ url: exactHttpOrigin(host, "new-user host") }];
+          const url = exactHttpOrigin(host, "new-user host");
+          warnRegistryDefaultNode(resolved.verdict, this.registryCacheStore, this.onRegistryFallback);
+          return [{ url }];
         }
         const destinations = resolved.hosts.flatMap((host) => host.urls.map((url) => ({ url, nodeDid: host.nodeDid })));
         return destinations;
@@ -746,7 +762,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
         const decision = await this.onNodeNotFound({ error, attempt });
         if (decision.action === "retry") continue;
         if (decision.action === "use-host" && error.verdict?.status === "unregistered") {
-          return [{ url: exactHttpOrigin(decision.host, "new-user host") }];
+          const url = exactHttpOrigin(decision.host, "new-user host");
+          warnRegistryDefaultNode(error.verdict, this.registryCacheStore, this.onRegistryFallback);
+          return [{ url }];
         }
         throw error;
       }

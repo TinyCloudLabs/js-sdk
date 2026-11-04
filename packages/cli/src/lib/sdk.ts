@@ -1,3 +1,4 @@
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
 import type { ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -8,7 +9,7 @@ import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../confi
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
-import { recordWarnings } from "../output/warnings.js";
+import { recordWarnings, recordRegistryFallbackWarning } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
 import { cliRetryPolicy } from "./retry-policy.js";
@@ -163,6 +164,9 @@ export async function restoreProfileSessionNode(
   try {
     const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
@@ -197,6 +201,9 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
     const key = await ProfileManager.getKey(profileName);
     const tinycloudRegistryUrl = configuredRegistryUrl(undefined, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: profile.host ?? DEFAULT_HOST,
@@ -269,6 +276,9 @@ export async function createSDKInstance(
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
@@ -314,6 +324,9 @@ export async function createSDKInstance(
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
     ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
     host: ctx.host,

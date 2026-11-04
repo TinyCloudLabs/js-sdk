@@ -76,6 +76,16 @@ await tc.signIn();
 There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
+## Signed registry cache
+
+The browser client stores exact owner-signed v2 registry responses beside its identity pins, under `tinycloud.registryCache.v2:<ownerKey>`. Fetch time and sequence metadata are outside the signed response. Every routing read verifies the stored response again; only a higher verified sequence replaces it. Warm reads do not wait for the background registry request.
+
+`registryCacheStore` accepts a matching custom `RegistryCacheStore` adapter from `@tinycloud/sdk-core`. The default persistent adapter uses Web Locks to serialize updates across tabs. If browser storage is unavailable, the client uses in-memory storage; unreadable or corrupt existing storage is an error, not an empty cache. Browsers without Web Locks must supply a transactional persistent adapter.
+
+Startup refresh uses the authenticated owner and verified held-delegation resource owners, never the session key or display hints. Cached placement remains authoritative when the client cannot reach the registry. Cold HTTP5xx, transport errors and timeouts without cached or remembered registration retain configured/default-host compatibility, with `registry unavailable; using the default node` logged only after route selection. `onRegistryFallback(reason)` collects that diagnostic instead of the console warning. Invalid/cache-corrupt/known-registration state and HTTP4xx refusals do not authorize fallback. Nodes performing online admission still require their registry connection.
+
+Details: TC-2481
+
 ## Optional local KV replication
 
 Install `@tinycloud/replica`, then load and register the optional browser plugin

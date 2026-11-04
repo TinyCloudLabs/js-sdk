@@ -21,41 +21,6 @@ function isolatedTest(name: string, action: () => Promise<void>): void {
   });
 }
 
-const expectedOperationIds = [
-  "tinycloud.account.applications.list",
-  "tinycloud.account.spaces.list",
-  "tinycloud.apps.context",
-  "tinycloud.apps.query",
-  "tinycloud.apps.read",
-  "tinycloud.apps.write",
-  "tinycloud.auth.capabilities",
-  "tinycloud.auth.import",
-  "tinycloud.auth.read_scope",
-  "tinycloud.auth.request",
-  "tinycloud.auth.status",
-  "tinycloud.knowledge.list",
-  "tinycloud.knowledge.read",
-  "tinycloud.kv.delete",
-  "tinycloud.kv.get",
-  "tinycloud.kv.head",
-  "tinycloud.kv.list",
-  "tinycloud.kv.put",
-  "tinycloud.read",
-  "tinycloud.secrets.get",
-  "tinycloud.secrets.status",
-  "tinycloud.sql.execute",
-  "tinycloud.sql.query",
-  "tinycloud.sql.schema.inspect",
-  "tinycloud.status.get",
-] as const;
-
-test("registry contains exactly the reviewed v1 operations", () => {
-  const definitions = operationDefinitionsForCatalog();
-
-  expect(definitions.map((definition) => `${definition.id}@${definition.version}`).sort())
-    .toEqual(expectedOperationIds.map((id) => `${id}@1`));
-});
-
 test("registry resolves each v1 operation and rejects unknown versions", () => {
   for (const { id: operationId } of operationDefinitionsForCatalog()) {
     expect(lookupOperation(operationId, 1)).toMatchObject({

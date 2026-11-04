@@ -34,6 +34,11 @@ export function recordWarnings(warnings: readonly OperationWarningOutput[]): voi
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
 
+/** The SDK calls this only after selecting an actual cold default-node route. */
+export function recordRegistryFallbackWarning(): void {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" }]);
+}
+
 export function drainWarnings(): OperationWarningOutput[] {
   const holder = globalThis as WarningHolder;
   const warnings = holder[PENDING_WARNINGS] ?? [];

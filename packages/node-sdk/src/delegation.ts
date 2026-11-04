@@ -124,6 +124,8 @@ export interface RuntimeDelegationActivator {
   useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
   useDelegation?(delegation: PortableDelegation): Promise<unknown>;
   getRuntimePermissionDelegations(): PortableDelegation[];
+  /** Called only with the verified effective authority of an installed delegation. */
+  refreshRegistryForCapabilities?(permissions: readonly PermissionEntry[]): void;
   /**
    * Verify a wallet-signed session grant issued to this runtime's live session
    * key. Required to activate a CACAO grant; compact UCANs do not use it.
@@ -799,6 +801,7 @@ export async function activateValidatedRuntimeDelegation(
       "Runtime delegation activation installed authority that differs from the validated authority.",
     );
   }
+  node.refreshRegistryForCapabilities?.(signed.permissions);
 
   return {
     cid,
