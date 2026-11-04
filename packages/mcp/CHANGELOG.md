@@ -1,5 +1,19 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.5
+
+### Minor Changes
+
+- 2a1ac15: The optional personal-app context `app` input accepts `healthlog` and `recipes`. Health Log requests its app-list and database access in one approval, with read-only access when requested. Recipes bundles read access to its notes and requests database reads separately after learning the database name. Tool input descriptions explain `app` and `access`.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- Updated dependencies [2a1ac15]
+- Updated dependencies [2a1ac15]
+  - @tinycloud/operations@0.9.0-beta.4
+
 ## 0.10.0-beta.4
 
 ### Minor Changes
