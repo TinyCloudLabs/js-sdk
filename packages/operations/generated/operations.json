@@ -2357,7 +2357,8 @@
             "type": "string"
           },
           "app": {
-            "type": "string"
+            "type": "string",
+            "description": "Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."
           },
           "access": {
             "type": "string",
@@ -2365,7 +2366,8 @@
               "read",
               "change"
             ],
-            "default": "change"
+            "default": "change",
+            "description": "Use read for a question that changes nothing; change requests the app's supported write access too."
           }
         },
         "additionalProperties": false,
@@ -2379,6 +2381,10 @@
           },
           "now": {
             "type": "string"
+          },
+          "utc": {
+            "type": "string",
+            "description": "The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."
           },
           "timezone": {
             "type": [
@@ -2500,6 +2506,7 @@
         "required": [
           "rules",
           "now",
+          "utc",
           "timezone",
           "apps",
           "legacy",
@@ -3466,6 +3473,10 @@
               "now": {
                 "type": "string"
               },
+              "utc": {
+                "type": "string",
+                "description": "The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."
+              },
               "timezone": {
                 "type": [
                   "string",
@@ -3586,6 +3597,7 @@
             "required": [
               "rules",
               "now",
+              "utc",
               "timezone",
               "apps",
               "legacy",

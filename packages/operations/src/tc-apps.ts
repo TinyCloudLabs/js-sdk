@@ -1,10 +1,17 @@
 import { appRoot, newApp, TC_APPS_DISCOVERY_ROOT, TC_APPS_ID_PREFIX, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT } from "./tc-apps/layout.js";
+import { HEALTHLOG_DATABASE } from "./tc-apps/preamble.js";
 
 export { TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT } from "./tc-apps/layout.js";
 export const TC_APPS_RECORDS_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] as const;
 export const TC_APPS_DISCOVERY_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"] as const;
 export const TC_APPS_CATALOG_READ_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list"] as const;
 export const TC_APPS_COPY_ACTIONS = ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] as const;
+
+/** Only the pinned catalog targets; Recipes learns its database from its notes. */
+export const TC_APPS_CATALOG_PERMISSIONS: Readonly<Record<string, { service: string; path: string; actions: readonly string[] }>> = {
+  healthlog: { service: "tinycloud.sql", path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+  recipes: { service: "tinycloud.kv", path: "xyz.tinycloud.sample.recipes/knowledge/", actions: TC_APPS_CATALOG_READ_ACTIONS },
+};
 
 /** What one stored or requested permission entry is, when it is one of the connector's own. */
 export type TcAppsPermissionKind =
@@ -14,6 +21,7 @@ export type TcAppsPermissionKind =
   | { kind: "legacy-copy" }
   | { kind: "app-records"; app: string }
   | { kind: "discovery" }
+  | { kind: "catalog"; app: string; change: boolean }
   | { kind: "app-copy"; app: string };
 
 const SPACE_ID = /^tinycloud:[^\s*]+:(default|applications)$/;
@@ -33,6 +41,11 @@ export function tcAppsPermissionKind(permission: unknown): TcAppsPermissionKind 
   }
   if (entry.service === "tinycloud.sql" && space === "default" && path === TC_APPS_LEGACY_DATABASE && inside(TC_APPS_COPY_ACTIONS)) return { kind: "legacy-copy" };
   if (space !== "applications") return undefined;
+  for (const [app, catalog] of Object.entries(TC_APPS_CATALOG_PERMISSIONS)) {
+    if (entry.service === catalog.service && path === catalog.path && inside(catalog.actions)) {
+      return { kind: "catalog", app, change: entry.actions.includes("tinycloud.sql/write") };
+    }
+  }
   if (entry.service === "tinycloud.kv" && path === TC_APPS_DISCOVERY_ROOT && inside(TC_APPS_DISCOVERY_ACTIONS)) return { kind: "discovery" };
   const match = new RegExp(`^${TC_APPS_ID_PREFIX.replace(/\./g, "\\.")}([a-z][a-z0-9-]*)/(index)?$`).exec(path);
   if (!match || !newApp(match[1]!)) return undefined;
@@ -54,7 +67,7 @@ const DISCOVERY_REASON = "Lets Claude list your apps and add or change entries i
 const LEGACY_READ_REASON = "Lets Claude read, but not change or delete, your older records in your TinyCloud default space (keys under xyz.tinycloud.agent-data/), so it can copy an app you ask it to move into its new folder. Nothing in your default space is changed or deleted. 30 days.";
 const named = (apps: readonly string[]) => apps.join(", ");
 
-interface Approval { legacyRecords: boolean; legacyRead: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; records: string[]; copies: string[]; bundle: "change" | "read" | undefined }
+interface Approval { legacyRecords: boolean; legacyRead: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; discoveryRead: boolean; records: string[]; copies: string[]; catalog: { app: string; change: boolean }[]; bundle: "change" | "read" | undefined }
 
 function approval(permissions: readonly unknown[]): Approval | undefined {
   const kinds = permissions.map(tcAppsPermissionKind);
@@ -71,6 +84,11 @@ function approval(permissions: readonly unknown[]): Approval | undefined {
   return {
     legacyRecords: has("legacy-records"), legacyRead: has("legacy-read"), legacyCatalog: has("legacy-catalog-read"), legacyCopy: has("legacy-copy"),
     discovery: has("discovery"), records: apps("app-records"), copies: apps("app-copy"), bundle,
+    discoveryRead: !permissions.some((permission, index) => {
+      const entry = permission as { actions: string[] };
+      return kinds[index]?.kind === "discovery" && entry.actions.includes("tinycloud.kv/put");
+    }),
+    catalog: kinds.flatMap((kind) => kind?.kind === "catalog" ? [{ app: kind.app, change: kind.change }] : []),
   };
 }
 
@@ -93,7 +111,12 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
     kinds.legacyRecords ? LEGACY_RECORDS_REASON : undefined,
     kinds.legacyRead && !kinds.legacyRecords ? LEGACY_READ_REASON : undefined,
     kinds.records.length > 0 ? recordsReason(kinds.records) : undefined,
-    kinds.discovery ? DISCOVERY_REASON : undefined,
+    kinds.discovery ? kinds.discoveryRead ? "Lets Claude read your app list, for 30 days." : DISCOVERY_REASON : undefined,
+    ...kinds.catalog.map((app) => app.app === "healthlog"
+      ? app.change
+        ? "Lets Claude read your Health Log and add, change or delete entries in it, for 30 days. This covers the whole Health Log database."
+        : "Lets Claude read your Health Log, for 30 days. This covers the whole Health Log database, without changing it."
+      : "Lets Claude read your Recipes app's notes, for 30 days. It cannot change them. Reading recipe records may need a separate approval."),
     kinds.legacyCatalog && !kinds.legacyRecords && !kinds.legacyRead ? LEGACY_CATALOG_REASON : undefined,
     kinds.legacyCopy ? LEGACY_COPY_REASON : undefined,
     kinds.copies.length > 0 ? copyReason(kinds.copies) : undefined,
@@ -103,7 +126,7 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
 export function tcAppsApprovalMessage(permissions: readonly unknown[]): string | undefined {
   const kinds = approval(permissions);
   if (!kinds) return undefined;
-  if (kinds.bundle !== undefined) {
+  if (kinds.catalog.length > 0 || kinds.bundle !== undefined) {
     return `Open the approval link and approve the request on OpenKey. ${tcAppsApprovalReason(permissions)} I'll carry on after you approve.`;
   }
   const records: string[] = [];

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { evaluateOperationAuthority } from "../authority.js";
 import { operationSpaceResolver } from "../secrets.js";
-import { TC_APPS_CATALOG_READ_ACTIONS } from "../tc-apps.js";
+import { TC_APPS_CATALOG_PERMISSIONS, TC_APPS_CATALOG_READ_ACTIONS } from "../tc-apps.js";
 import type { OperationContext, OperationDefinition, OperationExecutionOutcome, OperationExposure, RuntimeOperationContext, TinyCloudPosture } from "../contract.js";
 import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
@@ -18,15 +18,15 @@ const LayoutSchema = z.enum(["legacy", "new"]);
 const CopyStateSchema = z.enum(["present", "expired", "none"]);
 const ContextInputSchema = z.object({
   timezone: z.string().refine(validTimezone, "An IANA timezone is required.").optional(),
-  app: z.string().refine(newApp, "A valid personal app id is required.").optional(),
-  access: z.enum(["read", "change"]).default("change"),
+  app: z.string().refine((app) => Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, app) || newApp(app), "A valid app id is required.").optional().describe("Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."),
+  access: z.enum(["read", "change"]).default("change").describe("Use read for a question that changes nothing; change requests the app's supported write access too."),
 }).strict();
 const ReadInputSchema = z.object({ prefixes: z.array(PrefixSchema).optional(), keys: z.array(KeySchema).max(100).optional() }).strict();
 const RecordSchema = z.object({ key: z.string(), value: ObjectSchema, etag: z.string().min(1) }).strict();
 const ReadRecordSchema = z.union([RecordSchema, z.object({ key: z.string(), outcome: z.enum(["NOT_FOUND", "MALFORMED"]) }).strict()]);
 const AppSchema = z.object({ app: z.string(), layout: LayoutSchema, title: z.string().optional(), copy: CopyStateSchema }).strict();
 const ContextOutputSchema = z.object({
-  rules: z.string(), now: z.string(), timezone: z.string().nullable(),
+  rules: z.string(), now: z.string(), utc: z.string().describe("The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."), timezone: z.string().nullable(),
   apps: z.array(AppSchema),
   legacy: z.enum(["listed", "not_approved"]).describe("not_approved: the older layout's app list was not readable, so older apps are not in apps."),
   catalog: z.object({ keys: z.array(z.string()), records: z.array(RecordSchema).optional() }).strict(),
@@ -90,10 +90,18 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
   });
   return oneSpaceAtATime(context, scopes);
 }
-const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => input.app === undefined
-  ? [discoveryPermission(context)]
-  : [discoveryPermission(context, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined),
+const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => {
+  if (input.app === undefined) return [discoveryPermission(context)];
+  if (Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, input.app)) {
+    const catalog = TC_APPS_CATALOG_PERMISSIONS[input.app]!;
+    return [discoveryPermission(context, TC_APPS_CATALOG_READ_ACTIONS), {
+      ...catalog, space: appsSpace(context, "new"),
+      actions: catalog.actions.filter((action) => input.access !== "read" || action !== "tinycloud.sql/write"),
+    }];
+  }
+  return [discoveryPermission(context, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined),
     appRecordsPermission(context, input.app, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined)];
+};
 const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]).map((entry) => {
   const read = { ...entry, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
   return evaluateOperationAuthority(context.runtime!.granted as unknown as readonly PermissionEntry[], [read], operationSpaceResolver(context.runtime!.node, context.summary.space)).satisfied ? read : entry;
@@ -195,7 +203,7 @@ async function executeContext(context: OperationContext, input: ContextInput): P
     const listed = await Promise.all([...apps].sort(([a], [b]) => a.localeCompare(b)).map(async ([app, entry]) => ({
       app, ...entry, copy: await appsCopyState(context.summary.profile, entry.layout, app, appsSpace(context, entry.layout)),
     })));
-    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), timezone, apps: listed, legacy: legacy ? "listed" : "not_approved", catalog: { keys, ...(records === undefined ? {} : { records }) } } };
+    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), utc: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), timezone, apps: listed, legacy: legacy ? "listed" : "not_approved", catalog: { keys, ...(records === undefined ? {} : { records }) } } };
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
 /** Every app with a discovery entry, with its title when the entry is well formed. */
