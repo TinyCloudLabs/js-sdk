@@ -696,7 +696,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             shareOrigin: DEFAULT_SHARE_ORIGIN,
             permissions: loginPermissions!,
             ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
-            reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
@@ -1036,10 +1035,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           if (notices) process.stderr.write(`${notices.intro}\n`);
           for (const [index, group] of groups.entries()) {
             if (notices) process.stderr.write(`${notices.prompts[index]}\n`);
-            const reason = permissionGrantReason(
-              `Grant requested TinyCloud permissions from \`${CLI_NAME} auth request --grant\`.`,
-              group,
-            );
             const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
             const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
               let delegationData: Record<string, unknown>;
@@ -1051,7 +1046,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   shareOrigin: DEFAULT_SHARE_ORIGIN,
                   permissions: request,
                   expiry: parseRequestedExpiry(expiryOption ?? "7d"),
-                  reason,
                   expectedOwner: pinnedOwner(profile),
                   openkeyHost: resolveDeviceApiHost(profile),
                 });
@@ -1064,7 +1058,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   jwk: key,
                   host: ctx.host,
                   permissions: request,
-                  reason,
                   openkeyHost,
                   expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                   noPopup: options.popup === false,
@@ -1408,7 +1401,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
               parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
               OPENKEY_AGENT_MAX_LIFETIME_MS,
             ),
-            reason: "Grant permissions requested by a TinyCloud auth request artifact.",
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
             commandIntent: approvalCommandIntent(parsed),
@@ -1442,7 +1434,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             node,
             requested,
             expiryOption: parsed.requestedExpiry,
-            reason: "Grant permissions requested by a TinyCloud auth request artifact.",
             yes: options.yes === true || confirmedExtras,
           });
 
@@ -1965,7 +1956,7 @@ export async function acquireOpenKeyApproval(params: {
   profile: ProfileConfig;
   requested: PermissionEntry[];
   expiryOption: string | number | undefined;
-  reason: string;
+  reason?: string;
   anchorSpace?: string;
   /** The approval must cover every requested action, or none is returned. */
   exactApproval?: boolean;
@@ -2006,7 +1997,7 @@ export async function acquireOpenKeyApproval(params: {
       jwk: key,
       host: params.ctx.host,
       permissions: request,
-      reason: permissionGrantReason(params.reason, request),
+      ...(params.reason === undefined ? {} : { reason: params.reason }),
       openkeyHost: resolveOpenKeyHost(params.profile),
       expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
       noPopup: params.noPopup,
@@ -2053,7 +2044,7 @@ export async function ensureDelegationAuthority(params: {
   node: TinyCloudNode;
   requested: PermissionEntry[];
   expiryOption: string | number | undefined;
-  reason: string;
+  reason?: string;
   yes: boolean;
   /** Keep command-scoped authority out of profile grant/history storage. */
   persist?: boolean;
@@ -2135,7 +2126,7 @@ export async function ensureDelegationAuthority(params: {
           jwk: key,
           host: params.ctx.host,
           permissions: request,
-          reason: permissionGrantReason(params.reason, group),
+          ...(params.reason === undefined ? {} : { reason: params.reason }),
           openkeyHost,
           expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
           noPopup: params.noPopup,
@@ -2188,15 +2179,6 @@ function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
       ExitCode.PERMISSION_DENIED,
     );
   }
-}
-
-function permissionGrantReason(context: string, permissions: PermissionEntry[]): string {
-  const first = permissions[0];
-  const summary = first ? compactPermission(first) : "no permissions";
-  const more = permissions.length > 1
-    ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}`
-    : "";
-  return `${context} Requested: ${summary}${more}.`;
 }
 
 function execCapturedCommand(command: { argv: string[]; cwd: string }): Promise<void> {
@@ -3157,7 +3139,7 @@ export async function refreshOpenKeySession(
     expiry: openKeyExpiry,
     // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
     ...(plainPasteLink ? { expiryChangeable: true } : {}),
-    ...(permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
+    ...(permissions && options.reason ? { reason: options.reason } : {}),
   });
   seen.result = delegationData;
 

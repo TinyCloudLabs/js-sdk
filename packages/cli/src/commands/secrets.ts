@@ -367,8 +367,7 @@ async function runSecretOperation<T>(params: {
 }
 
 function secretPermissionReason(action: SecretAction, name?: string): string {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
+  return `Allow ${CLI_NAME} secrets ${action}${name ? ` ${name}` : ""}.`;
 }
 
 /** Browser approval is possible when the person can see stderr or answer on stdin. */

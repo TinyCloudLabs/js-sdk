@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -11,6 +11,7 @@ const originalHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-portable-proof-"));
 process.env.TC_HOME = home;
 const recordedErrors: unknown[] = [];
+const openKeyReasons: Array<string | undefined> = [];
 type SignedCallback = OpenKeyCallback;
 let callback: SignedCallback;
 const staticCallback: OpenKeyDelegate = async () => callback;
@@ -26,7 +27,10 @@ mock.module("../lib/sdk.js", () => ({
   restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
 }));
 mock.module("../auth/browser-auth.js", () => ({
-  startAuthFlow: async (did: string, options: { permissions?: PermissionEntry[] }) => acquire(did, options),
+  startAuthFlow: async (did: string, options: { permissions?: PermissionEntry[]; reason?: string }) => {
+    openKeyReasons.push(options.reason);
+    return acquire(did, options);
+  },
   publicJwkForDelegation: (jwk: Record<string, unknown>) => {
     const { d: _privateKey, ...publicKey } = jwk;
     return publicKey;
@@ -132,6 +136,7 @@ beforeEach(async () => {
   activationError = undefined;
   acquire = staticCallback;
   openKeyRequests.length = 0;
+  openKeyReasons.length = 0;
   openKey.refusals.length = 0;
   profileName = `portable-${++profileNumber}`;
   await ProfileManager.ensureConfigDir();
@@ -363,6 +368,34 @@ describe("signed portable OpenKey grants", () => {
     expect(stored[0]!.delegation.resources).toContainEqual({
       service: "kv", space: spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"],
     });
+  });
+
+  test("auth request --grant omits generated reason containing requested capability", async () => {
+    callback = { ...await signedProof({ raw: false }), permissions: [] };
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(["node", "tc", "--profile", profileName, "auth", "request", "--grant",
+      "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get"], { from: "node" });
+    expect(openKeyReasons).toEqual([undefined]);
+    expect(JSON.stringify(openKeyReasons)).not.toContain("vault/secrets/KEY");
+  });
+
+  test("auth grant omits generated reason containing requested capability", async () => {
+    callback = { ...await signedProof({ raw: false }), permissions: [] };
+    const requestPath = join(home, "auth-grant-request.json");
+    await writeFile(requestPath, JSON.stringify({
+      kind: "tinycloud.auth.request", version: 1, requestId: "reason-omission-test",
+      createdAt: new Date().toISOString(), profile: profileName, posture: "delegate-session",
+      operatorType: "agent", host, sessionDid: did,
+      requested: [{ service: "tinycloud.kv", space: spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+    }), "utf8");
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(["node", "tc", "--profile", profileName, "auth", "grant", requestPath, "--yes"], { from: "node" });
+    expect(openKeyReasons).toEqual([undefined]);
+    expect(JSON.stringify(openKeyReasons)).not.toContain("vault/secrets/KEY");
   });
 
   test("auth request activation failure leaves no stored grant or history", async () => {
