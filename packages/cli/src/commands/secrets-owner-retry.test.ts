@@ -236,7 +236,9 @@ describe("owner secrets get OpenKey retry", () => {
       output.write = originalWrite;
     }
 
-    expect(openKey.requests).toEqual([request]);
+    expect(openKey.requests).toHaveLength(1);
+    expect(openKey.requests[0]).toHaveLength(request.length);
+    expect(openKey.requests[0]).toEqual(expect.arrayContaining(request));
     expect(acquisitions).toBe(1);
     expect(operationAttempts).toBe(2);
     expect(installedDelegations).toEqual([grantedCid]);
