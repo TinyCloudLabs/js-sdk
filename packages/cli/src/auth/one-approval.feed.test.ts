@@ -1,11 +1,16 @@
 import { expect, spyOn, test } from "bun:test";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
-import { TinyCloudNode } from "../../../node-sdk/src/TinyCloudNode";
+const { TinyCloudNode } = await import(new URL("../../../node-sdk/src/TinyCloudNode.ts", import.meta.url).href) as { TinyCloudNode: typeof import("@tinycloud/node-sdk").TinyCloudNode };
 import { feedResourceNames, initializeFeedDatabases } from "@tinycloud/sdk-services/feed";
-import { sqliteHandle, unwrap } from "../../../sdk-services/src/feed/sqlite.test-helper";
-import { connectFeedAgent } from "../feed/connection";
-import { onboardingPermissions } from "./onboarding-scope";
-import { permissionTuples, scopedLoginPermissions } from "./scoped-login";
+import type { FeedDatabase } from "@tinycloud/sdk-services/feed";
+import type { Result } from "@tinycloud/sdk-services";
+const { sqliteHandle, unwrap } = await import(new URL("../../../sdk-services/src/feed/sqlite.test-helper.ts", import.meta.url).href) as {
+  sqliteHandle(): { handle: FeedDatabase; close(): void };
+  unwrap<T>(result: Result<T>): T;
+};
+import { connectFeedAgent } from "../feed/connection.js";
+import { onboardingPermissions } from "./onboarding-scope.js";
+import { permissionTuples, scopedLoginPermissions } from "./scoped-login.js";
 
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");

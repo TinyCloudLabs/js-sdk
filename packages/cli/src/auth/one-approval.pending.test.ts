@@ -14,11 +14,11 @@ test("both task spaces persist as one 1/1 approval, and interruption resumes the
   await ProfileManager.setProfile("one-approval", { name: "one-approval", host: "https://node.test", did, sessionDid: did, authMethod: "openkey", chainId: 1, spaceName: "applications", createdAt: new Date().toISOString() });
   await ProfileManager.setKey("one-approval", key);
   let creates = 0;
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (_input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     creates++;
     const record = JSON.parse(init!.body as string);
     return Response.json({ id: "aaaaaaaaaaaaaaaaaaaaaaaaaa", expiresAt: record.header.expiresAt }, { status: 201 });
-  });
+  }, { preconnect: globalThis.fetch.preconnect }));
   const urls: string[] = [];
   const options = { profileName: "one-approval", jwk: key, host: "https://node.test", permissions: scopedLoginPermissions(onboardingPermissions("apps,feed")),
     expiry: "30d", noPopup: true, approvalWait: { deadlineMs: Date.now() + 1000, step: 1, of: 1 },

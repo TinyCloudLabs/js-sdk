@@ -15,7 +15,7 @@ const requested = scopedLoginPermissions([
   { service: "tinycloud.kv", space: "account", path: "spaces/", actions: ["tinycloud.kv/list"] },
   { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/home_feed", actions: ["tinycloud.sql/read"] },
 ]);
-async function fixture(entries = requested, primary = "applications") {
+async function fixture(entries = requested, primary = "applications"): Promise<Record<string, unknown> & { requestedSpaces: Array<{space: string; spaceId: string; spaceReady: boolean}>; spaceReady: boolean }> {
   const spaceAbilities: Record<string, Record<string, Record<string, string[]>>> = {};
   for (const p of entries) ((spaceAbilities[space(p.space!)] ??= {})[p.service.slice("tinycloud.".length)] ??= {})[p.path] = p.actions;
   const prepared = wasm.prepareSession({ address, chainId: 1, domain: "fixture.test", spaceId: space(primary), jwk: key,
