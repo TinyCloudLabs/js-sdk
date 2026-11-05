@@ -492,7 +492,7 @@ function comparableSpace(space: string): string {
  * the exact CACAO and verified against this runtime's live session key, so
  * the signer (owner), audience, lifetime, space and ReCap all come from
  * signed bytes. The grant must be signed by the session's own owner, stay in
- * one owner space, and name only raw networks that owner holds.
+ * that owner's spaces, and name only raw networks that owner holds.
  */
 function signedAuthorityFromSessionGrant(
   node: RuntimeDelegationActivator,

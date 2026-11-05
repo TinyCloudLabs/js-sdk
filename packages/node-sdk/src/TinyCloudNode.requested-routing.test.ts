@@ -16,5 +16,5 @@ test("post-construction manifest routes through its requested space, ahead of im
     expect(node.spaceId).toBe(wasm.makeSpaceId(await signer.getAddress(), 1, "default"));
     expect(node.hasRuntimePermissions([{ service: "tinycloud.kv", space: "default", path: "com.demo.app/config", actions: ["tinycloud.kv/get"] }])).toBe(true);
     expect(node.hasRuntimePermissions([{ service: "tinycloud.kv", space: "default", path: "outside", actions: ["tinycloud.kv/get"] }])).toBe(false);
-  } finally { fetch.mockRestore(); }
+  } finally { await node.waitForAccountRegistrySync(); fetch.mockRestore(); }
 });
