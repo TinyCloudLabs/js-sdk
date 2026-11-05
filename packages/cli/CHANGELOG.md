@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.6.3-beta.5
+
+### Patch Changes
+
+- 68a8bd1: Omit generated OpenKey approval reasons when no explicit reason was provided.
+
+  Details: TC-2490
+
 ## 1.6.3-beta.4
 
 ### Patch Changes

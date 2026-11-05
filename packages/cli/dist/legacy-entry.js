@@ -36401,7 +36401,6 @@ async function revokeDelegationOnNode(params) {
         node,
         requested: [revokePermission],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: `Revoke delegation ${cid}`,
         yes: params.yes,
         consentAlreadyGiven: true,
         persist: false,
@@ -36448,7 +36447,6 @@ async function revokeDelegationOnNode(params) {
           actions: ["tinycloud.delegation/revoke"]
         }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes,
         consentAlreadyGiven: true,
         persist: false,
@@ -37361,7 +37359,6 @@ function registerAuthCommand(program, options) {
           shareOrigin: DEFAULT_SHARE_ORIGIN,
           permissions: loginPermissions,
           ...options2.expiry === void 0 ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options2.expiry)) },
-          reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
           expectedOwner: owner,
           replaceSession: options2.replaceSession === true,
           persistHost
@@ -37572,7 +37569,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
-  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
+  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
     `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
   ).option(
@@ -37649,10 +37646,6 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         for (const [index, group] of groups.entries()) {
           if (notices) process.stderr.write(`${notices.prompts[index]}
 `);
-          const reason = permissionGrantReason(
-            `Grant requested TinyCloud permissions from \`${CLI_NAME20} auth request --grant\`.`,
-            group
-          );
           const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
           const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
             let delegationData;
@@ -37664,7 +37657,6 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 shareOrigin: DEFAULT_SHARE_ORIGIN,
                 permissions: request,
                 expiry: parseRequestedExpiry(expiryOption ?? "7d"),
-                reason,
                 expectedOwner: pinnedOwner(profile),
                 openkeyHost: resolveDeviceApiHost(profile)
               });
@@ -37677,7 +37669,6 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 jwk: key,
                 host: ctx.host,
                 permissions: request,
-                reason,
                 openkeyHost,
                 expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
                 noPopup: options2.popup === false,
@@ -37958,7 +37949,6 @@ ${scope.text}
             parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
             OPENKEY_AGENT_MAX_LIFETIME_MS
           ),
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           exactApproval: true,
           noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
           commandIntent: approvalCommandIntent(parsed),
@@ -37991,7 +37981,6 @@ ${scope.text}
           node,
           requested,
           expiryOption: parsed.requestedExpiry,
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           yes: options2.yes === true || confirmedExtras
         });
         grant = await grantAuthRequest(node, resolvedRequest);
@@ -38404,7 +38393,7 @@ async function acquireOpenKeyApproval(params) {
       jwk: key,
       host: params.ctx.host,
       permissions: request,
-      reason: permissionGrantReason(params.reason, request),
+      ...params.reason === void 0 ? {} : { reason: params.reason },
       openkeyHost: resolveOpenKeyHost(params.profile),
       expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
       noPopup: params.noPopup,
@@ -38494,7 +38483,7 @@ async function ensureDelegationAuthority(params) {
           jwk: key,
           host: params.ctx.host,
           permissions: request,
-          reason: permissionGrantReason(params.reason, group),
+          ...params.reason === void 0 ? {} : { reason: params.reason },
           openkeyHost,
           expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
           noPopup: params.noPopup
@@ -38542,12 +38531,6 @@ function assertOpenKeyAgentRequest(requested) {
       ExitCode.PERMISSION_DENIED
     );
   }
-}
-function permissionGrantReason(context2, permissions) {
-  const first = permissions[0];
-  const summary = first ? compactPermission(first) : "no permissions";
-  const more = permissions.length > 1 ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}` : "";
-  return `${context2} Requested: ${summary}${more}.`;
 }
 function execCapturedCommand(command) {
   return new Promise((resolve10, reject) => {
@@ -39274,7 +39257,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry: openKeyExpiry,
       // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
       ...plainPasteLink ? { expiryChangeable: true } : {},
-      ...permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
+      ...permissions && options.reason ? { reason: options.reason } : {}
     });
     seen.result = delegationData;
     let sanitizedSession;
@@ -40052,7 +40035,6 @@ function registerEnableCommand(program) {
         nodeOrigin: context2.host,
         shareOrigin: DEFAULT_SHARE_ORIGIN,
         permissions: sharePublishingPermissions(),
-        reason: "Allow this TinyCloud CLI profile to publish Share links.",
         replaceSession: options.replaceSession === true,
         persistHost: globalOptions.host !== void 0
       });
@@ -42314,7 +42296,7 @@ var ONBOARD_STEPS = [
   }
 ];
 function registerOnboardCommand(program) {
-  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
+  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
     try {
       const deadlineMs = options.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options.timeout);
       if (options.timeout !== void 0 && typeof options.code === "string" && options.code.trim() !== "") {
@@ -42350,8 +42332,7 @@ function registerOnboardCommand(program) {
           noPopup: true,
           ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } },
           onApprovalRequest: ({ approvalUrl }) => {
-            console.error(`${flow.reason}
-Approve in OpenKey (open the complete link):
+            console.error(`Approve in OpenKey (open the complete link):
 ${approvalUrl}
 ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
           }
@@ -42359,13 +42340,11 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
       };
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         currentStep = index + 1;
-        const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
         const session2 = await ProfileManager.getSession(ctx.profile);
         if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
           const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
             permissions: step.permissions,
             expiry: ONBOARD_EXPIRY,
-            reason,
             persistHost: globalOpts.host !== void 0,
             openKeyAcquisition: acquire,
             ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
@@ -42385,7 +42364,6 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           node: await ensureAuthenticated(ctx),
           requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
           expiryOption: ONBOARD_EXPIRY,
-          reason,
           yes: true,
           exactApproval: true,
           openKeyAcquisition: acquire
@@ -44157,7 +44135,6 @@ async function runSecretOperation(params) {
       node: params.node,
       requested,
       expiryOption: void 0,
-      reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
@@ -44165,10 +44142,6 @@ async function runSecretOperation(params) {
     })
   );
   return runSecretOperationAttempt(params.label, params.operation);
-}
-function secretPermissionReason(action, name) {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME34} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 function assertOwnerApprovalPossible(profileName2, profile, action, name, missing = []) {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
@@ -44280,7 +44253,6 @@ async function canonicalSecretGet(params, collect) {
       node,
       requested: first.missing,
       expiryOption: void 0,
-      reason: secretPermissionReason("get", params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
