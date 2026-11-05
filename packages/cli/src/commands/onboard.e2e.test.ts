@@ -46,7 +46,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     profile: Record<string, unknown> | null;
     session: Record<string, unknown> | null;
     grants: Array<{ delegation: { cid: string; spaceId: string; siweProof?: { siwe: string; signature: string } } }>;
-    pending: Array<{ requestId: string; bodyCid: string; resultRef?: string; ackId: string; expectedOwner?: string; request: OpenKeyApprovalRequestV1 }>;
+    pending: Array<{ requestId: string; approvalUrl: string; bodyCid: string; resultRef?: string; ackId: string; expectedOwner?: string; request: OpenKeyApprovalRequestV1 }>;
   }
   let approvalServer: ReturnType<typeof Bun.serve> | undefined;
   let approvalCertificate = "";
@@ -73,7 +73,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     const saved = await savedState(entry.homeName);
     const pending = saved.pending.find((item) => item.requestId === entry.id);
     const delegation = entry.delegation;
-    const sessionMatches = saved.session?.delegationCid === delegation.delegationCid &&
+    const sessionMatches = saved.session !== null && saved.session.delegationCid === delegation.delegationCid &&
       saved.session.signature === delegation.signature && saved.session.siwe === delegation.siwe;
     const grantMatches = saved.grants.some((item) => item.delegation.cid === delegation.delegationCid &&
       item.delegation.siweProof?.signature === delegation.signature && item.delegation.siweProof?.siwe === delegation.siwe);
@@ -204,7 +204,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
   }
 
   async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner,
-    permissions: readonly PermissionEntry[] = request.permissions) {
+    permissions: Readonly<OpenKeyApprovalRequestV1["permissions"]> = request.permissions) {
     const address = await signer.getAddress();
     const ownerDid = "did:pkh:eip155:1:" + address;
     const names = spacesOf(request);
@@ -257,7 +257,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
   }
 
   async function onboardWithApprovals(name: string, chooseSigner: (request: OpenKeyApprovalRequestV1) => Promise<PrivateKeySigner | null> | PrivateKeySigner | null,
-    args = ["onboard"], selectPermissions?: (request: OpenKeyApprovalRequestV1) => PermissionEntry[]) {
+    args = ["onboard"], selectPermissions?: (request: OpenKeyApprovalRequestV1) => OpenKeyApprovalRequestV1["permissions"]) {
     const { argv, env, cwd } = cliArgs(name, args);
     const child = Bun.spawn(argv, { env, cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     activeChildren.add(child);
@@ -304,7 +304,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
           }
         }
       }
-      return { exitCode: await child.exited, stdout: await stdoutText, stderr, offered };
+      return { exitCode: await child.exited, stdout: await stdoutText, stderr, offered, links: [...seen] };
     } catch (error) {
       child.kill();
       await child.exited;
@@ -318,7 +318,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     expect(Date.parse(entry.record.header.expiresAt)).toBe(Math.floor(Date.parse(entry.record.header.issuedAt) / 1000) * 1000 + 3600_000);
   }
 
-  function authority(permissions: readonly PermissionEntry[]) {
+  function authority(permissions: Readonly<OpenKeyApprovalRequestV1["permissions"]>) {
     return permissions.map((permission) => ({ ...permission, actions: [...permission.actions].sort() }))
       .sort((left, right) => (left.space ?? "").localeCompare(right.space ?? "") || left.service.localeCompare(right.service) || left.path.localeCompare(right.path));
   }
@@ -422,6 +422,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     const pending = JSON.parse(first.stdout).pending;
     expect(pending).toMatchObject({ step: 1, of: 1 });
     expect(first.offered).toHaveLength(1);
+    expect(first.links).toEqual([pending.approvalUrl]);
     const approval = first.offered[0]!;
     expect(approval.request).not.toHaveProperty("reason");
     assertThirtyDays(approval);
@@ -438,13 +439,14 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(beforeResume.session).toBeNull();
     expect(beforeResume.grants).toEqual([]);
     expect(beforeResume.pending).toHaveLength(1);
-    expect(beforeResume.pending[0]).toMatchObject({ requestId: approval.id, bodyCid: approval.record.header.bodyCid });
+    expect(beforeResume.pending[0]).toMatchObject({ requestId: approval.id, approvalUrl: pending.approvalUrl, bodyCid: approval.record.header.bodyCid });
     expect(beforeResume.pending[0]!.request.permissions).toEqual(approval.request!.permissions);
     expect(approval.ackId).toBeUndefined();
     expect((await cli("agent", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("AUTH_REQUIRED");
     const done = await onboardWithApprovals("agent", () => ownerSigner, ["onboard", "--timeout", "1s"]);
     expect(done.exitCode, done.stderr + done.stdout).toBe(0);
     expect(done.offered.map(entry => entry.id)).toEqual([approval.id]);
+    expect(done.links).toEqual(first.links);
     expect(approvalRequests.size - countBefore).toBe(1);
     const result = JSON.parse(done.stdout) as { onboarded: boolean; profile: string; ownerDid: string };
     expect(result.onboarded).toBe(true);
