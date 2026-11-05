@@ -28,6 +28,7 @@ let savedPendingCopies = 0;
 let grantedUntil = "";
 let grantedCid = "";
 const stderr: string[] = [];
+const acquisitionReasons: Array<string | undefined> = [];
 
 const realBrowserAuth = await import("../auth/browser-auth.js");
 const wasm = new NodeWasmBindings();
@@ -87,6 +88,7 @@ let signRequest = false;
 let observedDuringApproval: { key: string; session: boolean } | undefined;
 let savePendingDelegation: typeof import("../auth/pending-code.js").savePendingDelegation;
 const acquisitionFlow = async (did: string, options: Record<string, unknown>) => {
+  acquisitionReasons.push(options.reason as string | undefined);
   // Another login commits a live session with this key while the owner is still approving.
   if (sessionDuringAcquisition) await ProfileManager.setSession(options.profileName as string, await proofFor(did, options.jwk as Record<string, unknown>, 30 * DAY));
   const delegation = await proofFor(did, options.jwk as Record<string, unknown>, pickedLifetimeMs, signRequest ? options.permissions as Permission[] : undefined);
@@ -161,6 +163,7 @@ beforeEach(async () => {
   recordedErrors.length = 0;
   outputs.length = 0;
   stderr.length = 0;
+  acquisitionReasons.length = 0;
   savedPendingCopies = 0;
   grantedUntil = "";
   grantedCid = "";
@@ -333,13 +336,14 @@ describe("a profile this command created and removed leaves no directory and no 
     await gone(profileName);
   });
 
-  test("onboard, refused: same", async () => {
+  test("onboard sends no generated OpenKey reason when none is supplied", async () => {
     pickedLifetimeMs = 7 * DAY;
     tamper = "signature";
     const program = new Command();
     program.option("-p, --profile <name>");
     registerOnboardCommand(program);
     await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard"], { from: "node" }));
+    expect(acquisitionReasons).toEqual([undefined]);
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
     await gone(profileName);
   });

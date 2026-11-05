@@ -413,6 +413,7 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(first.exitCode).not.toBe(0);
     expect(first.offered.map((entry) => spaceOf(entry.request!))).toEqual(["applications", "account"]);
     const approval1 = first.offered[0]!;
+    expect(approval1.request).not.toHaveProperty("reason");
     assertThirtyDays(approval1);
     expect(new Set(approval1.request!.permissions.map((permission) => permission.space))).toEqual(new Set(["applications"]));
     expect(authority(approval1.request!.permissions.map(({ space: _, ...permission }) => permission))).toEqual(authority([
