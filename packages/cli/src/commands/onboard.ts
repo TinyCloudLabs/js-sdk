@@ -5,7 +5,7 @@ import { startAuthFlow, delegationFromInput } from "../auth/browser-auth.js";
 import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
 import { completeApprovalResult } from "../auth/approval-request.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
-import { onboardingPermissions } from "../auth/onboarding-scope.js";
+import { onboardingPlan } from "../auth/onboarding-scope.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -61,8 +61,8 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (options, cmd) => {
       try {
         // Refused before anything is created or contacted. One deadline bounds the whole command, every approval in it.
-        const permissions = onboardingPermissions(options.with);
-        const steps = [{ permissions, asks: options.with === "feed" ? "Use Home and your feed, and discover your spaces and apps, for 30 days." : "Use the requested apps and discover your spaces, for 30 days." }];
+        const { permissions, asks } = onboardingPlan(options.with);
+        const steps = [{ permissions, asks }];
         const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         if (options.timeout !== undefined && typeof options.code === "string" && options.code.trim() !== "") {
           throw new CLIError(
