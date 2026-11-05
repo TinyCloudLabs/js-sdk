@@ -167,8 +167,8 @@ export async function revokeDelegationOnNode(params: {
     try {
       const acquired = await ensureDelegationAuthority({
         ctx, profile, node, requested: [revokePermission], expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: `Revoke delegation ${cid}`, yes: params.yes, consentAlreadyGiven: true,
-        persist: false, openKeyAcquisition: params.openKeyAcquisition,
+        yes: params.yes, consentAlreadyGiven: true, persist: false,
+        openKeyAcquisition: params.openKeyAcquisition,
       });
       commandAuthorityCid = acquired?.cid;
     } catch (error) {
@@ -206,9 +206,6 @@ export async function revokeDelegationOnNode(params: {
           space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
           path: "", actions: ["tinycloud.delegation/revoke"] }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: fallback.source === "node-delegation-record"
-          ? `Revoke delegation ${cid} using the node's record of the owner's grant`
-          : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes, consentAlreadyGiven: true, persist: false,
         openKeyAcquisition: params.openKeyAcquisition,
       });
