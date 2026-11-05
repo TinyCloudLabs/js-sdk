@@ -410,6 +410,9 @@ export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: s
 }
 
 function canonicalSpaceOrder(permissions: PermissionEntry[]): PermissionEntry[] {
+  const spaces = new Set(permissions.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p))
+    .map(p => (p.space ?? "").split(":").at(-1)));
+  if (spaces.size <= 1) return permissions;
   return [...permissions].sort((a, b) => {
     // OpenKey accepts qualified spaces only for the selected signing account.
     // Compare their names so mixed logical/qualified spellings use the same route.

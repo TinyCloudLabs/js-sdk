@@ -923,6 +923,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
     );
   }
 
+  private primaryRequestedSpace(
+    request: ComposedManifestRequest, fallback: readonly ResourceCapability[], address: string, chainId: number,
+  ): string {
+    // Registry permissions are signed companions, not a request to route the app
+    // through account. Choose among the manifest's own requested spaces first.
+    const requested = request.manifests.length === 0 ? []
+      : composeManifestRequest(request.manifests, { includeAccountRegistryPermissions: false }).resources
+        .filter(entry => entry.service !== ENCRYPTION_PERMISSION_SERVICE);
+    const grantedSpaces = new Set(fallback.map(entry => pkhSpaceIdentity(this.resolveSpaceName(entry.space, address, chainId))));
+    const candidates = requested.filter(entry => grantedSpaces.has(pkhSpaceIdentity(this.resolveSpaceName(entry.space, address, chainId))));
+    return primaryManifestSpace((candidates.length ? candidates : fallback)
+      .map(entry => ({ ...entry, space: this.resolveSpaceName(entry.space, address, chainId) })));
+  }
+
   private resolveSpaceName(space: string, address: string, chainId: number): string {
     if (space.startsWith("tinycloud:")) {
       return space;
@@ -1015,7 +1029,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceResources = request.resources.filter(
       (entry) => entry.service !== ENCRYPTION_PERMISSION_SERVICE,
     );
-    const primarySpaceName = primaryManifestSpace(spaceResources.map(entry => ({ ...entry, space: this.resolveSpaceName(entry.space, address, chainId) })));
+    const primarySpaceName = this.primaryRequestedSpace(request, spaceResources, address, chainId);
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
       address,
@@ -1205,7 +1219,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       return false;
     });
 
-    const primarySpaceName = primaryManifestSpace(spaceResources.map(entry => ({ ...entry, space: this.resolveSpaceName(entry.space, address, chainId) })));
+    const primarySpaceName = this.primaryRequestedSpace(request, spaceResources, address, chainId);
     const primarySpaceId = this.resolveSpaceName(
       primarySpaceName,
       address,

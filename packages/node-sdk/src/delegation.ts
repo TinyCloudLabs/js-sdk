@@ -538,6 +538,8 @@ function signedAuthorityFromSessionGrant(
     reject("authority_invalid", "Runtime delegation space is not owned by its signer.");
   }
   const groups = new Map<string, PermissionEntry>();
+  let hasSpacedAuthority = false;
+  let coversPrimary = false;
   for (const entry of verified.recap) {
     const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
     const raw = entry.space === "encryption";
@@ -549,10 +551,14 @@ function signedAuthorityFromSessionGrant(
       if (!didPrincipalsMatch(networkOwner, owner)) {
         reject("authority_invalid", "Runtime delegation names an encryption network its signer does not own.");
       }
-    } else if (service === "tinycloud.encryption" || comparableSpace(entry.space) !== space) {
-      // Decrypt signed inside a space (older OpenKey) is not a usable network
-      // grant, and one grant covers one space.
-      reject("authority_invalid", "Runtime delegation has signed authority outside its space.");
+    } else {
+      const resourceOwner = PKH_SPACE.exec(entry.space);
+      if (service === "tinycloud.encryption" || !resourceOwner ||
+        !didPrincipalsMatch(`did:pkh:eip155:${resourceOwner[1]}:${resourceOwner[2]}`, owner)) {
+        reject("authority_invalid", "Runtime delegation has signed authority outside its owner's spaces.");
+      }
+      hasSpacedAuthority = true;
+      coversPrimary ||= comparableSpace(entry.space) === space;
     }
     const caveats = signedCaveats(entry.caveats ?? []);
     const key = JSON.stringify([service, raw ? "" : entry.space, entry.path, canonicalizeRecapCaveats(caveats)]);
@@ -567,6 +573,9 @@ function signedAuthorityFromSessionGrant(
       if (!group.actions.includes(action)) group.actions.push(action);
     }
     groups.set(key, group);
+  }
+  if (hasSpacedAuthority && !coversPrimary) {
+    reject("authority_invalid", "Runtime delegation primary route is outside its signed spaces.");
   }
   return canonicalSignedAuthority({
     issuer: owner,
@@ -734,7 +743,7 @@ export async function activateValidatedRuntimeDelegation(
           disableSubDelegation: signed.remainingRedelegationDepth === 0,
         }),
     authHeader: authorization,
-    spaceId: signedSpace ?? delegation.spaceId,
+    spaceId: compact ? signedSpace ?? delegation.spaceId : delegation.spaceId,
     path: primary.path,
     actions: [...primary.actions],
     ...(primary.caveats === undefined ? {} : { caveats: primary.caveats }),
@@ -852,6 +861,7 @@ export function siweRuntimeDelegation(
   }
   return {
     ...portableFromSignedAuthority(cid, input.authorization, signed, input),
+    spaceId: input.spaceId,
     siweProof: proof,
   };
 }
