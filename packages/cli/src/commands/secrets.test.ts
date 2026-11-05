@@ -135,6 +135,7 @@ const recorded = {
     }>;
   }>,
   sessionRefreshes: [] as Array<{ profile: string; host: string }>,
+  approvalReasons: [] as Array<string | undefined>,
   delegatedKvGets: [] as Array<{ path: string; options: { raw: boolean; prefix: string } }>,
   decryptEnvelopeCalls: [] as Array<{ envelope: unknown; options: { proofs: string[] } }>,
   networkReadCalls: [] as string[],
@@ -183,6 +184,7 @@ function resetRecorded(): void {
   recorded.networkInitCalls.length = 0;
   recorded.delegateCalls.length = 0;
   recorded.permissionRequests.length = 0;
+  recorded.approvalReasons.length = 0;
   recorded.sessionRefreshes.length = 0;
   recorded.delegatedKvGets.length = 0;
   recorded.decryptEnvelopeCalls.length = 0;
@@ -542,7 +544,9 @@ mock.module("./auth.js", () => ({
       actions: string[];
       skipPrefix?: boolean;
     }>;
+    reason?: string;
   }) => {
+    recorded.approvalReasons.push(params.reason as string | undefined);
     recorded.permissionRequests.push({
       profile: params.ctx.profile,
       requested: params.requested,
@@ -1412,6 +1416,7 @@ describe("CLI secrets commands", () => {
     await runSecretsCommand(["secrets", "list"]);
 
     expect(recorded.listCalls).toEqual([undefined, undefined]);
+    expect(recorded.approvalReasons).toEqual([undefined]);
     expect(recorded.permissionRequests).toEqual([
       {
         profile: "default",

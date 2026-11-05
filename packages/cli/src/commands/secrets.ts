@@ -355,7 +355,6 @@ async function runSecretOperation<T>(params: {
       node: params.node,
       requested,
       expiryOption: undefined,
-      reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
@@ -366,10 +365,6 @@ async function runSecretOperation<T>(params: {
   return runSecretOperationAttempt(params.label, params.operation);
 }
 
-function secretPermissionReason(action: SecretAction, name?: string): string {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
-}
 
 /** Browser approval is possible when the person can see stderr or answer on stdin. */
 function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string, missing: readonly Readonly<Record<string, unknown>>[] = []): void {
@@ -533,7 +528,6 @@ async function canonicalSecretGet(
       node,
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
-      reason: secretPermissionReason("get", params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
