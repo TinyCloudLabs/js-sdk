@@ -147,6 +147,8 @@ beforeEach(async () => {
     spaceName: "secrets", spaceId, authMethod: "openkey", posture: "owner-openkey",
     operatorType: "human", createdAt: new Date().toISOString(),
   });
+  // These tests cover grants from an already authenticated profile, not key-only bootstrap.
+  await ProfileManager.setSession(profileName, { delegationCid: "existing-session", spaceId });
 });
 
 afterAll(async () => {
