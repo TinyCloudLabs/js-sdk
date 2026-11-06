@@ -143,6 +143,14 @@ describe("scoped first login", () => {
     expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
 
+  test("rejects empty login requests before opening consent", async () => {
+    let calls = 0;
+    const acquire = async () => { calls++; return proof(); };
+    await expect(refreshOpenKeySession("scoped", host, { permissions: [], openKeyAcquisition: acquire }))
+      .rejects.toMatchObject({ code: "INVALID_LOGIN_SCOPE" });
+    expect(calls).toBe(0);
+  });
+
   test("accepts a signed multi-space scope and preserves each resource space", async () => {
     const multiRequested = [...requested, { ...requested[0]!, space: "default" }];
     const response = await proof({ spaces: ["applications", "default"] });
