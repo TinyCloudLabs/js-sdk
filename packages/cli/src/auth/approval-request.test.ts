@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { Command } from "commander";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
@@ -28,6 +29,7 @@ const { verifyScopedLogin } = await import("./scoped-login.js");
 const { clearProfileCredentials } = await import("../lib/logout-pending.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 const { createECDH } = await import("node:crypto");
+const { registerAuthCommand } = await import("../commands/auth.js");
 restoreEnvironment(original);
 let caseEnvironment = original;
 const wasm = new NodeWasmBindings();
@@ -85,8 +87,12 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   return Response.json({ ackId: body.ackId, status: "acknowledged" });
 } });
 
-async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds = 3600) {
-  const prepared = wasm.prepareSession({ abilities: { kv: { "": actions } }, address, chainId: 1,
+async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds = 3600, includeCapabilities = false) {
+  const abilities = {
+    kv: { "": actions },
+    ...(includeCapabilities ? { capabilities: { "": ["tinycloud.capabilities/read"] } } : {}),
+  };
+  const prepared = wasm.prepareSession({ abilities, address, chainId: 1,
     domain: "cli.example", spaceId, jwk: key, issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + lifetimeSeconds * 1000).toISOString() });
   const signature = await wallet.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -94,11 +100,15 @@ async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
 }
 
-async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid }) {
+async function stage(
+  delegation: Record<string, unknown>,
+  options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid },
+  requestPermissions: typeof requested = requested,
+) {
   const relay = createECDH("prime256v1"); relay.generateKeys();
   const recipientJwk = relayPublicJwkOf(relay);
   const request = { issuer: did, requestVersion: 1 as const, targetDid: did,
-    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requested,
+    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requestPermissions,
     grantLifetimeSeconds: options.grantLifetimeSeconds ?? 3600, resultEncryptionPublicJwk: recipientJwk };
   const prepared = await prepareLinkRecord({ type: "openkey-approval-request", plaintext: new TextEncoder().encode(JSON.stringify(request)),
     issuerKey: signerFromJwk(key), apiOrigin: "https://api.tinycloud.xyz", expiresAt: new Date(Date.now() + 3600_000) });
@@ -166,6 +176,40 @@ test("a fetched approval is not acknowledged before durable login persistence", 
   expect(durable?.[0]).toMatchObject({ committed: true, ackId: pending.ackId });
   await completeApprovalResult("approval");
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+});
+
+test("key-only auth request durably saves then ACKs the first OpenKey grant", async () => {
+  const requestPermissions = [
+    { service: "tinycloud.capabilities", space: "applications", path: "", actions: ["tinycloud.capabilities/read"] },
+    ...requested,
+  ];
+  const delegation = await signedDelegation(["tinycloud.kv/list"], 3600, true);
+  const pending = await stage(delegation, { expectedOwner: ownerDid }, requestPermissions);
+  process.env.TC_OPENKEY_HOST = "https://openkey.example";
+  process.env.TC_OPENKEY_API_HOST = server.url.origin;
+  process.env.TC_LINKS_API_ORIGIN = "https://api.tinycloud.xyz";
+
+  const program = new Command().option("--profile <name>");
+  registerAuthCommand(program);
+  await program.parseAsync([
+    "node",
+    "tc",
+    "--profile",
+    "approval",
+    "auth",
+    "request",
+    "--grant",
+    "--cap",
+    "tinycloud.kv:applications::list",
+    "--expiry",
+    "1h",
+    "--no-popup",
+  ], { from: "node" });
+
+  expect(savedBeforeAck).toBe(true);
+  expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  expect((await ProfileManager.getSession("approval"))?.delegationCid).toBe(delegation.delegationCid);
   expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
 });
 

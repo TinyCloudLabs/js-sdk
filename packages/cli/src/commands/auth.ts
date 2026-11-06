@@ -961,7 +961,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
-        const profile = await ProfileManager.getProfile(ctx.profile);
+        const initialSnapshot = options.grant ? await readProfileSnapshot(ctx.profile) : undefined;
+        const profile = initialSnapshot?.profile ?? await ProfileManager.getProfile(ctx.profile);
         if (options.paste && (!options.grant || options.device || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--paste requires --grant on an OpenKey owner profile and cannot be combined with --device.", ExitCode.USAGE_ERROR);
         }
@@ -999,8 +1000,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
 
         
-        const session = await ProfileManager.getSession(ctx.profile);
-        const key = await ProfileManager.getKey(ctx.profile);
+        const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
+        const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
         const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options.device;
         if (profile.authMethod === "openkey" || options.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
         let node: TinyCloudNode | undefined;
@@ -1077,8 +1078,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
               return approval.delegation;
             });
             if (bootstrapSessionData) {
-              await ProfileManager.setSession(ctx.profile, bootstrapSessionData);
-              await ProfileManager.setProfile(ctx.profile, {
+              const bootstrapProfile: ProfileConfig = {
                 ...profile,
                 posture: profile.posture ?? "owner-openkey",
                 sessionDid: profile.sessionDid ?? profile.did,
@@ -1087,7 +1087,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                 ...(typeof bootstrapSessionData.ownerDid === "string"
                   ? { ownerDid: bootstrapSessionData.ownerDid }
                   : {}),
+              };
+              await commitLogin(ctx.profile, initialSnapshot!, {
+                key,
+                session: bootstrapSessionData,
+                profile: bootstrapProfile,
+                durable: true,
               });
+              await completeApprovalResult(ctx.profile, delegation);
               node = await ensureAuthenticated(ctx);
             }
             grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
