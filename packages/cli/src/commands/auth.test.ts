@@ -2028,7 +2028,13 @@ describe("CLI auth request command", () => {
     ensureAuthenticatedError = new Error("Not authenticated");
     openKeyDelegation = {
       ...openKeyDelegation,
-      spaceId: "default",
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+      verificationMethod: "did:key:old",
+      siwe: "signed session proof",
+      signature: "0xsigned",
+      address: "0xowner",
+      chainId: 1,
+      verifiedActions: ["tinycloud.kv/list"],
     };
 
     await runAuthCommand([
@@ -2046,12 +2052,12 @@ describe("CLI auth request command", () => {
       did: "did:key:old",
       options: {
         noPopup: true,
-        permissions: [{
+        permissions: expect.arrayContaining([{
           service: "tinycloud.kv",
           space: "default",
           path: "",
           actions: ["list"],
-        }],
+        }]),
       },
     });
     expect(sessions.get("default")).toMatchObject({

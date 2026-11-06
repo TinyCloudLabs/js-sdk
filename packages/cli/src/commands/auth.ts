@@ -1072,15 +1072,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                 });
               }
               seen.result = delegationData;
-              const portable = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
-              if (keyOnlyOpenKey && index === 0) bootstrapSessionData = delegationData;
-              return portable;
+              const approval = verifyOpenKeyApproval(delegationData, request, ctx.host, proof);
+              if (keyOnlyOpenKey && index === 0) bootstrapSessionData = approval.session;
+              return approval.delegation;
             });
             if (bootstrapSessionData) {
-              await ProfileManager.setSession(
-                ctx.profile,
-                mergePrivateJwkIntoSession(bootstrapSessionData, key),
-              );
+              await ProfileManager.setSession(ctx.profile, bootstrapSessionData);
               await ProfileManager.setProfile(ctx.profile, {
                 ...profile,
                 posture: profile.posture ?? "owner-openkey",
