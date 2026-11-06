@@ -91,6 +91,22 @@ test("error details use an explicit safe-field policy", () => {
   expect(JSON.stringify(error)).not.toContain("canary");
 });
 
+test("preserves the known SQL missing-database reason for install rules", () => {
+  const failure = (reason: unknown) => redactOperationError(
+    { sensitivity },
+    {
+      code: "NODE_ERROR",
+      message: "The database or table does not exist in this space.",
+      retryable: false,
+      details: { reason, nodeResponse: "private-node-canary" },
+    },
+  );
+
+  expect(failure("sql_database_missing").details).toEqual({ reason: "sql_database_missing" });
+  expect(failure("private-node-canary").details).toBeUndefined();
+  expect(JSON.stringify(failure("sql_database_missing"))).not.toContain("private-node-canary");
+});
+
 test("storage error details keep only well-formed account totals", () => {
   const storageError = (account: unknown) => redactOperationError(
     { sensitivity },

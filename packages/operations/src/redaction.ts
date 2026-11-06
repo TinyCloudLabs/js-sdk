@@ -143,7 +143,10 @@ const SAFE_ERROR_DETAIL_POLICIES: Readonly<
     recovery: (value) => isSafeRecovery(value, "sign_in") ? { ...value } : undefined,
   },
   NODE_ERROR: {
-    reason: (value) => value === "space_not_hosted" || value === "copy_unavailable" ? value : undefined,
+    reason: (value) =>
+      value === "space_not_hosted" || value === "copy_unavailable" || value === "sql_database_missing"
+        ? value
+        : undefined,
   },
   PROFILE_MIGRATION_REQUIRED: {
     recovery: (value) => isSafeRecovery(value, "complete_migration") ? { ...value } : undefined,
