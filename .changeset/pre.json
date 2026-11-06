@@ -37,6 +37,7 @@
     "tc-2416-apps-layout",
     "tc-2416-catalog-bundles",
     "tc-2416-catalog-routing",
+    "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
     "tc-2490-cli-reason",
     "tc2380-q2"

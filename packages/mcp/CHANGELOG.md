@@ -1,5 +1,12 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.6
+
+### Patch Changes
+
+- 951de44: Use client-neutral guidance on unavailable approval links and log approval GET reason codes with the pathname only.
+  Details: TC-2416
+
 ## 0.10.0-beta.5
 
 ### Minor Changes
