@@ -422,6 +422,7 @@ export async function readGrantHistory(
 export async function parseCapSpec(
   spec: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry> {
   const firstColon = spec.indexOf(":");
   const lastColon = spec.lastIndexOf(":");
@@ -448,12 +449,13 @@ export async function parseCapSpec(
 
   return (await resolvePermissionSpaces([
     { service, space, path, actions },
-  ], profile))[0]!;
+  ], profile, options))[0]!;
 }
 
 export async function loadPermissionRequest(
   source: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const raw = JSON.parse(await readFile(source, "utf8")) as { permissions?: PermissionEntry[] };
   if (!Array.isArray(raw.permissions)) {
@@ -463,7 +465,7 @@ export async function loadPermissionRequest(
       ExitCode.USAGE_ERROR,
     );
   }
-  return resolvePermissionSpaces(raw.permissions, profile);
+  return resolvePermissionSpaces(raw.permissions, profile, options);
 }
 
 export async function loadManifestPermissions(

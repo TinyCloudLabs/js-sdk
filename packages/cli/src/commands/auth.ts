@@ -969,9 +969,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
         const preset = resolveAppsAgentRequest(options);
+        const resolutionOptions = { allowLogicalSpaces: true };
         const requested = preset === undefined
-          ? await collectRequestedPermissions(options, ctx.profile)
-          : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
+          ? await collectRequestedPermissions(options, ctx.profile, resolutionOptions)
+          : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile, resolutionOptions);
         const expiryOption = preset === undefined ? parseExpiryOption(options.expiry) : APPS_AGENT_EXPIRY;
         // Before any approval link is printed: the plain-words scope of the grant.
         if (preset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(preset.mode, preset.appIds)}\n\n`);
@@ -2214,16 +2215,20 @@ async function collectRequestedPermissions(
     device?: boolean;
   },
   profile: string,
+  resolutionOptions: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const permissions: PermissionEntry[] = [];
   for (const spec of options.cap ?? []) {
-    permissions.push(await parseCapSpec(spec, profile));
+    permissions.push(await parseCapSpec(spec, profile, resolutionOptions));
   }
   if (options.permission) {
-    permissions.push(...await loadPermissionRequest(options.permission, profile));
+    permissions.push(...await loadPermissionRequest(options.permission, profile, resolutionOptions));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, {
+      ...resolutionOptions,
+      device: options.device === true,
+    }));
   }
   return permissions;
 }
