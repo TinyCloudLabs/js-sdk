@@ -380,10 +380,12 @@ function createHostedSurface(
         try {
           const destination = await store.approvalRedirect(requiredState(url));
           return Response.redirect(destination, 302);
-        } catch {
+        } catch (error) {
+          const reason = error instanceof ApprovalRequestError ? error.detail : "unknown";
+          writeDiagnostic(`connect rejected: reason=${reason} path=${connectPath}`);
           if (request.headers.get("accept")?.includes("text/html")) {
             return new Response(
-              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. No new approval was accepted through this link.</p><p>Return to the conversation that requested access. In ChatGPT, select @TinyCloud and ask it to continue your original request. If access is still needed, it can provide a fresh approval link.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
+              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
               {
                 status: 400,
                 headers: {

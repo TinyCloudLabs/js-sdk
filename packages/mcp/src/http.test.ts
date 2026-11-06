@@ -590,6 +590,69 @@ test("invalid browser approvals return an inert page without reflecting state", 
   expect(machine.headers.get("content-type")).toContain("application/json");
 });
 
+test("approval GET refusals log reason codes and pathnames without approval state", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));
+  const app = await testApp(stateDir);
+  const store = siblingStore(stateDir);
+  const stateFor = async (subject: string, ttlStore = store) =>
+    new URL((await ttlStore.connectStatus(subject)).approvalUrl!).searchParams.get("state")!;
+  const valid = await stateFor("approval-get-valid");
+  const expired = await stateFor("approval-get-expired", siblingStore(stateDir, 0));
+  const used = await stateFor("approval-get-used");
+  await rm(join(store.tenantStateRoot("approval-get-used"), ".tinycloud/profiles/agent/pending", `${used.split(".")[1]}.json`));
+  const orphaned = await stateFor("approval-get-orphaned");
+  await rm(join(store.tenantStateRoot("approval-get-orphaned"), ".tinycloud/profiles/agent/key.json"));
+  const corrupt = await stateFor("approval-get-corrupt");
+  await writeFile(
+    join(store.tenantStateRoot("approval-get-corrupt"), ".tinycloud/profiles/agent/pending", `${corrupt.split(".")[1]}.json`),
+    `{"untrusted":"${CANARY}"`,
+  );
+  const [tenantId, nonce] = valid.split(".");
+  const cases = [
+    { path: "/connect", state: undefined, reason: "state_missing" },
+    { path: "/connect", state: CANARY, reason: "state_invalid" },
+    { path: "/connect", state: `${tenantId}.${nonce}.${CANARY}`, reason: "state_invalid" },
+    { path: "/connect", state: `${CANARY}.${"a".repeat(512)}`, reason: "state_invalid" },
+    { path: "/connect", state: expired, reason: "state_expired" },
+    { path: "/connect", state: used, reason: "state_not_pending" },
+    { path: "/connect", state: orphaned, reason: "tenant_missing" },
+    { path: "/connect", state: corrupt, reason: "unknown" },
+    { path: "/chatgpt/connect", state: CANARY, reason: "state_invalid" },
+  ];
+  const diagnostics: string[] = [];
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+    diagnostics.push(String(chunk));
+    return true;
+  });
+  const responses: string[] = [];
+  try {
+    const accepted = await app.fetch(request(`/connect?state=${encodeURIComponent(valid)}`));
+    expect(accepted.status).toBe(302);
+    for (const { path, state } of cases) {
+      const query = state === undefined ? "" : `?state=${encodeURIComponent(state)}&extra=${CANARY}`;
+      const response = await app.fetch(request(`${path}${query}`, { headers: { accept: "text/html" } }));
+      expect(response.status).toBe(400);
+      responses.push(await response.text());
+    }
+    const machine = await app.fetch(request("/chatgpt/connect", { headers: { accept: "application/json" } }));
+    expect(machine.status).toBe(400);
+  } finally {
+    stderr.mockRestore();
+  }
+  expect(diagnostics).toEqual([
+    ...cases.map(({ path, reason }) => `[tinycloud-mcp-http] connect rejected: reason=${reason} path=${path}\n`),
+    "[tinycloud-mcp-http] connect rejected: reason=state_missing path=/chatgpt/connect\n",
+  ]);
+  for (const response of responses) expect(response).toBe(responses[0]!);
+  for (const text of [...responses, ...diagnostics]) {
+    expect(text).not.toContain(CANARY);
+    for (const state of [valid, expired, used, orphaned, corrupt]) {
+      expect(text).not.toContain(state);
+      for (const part of state.split(".")) expect(text).not.toContain(part);
+    }
+  }
+});
+
 test("a refused callback names its stage and code without echoing the callback", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));
   const app = await testApp(stateDir);
