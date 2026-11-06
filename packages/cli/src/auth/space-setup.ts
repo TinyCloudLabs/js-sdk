@@ -1,3 +1,4 @@
+import { normalizePkhIdentifier } from "../lib/space.js";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT } from "../config/constants.js";
 import { restoreProfileSessionNode, type ProfileSessionContext, type ProfileSessionRestore } from "../lib/sdk.js";
@@ -195,17 +196,19 @@ export function kvSpaceProbe(
   ctx: ProfileSessionContext,
   permissions: readonly PermissionEntry[] | undefined,
   restore: (ctx: ProfileSessionContext) => Promise<ProfileSessionRestore> = restoreProfileSessionNode,
+  spaceId?: string,
 ): () => Promise<SpaceProbeResult> {
   const target = readTarget(permissions);
+  const sql = permissions?.find(p => (p.service === "tinycloud.sql" || p.service === "sql") && p.actions.some(a => a === "read" || a === "tinycloud.sql/read") && p.path !== "" && !p.path.endsWith("/"));
   let restored: ProfileSessionRestore | undefined;
   return async () => {
-    if (!target) return "unreadable";
+    if (!target && !sql) return "unreadable";
     restored ??= await restore(ctx);
     if ("unavailable" in restored) return "unreadable";
-    const kv = restored.node.kv;
-    const result = target.op === "list"
-      ? await kv.list({ prefix: target.prefix, limit: 1 })
-      : await kv.get(target.key);
+    const kv = spaceId ? restored.node.space(spaceId).kv : restored.node.kv;
+    const result = target
+      ? target.op === "list" ? await kv.list({ prefix: target.prefix, limit: 1 }) : await kv.get(target.key)
+      : await restored.node.sqlForSpace(spaceId ?? restored.node.spaceId!).db(sql!.path).query("SELECT 1");
     if (result.ok) return "hosted";
     const status = (result.error.meta as { status?: number } | undefined)?.status;
     if (status === 404 && UNHOSTED.test(result.error.message)) return "unhosted";
@@ -225,7 +228,23 @@ export async function ensureSpaceSetup(
   permissions: readonly PermissionEntry[] | undefined,
   /** Bound the wait (`onboard --timeout`); the default is {@link SPACE_SETUP_TIMEOUT_MS}. */
   timeoutMs?: number,
+  restore: (ctx: ProfileSessionContext) => Promise<ProfileSessionRestore> = restoreProfileSessionNode,
 ): Promise<void> {
+  if (Array.isArray(delegation.requestedSpaces)) {
+    const deadline = Date.now() + (timeoutMs ?? SPACE_SETUP_TIMEOUT_MS);
+    for (const entry of delegation.requestedSpaces as Array<Record<string, unknown>>) {
+      const report = spaceSetupReport(entry);
+      if (!report) continue;
+      const id = entry.spaceId as string;
+      const scoped = permissions?.filter(p => normalizePkhIdentifier(p.space ?? "") === normalizePkhIdentifier(id) || p.space === entry.space);
+      await awaitSpaceSetup(report, {
+        probe: kvSpaceProbe(ctx, scoped, restore, id),
+        timeoutMs: Math.max(0, deadline - Date.now()),
+        write: line => process.stderr.write(`${id}: ${line}\n`),
+      });
+    }
+    return;
+  }
   const report = spaceSetupReport(delegation);
   if (!report) return;
   await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...(timeoutMs === undefined ? {} : { timeoutMs }) });

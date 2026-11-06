@@ -210,29 +210,41 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     } finally { activeChildren.delete(child); }
   }
 
-  function spaceOf(request: OpenKeyApprovalRequestV1): string {
-    const spaces = [...new Set(request.permissions.map((permission) => permission.space?.split(":").at(-1)))];
-    if (spaces.length !== 1 || !spaces[0]) throw new Error("Onboarding approval did not name exactly one space");
-    return spaces[0];
+  function spacesOf(request: OpenKeyApprovalRequestV1): string[] {
+    return [...new Set(request.permissions.map((permission) => permission.space?.split(":").at(-1)).filter((space): space is string => Boolean(space)))];
+  }
+
+  function primarySpaceOf(request: OpenKeyApprovalRequestV1): string {
+    const spaces = spacesOf(request);
+    const primary = spaces.includes("applications") ? "applications" : spaces[0];
+    if (!primary) throw new Error("Onboarding approval did not name a space");
+    return primary;
   }
 
   async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner, relayed: Record<string, unknown> = {}) {
-    const abilities: Record<string, Record<string, string[]>> = {};
+    const address = await signer.getAddress();
+    const ownerDid = "did:pkh:eip155:1:" + address;
+    const spaces = spacesOf(request);
+    const spaceId = wasm.makeSpaceId(address, 1, primarySpaceOf(request));
+    const spaceAbilities: Record<string, Record<string, Record<string, string[]>>> = {};
     for (const permission of request.permissions) {
+      const resourceSpace = wasm.makeSpaceId(address, 1, permission.space?.split(":").at(-1) ?? "default");
+      const abilities = spaceAbilities[resourceSpace] ??= {};
       const service = permission.service.slice("tinycloud.".length);
       abilities[service] = { ...abilities[service], [permission.path]: [...new Set([...(abilities[service]?.[permission.path] ?? []), ...permission.actions])] };
     }
-    const address = await signer.getAddress();
-    const ownerDid = "did:pkh:eip155:1:" + address;
-    const spaceId = wasm.makeSpaceId(address, 1, spaceOf(request));
     const now = Date.now();
-    const prepared = wasm.prepareSession({ abilities, address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
+    const prepared = wasm.prepareSession({ abilities: spaceAbilities[spaceId], spaceAbilities, address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
       jwk: request.targetPublicJwk, issuedAt: new Date(now).toISOString(),
       expirationTime: new Date(now + request.grantLifetimeSeconds * 1000).toISOString() });
     const signature = await signer.signMessage(prepared.siwe);
     const session = wasm.completeSessionSetup({ ...prepared, signature });
     await activateSessionWithHost(host, session.delegationHeader);
-    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature, ...relayed };
+    const spaceReady = relayed.spaceReady === undefined ? true : relayed.spaceReady;
+    const requestedSpaces = spaces.map(space => ({ space, spaceId: wasm.makeSpaceId(address, 1, space), spaceReady,
+      ...(relayed.spacePending === true ? { spacePending: true } : {}) }));
+    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature,
+      requestedSpaces, spaceReady, ...relayed };
     const signedExpiry = prepared.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1];
     const signedIssuedAt = prepared.siwe.match(/^Issued At:\s*(.+)$/m)?.[1];
     if (!signedExpiry || !signedIssuedAt) throw new Error("Fixture grant lacks signed lifetime");
@@ -431,8 +443,8 @@ if (seam === "after-save") {
     expect(first.stdout.endsWith("\n")).toBe(true);
     expect(Object.keys(JSON.parse(first.stdout))).toEqual(["pending"]);
     const entry1 = await openLink("loop", first.stderr);
-    expect(stdoutPending(first.stdout).pending).toEqual({ step: 1, of: 2, approvalUrl: lastLink(first.stderr), expiresAt: entry1.record.header.expiresAt });
-    expect(spaceOf(entry1.request!)).toBe("applications");
+    expect(stdoutPending(first.stdout).pending).toEqual({ step: 1, of: 1, approvalUrl: lastLink(first.stderr), expiresAt: entry1.record.header.expiresAt });
+    expect(new Set(spacesOf(entry1.request!))).toEqual(new Set(["applications", "account"]));
     expect(entry1.polls).toBe(0);
     expect(approvalRequests.size).toBe(baseline + 1);
     expect((await savedState("loop")).pending.map((item) => item.requestId)).toEqual([entry1.id]);
@@ -446,33 +458,22 @@ if (seam === "after-save") {
     expect(approvalRequests.size).toBe(baseline + 1);
     expect((await savedState("loop")).pending.map((item) => item.requestId)).toEqual([entry1.id]);
 
-    // 3. The owner approves while the command is waiting: it collects step 1, saves and acknowledges it,
-    //    then returns the link of step 2 at once.
+    // 3. The owner approves while the command is waiting: it collects the single request and completes onboarding.
     const polled = entry1.polls;
     const collecting = await run("loop", ["onboard", "--timeout", "60s"], {}, async () => {
       await until(() => entry1.polls > polled, "the resumed command to poll");
       await approve(entry1, entry1.request!, ownerSigner);
     });
-    expect(collecting.exitCode, collecting.stderr).toBe(8);
-    expect(approvalRequests.size).toBe(baseline + 2);
-    const entry2 = await openLink("loop", collecting.stderr);
-    expect(entry2.id).not.toBe(entry1.id);
-    expect(stdoutPending(collecting.stdout).pending).toEqual({ step: 2, of: 2, approvalUrl: lastLink(collecting.stderr), expiresAt: entry2.record.header.expiresAt });
-    expect(spaceOf(entry2.request!)).toBe("account");
+    expect(collecting.exitCode, collecting.stderr).toBe(0);
+    expect(approvalRequests.size).toBe(baseline + 1);
     expect(acksOf(entry1)).toHaveLength(1);
     expect((await savedState("loop")).session?.delegationCid).toBe(entry1.delegation!.delegationCid);
 
-    // 4. Step 2 approved: the final run exits 0 with the normal result, and every ack happened once.
-    await approve(entry2, entry2.request!, ownerSigner);
-    const done = await run("loop", ["onboard", "--timeout", "90s"]);
-    expect(done.exitCode, done.stderr).toBe(0);
-    const result = JSON.parse(done.stdout) as { onboarded: boolean; profile: string; ownerDid: string; granted: Array<{ space: string }> };
+    // 4. One approval grants both spaces; every authorization and ACK is retained.
+    const result = JSON.parse(collecting.stdout) as { onboarded: boolean; profile: string; ownerDid: string; granted: Array<{ space: string }> };
     expect(result.onboarded).toBe(true);
-    expect(result.granted.map((item) => item.space)).toEqual(["applications", "account"]);
-    expect(done.stdout).not.toContain("pending");
-    expect(acksOf(entry1)).toHaveLength(1);
-    expect(acksOf(entry2)).toHaveLength(1);
-    expect(approvalRequests.size).toBe(baseline + 2);
+    expect(new Set(result.granted.map((item) => item.space))).toEqual(new Set(["applications", "account"]));
+    expect(collecting.stdout).not.toContain("pending");
     expect((await savedState("loop")).pending).toEqual([]);
     expect((await run("loop", ["kv", "put", "--space", "applications", "loop/note", "hello"])).exitCode).toBe(0);
     expect((await run("loop", ["kv", "get", "--space", "account", "spaces/applications"])).stdout).toContain("hosted");
@@ -480,7 +481,11 @@ if (seam === "after-save") {
     // 5. Run again once onboarded: still exit 0, no new request, no early exit 8.
     const again = await run("loop", ["onboard", "--timeout", "90s"]);
     expect(again.exitCode).toBe(0);
-    expect(approvalRequests.size).toBe(baseline + 2);
+    expect(approvalRequests.size).toBe(baseline + 1);
+    expect((await savedState("loop")).pending).toEqual([]);
+    expect((await run("loop", ["kv", "put", "--space", "applications", "loop/note", "hello"])).exitCode).toBe(0);
+    expect((await run("loop", ["kv", "get", "--space", "account", "spaces/applications"])).stdout).toContain("hosted");
+
   });
 
   test("an expired request is exit 3 APPROVAL_REQUEST_EXPIRED, not a pending approval, and the next run starts a new link", async () => {
@@ -612,21 +617,13 @@ if (seam === "after-save") {
         expect(afterKill.session?.delegationCid).toBe(entry1.delegation!.delegationCid);
       }
 
-      // The re-run finishes step 1 from what was saved (or re-collects it) and moves on to step 2.
+      // The re-run finishes the same saved approval and completes onboarding.
       const resumed = await run(name, ["onboard", "--timeout", "90s"]);
-      expect(resumed.exitCode, resumed.stderr).toBe(8);
-      expect(stdoutPending(resumed.stdout).pending.step).toBe(2);
-      expect(approvalRequests.size).toBe(baseline + 2);
+      expect(resumed.exitCode, resumed.stderr).toBe(0);
+      expect(JSON.parse(resumed.stdout).onboarded).toBe(true);
+      expect(approvalRequests.size).toBe(baseline + 1);
       expect(acksOf(entry1)).toHaveLength(1);
       expect((await savedState(name)).session?.delegationCid).toBe(entry1.delegation!.delegationCid);
-      const entry2 = await openLink(name, resumed.stderr);
-      await approve(entry2, entry2.request!, ownerSigner);
-      const done = await run(name, ["onboard", "--timeout", "90s"]);
-      expect(done.exitCode, done.stderr).toBe(0);
-      expect(JSON.parse(done.stdout).onboarded).toBe(true);
-      expect(approvalRequests.size).toBe(baseline + 2);
-      expect(acksOf(entry1)).toHaveLength(1);
-      expect(acksOf(entry2)).toHaveLength(1);
       expect((await savedState(name)).pending).toEqual([]);
     });
   }

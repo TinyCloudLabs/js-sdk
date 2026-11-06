@@ -196,7 +196,8 @@ describe("tc delegation revoke authority", () => {
       yes: false,
       persist: false,
     });
-    expect(authorityRequests[0]).not.toHaveProperty("reason");
+    expect(authorityRequests[0]).toMatchObject({ reason: "Revoke delegation bafy-device-grant." });
+    expect(authorityRequests[0]?.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
     expect(outputs).toEqual([{
       cid: "bafy-device-grant",
@@ -333,7 +334,8 @@ describe("tc delegation revoke authority", () => {
       }],
       persist: false,
     });
-    expect(authorityRequests[0]).not.toHaveProperty("reason");
+    expect(authorityRequests[0]).toMatchObject({ reason: "Revoke delegation bafy-device-grant." });
+    expect(authorityRequests[0]?.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(outputs).toEqual([{
       cid: "bafy-device-grant",
       revoked: true,

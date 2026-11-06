@@ -360,7 +360,7 @@ export function declinedPermissions(requested: readonly PermissionEntry[], signe
 }
 
 /**
- * A first-login scope: one TinyCloud space, plus optional raw encryption
+ * A first-login scope: named TinyCloud spaces, plus optional raw encryption
  * network entries (`space: "encryption"`), which are not a second space.
  */
 export function validateLoginPermissions(permissions: PermissionEntry[]): void {
@@ -372,8 +372,8 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
       : !p.space.startsWith("tinycloud:") && !/^[A-Za-z0-9_-]+$/.test(p.space)) ||
     typeof p.path !== "string" || !p.actions?.length ||
     p.actions.some((action) => !action.startsWith(`${p.service}/`)),
-  ) || new Set(spaced.map((p) => normalizePkhIdentifier(p.space ?? ""))).size !== 1) {
-    throw new CLIError("INVALID_LOGIN_SCOPE", "First login requires non-empty permissions in one TinyCloud space (raw tinycloud.encryption network entries may accompany them). Request additional spaces after login.", ExitCode.USAGE_ERROR);
+  )) {
+    throw new CLIError("INVALID_LOGIN_SCOPE", "Login requires non-empty permissions in named TinyCloud spaces (raw tinycloud.encryption network entries may accompany them).", ExitCode.USAGE_ERROR);
   }
 }
 
@@ -384,8 +384,8 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
  */
 export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
   assertNoCaveatLimits(permissions);
-  // Validation guarantees one non-raw entry with a non-empty space.
-  return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "");
+  const spaces = [...new Set(permissions.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map(p => p.space!))].sort();
+  return canonicalSpaceOrder(spaces.reduce((entries, space) => withCapabilitiesRead(entries, space), permissions));
 }
 
 /**
@@ -405,7 +405,21 @@ export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: s
   const capabilitySpace = request.find((permission) =>
     !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
   )?.space ?? anchorSpace;
-  return withCapabilitiesRead(request, capabilitySpace);
+  const spaces = [...new Set(request.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p)).map(p => p.space!))].sort();
+  return canonicalSpaceOrder((spaces.length ? spaces : [capabilitySpace]).reduce((entries, space) => withCapabilitiesRead(entries, space), request));
+}
+
+function canonicalSpaceOrder(permissions: PermissionEntry[]): PermissionEntry[] {
+  const spaces = new Set(permissions.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p))
+    .map(p => (p.space ?? "").split(":").at(-1)));
+  if (spaces.size <= 1) return permissions;
+  return [...permissions].sort((a, b) => {
+    // OpenKey accepts qualified spaces only for the selected signing account.
+    // Compare their names so mixed logical/qualified spellings use the same route.
+    const left = (a.space ?? "").split(":").at(-1)!;
+    const right = (b.space ?? "").split(":").at(-1)!;
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
 }
 
 function withCapabilitiesRead(permissions: PermissionEntry[], space: string): PermissionEntry[] {
@@ -590,10 +604,24 @@ export function verifyScopedLogin(
     throw error;
   }
   const spaceId = data.spaceId as string;
-  for (const permission of requested) {
-    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
-    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  const spaces = [...new Set(requested.filter(p => !isRawEncryptionPermission(p) && !isRawCidRevocationPermission(p))
+    .map(p => normalizePkhIdentifier(ownerSpaceId(p.space ?? "", signed.ownerDid))))].sort();
+  const primary = spaces.find(space => space.endsWith(":applications")) ?? spaces[0];
+  if (primary && normalizePkhIdentifier(spaceId) !== primary) {
+    throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved primary route differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  if (spaces.length > 1 || data.requestedSpaces !== undefined) {
+    const entries = data.requestedSpaces;
+    if (!Array.isArray(entries) || entries.length !== spaces.length ||
+      new Set(entries.map(entry => typeof entry?.spaceId === "string" ? normalizePkhIdentifier(entry.spaceId) : entry?.spaceId)).size !== spaces.length || entries.some(entry =>
+        !entry || typeof entry.space !== "string" || typeof entry.spaceId !== "string" ||
+        !spaces.includes(normalizePkhIdentifier(entry.spaceId)) ||
+        normalizePkhIdentifier(ownerSpaceId(entry.space, signed.ownerDid)) !== normalizePkhIdentifier(entry.spaceId) ||
+        ![true, false, null].includes(entry.spaceReady) ||
+        (entry.spacePending !== undefined && entry.spacePending !== true) ||
+        (entry.spaceError !== undefined && typeof entry.spaceError !== "string")) ||
+      (data.spaceReady === true) !== entries.every(entry => entry.spaceReady === true)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey's requested-space status differs from the requested spaces. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   // Old OpenKey signs requested decrypt inside the session space rather than
@@ -618,10 +646,20 @@ export function verifyScopedLogin(
   if (!scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  // An agent grant stands for the whole request. An action the owner unchecked
-  // is not granted, and the grant must not be recorded as if it were.
-  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  // An agent grant stands for the whole request. An action or space the owner
+  // unchecked is not granted, and the request must not be recorded as if it were.
+  if ((expected.exactApproval || spaces.length > 1) && !scopeCovers(approved, requested, signed.ownerDid)) {
+    const approvedSpaces = new Set(approved
+      .filter(permission => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission))
+      .map(permission => normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))));
+    const missingSpaces = [...new Set(requested
+      .filter(permission => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission))
+      .filter(permission => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))))
+      .map(permission => permission.space ?? "default"))];
+    const message = missingSpaces.length > 0
+      ? `The owner did not approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}. This task needs all requested spaces. Ask the agent to request less. ${notStored}`
+      : `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`;
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
   // The SIWE proof stays intact for validation/diagnostics. Only effective,
   // requested authority is recorded as approved and compared on renewals.
