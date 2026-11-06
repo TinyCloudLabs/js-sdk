@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { buildShortLink, checkLinkRecord, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
 
@@ -205,16 +205,18 @@ test("key-only auth request retries ACK after its saved session covers the reque
     "1h",
     "--no-popup",
   ];
+  const authCommandPath = join(import.meta.dir, "../commands/auth.ts");
+  const projectRoot = resolve(import.meta.dir, "../../../..");
   const script = `
     import { Command } from "commander";
-    import { registerAuthCommand } from "./packages/cli/src/commands/auth.ts";
+    import { registerAuthCommand } from ${JSON.stringify(authCommandPath)};
     const program = new Command().option("--profile <name>");
     registerAuthCommand(program);
     await program.parseAsync(${JSON.stringify(args)}, { from: "node" });
   `;
   const run = async () => {
     try {
-      const { stdout, stderr } = await execFileAsync("bun", ["-e", script], { env: { ...process.env } });
+      const { stdout, stderr } = await execFileAsync("bun", ["-e", script], { cwd: projectRoot, env: { ...process.env } });
       return { status: 0, stdout, stderr };
     } catch (error) {
       const result = error as Error & { code?: number | string; stdout?: string; stderr?: string };
