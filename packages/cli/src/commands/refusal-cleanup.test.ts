@@ -665,6 +665,19 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
       ctx: { profile: profileName, host: HOST }, profile, node, requested: requested as never, expiryOption: "7d", reason: "test",
       yes: true, consentAlreadyGiven: true, openKeyAcquisition: acquisitionFlow as never, ...extra,
     }));
+  const multiSpaceApproval = (approvedSpaces: Set<string>, refuse = false) =>
+    async (did: string, options: Record<string, unknown>) => {
+      const requested = options.permissions as Permission[];
+      const approved = requested.filter(permission => approvedSpaces.has(permission.space));
+      if (refuse) tamper = "signature";
+      const delegation = await acquisitionFlow(did, { ...options, permissions: approved });
+      const spaces = [...new Set(requested.map(permission => permission.space))];
+      return {
+        ...delegation,
+        requestedSpaces: spaces.map(space => ({ space, spaceId: wasm.makeSpaceId(address, 1, space), spaceReady: true })),
+        spaceReady: true,
+      };
+    };
 
   test("OPENKEY_OWNER_MISMATCH: the saved approval goes, the existing key stays, one kept notice names the CID, nothing is stored", async () => {
     const profile = await owned();
@@ -693,22 +706,42 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expectOneNotice("kept");
   });
 
-  test("a SECOND space refused after the first was approved: nothing is stored, ONE notice (for the refused delegation only)", async () => {
+  test("a refused combined multi-space approval stores nothing and leaves nothing pending", async () => {
     const profile = await owned();
     pickedLifetimeMs = 6 * DAY;
     let approvals = 0;
-    const secondRefused = async (did: string, options: Record<string, unknown>) => {
+    const refused = async (did: string, options: Record<string, unknown>) => {
       approvals += 1;
-      tamper = approvals === 2 ? "signature" : "none";
-      return acquisitionFlow(did, options);
+      return multiSpaceApproval(new Set(["default", "applications"]), true)(did, options);
     };
-    await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: secondRefused as never }))
+    await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: refused as never }))
       .rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
-    expect(approvals).toBe(2);
+    expect(approvals).toBe(1);
+    expect(savedPendingCopies).toBe(1);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
     expect(grantedFiles(profileName)).toBe(false);
     expect(noticeCount()).toBe(1);
     expect(text()).toContain(`Refused delegation: ${grantedCid}.`);
     expect(text()).toContain(REVOKE_URL);
+  });
+
+  test("a multi-space approval that omits one requested space names it and stores no grant", async () => {
+    const profile = await owned();
+    pickedLifetimeMs = 6 * DAY;
+    let approvals = 0;
+    const omittedDefault = async (did: string, options: Record<string, unknown>) => {
+      approvals += 1;
+      return multiSpaceApproval(new Set(["applications"]))(did, options);
+    };
+    await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: omittedDefault as never }))
+      .rejects.toMatchObject({
+        code: "OPENKEY_APPROVAL_NARROWER",
+        message: expect.stringContaining('The owner did not approve access to "default". This task needs all requested spaces.'),
+      });
+    expect(approvals).toBe(1);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(grantedFiles(profileName)).toBe(false);
+    expect(noticeCount()).toBe(1);
   });
 
   test("a one-use approval (persist: false): refused, one kept notice, nothing is activated", async () => {

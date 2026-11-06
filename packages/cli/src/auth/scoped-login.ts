@@ -646,10 +646,20 @@ export function verifyScopedLogin(
   if (!scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  // An agent grant stands for the whole request. An action the owner unchecked
-  // is not granted, and the grant must not be recorded as if it were.
+  // An agent grant stands for the whole request. An action or space the owner
+  // unchecked is not granted, and the request must not be recorded as if it were.
   if ((expected.exactApproval || spaces.length > 1) && !scopeCovers(approved, requested, signed.ownerDid)) {
-    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    const approvedSpaces = new Set(approved
+      .filter(permission => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission))
+      .map(permission => normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))));
+    const missingSpaces = [...new Set(requested
+      .filter(permission => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission))
+      .filter(permission => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))))
+      .map(permission => permission.space ?? "default"))];
+    const message = missingSpaces.length > 0
+      ? `The owner did not approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}. This task needs all requested spaces. Ask the agent to request less. ${notStored}`
+      : `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`;
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }
   // The SIWE proof stays intact for validation/diagnostics. Only effective,
   // requested authority is recorded as approved and compared on renewals.
