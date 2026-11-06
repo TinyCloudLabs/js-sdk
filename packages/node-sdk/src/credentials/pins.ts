@@ -1,6 +1,6 @@
 import { ACCOUNT_HOLDER_BINDING_DOMAIN } from "@tinycloud/sdk-core";
 
-/** Issuer pins. This draft is blocked until the clean witness key is supplied. */
+/** Issuer pins. This draft is blocked until the verified replacement key is supplied. */
 export const EMAIL_PROOF_PINS = Object.freeze({
   witnessOrigin: "https://witness.credentials.org",
   issuerDid: "did:web:issuer.credentials.org",
