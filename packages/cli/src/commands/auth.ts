@@ -940,7 +940,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.",
     )
     .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
-    .option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent")
+    .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")

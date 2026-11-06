@@ -157,12 +157,13 @@ describe("OpenKey device authorization", () => {
   test("requests the manifest scope without private key material and returns the verified session", async () => {
     const prompts: unknown[] = [];
     const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: requested }));
-    const result = await acquire(openkey, { expiry: { durationMs: 7_200_000 }, reason: "Publish Share links.", emitInstructions: (prompt) => prompts.push(prompt) });
+    const result = await acquire(openkey, { expiry: { durationMs: 7_200_000 }, reason: "Allow this TinyCloud CLI profile to publish Share links.", emitInstructions: (prompt) => prompts.push(prompt) });
 
     const start = openkey.startBodies[0]!;
     expect(start.permissions).toEqual(requested);
     expect(start.delegationTtlSeconds).toBe(7200);
-    expect(start.reason).toBe("Publish Share links.");
+    expect(start.reason).toBe("Allow this TinyCloud CLI profile to publish Share links.");
+    expect(start.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(start).toMatchObject({ sessionDid, nodeOrigin: NODE, shareOrigin: SHARE });
     expect(JSON.stringify(start)).not.toContain(key.d);
     expect(prompts).toEqual([expect.objectContaining({

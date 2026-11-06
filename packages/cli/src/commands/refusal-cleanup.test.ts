@@ -336,14 +336,17 @@ describe("a profile this command created and removed leaves no directory and no 
     await gone(profileName);
   });
 
-  test("onboard sends no generated OpenKey reason when none is supplied", async () => {
+  test("onboard supplies concise human context without capability strings", async () => {
     pickedLifetimeMs = 7 * DAY;
     tamper = "signature";
     const program = new Command();
     program.option("-p, --profile <name>");
     registerOnboardCommand(program);
-    await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard"], { from: "node" }));
-    expect(acquisitionReasons).toEqual([undefined]);
+    await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard", "--with", "feed"], { from: "node" }));
+    expect(acquisitionReasons).toEqual([
+      "TinyCloud onboarding, step 1 of 1: Use Home and your feed, and discover your spaces and apps, for 30 days.",
+    ]);
+    expect(acquisitionReasons[0]).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
     await gone(profileName);
   });

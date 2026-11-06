@@ -54,7 +54,7 @@ export const ONBOARD_STEPS: ReadonlyArray<{
 export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
-    .description("Set up this computer with its owner's OpenKey approval and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
+    .description("Set up this computer with its owner's OpenKey approval and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
     .option("--with <tasks>", "Tasks to authorize: apps (default), feed (Home/feed only), or apps,feed")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
@@ -101,11 +101,13 @@ export function registerOnboardCommand(program: Command): void {
         };
 
         for (const [index, step] of steps.entries()) {
+          const reason = `TinyCloud onboarding, step ${index + 1} of ${steps.length}: ${step.asks}`;
           currentStep = index + 1;
           const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
             const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
               permissions: step.permissions,
+              reason,
               expiry: ONBOARD_EXPIRY,
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
@@ -125,7 +127,7 @@ export function registerOnboardCommand(program: Command): void {
             node,
             requested,
             expiryOption: ONBOARD_EXPIRY,
-            yes: true,
+            reason,
             exactApproval: true,
             ...(deadlineMs === undefined ? {} : { spaceSetupTimeoutMs: () => spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) }),
             openKeyAcquisition: acquire,

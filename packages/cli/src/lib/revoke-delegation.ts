@@ -167,6 +167,7 @@ export async function revokeDelegationOnNode(params: {
     try {
       const acquired = await ensureDelegationAuthority({
         ctx, profile, node, requested: [revokePermission], expiryOption: REVOKE_AUTHORITY_EXPIRY,
+        reason: `Revoke delegation ${cid}.`,
         yes: params.yes, consentAlreadyGiven: true, persist: false,
         openKeyAcquisition: params.openKeyAcquisition,
       });
@@ -206,6 +207,7 @@ export async function revokeDelegationOnNode(params: {
           space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
           path: "", actions: ["tinycloud.delegation/revoke"] }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
+        reason: `Revoke delegation ${cid}.`,
         yes: params.yes, consentAlreadyGiven: true, persist: false,
         openKeyAcquisition: params.openKeyAcquisition,
       });

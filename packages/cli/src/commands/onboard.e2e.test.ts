@@ -424,7 +424,10 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(first.offered).toHaveLength(1);
     expect(first.links).toEqual([pending.approvalUrl]);
     const approval = first.offered[0]!;
-    expect(approval.request).not.toHaveProperty("reason");
+    expect(approval.request).toMatchObject({
+      reason: "TinyCloud onboarding, step 1 of 1: Use the requested apps and discover your spaces, for 30 days.",
+    });
+    expect(approval.request!.reason).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     assertThirtyDays(approval);
     expect(spacesOf(approval.request!)).toEqual(["account", "applications"]);
     expect(authority(approval.request!.permissions)).toEqual(authority([
