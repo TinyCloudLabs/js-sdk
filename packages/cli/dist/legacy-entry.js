@@ -3046,7 +3046,7 @@ async function readGrantHistory(profile) {
     return raw.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   });
 }
-async function parseCapSpec(spec, profile) {
+async function parseCapSpec(spec, profile, options = {}) {
   const firstColon = spec.indexOf(":");
   const lastColon = spec.lastIndexOf(":");
   if (firstColon <= 0 || lastColon <= firstColon) {
@@ -3069,9 +3069,9 @@ async function parseCapSpec(spec, profile) {
   }
   return (await resolvePermissionSpaces([
     { service, space, path, actions }
-  ], profile))[0];
+  ], profile, options))[0];
 }
-async function loadPermissionRequest(source, profile) {
+async function loadPermissionRequest(source, profile, options = {}) {
   const raw = JSON.parse(await readFile2(source, "utf8"));
   if (!Array.isArray(raw.permissions)) {
     throw new CLIError(
@@ -3080,7 +3080,7 @@ async function loadPermissionRequest(source, profile) {
       ExitCode.USAGE_ERROR
     );
   }
-  return resolvePermissionSpaces(raw.permissions, profile);
+  return resolvePermissionSpaces(raw.permissions, profile, options);
 }
 async function loadManifestPermissions(source, profile, options = {}) {
   const raw = await loadManifestText(source);
@@ -37581,7 +37581,8 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
-      const profile = await ProfileManager.getProfile(ctx.profile);
+      const initialSnapshot = options2.grant ? await readProfileSnapshot(ctx.profile) : void 0;
+      const profile = initialSnapshot?.profile ?? await ProfileManager.getProfile(ctx.profile);
       if (options2.paste && (!options2.grant || options2.device || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--paste requires --grant on an OpenKey owner profile and cannot be combined with --device.", ExitCode.USAGE_ERROR);
       }
@@ -37589,7 +37590,8 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
       }
       const preset = resolveAppsAgentRequest(options2);
-      const requested = preset === void 0 ? await collectRequestedPermissions(options2, ctx.profile) : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
+      const resolutionOptions = { allowLogicalSpaces: true };
+      const requested = preset === void 0 ? await collectRequestedPermissions(options2, ctx.profile, resolutionOptions) : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile, resolutionOptions);
       const expiryOption = preset === void 0 ? parseExpiryOption(options2.expiry) : APPS_AGENT_EXPIRY;
       if (preset !== void 0) process.stderr.write(`
 ${appsAgentScopeNotice(preset.mode, preset.appIds)}
@@ -37614,14 +37616,18 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         await emitPermissionRequestArtifact(artifact, options2.emit);
         return;
       }
-      if (profile.authMethod === "openkey" || options2.device) assertNoCaveatLimits(requested);
-      const node = await ensureAuthenticated(ctx);
-      if (node.hasRuntimePermissions(requested)) {
+      const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
+      const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
+      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options2.device;
+      if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
+      await completeApprovalResult(ctx.profile);
+      let node;
+      if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
+      if (node?.hasRuntimePermissions(requested)) {
         outputJson({ changed: false, missing: [], added: [] });
         return;
       }
-      if (profile.authMethod === "openkey" || options2.device) {
-        const key = await ProfileManager.getKey(ctx.profile);
+      if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) {
         if (!key) {
           throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME20} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
         }
@@ -37647,10 +37653,11 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           if (notices) process.stderr.write(`${notices.prompts[index]}
 `);
           const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
+          let bootstrapSessionData;
           const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
             let delegationData;
             if (options2.device) {
-              const approval = await acquireDeviceDelegation({
+              const approval2 = await acquireDeviceDelegation({
                 sessionDid: keyToDID(key),
                 jwk: key,
                 nodeOrigin: ctx.host,
@@ -37660,8 +37667,8 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 expectedOwner: pinnedOwner(profile),
                 openkeyHost: resolveDeviceApiHost(profile)
               });
-              declined.push(...approval.declined);
-              delegationData = approval.session;
+              declined.push(...approval2.declined);
+              delegationData = approval2.session;
             } else {
               delegationData = await startAuthFlow(profile.did, {
                 profileName: ctx.profile,
@@ -37677,11 +37684,33 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
               });
             }
             seen.result = delegationData;
-            return portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
+            const approval = verifyOpenKeyApproval(delegationData, request, ctx.host, proof);
+            if (keyOnlyOpenKey && index === 0) bootstrapSessionData = approval.session;
+            return approval.delegation;
           });
+          if (bootstrapSessionData) {
+            const bootstrapProfile = {
+              ...profile,
+              posture: profile.posture ?? "owner-openkey",
+              sessionDid: profile.sessionDid ?? profile.did,
+              authMethod: "openkey",
+              spaceId: delegation.spaceId,
+              ...typeof bootstrapSessionData.ownerDid === "string" ? { ownerDid: bootstrapSessionData.ownerDid } : {}
+            };
+            await commitLogin(ctx.profile, initialSnapshot, {
+              key,
+              session: bootstrapSessionData,
+              profile: bootstrapProfile,
+              durable: true
+            });
+            await completeApprovalResult(ctx.profile, delegation);
+            node = await ensureAuthenticated(ctx);
+          }
           grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
         }
-        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options2.manifest ? "manifest" : "cli");
+        if (!node) node = await ensureAuthenticated(ctx);
+        const runtimeGrants = keyOnlyOpenKey ? grants.slice(1) : grants;
+        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, runtimeGrants, options2.manifest ? "manifest" : "cli");
         const delegationCids2 = grants.map(({ delegation }) => delegation.cid);
         const expiry2 = grants.at(-1)?.delegation.expiry.toISOString();
         reportDeclined(declined);
@@ -37706,6 +37735,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           ExitCode.USAGE_ERROR
         );
       }
+      if (!node) node = await ensureAuthenticated(ctx);
       const delegations = await node.grantRuntimePermissions(
         requested,
         expiryOption !== void 0 ? { expiry: expiryOption } : void 0
@@ -38556,16 +38586,19 @@ function execCapturedCommand(command) {
     });
   });
 }
-async function collectRequestedPermissions(options, profile) {
+async function collectRequestedPermissions(options, profile, resolutionOptions = {}) {
   const permissions = [];
   for (const spec of options.cap ?? []) {
-    permissions.push(await parseCapSpec(spec, profile));
+    permissions.push(await parseCapSpec(spec, profile, resolutionOptions));
   }
   if (options.permission) {
-    permissions.push(...await loadPermissionRequest(options.permission, profile));
+    permissions.push(...await loadPermissionRequest(options.permission, profile, resolutionOptions));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, {
+      ...resolutionOptions,
+      device: options.device === true
+    }));
   }
   return permissions;
 }

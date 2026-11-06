@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.6.3-beta.6
+
+### Patch Changes
+
+- 8bb35f2: Preserve named permission spaces in `tc auth request` until the owner resolves them, including `--grant` from a key-only profile.
+
+  Details: TC-2473
+
 ## 1.6.3-beta.5
 
 ### Patch Changes

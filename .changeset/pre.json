@@ -40,6 +40,7 @@
     "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
     "tc-2490-cli-reason",
-    "tc2380-q2"
+    "tc2380-q2",
+    "tidy-names-openkey-grant"
   ]
 }
