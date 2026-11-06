@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { Command } from "commander";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
@@ -29,7 +30,7 @@ const { verifyScopedLogin } = await import("./scoped-login.js");
 const { clearProfileCredentials } = await import("../lib/logout-pending.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 const { createECDH } = await import("node:crypto");
-const { registerAuthCommand } = await import("../commands/auth.js");
+const execFileAsync = promisify(execFile);
 restoreEnvironment(original);
 let caseEnvironment = original;
 const wasm = new NodeWasmBindings();
@@ -179,7 +180,7 @@ test("a fetched approval is not acknowledged before durable login persistence", 
   expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
 });
 
-test("key-only auth request durably saves then ACKs the first OpenKey grant", async () => {
+test("key-only auth request retries ACK after its saved session covers the request", async () => {
   const requestPermissions = [
     { service: "tinycloud.capabilities", space: "applications", path: "", actions: ["tinycloud.capabilities/read"] },
     ...requested,
@@ -190,9 +191,7 @@ test("key-only auth request durably saves then ACKs the first OpenKey grant", as
   process.env.TC_OPENKEY_API_HOST = server.url.origin;
   process.env.TC_LINKS_API_ORIGIN = "https://api.tinycloud.xyz";
 
-  const program = new Command().option("--profile <name>");
-  registerAuthCommand(program);
-  await program.parseAsync([
+  const args = [
     "node",
     "tc",
     "--profile",
@@ -205,11 +204,37 @@ test("key-only auth request durably saves then ACKs the first OpenKey grant", as
     "--expiry",
     "1h",
     "--no-popup",
-  ], { from: "node" });
+  ];
+  const script = `
+    import { Command } from "commander";
+    import { registerAuthCommand } from "./packages/cli/src/commands/auth.ts";
+    const program = new Command().option("--profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(${JSON.stringify(args)}, { from: "node" });
+  `;
+  const run = async () => {
+    try {
+      const { stdout, stderr } = await execFileAsync("bun", ["-e", script], { env: { ...process.env } });
+      return { status: 0, stdout, stderr };
+    } catch (error) {
+      const result = error as Error & { code?: number | string; stdout?: string; stderr?: string };
+      return { status: typeof result.code === "number" ? result.code : -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+    }
+  };
 
+  dropAck = true;
+  const firstAttempt = await run();
+  expect(firstAttempt).toMatchObject({ status: 8 });
+  expect(firstAttempt.stderr).toContain("APPROVAL_ACK_PENDING");
   expect(savedBeforeAck).toBe(true);
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
   expect((await ProfileManager.getSession("approval"))?.delegationCid).toBe(delegation.delegationCid);
+  expect((await readJson<Array<{ committed?: boolean }>>(join(profilePath("approval"), "approval-pending.json")))?.[0])
+    .toMatchObject({ committed: true });
+
+  const retry = await run();
+  expect(retry.status).toBe(0);
+  expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
   expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
 });
 

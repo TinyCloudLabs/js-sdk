@@ -1004,6 +1004,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
         const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options.device;
         if (profile.authMethod === "openkey" || options.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
+        // Recover a durable approval ACK before the permissions fast path can return.
+        await completeApprovalResult(ctx.profile);
         let node: TinyCloudNode | undefined;
         if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
 
