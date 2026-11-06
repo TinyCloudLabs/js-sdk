@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createPrivateKey, sign } from "node:crypto";
 import { canonicalDigest, createStoredCredentialRecord, credentialRequirementDigest, CredentialError, sha256Base64Url, type CredentialFlowDescriptor, type IssuerVerificationKey } from "@tinycloud/sdk-core";
-import { acquireEmailProofWithIssuerKeys, createEd25519HolderSigner, createMemoryEmailProofPendingStore, emailProofRequirement, verifyStoredWithIssuerKeys, type StoredEmailProofInput, type StoredEmailProofRecord } from "./email-proof";
+import { acquireEmailProofWithIssuerKeys, createEd25519HolderSigner, createMemoryEmailProofPendingStore, emailProofRequirement, EMAIL_PROOF_ISSUER_KEYS, EMAIL_PROOF_PINS, verifyStoredEmailProof, verifyStoredWithIssuerKeys, type StoredEmailProofInput, type StoredEmailProofRecord } from "./email-proof";
 import { generateHolderKey, makeWitness } from "./test-support/witness-stub.mjs";
 
 const ADDRESS = "reader@example.com";
@@ -41,6 +41,29 @@ test("control: the untampered stored record verifies", async () => {
   const { input, issuerKeys } = await issuedRecord();
   const verified = await verifyStoredWithIssuerKeys(input, issuerKeys);
   expect(verified.claims.email).toBe(ADDRESS);
+});
+
+test("the blocked draft has no usable issuer key, including the previous witness key", async () => {
+  const previousX = "eEJI4xEobto4HtQ7Pg9R1vBOwcpfGRTlXDG5QfqLnGQ";
+  expect(EMAIL_PROOF_PINS.issuerX).toBe("UNKNOWN_NEW_WITNESS_KEY");
+  expect(EMAIL_PROOF_ISSUER_KEYS).toHaveLength(1);
+  for (const key of EMAIL_PROOF_ISSUER_KEYS) {
+    expect(key.jwk.x).not.toBe(previousX);
+    // This explicit unknown value decodes to 17 bytes, never a 32-byte Ed25519 key.
+    expect(Buffer.from(key.jwk.x, "base64url")).toHaveLength(17);
+  }
+  const { input, issuerKeys } = await issuedRecord();
+  // Positive control: replacing only the issuer key accepts a correctly signed credential.
+  expect((await verifyStoredWithIssuerKeys(input, issuerKeys)).claims.email).toBe(ADDRESS);
+  // Key-length validation happens before signature verification: no signature, including
+  // one made with the previous key, can pass while the replacement key is unknown.
+  await expect(verifyStoredEmailProof(input))
+    .rejects.toMatchObject({ code: "VERIFICATION_FAILED", message: "Issuer key is invalid" });
+  const [jwt, ...disclosures] = input.record.credential.split("~");
+  const [header, payload] = jwt!.split(".");
+  const credential = [`${header}.${payload}.${Buffer.alloc(64, 1).toString("base64url")}`, ...disclosures].join("~");
+  await expect(verifyStoredEmailProof({ ...input, record: { ...input.record, credential } }))
+    .rejects.toMatchObject({ code: "VERIFICATION_FAILED", message: "Issuer key is invalid" });
 });
 
 /** `expectedCode` pins the refusal code where the verifier's classification is correct. Omitted means only the error class is pinned. */
