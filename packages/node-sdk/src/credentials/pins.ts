@@ -1,11 +1,12 @@
 import { ACCOUNT_HOLDER_BINDING_DOMAIN } from "@tinycloud/sdk-core";
 
-/** Production pins. Credentials verify only against these values. Tests pin them literally. */
+/** Issuer pins. This draft is blocked until the clean witness key is supplied. */
 export const EMAIL_PROOF_PINS = Object.freeze({
   witnessOrigin: "https://witness.credentials.org",
   issuerDid: "did:web:issuer.credentials.org",
   issuerKid: "did:web:issuer.credentials.org#controller",
-  issuerX: "eEJI4xEobto4HtQ7Pg9R1vBOwcpfGRTlXDG5QfqLnGQ",
+  // Deliberately not a 32-byte Ed25519 key: verification fails closed until replacement.
+  issuerX: "UNKNOWN_NEW_WITNESS_KEY",
   descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
 } as const);
 
