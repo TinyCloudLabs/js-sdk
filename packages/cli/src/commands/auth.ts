@@ -961,7 +961,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
-        const profile = await ProfileManager.getProfile(ctx.profile);
+        const initialSnapshot = options.grant ? await readProfileSnapshot(ctx.profile) : undefined;
+        const profile = initialSnapshot?.profile ?? await ProfileManager.getProfile(ctx.profile);
         if (options.paste && (!options.grant || options.device || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--paste requires --grant on an OpenKey owner profile and cannot be combined with --device.", ExitCode.USAGE_ERROR);
         }
@@ -969,9 +970,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
         const preset = resolveAppsAgentRequest(options);
+        const resolutionOptions = { allowLogicalSpaces: true };
         const requested = preset === undefined
-          ? await collectRequestedPermissions(options, ctx.profile)
-          : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
+          ? await collectRequestedPermissions(options, ctx.profile, resolutionOptions)
+          : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile, resolutionOptions);
         const expiryOption = preset === undefined ? parseExpiryOption(options.expiry) : APPS_AGENT_EXPIRY;
         // Before any approval link is printed: the plain-words scope of the grant.
         if (preset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(preset.mode, preset.appIds)}\n\n`);
@@ -997,19 +999,25 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           return;
         }
 
-        if (profile.authMethod === "openkey" || options.device) assertNoCaveatLimits(requested);
-        const node = await ensureAuthenticated(ctx);
+        
+        const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
+        const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
+        const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options.device;
+        if (profile.authMethod === "openkey" || options.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
+        // Recover a durable approval ACK before the permissions fast path can return.
+        await completeApprovalResult(ctx.profile);
+        let node: TinyCloudNode | undefined;
+        if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
 
         // Fast path: master's grantRuntimePermissions / hasRuntimePermissions
         // already does the diff against the live session + existing runtime
         // grants; no need to compute it ourselves.
-        if (node.hasRuntimePermissions(requested)) {
+        if (node?.hasRuntimePermissions(requested)) {
           outputJson({ changed: false, missing: [], added: [] });
           return;
         }
 
-        if (profile.authMethod === "openkey" || options.device) {
-          const key = await ProfileManager.getKey(ctx.profile);
+        if (profile.authMethod === "openkey" || options.device || keyOnlyOpenKey) {
           if (!key) {
             throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
           }
@@ -1036,6 +1044,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           for (const [index, group] of groups.entries()) {
             if (notices) process.stderr.write(`${notices.prompts[index]}\n`);
             const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
+            let bootstrapSessionData: Record<string, unknown> | undefined;
             const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
               let delegationData: Record<string, unknown>;
               if (options.device) {
@@ -1066,11 +1075,35 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                 });
               }
               seen.result = delegationData;
-              return portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
+              const approval = verifyOpenKeyApproval(delegationData, request, ctx.host, proof);
+              if (keyOnlyOpenKey && index === 0) bootstrapSessionData = approval.session;
+              return approval.delegation;
             });
+            if (bootstrapSessionData) {
+              const bootstrapProfile: ProfileConfig = {
+                ...profile,
+                posture: profile.posture ?? "owner-openkey",
+                sessionDid: profile.sessionDid ?? profile.did,
+                authMethod: "openkey",
+                spaceId: delegation.spaceId,
+                ...(typeof bootstrapSessionData.ownerDid === "string"
+                  ? { ownerDid: bootstrapSessionData.ownerDid }
+                  : {}),
+              };
+              await commitLogin(ctx.profile, initialSnapshot!, {
+                key,
+                session: bootstrapSessionData,
+                profile: bootstrapProfile,
+                durable: true,
+              });
+              await completeApprovalResult(ctx.profile, delegation);
+              node = await ensureAuthenticated(ctx);
+            }
             grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
           }
-          await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options.manifest ? "manifest" : "cli");
+          if (!node) node = await ensureAuthenticated(ctx);
+          const runtimeGrants = keyOnlyOpenKey ? grants.slice(1) : grants;
+          await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, runtimeGrants, options.manifest ? "manifest" : "cli");
           const delegationCids = grants.map(({ delegation }) => delegation.cid);
           const expiry = grants.at(-1)?.delegation.expiry.toISOString();
           reportDeclined(declined);
@@ -1097,7 +1130,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
 
-        // Local-key flow: master's grantRuntimePermissions handles signing
+        if (!node) node = await ensureAuthenticated(ctx);
         // through the SDK's wallet-mode signer, groups by space, and skips
         // anything already covered by the session or an existing grant.
         const delegations = await node.grantRuntimePermissions(
@@ -2214,16 +2247,20 @@ async function collectRequestedPermissions(
     device?: boolean;
   },
   profile: string,
+  resolutionOptions: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const permissions: PermissionEntry[] = [];
   for (const spec of options.cap ?? []) {
-    permissions.push(await parseCapSpec(spec, profile));
+    permissions.push(await parseCapSpec(spec, profile, resolutionOptions));
   }
   if (options.permission) {
-    permissions.push(...await loadPermissionRequest(options.permission, profile));
+    permissions.push(...await loadPermissionRequest(options.permission, profile, resolutionOptions));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, {
+      ...resolutionOptions,
+      device: options.device === true,
+    }));
   }
   return permissions;
 }
