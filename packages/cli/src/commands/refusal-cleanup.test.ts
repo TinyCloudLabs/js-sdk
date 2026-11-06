@@ -653,14 +653,15 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
 });
 
 describe("ensureDelegationAuthority: a refused approval of an established profile", () => {
-  beforeEach(() => { signRequest = true; });
+  beforeEach(() => { signRequest = true; activationCalls = 0; });
   const owned = async () => {
     await createKeyOnlyProfile(profileName, HOST);
     const profile = { ...(await ProfileManager.getProfile(profileName)), authMethod: "openkey" as const, ownerDid: OWNER_DID, posture: "owner-openkey" as const };
     await ProfileManager.setProfile(profileName, profile);
     return profile;
   };
-  const node = { hasRuntimePermissions: () => false, useRuntimeDelegation: async () => { throw new Error("nothing may be activated"); } } as never;
+  let activationCalls = 0;
+  const node = { hasRuntimePermissions: () => false, useRuntimeDelegation: async () => { activationCalls += 1; throw new Error("nothing may be activated"); } } as never;
   const request = (space: string, path = ""): Permission => ({ service: "tinycloud.kv", space, path, actions: ["tinycloud.kv/get"] });
   const grantedFiles = (name: string) => existsSync(join(profilePath(name), "additional-delegations.json"));
   const ensure = (profile: Parameters<typeof ensureDelegationAuthority>[0]["profile"], requested: Permission[], extra: Record<string, unknown> = {}) =>
@@ -709,7 +710,7 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expectOneNotice("kept");
   });
 
-  test("a refused combined multi-space approval stores nothing and leaves nothing pending", async () => {
+  test("a refused single combined multi-space request leaves no grant, session, pending state, or activation", async () => {
     const profile = await owned();
     pickedLifetimeMs = 6 * DAY;
     let approvals = 0;
@@ -722,13 +723,15 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expect(approvals).toBe(1);
     expect(savedPendingCopies).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(existsSync(join(profilePath(profileName), "approval-pending.json"))).toBe(false);
     expect(grantedFiles(profileName)).toBe(false);
+    expect(activationCalls).toBe(0);
     expect(noticeCount()).toBe(1);
     expect(text()).toContain(`Refused delegation: ${grantedCid}.`);
     expect(text()).toContain(REVOKE_URL);
   });
 
-  test("a multi-space approval that omits one requested space names it and stores no grant", async () => {
+  test("a narrowed multi-space approval names the omitted space and stores no grant", async () => {
     const profile = await owned();
     pickedLifetimeMs = 6 * DAY;
     let approvals = 0;
@@ -745,7 +748,9 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
     expect(grantedFiles(profileName)).toBe(false);
     expect(noticeCount()).toBe(1);
+    expect(activationCalls).toBe(0);
   });
+
 
   test("a one-use approval (persist: false): refused, one kept notice, nothing is activated", async () => {
     const profile = await owned();

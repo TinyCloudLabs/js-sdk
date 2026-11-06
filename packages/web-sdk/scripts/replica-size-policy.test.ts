@@ -57,6 +57,7 @@ import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } f
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 
+import { approvedTc2490OneApproval, validateTc2490OneApprovalTransition } from "./replica-size-policy";
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 
 // Newest-row helpers. Order is the ledger file's key order and every ceiling is read from the ledger JSON, so
@@ -2943,6 +2944,7 @@ delete tc2043Ledger.tc2418AbortListenerCleanup;
 delete tc2043Ledger.tc2379SignOutFence;
 delete tc2043Ledger.tc2380SpaceHosting;
 delete tc2043Ledger.tc2380Q2OneClick;
+delete tc2043Ledger.tc2490OneApproval;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4595,5 +4597,46 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2380SpaceHostingTransition(undefined, changed)).toThrow("TC-2380");
     expect(() => validateTc2380SpaceHostingTransition(row(), undefined)).toThrow("TC-2380");
+  });
+});
+describe("TC-2490 one-approval exact root-size ceiling", () => {
+  it("records the two canonical root deltas and carries the other buckets unchanged", () => {
+    const row = current.tc2490OneApproval!;
+    expect(row).toEqual(approvedTc2490OneApproval);
+    expect(row).toMatchObject({
+      root: {
+        delta: { "index.mjs": 206, "index.cjs": 194 },
+        ceiling: { "index.mjs": 1480276, "index.cjs": 1422678 },
+      },
+      firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } },
+      activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
+      worker: { delta: 0, ceiling: 776561 },
+      replicaWorker: { delta: 0, ceiling: 770494 },
+    });
+    expect(rootCeilings(current).at(-1)).toEqual({
+      row: "tc2490OneApproval",
+      ceiling: { "index.mjs": 1480276, "index.cjs": 1422678 },
+    });
+    expect(activeRootCeiling(current)?.row).toBe("tc2490OneApproval");
+    expect(ancestryPins(current, false).at(-1)).toEqual({
+      row: "tc2490OneApproval",
+      pin: "760ac2a0530c1b44bb572a20cfb9997bcb4fcf4f",
+    });
+  });
+  it("rejects changes, missing prerequisites, and transitions after introduction", () => {
+    const row = current.tc2490OneApproval!;
+    expect(() => validateLedger(current)).not.toThrow();
+    const changed = copy(current);
+    changed.tc2490OneApproval!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2490");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2380Q2OneClick;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2490");
+    expect(() => validateTc2490OneApprovalTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2490OneApprovalTransition(row, row)).not.toThrow();
+    const changedTransition = structuredClone(row);
+    changedTransition.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2490OneApprovalTransition(undefined, changedTransition)).toThrow("TC-2490");
+    expect(() => validateTc2490OneApprovalTransition(row, undefined)).toThrow("TC-2490");
   });
 });
