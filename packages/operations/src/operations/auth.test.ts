@@ -763,7 +763,7 @@ test("serializes an independently queued session writer after import and refuses
       process.execPath,
       "--preload", new URL("../../test-support/test-bootstrap.mjs", import.meta.url).pathname,
       "--eval", `
-        import { exitWithParent } from ${JSON.stringify(new URL("../../test-support/parent-watch.mjs", import.meta.url).href)};
+        import { exitWithParent } from ${JSON.stringify(new URL("../test-support/parent-watch.mjs", import.meta.url).href)};
         import { PROFILE_LOCK_HELPER_DEADLINE_MS } from ${JSON.stringify(new URL("../test-support/profile-lock-protocol.ts", import.meta.url).href)};
         import { withProfileLock, readAdditionalDelegations, sessionPath, writeJsonAtomic }
           from ${JSON.stringify(new URL("../state.ts", import.meta.url).href)};
