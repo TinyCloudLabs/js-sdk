@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
-import { unregisteredLocationRegistryResponse } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
@@ -93,7 +92,18 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
   const allRequests: string[] = [];
   const externalRequests: string[] = [];
   try {
+    const registryHelperUrl = new URL(
+      "../../node-sdk/src/test-support/unregistered-location-registry.ts", import.meta.url,
+    ).href;
+    // Match the existing auth fixture's variable-URL import across the strict package root.
+    const { unregisteredLocationRegistryResponse } = await import(registryHelperUrl) as {
+      unregisteredLocationRegistryResponse(
+        input: Parameters<typeof fetch>[0], origin: string, init?: RequestInit,
+      ): Response | undefined;
+    };
     const delegation = await fixture.hermetic.mintDelegation();
+    // The public SDK takes a mutable action array; leave the stored fixture record unchanged.
+    const portableDelegation = { ...delegation, actions: [...delegation.actions] };
     delete process.env.TC_REGISTRY_URL;
     const storedProfile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
     if (storedProfile === null) throw new Error("expected the stored fixture profile");
@@ -119,7 +129,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
     if (!fromProfile.ok) throw new Error("expected a restored runtime");
     const profileNode = fromProfile.context.runtime.node as TinyCloudNode;
     expect(profileNode.hosts).toContain(fixture.hermetic.host);
-    await profileNode.useRuntimeDelegation(delegation);
+    await profileNode.useRuntimeDelegation(portableDelegation);
     expect((await profileNode.kv.get(key)).ok).toBe(true);
     expect(externalRequests.length).toBeGreaterThan(0);
     expect(externalRequests.every((url) => url.startsWith(`${profileRegistryUrl}/`))).toBe(true);
@@ -133,7 +143,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
     if (!fromEnvironment.ok) throw new Error("expected a restored runtime");
     const environmentNode = fromEnvironment.context.runtime.node as TinyCloudNode;
     expect(environmentNode.hosts).toContain(fixture.hermetic.host);
-    await environmentNode.useRuntimeDelegation(delegation);
+    await environmentNode.useRuntimeDelegation(portableDelegation);
     expect((await environmentNode.kv.get(key)).ok).toBe(true);
     expect(externalRequests.length).toBeGreaterThan(0);
     expect(externalRequests.every((url) => url.startsWith(`${envRegistryUrl}/`))).toBe(true);
