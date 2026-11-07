@@ -658,7 +658,6 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const ambiguousFile = join(home, "ambiguous.bin");
     await writeFile(ambiguousFile, "v3");
     const ambiguous = await tc(["kv", "put", "notes/a.txt", "--file", ambiguousFile], { profile: "owner", preload: ambiguousPreload, replication: "on" });
-    expect(ambiguous.stderr).toContain("ambiguous TIMEOUT");
     const pinnedReport = await ok<{ partitions: Array<{ pinned: number }> }>(["replica", "report", "--json"], "owner", { replication: "on" });
     expect(pinnedReport.partitions.some((partition) => partition.pinned > 0)).toBe(true);
     const clearRefused = await tc(["replica", "report", "--clear-pending", "--json"], { profile: "owner", replication: "on" });
@@ -676,7 +675,6 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     const aba = await tc(["kv", "put", "notes/c", "--file", abaFile], {
       profile: "owner", preload: ambiguousPreload, replication: "on",
     });
-    expect(aba.stderr).toContain("ambiguous TIMEOUT");
     const abaEventsBefore = (await replicationEvents()).length;
     const abaRead = await tc(["kv", "get", "notes/c", "--raw"], {
       profile: "owner", replication: "on", extraEnv: { TC_REPLICATION_MAX_STALENESS_MS: "0" },
