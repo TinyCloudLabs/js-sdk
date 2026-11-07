@@ -7,7 +7,7 @@ import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { activateValidatedRuntimeDelegation } from "./delegation";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
 
-test("startup refresh derives wallet and held-grant owners from verified authority, never the session key or display owner", async () => {
+test("offline restore defers registry refresh until verified authority is used, never looking up session or display owners", async () => {
   const fixture = await createHermeticEncryptedNode();
   let registry: Bun.Server<undefined> | undefined;
   let nodeFront: Bun.Server<undefined> | undefined;
@@ -17,9 +17,12 @@ test("startup refresh derives wallet and held-grant owners from verified authori
     const signerB = new PrivateKeySigner(fixture.ownerPrivateKey);
     const addressA = await signerA.getAddress();
     const subjectA = registryOwnerSubjectV1(addressA);
+    const displayOwner = await new PrivateKeySigner(generatePrivateKey()).getAddress();
     const { nodeId } = await (await fetch(`${fixture.host}/info`)).json() as { nodeId: string };
+    const nodeRequests: string[] = [];
     nodeFront = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       const url = new URL(request.url);
+      nodeRequests.push(url.pathname);
       if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: nodeId, shareInvitationPublicKey: "A".repeat(43) });
       return fetch(new Request(`${fixture.host}${url.pathname}${url.search}`, request));
     } });
@@ -44,22 +47,27 @@ test("startup refresh derives wallet and held-grant owners from verified authori
     const manager = wasm.createSessionManager(), jwk = JSON.parse(manager.jwk("default")!);
     const primarySpace = fixture.ownerRestorableSession.spaceId;
     const prepared = wasm.prepareSession({ address: addressA, chainId: 1, domain: "cache-TEST.invalid", spaceId: primarySpace, jwk,
-      abilities: {}, issuedAt: new Date().toISOString(), expirationTime: new Date(Date.now() + 600_000).toISOString() });
+      abilities: {}, rawAbilities: { [`${spaceA}/kv/`]: ["tinycloud.kv/get"] },
+      issuedAt: new Date().toISOString(), expirationTime: new Date(Date.now() + 600_000).toISOString() });
     const signature = await signerA.signMessage(prepared.siwe);
     const base = wasm.completeSessionSetup({ ...prepared, signature });
     const cacheStore = createInMemoryRegistryCacheStore();
     const node = new TinyCloudNode({ wasmBindings: wasm, host, tinycloudRegistryUrl: registry.url.origin, registryCacheStore: cacheStore });
     await node.restoreSession({ ...base, jwk, address: addressA, chainId: 1, siwe: prepared.siwe, signature, spaceId: primarySpace });
-    // The primary resource belongs to B, so only authenticated-owner refresh discovers A.
+    expect([...observed]).toEqual([]);
+    expect(nodeRequests).toEqual([]);
+    // The primary resource belongs to B; refresh A only from its verified signed capability.
+    node.refreshRegistryForCapabilities(node.getVerifiedSessionCapabilities());
     await ownerRefresh;
     const grant = await fixture.mintDelegationForAudience(node.sessionDid.split("#", 1)[0]!);
-    // Untrusted display owner is deliberately unrelated; signed resources win.
-    await activateValidatedRuntimeDelegation(node, { ...grant, ownerAddress: addressA }, { host });
+    // An unsigned display owner C must not cause a lookup alongside A or signed owner B.
+    await activateValidatedRuntimeDelegation(node, { ...grant, ownerAddress: displayOwner }, { host });
     const addressB = fixture.ownerDid.slice(fixture.ownerDid.lastIndexOf(":") + 1);
     await Promise.all([subjectA, fixture.ownerDid].map((subject) => refreshOwnerRegistry(subject, { cacheStore, registryUrl: registry!.url.origin })));
     expect([...observed].sort()).toEqual([addressA, addressB].sort());
     expect((await cacheStore.get(addressA))?.sequence).toBe(3);
     expect((await cacheStore.get(addressB))?.sequence).toBe(3);
     expect(await cacheStore.get(node.sessionDid)).toBeUndefined();
+    expect(await cacheStore.get(displayOwner)).toBeUndefined();
   } finally { registry?.stop(true); nodeFront?.stop(true); fixture.stop(); }
 }, 15_000);
