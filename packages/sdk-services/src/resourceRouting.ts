@@ -91,18 +91,15 @@ export function routingFailure(error: unknown): RoutingFailure | undefined {
   if (typeof error === "object" && error !== null && "code" in error && "message" in error &&
     typeof error.code === "string" && typeof error.message === "string" &&
     isRoutingFailureCode(error.code)) {
-    let meta: Record<string, unknown> | undefined;
+    const candidate = "meta" in error ? error.meta : undefined;
+    let meta = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
+      ? candidate as Record<string, unknown> : undefined;
     if (error.code === "NODE_NOT_RESPONDING" && "hosts" in error && Array.isArray(error.hosts)) {
-      meta = { hosts: error.hosts };
+      meta = { ...meta, hosts: error.hosts };
     } else if (error.code === "PARTIAL_NODE_WRITE" &&
         "succeeded" in error && Array.isArray(error.succeeded) &&
         "failed" in error && Array.isArray(error.failed)) {
-      meta = { succeeded: error.succeeded, failed: error.failed };
-    } else {
-      const candidate = "meta" in error ? error.meta : undefined;
-      if (typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)) {
-        meta = candidate as Record<string, unknown>;
-      }
+      meta = { ...meta, succeeded: error.succeeded, failed: error.failed };
     }
     return { code: error.code, message: error.message, ...(error instanceof Error ? { cause: error } : {}), ...(meta ? { meta } : {}) };
   }

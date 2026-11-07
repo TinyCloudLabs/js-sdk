@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { wrapError } from "@tinycloud/sdk-services";
 
 import { ReplicaErrorCode, isReplicaError } from "./errors.js";
 import { kvSyncTransport, type KVSyncClient } from "./transport.js";
@@ -50,6 +51,25 @@ describe("kvSyncTransport.syncPage", () => {
         got: expected,
       });
     }
+  });
+
+  test.each([
+    {
+      error: { code: "NODE_NOT_RESPONDING", message: "The node answered", hosts: ["http://127.0.0.1:19901"], meta: { status: 403 } },
+      expected: ReplicaErrorCode.GRANT_UNAUTHORIZED,
+    },
+    {
+      error: { code: "NODE_NOT_RESPONDING", message: "The node answered", hosts: ["http://127.0.0.1:19901"], meta: { status: 500 } },
+      expected: ReplicaErrorCode.NODE_ERROR,
+    },
+    {
+      error: { code: "PARTIAL_NODE_WRITE", message: "The node refused", succeeded: [], failed: [], meta: { status: 403 } },
+      expected: ReplicaErrorCode.GRANT_UNAUTHORIZED,
+    },
+  ])("retains authoritative HTTP precedence through service normalization: $error.code / $error.meta.status", async ({ error, expected }) => {
+    const failure: Failure = { ok: false, error: wrapError("kv", error) };
+    const transport = kvSyncTransport(client({ changes: async () => failure }));
+    expect(await codeOf(transport.syncPage({ prefix: "notes/", limit: 10 }))).toBe(expected);
   });
 
   test("passes cursor, limit and retention grant through, and rejects an off-contract page", async () => {
