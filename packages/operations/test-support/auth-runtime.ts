@@ -44,6 +44,7 @@ interface HermeticEncryptedNode {
   readonly unrelatedAudience: string;
   /** Every HTTP request the loopback node received, in order. */
   requests(): readonly HermeticRequest[];
+  failDelegate(status: number | null): void;
   /** Every capability of every verified `/invoke` invocation, in order. */
   invocations(): readonly { readonly service: string; readonly action: string; readonly space: string; readonly path: string }[];
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;

@@ -1143,8 +1143,8 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
     const proof = { ...delegation.siweProof! };
     const originalReadSession = state.readSession;
     let paused = false;
-    readSession = spyOn(state, "readSession").mockImplementation(async (profile) => {
-      const session = await originalReadSession(profile);
+    readSession = spyOn(state, "readSession").mockImplementation(async <T extends object = Record<string, unknown>>(profile: string) => {
+      const session = await originalReadSession<T>(profile);
       if (!paused) {
         paused = true;
         announceRead();
