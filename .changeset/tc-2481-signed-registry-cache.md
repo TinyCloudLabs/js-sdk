@@ -31,7 +31,7 @@ Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 
 
 Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
 
-Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait for the import transaction instead of running alongside activation.
+Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
 
 Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
 
