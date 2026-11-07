@@ -1117,6 +1117,8 @@ export {
   verifyRegistryCacheEntry,
   DEFAULT_REGISTRY_CACHE_STORAGE_KEY,
   type RegistryCacheEntry,
+  type RegistryCacheTombstone,
+  type RegistryCacheRecord,
   type RegistryCacheStore,
 } from "./registry-cache";
 export { refreshOwnerRegistry } from "./registry-policy";

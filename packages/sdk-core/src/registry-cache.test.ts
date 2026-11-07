@@ -4,7 +4,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { signLocationRecord, signLocationRecordV2 } from "./location";
 import type { LocationRecordV2Payload } from "./location";
-import { createInMemoryRegistryCacheStore, createLocalStorageRegistryCacheStore, verifyRegistryCacheEntry } from "./registry-cache";
+import { createInMemoryRegistryCacheStore, createLocalStorageRegistryCacheStore, verifyRegistryCacheEntry, DEFAULT_REGISTRY_CACHE_STORAGE_KEY } from "./registry-cache";
 import type { RegistryCacheEntry, RegistryCacheStore } from "./registry-cache";
 import { createInMemoryRegistrySequenceStore, DEFAULT_NEW_USER_HOST, refreshOwnerRegistry, registryOwnerSubjectV1, resolveFailClosedTinyCloudHosts, resolveOwnerHosts, resolveRegistryResource } from "./registry-policy";
 import { createLocalStorageRegistrySequenceStore, DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY } from "./registry-policy";
@@ -63,7 +63,8 @@ test("equal-sequence conflicting signed membership refuses, preserves age until 
   let deletedEntry: RegistryCacheEntry | undefined;
   const cacheStore: RegistryCacheStore = {
     get: backing.get, update: backing.update,
-    delete: async (key) => { deletedEntry = await backing.get(key); await backing.delete(key); },
+    getRevision: backing.getRevision,
+    delete: async (key, revision, maximumSequence) => { deletedEntry = await backing.get(key); await backing.delete(key, revision, maximumSequence); },
   };
   const raw = await body(0);
   await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(raw) });
@@ -110,7 +111,7 @@ test("each warm routing decision awaits a coalesced refresh and immediately appl
 
 test("concurrent clients cannot overwrite a higher persisted sequence with a late response", async () => {
   const backing = createInMemoryRegistryCacheStore();
-  const client = (): RegistryCacheStore => ({ get: backing.get, update: backing.update, delete: backing.delete });
+  const client = (): RegistryCacheStore => ({ get: backing.get, getRevision: backing.getRevision, update: backing.update, delete: backing.delete });
   const slow = client(), fast = client();
   let release!: (response: Response) => void;
   const pending = new Promise<Response>((resolve) => { release = resolve; });
@@ -269,9 +270,10 @@ for (const failure of ["marker", "delete"] as const) {
     const backing = createInMemoryRegistryCacheStore(), sequences = createInMemoryRegistrySequenceStore();
     const cacheStore: RegistryCacheStore = {
       get: backing.get, update: backing.update,
-      delete: async (key) => {
+      getRevision: backing.getRevision,
+      delete: async (key, revision, maximumSequence) => {
         if (failure === "delete") throw new Error("TEST deletion unavailable");
-        await backing.delete(key);
+        await backing.delete(key, revision, maximumSequence);
       },
     };
     await resolveOwnerHosts(subject, { cacheStore, sequenceStore: sequences, fetch: answer(await body(0)) });
@@ -329,6 +331,7 @@ test("refresh rejects a noncanonical owner before cache or network access", asyn
   let cacheReads = 0, requests = 0;
   const cacheStore: RegistryCacheStore = {
     get: async () => { cacheReads++; return undefined; },
+    getRevision: async () => { throw new Error("Invalid owner must not read revisions"); },
     update: async () => { throw new Error("Invalid owner must not update storage"); },
     delete: async () => { throw new Error("Invalid owner must not delete storage"); },
   };
@@ -344,6 +347,7 @@ test("a restored verified cache establishes highwater before later cache loss an
   let visible = true;
   const cacheStore: RegistryCacheStore = {
     get: (key) => visible ? persisted.get(key) : Promise.resolve(undefined),
+    getRevision: persisted.getRevision,
     update: persisted.update,
     delete: persisted.delete,
   };
@@ -439,6 +443,7 @@ test("a shared registered refresh respects independent caller highwaters and rem
   let onEmptyRead: (() => void) | undefined;
   const cacheStore: RegistryCacheStore = {
     update: backing.update,
+    getRevision: backing.getRevision,
     delete: backing.delete,
     async get(key) {
       const current = await backing.get(key);
@@ -492,6 +497,7 @@ test("direct refresh repairs restored highwater before outage I/O and later cach
   let visible = true;
   const cacheStore: RegistryCacheStore = {
     get: (key) => visible ? persisted.get(key) : Promise.resolve(undefined),
+    getRevision: persisted.getRevision,
     update: persisted.update,
     delete: persisted.delete,
   };
@@ -581,4 +587,141 @@ test("a fresh registered owner without any usable host is dropped before subsequ
   expect(await sequenceStore.get(owner.address)).toBe(1);
   await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503) }))
     .rejects.toMatchObject({ code: "registry_unavailable" });
+});
+
+for (const warmAtStart of [true, false]) {
+  test(`invalidation revisions fence stale flights from ${warmAtStart ? "warm" : "known-empty"} adapters`, async () => {
+    const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+    const raw = await body(0);
+    await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(raw) });
+    if (!warmAtStart) await backing.delete(owner.address);
+    const adapter = (): RegistryCacheStore => ({
+      get: backing.get, getRevision: backing.getRevision, update: backing.update, delete: backing.delete,
+    });
+    const A = adapter(), B = adapter(), C = adapter();
+    const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+    const late = resolveRegistryResource(subject, space, "read", {
+      cacheStore: A, sequenceStore, fetch: Object.assign(async () => { started.resolve(); return reply.promise; }, { preconnect: fetch.preconnect }),
+    }).then(() => undefined, (error: unknown) => error);
+    await started.promise;
+    await expect(resolveRegistryResource(subject, space, "read", { cacheStore: B, sequenceStore, fetch: httpFailure(403) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    const revision = warmAtStart ? 1 : 2;
+    expect(await backing.getRevision(owner.address)).toBe(revision);
+    expect(await backing.get(owner.address)).toBeUndefined();
+    reply.resolve(new Response(raw));
+    expect(await late).toMatchObject({ code: "registry_unavailable" });
+    expect(await backing.get(owner.address)).toBeUndefined();
+    expect(await sequenceStore.get(owner.address)).toBe(0);
+    const warnings: string[] = [];
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: C, sequenceStore, fetch: httpFailure(503), autoDiscoverLocalNode: false,
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+    // A new lookup after invalidation may accept valid signed sequence zero.
+    expect((await resolveRegistryResource(subject, space, "read", { cacheStore: C, sequenceStore, fetch: answer(raw) })).hosts[0]?.nodeDid).toBe(nodeDid);
+    expect(await backing.getRevision(owner.address)).toBe(revision);
+  });
+}
+
+test("invalidation revisions refuse an old outage flight without deleting a newly accepted higher record", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const adapter = (): RegistryCacheStore => ({
+    get: backing.get, getRevision: backing.getRevision, update: backing.update, delete: backing.delete,
+  });
+  await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(await body(0)) });
+  const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+  const stale = resolveRegistryResource(subject, space, "read", {
+    cacheStore: adapter(), sequenceStore,
+    fetch: Object.assign(async () => { started.resolve(); return reply.promise; }, { preconnect: fetch.preconnect }),
+  }).then(() => undefined, (error: unknown) => error);
+  await started.promise;
+  await expect(resolveRegistryResource(subject, space, "read", { cacheStore: adapter(), sequenceStore, fetch: httpFailure(403) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  const current = await body(1, "read-write", "https://current.invalid");
+  await resolveRegistryResource(subject, space, "read", { cacheStore: adapter(), sequenceStore, fetch: answer(current) });
+  reply.resolve(new Response("TEST outage", { status: 503 }));
+  expect(await stale).toMatchObject({ code: "registry_unavailable" });
+  expect((await backing.get(owner.address))?.responseBody).toBe(current);
+  expect(await backing.getRevision(owner.address)).toBe(1);
+  expect(await sequenceStore.get(owner.address)).toBe(1);
+});
+
+test("conditional invalidation cannot delete a higher signed record accepted before its atomic delete", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const newer = await body(1);
+  let guardedRevision: number | undefined, guardedSequence: number | undefined;
+  const cacheStore: RegistryCacheStore = {
+    get: backing.get, getRevision: backing.getRevision, update: backing.update,
+    async delete(key, revision, maximumSequence) {
+      guardedRevision = revision; guardedSequence = maximumSequence;
+      await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(newer) });
+      await backing.delete(key, revision, maximumSequence);
+    },
+  };
+  await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+  await expect(resolveRegistryResource(subject, space, "read", { cacheStore, sequenceStore, fetch: httpFailure(403) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(guardedRevision).toBe(0);
+  expect(guardedSequence).toBe(0);
+  expect((await backing.get(owner.address))?.responseBody).toBe(newer);
+  expect(await backing.getRevision(owner.address)).toBe(0);
+  expect(await sequenceStore.get(owner.address)).toBe(1);
+});
+
+test("durable browser tombstones remain known without sequence storage and guard new signed state", async () => {
+  const platform = installTestWebLocks();
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  const key = `${DEFAULT_REGISTRY_CACHE_STORAGE_KEY}:${owner.address}`;
+  const raw = await body(0);
+  try {
+    storage.setItem(key, JSON.stringify({ ownerKey: owner.address, responseBody: raw, fetchedAt: Date.now(), sequence: 0 }));
+    const cache = createLocalStorageRegistryCacheStore(storage);
+    expect(await cache.getRevision(owner.address)).toBe(0);
+    await cache.delete(owner.address, 0, 0);
+    expect(JSON.parse(storage.getItem(key)!)).toEqual({ ownerKey: owner.address, revision: 1, invalidated: true });
+    const reloaded = createLocalStorageRegistryCacheStore(storage);
+    expect(await reloaded.get(owner.address)).toBeUndefined();
+    expect(await reloaded.getRevision(owner.address)).toBe(1);
+    const warnings: string[] = [];
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: reloaded, fetch: httpFailure(503), autoDiscoverLocalNode: false,
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+    await reloaded.delete(owner.address); // Deleting an empty tombstone still advances.
+    expect(await reloaded.getRevision(owner.address)).toBe(2);
+    await resolveOwnerHosts(subject, { cacheStore: reloaded, fetch: answer(await body(1)) });
+    const accepted = await reloaded.get(owner.address);
+    expect(accepted?.revision).toBe(2);
+    await expect(reloaded.delete(owner.address, 1, 1)).rejects.toThrow("revision changed");
+    await expect(reloaded.delete(owner.address, 2, 0)).rejects.toThrow("sequence advanced");
+    expect(await reloaded.get(owner.address)).toEqual(accepted);
+    expect(await reloaded.getRevision(owner.address)).toBe(2);
+  } finally { platform.restore(); }
+});
+
+test("corrupt browser revisions and revision overflow refuse without removing signed state", async () => {
+  const platform = installTestWebLocks();
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  const key = `${DEFAULT_REGISTRY_CACHE_STORAGE_KEY}:${owner.address}`;
+  const entry = { ownerKey: owner.address, responseBody: await body(0), fetchedAt: Date.now(), sequence: 0 };
+  try {
+    const cache = createLocalStorageRegistryCacheStore(storage);
+    for (const revision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, null]) {
+      storage.setItem(key, JSON.stringify({ ...entry, revision }));
+      await expect(cache.getRevision(owner.address)).rejects.toThrow("revision");
+    }
+    const persisted = JSON.stringify({ ...entry, revision: Number.MAX_SAFE_INTEGER });
+    storage.setItem(key, persisted);
+    await expect(cache.delete(owner.address)).rejects.toThrow("overflow");
+    await expect(cache.delete(owner.address, -1)).rejects.toThrow("revision");
+    await expect(cache.delete(owner.address, Number.MAX_SAFE_INTEGER, -1)).rejects.toThrow("sequence");
+    expect(storage.getItem(key)).toBe(persisted);
+  } finally { platform.restore(); }
 });

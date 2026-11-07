@@ -228,9 +228,12 @@ export async function resolveOwnerHosts(
 interface OwnerRegistryResult {
   verdict: RegistryVerdict;
   allowCached?: boolean;
+  revision?: number;
 }
 
 const cacheAuthorities = new WeakMap<RegistryCacheStore, Map<string, { sequence: number; invalidated: boolean }>>();
+// The accepted decision's origin generation authorizes any later route-denial drop.
+const verdictRevisions = new WeakMap<RegistryVerdict, number>();
 function cacheAuthority(cache: RegistryCacheStore, key: string) {
   let owners = cacheAuthorities.get(cache);
   if (!owners) cacheAuthorities.set(cache, owners = new Map());
@@ -270,7 +273,7 @@ async function refreshCachedOwnerRegistry(
     active.set(key, next);
     void next.finally(() => active!.delete(key)).catch(() => undefined);
   }
-  const { verdict, allowCached } = await next;
+  const { verdict, allowCached, revision } = await next;
   if (verdict.status === "unavailable" && !allowCached) return verdict;
   // Routing authority is caller-specific, even when cache identity is shared.
   // Recheck at the end of shared I/O and retain evidence observed before joining.
@@ -278,15 +281,20 @@ async function refreshCachedOwnerRegistry(
   const latest = await options.sequenceStore?.get(key);
   const authority = cacheAuthority(cache, key);
   const highWater = Math.max(remembered ?? -1, latest ?? -1, authority.sequence);
+  assertRegistryRevision(subject, await cache.getRevision(key), revision!);
   if (current !== undefined) {
     const verified = await verifyRegistryCacheEntry(subject, key, current, highWater < 0 ? undefined : highWater);
     authority.sequence = Math.max(highWater, verified.sequence);
     await rememberAcceptedSequence(options.sequenceStore, key, latest, verified);
+    assertRegistryRevision(subject, await cache.getRevision(key), revision!);
     if (verdict.status === "unavailable") {
       const age = Date.now() - current.fetchedAt;
       if (!allowCached || authority.invalidated || age < 0 || age >= REGISTRY_CACHE_MAX_AGE_MS) return verdict;
-      return { ...verified, offline: true };
+      const fallback: RegisteredRegistryVerdict = { ...verified, offline: true };
+      verdictRevisions.set(fallback, revision!);
+      return fallback;
     }
+    verdictRevisions.set(verified, revision!);
     return verified;
   }
   if (verdict.status === "unavailable") return verdict;
@@ -297,6 +305,8 @@ async function refreshCachedOwnerRegistry(
       message: `registry refresh sequence ${verdict.sequence} is below remembered sequence ${highWater}`, hosts: [],
     };
     await rememberAcceptedSequence(options.sequenceStore, key, latest, verdict);
+    assertRegistryRevision(subject, await cache.getRevision(key), revision!);
+    verdictRevisions.set(verdict, revision!);
     return verdict;
   }
   if (highWater >= 0) return {
@@ -304,6 +314,14 @@ async function refreshCachedOwnerRegistry(
     message: "owner registration was remembered before registry absence could authorize onboarding", hosts: [],
   };
   return verdict;
+}
+
+function assertRegistryRevision(subject: string, actual: number, expected: number): void {
+  if (!isSequence(actual) || actual !== expected) {
+    throw new RegistryUnavailableError(subject, undefined, {
+      message: "owner routing was invalidated while the registry lookup was in flight",
+    });
+  }
 }
 
 async function fetchOwnerRegistry(
@@ -318,6 +336,13 @@ async function fetchOwnerRegistry(
   const baseUrl = registryUrl.replace(/\/$/, "");
   const fetchFn = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS;
+  // Capture before network I/O. A positive generation is independent known-owner
+  // evidence even when a sequence adapter is absent or has forgotten its marker.
+  const revision = options.cacheStore ? await options.cacheStore.getRevision(ownerKey) : undefined;
+  if (options.cacheStore && !isSequence(revision)) throw new RegistryUnavailableError(subject, undefined, {
+    message: "invalid registry cache revision",
+  });
+  if (revision !== undefined && revision > 0) remembered = Math.max(remembered ?? -1, 0);
 
   const observation = await observeRegistry(`${baseUrl}/v2/locations/${encodeURIComponent(ownerKey)}`, fetchFn, timeoutMs);
   const v2 = await classifyObservation(subject, observation, 2, remembered ?? null);
@@ -326,7 +351,8 @@ async function fetchOwnerRegistry(
     let accepted: RegistryCacheEntry;
     let equalSequenceConflict = false;
     try {
-      accepted = await options.cacheStore.update(ownerKey, async (current) => {
+      accepted = await options.cacheStore.update(ownerKey, async (current, currentRevision) => {
+        assertRegistryRevision(subject, currentRevision, revision!);
         const highest = Math.max((await store?.get(ownerKey)) ?? -1, cacheAuthority(options.cacheStore!, ownerKey).sequence);
         const highWater = highest < 0 ? undefined : highest;
         if (current !== undefined) {
@@ -349,7 +375,7 @@ async function fetchOwnerRegistry(
       });
     } catch (error) {
       // Invalidate outside update: persistent adapters use a non-reentrant queue.
-      if (equalSequenceConflict) await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, v2.sequence);
+      if (equalSequenceConflict) await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, v2.sequence, revision!);
       throw error;
     }
     const verdict = await verifyRegistryCacheEntry(subject, ownerKey, accepted);
@@ -357,11 +383,11 @@ async function fetchOwnerRegistry(
     authority.sequence = Math.max(authority.sequence, verdict.sequence);
     authority.invalidated = false;
     await rememberAcceptedSequence(store, ownerKey, remembered, verdict);
-    return { verdict };
+    return { verdict, revision };
   }
   if (options.cacheStore && (cached !== undefined || remembered !== undefined) &&
       observation.kind === "http" && observation.status >= 400 && observation.status < 500) {
-    await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, Math.max(remembered ?? 0, cached?.sequence ?? 0));
+    await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, Math.max(remembered ?? 0, cached?.sequence ?? 0), revision!);
   }
   const fresh = cached === undefined && remembered === undefined;
   const coldOffline = fresh && v2.status === "unavailable" && registryOutage(observation);
@@ -371,7 +397,7 @@ async function fetchOwnerRegistry(
       observation.kind === "network-error" || observation.kind === "timeout" ||
       (observation.kind === "http" && [502, 503, 504].includes(observation.status))
     );
-    return { verdict: v2, allowCached };
+    return { verdict: v2, allowCached, revision };
   }
 
   const v1Subject = legacyRegistrySubject(subject, options.registryChainId);
@@ -388,11 +414,11 @@ async function fetchOwnerRegistry(
       reason: "unsupported-format",
       message: "owner has a v1 location record but no signed-v2 routing record",
       hosts: [],
-    } };
+    }, revision };
   }
   const legacyOffline = fresh && v1.status === "unavailable" && registryOutage(v1Observation);
-  if (v1.status === "unavailable" && !legacyOffline) return { verdict: { ...v1, subject } };
-  return { verdict: { status: "unregistered", subject, source: "offchain", hosts: [], ...(coldOffline || legacyOffline ? { offline: true } : {}) } };
+  if (v1.status === "unavailable" && !legacyOffline) return { verdict: { ...v1, subject }, revision };
+  return { verdict: { status: "unregistered", subject, source: "offchain", hosts: [], ...(coldOffline || legacyOffline ? { offline: true } : {}) }, revision };
 }
 
 async function dropOwnerRegistryCache(
@@ -401,7 +427,11 @@ async function dropOwnerRegistryCache(
   store: RegistrySequenceStore | undefined,
   key: string,
   sequence: number,
+  expectedRevision: number,
 ): Promise<void> {
+  if (!isSequence(expectedRevision)) throw new RegistryUnavailableError(subject, undefined, {
+    message: "registry invalidation has no accepted origin revision",
+  });
   const authority = cacheAuthority(cache, key);
   authority.sequence = Math.max(authority.sequence, sequence);
   authority.invalidated = true;
@@ -409,7 +439,7 @@ async function dropOwnerRegistryCache(
   // writes, this marker must persist before the signed cache is removed.
   try {
     if (store) await store.set(key, Math.max(authority.sequence, (await store.get(key)) ?? -1));
-    await cache.delete(key);
+    await cache.delete(key, expectedRevision, sequence);
   } catch (cause) {
     throw new RegistryUnavailableError(subject, undefined, { message: "cached storage settings could not be invalidated", cause });
   }
@@ -694,7 +724,7 @@ export async function resolveRegistryResource(
   }
   const denyRoute = async (): Promise<never> => {
     if (options.cacheStore) {
-      await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), verdict.sequence);
+      await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), verdict.sequence, verdictRevisions.get(verdict)!);
     }
     throw new NodeNotFoundError(subject, verdict);
   };
@@ -818,7 +848,7 @@ export async function resolveFailClosedTinyCloudHosts(
       hosts = hostsForVerdict(verdict, newUserHost);
     } catch (error) {
       if (error instanceof NodeNotFoundError && error.verdict.status === "registered" && options.cacheStore) {
-        await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence);
+        await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence, verdictRevisions.get(error.verdict)!);
       }
       throw error;
     }
