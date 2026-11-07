@@ -403,8 +403,8 @@ function recordWarnings(warnings) {
   const holder = globalThis;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
-function recordRegistryFallbackWarning() {
-  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" }]);
+function recordRegistryFallbackWarning(_message, reason = "using_default_node") {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
 }
 function drainWarnings() {
   const holder = globalThis;
@@ -434,8 +434,10 @@ function outputJson(data) {
 }
 function warningLine(warnings) {
   const fallback = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
+  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
   const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
   const parts = fallback ? ["registry unavailable; using the default node"] : [];
+  if (cached) parts.push("Storage settings are unreachable; using cached settings checked less than 1 hour ago.");
   if (skipped.length > 0) {
     const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
     const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
@@ -5807,7 +5809,7 @@ function replicaErrorFromService(error, context2, request) {
   if (status !== void 0) {
     return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
   }
-  if (error.code === "NETWORK_ERROR" || /TIMEOUT|ABORT/.test(error.code)) {
+  if (error.code === "NETWORK_ERROR" || error.code === "NODE_NOT_RESPONDING" || /TIMEOUT|ABORT/.test(error.code)) {
     return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context2}: ${error.message}`, detail);
   }
   return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
