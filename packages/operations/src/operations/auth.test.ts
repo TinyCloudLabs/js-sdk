@@ -997,7 +997,6 @@ function ownerAuthFixture(fixture: AuthRuntimeFixture): AuthRuntimeFixture {
 async function signedLoginDelegation(
   fixture: AuthRuntimeFixture,
   runtime: RuntimeOperationContext,
-  audienceJwk?: object,
 ): Promise<PortableDelegation> {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
@@ -1011,7 +1010,7 @@ async function signedLoginDelegation(
     issuedAt: issuedAt.toISOString(),
     expirationTime: new Date(issuedAt.getTime() + 60 * 60_000).toISOString(),
     spaceId: fixture.hermetic.ownerRestorableSession.spaceId,
-    jwk: audienceJwk ?? fixture.hermetic.ownerRestorableSession.jwk as object,
+    jwk: fixture.hermetic.ownerRestorableSession.jwk as object,
   });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -1096,13 +1095,19 @@ test("a verified full-resource registry accepts a grant's current data host whil
 });
 
 test("a held-lock import uses its captured signed-login proof despite caller mutation during local reads", async () => {
-  const fixture = await createAuthRuntimeFixture();
+  const fixture = ownerAuthFixture(await createAuthRuntimeFixture());
   let releaseRead!: () => void;
   const released = new Promise<void>((resolve) => { releaseRead = resolve; });
   let announceRead!: () => void;
   const entered = new Promise<void>((resolve) => { announceRead = resolve; });
   let readSession: { mockRestore(): void } | undefined;
   try {
+    const profile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
+    if (!profile) throw new Error("The signed-login session profile is missing");
+    delete profile.privateKey;
+    await writeJsonAtomic(profileConfigPath(fixture.profile), {
+      ...profile, posture: "delegate-session", operatorType: "agent", authMethod: "openkey",
+    });
     const runtime = await runtimeContext(fixture.profile);
     const requested: PermissionEntry = {
       service: "tinycloud.kv",
@@ -1111,9 +1116,7 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
       actions: ["tinycloud.kv/get"],
     };
     const requestId = await createBoundRequest(runtime, [requested]);
-    const delegation = await signedLoginDelegation(
-      fixture, runtime, (runtime.runtime.node as TinyCloudNode).restorableSession!.jwk as object,
-    );
+    const delegation = await signedLoginDelegation(fixture, runtime);
     const authorization = delegation.delegationHeader.Authorization;
     const expiry = delegation.expiry.getTime();
     const proof = { ...delegation.siweProof! };
