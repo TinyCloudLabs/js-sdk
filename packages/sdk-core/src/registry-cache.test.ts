@@ -736,3 +736,49 @@ test("corrupt browser revisions and revision overflow refuse without removing si
     expect(storage.getItem(key)).toBe(persisted);
   } finally { platform.restore(); }
 });
+
+test("a failed invalidation keeps its runtime fence against an older positive continuation until a new verified lookup", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const raw = await body(0);
+  await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(raw) });
+  const finalRead = Promise.withResolvers<void>(), releaseFinalRead = Promise.withResolvers<void>();
+  const committed = Promise.withResolvers<void>(), releaseUpdate = Promise.withResolvers<void>();
+  let reads = 0, updates = 0, deletions = 0;
+  const cacheStore: RegistryCacheStore = {
+    async get(key) {
+      const number = ++reads;
+      const entry = await backing.get(key);
+      if (number === 3) { finalRead.resolve(); await releaseFinalRead.promise; }
+      return entry;
+    },
+    getRevision: backing.getRevision,
+    async update(key, callback) {
+      const number = ++updates;
+      const entry = await backing.update(key, callback);
+      if (number === 2) { committed.resolve(); await releaseUpdate.promise; }
+      return entry;
+    },
+    async delete(_key, _revision, _maximumSequence) { deletions++; throw new Error("TEST deletion failed"); },
+  };
+  const warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, fetch: answer(raw), onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  try {
+    const denial = resolveRegistryResource(subject, `${space}-unlisted`, "read", options).then(() => undefined, (error: unknown) => error);
+    await finalRead.promise;
+    const older = resolveRegistryResource(subject, space, "read", options).then(() => undefined, (error: unknown) => error);
+    await committed.promise;
+    releaseFinalRead.resolve();
+    expect(await denial).toMatchObject({ code: "registry_unavailable" });
+    expect(deletions).toBe(1);
+    expect(await backing.getRevision(owner.address)).toBe(0);
+    releaseUpdate.resolve();
+    expect(await older).toMatchObject({ code: "registry_unavailable" });
+    await expect(resolveRegistryResource(subject, space, "read", { ...options, fetch: httpFailure(503) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+    expect((await resolveRegistryResource(subject, space, "read", options)).hosts[0]?.nodeDid).toBe(nodeDid);
+    expect((await resolveRegistryResource(subject, space, "read", { ...options, fetch: httpFailure(503) })).hosts[0]?.nodeDid).toBe(nodeDid);
+    expect(warnings).toHaveLength(1);
+    expect(await sequenceStore.get(owner.address)).toBe(0);
+  } finally { releaseFinalRead.resolve(); releaseUpdate.resolve(); }
+});

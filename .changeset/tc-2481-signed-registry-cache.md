@@ -23,6 +23,8 @@ Durable per-owner invalidation revisions fence older in-flight results across ad
 
 Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
 
+Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
 Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
 
 Details: TC-2481
