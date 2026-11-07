@@ -21,6 +21,8 @@ Equal-sequence refreshes renew fetch time only when the verified canonical signe
 
 Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
 
+Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
 Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
 
 Details: TC-2481

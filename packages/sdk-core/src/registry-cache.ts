@@ -86,7 +86,7 @@ function validateRegistryCacheRecord(value: unknown, key: string): RegistryCache
     throw new Error("Invalid registry cache revision");
   }
   if ("invalidated" in value) {
-    if (value.invalidated !== true || !("revision" in value) ||
+    if (value.invalidated !== true || !("revision" in value) || revision === 0 ||
         Object.keys(value).some((field) => field !== "ownerKey" && field !== "revision" && field !== "invalidated")) {
       throw new Error("Invalid registry cache tombstone");
     }

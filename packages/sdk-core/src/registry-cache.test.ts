@@ -717,6 +717,17 @@ test("corrupt browser revisions and revision overflow refuse without removing si
       storage.setItem(key, JSON.stringify({ ...entry, revision }));
       await expect(cache.getRevision(owner.address)).rejects.toThrow("revision");
     }
+    storage.setItem(key, JSON.stringify({ ownerKey: owner.address, revision: 0, invalidated: true }));
+    let requests = 0;
+    const warnings: string[] = [];
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: cache, autoDiscoverLocalNode: false,
+      fetch: Object.assign(async () => { requests++; return new Response("TEST outage", { status: 503 }); }, { preconnect: fetch.preconnect }),
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(requests).toBe(0);
+    expect(warnings).toEqual([]);
+    await expect(cache.getRevision(owner.address)).rejects.toThrow("tombstone");
     const persisted = JSON.stringify({ ...entry, revision: Number.MAX_SAFE_INTEGER });
     storage.setItem(key, persisted);
     await expect(cache.delete(owner.address)).rejects.toThrow("overflow");
