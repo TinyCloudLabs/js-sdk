@@ -21,12 +21,14 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const DATABASE_URL = process.env.TC_REPLICA_E2E_DATABASE_URL || undefined;
 const CLI = process.env.TC_REPLICA_E2E_CLI ?? resolve(import.meta.dir, "../dist/index.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
 const NODE20 = resolve(import.meta.dir, "../test-support/node20.cjs");
+const TEST_BOOTSTRAP = resolve(import.meta.dir, "../../operations/test-support/test-bootstrap.mjs");
 
 type Run = { code: number; stdout: Buffer; stderr: string };
 
@@ -52,6 +54,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
   let host: string;
   let port: number;
   let node: ChildProcess | undefined;
+  let registry: UnregisteredLocationRegistry;
   let space: string;
   let deviceGrantCid: string;
   let supportsRootSync = false;
@@ -102,7 +105,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     const netLog = join(home, "network-attempts.log");
     const child = spawn(
       "node",
-      [...(options.preload ? ["--require", options.preload] : []), CLI, "-q", "--json", "--profile", options.profile, ...args],
+      ["--import", TEST_BOOTSTRAP, ...(options.preload ? ["--require", options.preload] : []), CLI, "-q", "--json", "--profile", options.profile, ...args],
       {
         cwd: home,
         env: { ...ambient, TC_HOME: home, HOME: home, TC_NO_NETWORK_LOG: netLog },
@@ -151,6 +154,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "tc-replica-e2e-home-"));
     dataDir = await mkdtemp(join(tmpdir(), "tc-replica-e2e-node-"));
+    registry = startUnregisteredLocationRegistry();
     port = await freePort();
     host = `http://127.0.0.1:${port}`;
     await startNode();
@@ -163,15 +167,19 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     await stopNode();
     await rm(home, { recursive: true, force: true });
     await rm(dataDir, { recursive: true, force: true });
+    registry?.stop(true);
   });
 
   test("grant, sync, offline restart reads, catch-up and scope", async () => {
     // 1. The owner writes notes and grants a device key get,list,metadata,sync on notes/.
     await ok(["--host", host, "init", "--name", "owner", "--key-only"], "owner");
+    const ownerProfilePath = join(home, ".tinycloud", "profiles", "owner", "profile.json");
+    const ownerProfile = JSON.parse(await readFile(ownerProfilePath, "utf8"));
+    await writeFile(ownerProfilePath, JSON.stringify({ ...ownerProfile, tinycloudRegistryUrl: registry.url.origin }));
     const login = await ok<{ spaceId: string }>(["--host", host, "auth", "login", "--method", "local"], "owner");
     space = login.spaceId;
     for (const [key, bytes] of Object.entries({ ...fixtures, ...outOfScope })) await put(key, bytes);
-    await ok(["profile", "create", "device", "--posture", "delegate-session", "--host", host], "device");
+    await ok(["profile", "create", "device", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin], "device");
     await ok(
       ["auth", "request", "--cap", `tinycloud.kv:${space}:notes/:get,list,metadata,sync`, "--expiry", "30d", "--emit", "req.json"],
       "device",
@@ -280,7 +288,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     expect(await readFile(join(home, "network-attempts.log"), "utf8").catch(() => "")).toBe("");
     await startNode();
     await ok(["--host", host, "auth", "login", "--method", "local", "--replication-prefix", "/", "--replication-allow-secrets"], "owner");
-    await ok(["profile", "create", "root-device", "--posture", "delegate-session", "--host", host], "owner");
+    await ok(["profile", "create", "root-device", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin], "owner");
     await ok(
       ["auth", "request", "--cap", `tinycloud.kv:${space}::get,list,metadata,sync`, "--expiry", "30d", "--emit", "root-request.json"],
       "root-device",
@@ -321,7 +329,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
       const remaining = Date.parse(iso) + 1500 - Date.now();
       if (remaining > 0) await Bun.sleep(remaining);
     };
-    await ok(["profile", "create", "dev2", "--posture", "delegate-session", "--host", host], "dev2");
+    await ok(["profile", "create", "dev2", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin], "dev2");
     const grant = async (actions: string, expiry: string, file: string): Promise<string> => {
       await ok(["auth", "request", "--cap", `tinycloud.kv:${space}:notes/:${actions}`, "--expiry", expiry, "--emit", `${file}.req.json`], "dev2");
       const granted = await tc(["auth", "grant", `${file}.req.json`, "--yes"], { profile: "owner" });
@@ -372,6 +380,7 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
     };
     const owner = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       privateKey: ownerProfile.privateKey,
       autoBootstrapAccount: false,
       autoCreateSpace: true,
