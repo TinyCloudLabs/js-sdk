@@ -35,7 +35,7 @@ export function unregisteredLocationRegistryResponse(
   const headers = new Headers(init?.headers !== undefined
     ? init.headers : input instanceof Request ? input.headers : undefined);
   if (headers.has("authorization")) {
-    throw new Error("Registry fixture metadata requests must not include Authorization");
+    return new Response("Registry fixture metadata requests must not include Authorization", { status: 400 });
   }
   return new Response(REGISTRY_NOT_FOUND_BODY, {
     status: 404,
