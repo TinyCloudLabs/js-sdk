@@ -509,7 +509,7 @@ function warnRegistryFallback(
     if (warned.has(key)) return;
     warned.add(key);
   }
-  const reason = code === "using_default_node" ? "registry unavailable; using the default node"
+  const reason = code === "using_default_node" ? "Couldn't check your storage settings."
     : "Storage settings are unreachable; using cached settings checked less than 1 hour ago.";
   if (onRegistryFallback) onRegistryFallback(reason, code);
   else console.warn(reason);

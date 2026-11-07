@@ -9,8 +9,8 @@ type Output = { owner: string; sequence: number; fetchedAt: number; ageMs: numbe
 
 export const registryShowOperationDefinitions: readonly OperationDefinition<Input, Output>[] = [{
   id: "tinycloud.registry.show", version: 1,
-  title: "Inspect cached registry placement",
-  description: "Read and verify the selected profile's cached signed registry entry without contacting a node or registry.",
+  title: "Show saved storage settings",
+  description: "Check the storage settings saved on this computer. Works offline, no sign-in.",
   input: z.object({ did: z.string().min(1).optional() }).strict(),
   output: z.object({
     owner: z.string(), sequence: z.number().int().nonnegative(), fetchedAt: z.number().int().nonnegative(), ageMs: z.number().nonnegative(),
@@ -26,17 +26,17 @@ export const registryShowOperationDefinitions: readonly OperationDefinition<Inpu
     const summary = context.summary;
     const owner = input.did ?? summary.ownerDid ?? (summary.space ? parseSpaceUri(summary.space)?.owner : undefined) ??
       (summary.posture !== "delegate-session" ? summary.principalDid : undefined);
-    if (!owner) return { status: "error", error: operationError("INPUT_INVALID", "No profile owner is available; specify an owner DID.") };
+    if (!owner) return { status: "error", error: operationError("INPUT_INVALID", "Not sure whose storage settings to show. Sign in, or name the account: tinycloud registry show <account-id>.") };
     try {
       const key = registryOwnerKeyV2(owner);
       const entry = await createProfileRegistryCacheStore(summary.profile).get(key);
-      if (!entry) return { status: "error", error: operationError("REGISTRY_UNAVAILABLE", "No signed registry entry is cached for this owner.") };
+      if (!entry) return { status: "error", error: operationError("REGISTRY_UNAVAILABLE", "This computer hasn't saved storage settings for this account yet.") };
       const remembered = await createProfileRegistrySequenceStore(summary.profile).get(key);
       const verdict = await verifyRegistryCacheEntry(owner, key, entry, remembered);
       const record = verdict.record!;
       return { status: "ok", output: { owner: record.subject, sequence: verdict.sequence, fetchedAt: entry.fetchedAt, ageMs: Math.max(0, Date.now() - entry.fetchedAt), nodes: record.nodes, spaces: record.spaces, encryptionNode: record.encryptionNode } };
     } catch {
-      return { status: "error", error: operationError("REGISTRY_UNAVAILABLE", "The cached signed registry entry could not be verified.") };
+      return { status: "error", error: operationError("REGISTRY_UNAVAILABLE", "The storage settings saved on this computer failed their signature check, so they weren't used.") };
     }
   },
 }];

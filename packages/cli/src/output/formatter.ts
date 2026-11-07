@@ -19,7 +19,7 @@ function warningLine(warnings: readonly OperationWarningOutput[]): string {
   const fallback = warnings.some(({ code, reason }) => code === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
   const cached = warnings.some(({ code, reason }) => code === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
   const skipped = warnings.filter(({ code }) => code !== "REGISTRY_UNAVAILABLE");
-  const parts = fallback ? ["registry unavailable; using the default node"] : [];
+  const parts = fallback ? ["Couldn't check your storage settings."] : [];
   if (cached) parts.push("Storage settings are unreachable; using cached settings checked less than 1 hour ago.");
   if (skipped.length > 0) {
     const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
