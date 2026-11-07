@@ -35,6 +35,7 @@ export const TOOL_NAMES = [
   "tinycloud_apps_read",
   "tinycloud_apps_write",
   "tinycloud_apps_query",
+  "tinycloud_apps_move",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -365,6 +366,16 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     destructiveHint: true,
     openWorldHint: false,
     surfaces: ["hosted", "public"],
+  },
+  {
+    name: "tinycloud_apps_move",
+    operationId: "tinycloud.apps.move",
+    operationVersion: 1,
+    readOnlyHint: false,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+    surfaces: ["hosted"],
   },
 ] as const;
 

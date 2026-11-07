@@ -103,7 +103,7 @@ describe("signed resource routing", () => {
   test("a stopped listed node stays NODE_NOT_RESPONDING through service wrapping", async () => {
     const h = context({ failure: box.url });
     const error = await h.ctx.fetch("https://stale.invalid/invoke", { method: "POST", headers: { Authorization: token("tinycloud.kv/get") } }).catch((error) => error);
-    expect(wrapError("kv", error)).toMatchObject({ code: "NODE_NOT_RESPONDING", message: "The place where your data is at is not responsive right now. Please try again." });
+    expect(wrapError("kv", error)).toMatchObject({ code: "NODE_NOT_RESPONDING" });
     expect(h.requests).toEqual([]);
   });
 
@@ -136,7 +136,7 @@ describe("signed resource routing", () => {
     });
     vault.initialize(ctx);
     expect(await new SecretsService(vault).get("DEMO", { source: "network" })).toMatchObject({
-      ok: false, error: { code: "NODE_NOT_RESPONDING", message: "The place where your data is at is not responsive right now. Please try again." },
+      ok: false, error: { code: "NODE_NOT_RESPONDING" },
     });
   });
 

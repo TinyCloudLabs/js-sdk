@@ -20,4 +20,6 @@ Network-only vault/secret reads now reject typed routing failures from KV or dec
 
 Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
 
+Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
 Details: TC-2481

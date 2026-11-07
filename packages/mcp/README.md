@@ -130,15 +130,42 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
-For personal records, ask naturally: “Log my weight: 80.5 kg today.”
-`tinycloud_apps_context` supplies the rules and catalog, `tinycloud_apps_read`
+For personal records, ask naturally: “Add renew passport to my todos.”
+`tinycloud_apps_context` supplies the rules and the app list (each app with its
+layout), `tinycloud_apps_read`
 reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
 moves or deletes records in ordered batches of up to ten operations.
-`tinycloud_apps_query` refreshes the optional fast copy and queries selected kinds.
-These tools are hosted-only and share the coding-agent skill's
-`xyz.tinycloud.agent-data/` records in the owner's `default` space without a
-local CLI or skill installation. First use requires connect and records approval.
-Records use one prefix grant with get/list/put/delete, not one grant per key.
+`tinycloud_apps_query` refreshes an app's optional fast copy and queries selected
+kinds of that one app.
+These tools are hosted-only and share the coding-agent skill's records without a
+local CLI or skill installation. A new app lives in the owner's `applications`
+space under `xyz.tinycloud.tinyapps.<app>/` with a discovery entry at
+`xyz.tinycloud.tinyapps.catalog/<app>/entry`, as `tc-apps` skill 0.3.10 does.
+An app created earlier in the `default` space under `xyz.tinycloud.agent-data/`
+stays there, readable and writable, until the owner asks to move it:
+`tinycloud_apps_move` (dry run first) copies that app into its new folder
+without overwriting anything, reads it back, and only then adds its discovery
+entry; the older records are never changed or deleted. The move tool is offered on
+the hosted `/mcp` surface; the public ChatGPT plugin (`/chatgpt/mcp`) has a fixed,
+reviewed tool list that does not include it. Apps created earlier keep working in
+place under either surface.
+Approvals are per app, one OpenKey space at a time (OpenKey signs one space per
+delegation). After connect, pass `app` to `tinycloud_apps_context` to approve the
+app's folder and app list together. The first new app needs two requests (the
+bundle, then a read-only look at the older catalog,
+`xyz.tinycloud.agent-data/catalog/`, unless an older grant already covers it);
+later new apps need one. Omitting `app` retains per-call approvals (three for the
+first new app). `access: "read"` requests only read access; the default
+`"change"` also covers adding the app to the list and adding, changing or
+deleting its records. Each grant lasts 30 days, and records use one prefix grant
+per app, not one grant per key.
+For Health Log on hosted `/mcp`, `app: "healthlog"` bundles app-list read
+and Health Log database read/write into one task approval; `access: "read"`
+requests read only. A first meal without `app` retains three task approvals.
+`app: "recipes"` bundles app-list and Recipes-notes reads; its database is
+learned from those notes and SQL read access is requested separately.
+Recipes writes remain unsupported. The public ChatGPT surface has no generic
+SQL tools; the catalog rules direct it to the app link when those tools are absent.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to
@@ -175,8 +202,9 @@ If the owner declines, stop rather than asking again in that conversation.
 
 For larger questions, offer “a fast, searchable copy of your records” after
 answering from KV when no copy is approved. It needs separate approval and is
-optional; KV records remain the source of truth. The exact SQL database is
-`xyz.tinycloud.agent-data.index`, with read/write/schema authority. Writes sync
+optional; KV records remain the source of truth. The SQL database is per app,
+`xyz.tinycloud.tinyapps.<app>/index` (`xyz.tinycloud.agent-data.index` for an
+older app), with read/write/schema authority. Writes sync
 the copy when authorized or mark changed kinds stale; queries rebuild stale
 kinds before answering and return checked per-kind record counts.
 `COPY_PARTIAL` is an `ok` result listing remaining kinds; the next query resumes.

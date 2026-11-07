@@ -1,5 +1,41 @@
 # @tinycloud/operations
 
+## 0.9.0-beta.4
+
+### Minor Changes
+
+- 2a1ac15: The optional personal-app context `app` input accepts `healthlog` and `recipes`. Health Log requests its app-list and database access in one approval, with read-only access when requested. Recipes bundles read access to its notes and requests database reads separately after learning the database name. Tool input descriptions explain `app` and `access`.
+
+  Details: TC-2416
+
+- 2a1ac15: The hosted personal-records rules route meals, food, calories, body weight and recipes to the first-party Health Log and Recipes tiny apps instead of the generic store (the pinned `tc-apps` skill's routing table, now vendored as `TINY-APPS.md`), so a meal saved through the connector lands where the CLI skill puts it. The model logs with fixed, parameterized statements on `xyz.tinycloud.sample.healthlog/healthlog` through `tinycloud_sql_query` and `tinycloud_sql_execute` (`meal` and `weight` tables, `op_id` for idempotence, `day_card` read-back) and reads none of the app's notes, which keeps a first meal at five approvals instead of nine. The first query doubles as the install check: it never installs the app or changes its tables, and when the database or table is missing it tells the owner to open the Health Log tiny-app link once. Recipes are read-only for now (no vetted statements to save one). These tools are not on the public ChatGPT plugin surface, so there the rules say meals and recipes cannot be saved from that connector yet.
+
+  `tinycloud_sql_query` (and the schema inspector) now report a database or table that does not exist as `NODE_ERROR` with `error.details.reason: "sql_database_missing"` and `retryable: false`, instead of a retryable `NODE_ERROR`, and a `404 Space not found` as `NODE_ERROR` with `details.reason: "space_not_hosted"`; permission, quota, network and other SQL errors are unchanged. `tinycloud.apps.context` returns `utc` (the same instant as `now`) for `logged_at`.
+
+  Details: TC-2416
+
+## 0.9.0-beta.3
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+- 592136c: The personal-apps operations follow the `tc-apps` skill 0.3.10 layout, so records saved through the hosted connector land where the CLI skill puts them. A new app is kept in the owner's `applications` space under `xyz.tinycloud.tinyapps.<app>/` (catalog at `<app>/catalog`, kinds at `<app>/catalog/<kind>`, records at `<app>/<kind>/<folder>/<id>`) with a discovery entry at `xyz.tinycloud.tinyapps.catalog/<app>/entry`, written after the app's first kind. Apps already in the older `default` space under `xyz.tinycloud.agent-data/` stay there, readable and writable as before, until a later move (the layout is chosen per app, as the skill's `layout.sh` does). A new app is refused when the older layout already holds it, and a legacy key is refused when its app has moved and the entry is readable. The names `catalog`, `index-stale`, `healthlog` and `recipes` are reserved for new apps.
+
+  Older-layout access to an app also needs the app list (a read of its entry), so a moved app is always recognised, and its older records are no longer served. A discovery entry for an app the older layout still holds is added only by a move (a later change), never by a plain write; a folder that holds another app's `manifest.json` cannot become a generic app, every change to a record in a new-layout app needs the app's catalog record, and a record is not created before the app's discovery entry when the app list is readable.
+
+  Approvals are now per app: `xyz.tinycloud.tinyapps.<app>/` (get, list, put, del), the app list `xyz.tinycloud.tinyapps.catalog/` (get, list, put), and a read-only look at the older catalog `xyz.tinycloud.agent-data/catalog/` (get, list) when an app is created or the app list is read. The fast copy is one SQL database per app, `xyz.tinycloud.tinyapps.<app>/index`.
+
+  What breaks for callers: `tinycloud.apps.query` requires a `layout` (`new` or `legacy`) and one app per call, and the new-layout `entries` view has no `app` column; `tinycloud.apps.context` returns `apps` (app, layout, title, copy) and no longer returns a top-level `copy`; a move now stays inside one app; `tinycloud.apps.read` and `tinycloud.apps.write` accept keys of either layout. The package exports `TC_APPS_LEGACY_ROOT` and `TC_APPS_LEGACY_DATABASE` in place of `TC_APPS_ROOT` and `TC_APPS_DATABASE`.
+  Details: TC-2416
+
+### Patch Changes
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` remain annotated as potentially destructive: context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. They are not read-only. The query accepts one read-only SELECT and does not change canonical records; context only changes the timezone when one is supplied. Only `tinycloud_apps_write` mutates app records.
+  Details: TC-2416
+
 ## 0.8.1-beta.2
 
 ### Patch Changes

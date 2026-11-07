@@ -1,5 +1,50 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.6
+
+### Patch Changes
+
+- 951de44: Use client-neutral guidance on unavailable approval links and log approval GET reason codes with the pathname only.
+  Details: TC-2416
+
+## 0.10.0-beta.5
+
+### Minor Changes
+
+- 2a1ac15: The optional personal-app context `app` input accepts `healthlog` and `recipes`. Health Log requests its app-list and database access in one approval, with read-only access when requested. Recipes bundles read access to its notes and requests database reads separately after learning the database name. Tool input descriptions explain `app` and `access`.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- Updated dependencies [2a1ac15]
+- Updated dependencies [2a1ac15]
+  - @tinycloud/operations@0.9.0-beta.4
+
+## 0.10.0-beta.4
+
+### Minor Changes
+
+- b09d4c0: The hosted personal-records tools keep new apps in the owner's `applications` space under `xyz.tinycloud.tinyapps.<app>/`, with a discovery entry, so records saved through the connector match the CLI skill's (`tc-apps` 0.3.10). Apps already in the `default` space under `xyz.tinycloud.agent-data/` stay there until moved. The approval screens change: first use asks for the app list (`xyz.tinycloud.tinyapps.catalog/`); a new app asks for its own folder (`xyz.tinycloud.tinyapps.<app>/`), then for a read-only look at the older catalog (`xyz.tinycloud.agent-data/catalog/`) unless an older grant covers it, because OpenKey signs one space per delegation; later apps ask for their own folder only. The fast copy is one database per app, `xyz.tinycloud.tinyapps.<app>/index`. `tinycloud_apps_query` now needs a `layout` and one app per call; `tinycloud_apps_context` returns `apps` and `legacy`.
+  Details: TC-2416
+
+## 0.10.0-beta.3
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` remain annotated as potentially destructive: context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. They are not read-only. The query accepts one read-only SELECT and does not change canonical records; context only changes the timezone when one is supplied. Only `tinycloud_apps_write` mutates app records.
+  Details: TC-2416
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
 ## 0.9.1-beta.2
 
 ### Patch Changes

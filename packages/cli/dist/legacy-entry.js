@@ -3055,7 +3055,7 @@ async function readGrantHistory(profile) {
     return raw.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   });
 }
-async function parseCapSpec(spec, profile) {
+async function parseCapSpec(spec, profile, options = {}) {
   const firstColon = spec.indexOf(":");
   const lastColon = spec.lastIndexOf(":");
   if (firstColon <= 0 || lastColon <= firstColon) {
@@ -3078,9 +3078,9 @@ async function parseCapSpec(spec, profile) {
   }
   return (await resolvePermissionSpaces([
     { service, space, path, actions }
-  ], profile))[0];
+  ], profile, options))[0];
 }
-async function loadPermissionRequest(source, profile) {
+async function loadPermissionRequest(source, profile, options = {}) {
   const raw = JSON.parse(await readFile2(source, "utf8"));
   if (!Array.isArray(raw.permissions)) {
     throw new CLIError(
@@ -3089,7 +3089,7 @@ async function loadPermissionRequest(source, profile) {
       ExitCode.USAGE_ERROR
     );
   }
-  return resolvePermissionSpaces(raw.permissions, profile);
+  return resolvePermissionSpaces(raw.permissions, profile, options);
 }
 async function loadManifestPermissions(source, profile, options = {}) {
   const raw = await loadManifestText(source);
@@ -36450,7 +36450,6 @@ async function revokeDelegationOnNode(params) {
         node,
         requested: [revokePermission],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: `Revoke delegation ${cid}`,
         yes: params.yes,
         consentAlreadyGiven: true,
         persist: false,
@@ -36497,7 +36496,6 @@ async function revokeDelegationOnNode(params) {
           actions: ["tinycloud.delegation/revoke"]
         }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes,
         consentAlreadyGiven: true,
         persist: false,
@@ -37410,7 +37408,6 @@ function registerAuthCommand(program, options) {
           shareOrigin: DEFAULT_SHARE_ORIGIN,
           permissions: loginPermissions,
           ...options2.expiry === void 0 ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options2.expiry)) },
-          reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
           expectedOwner: owner,
           replaceSession: options2.replaceSession === true,
           persistHost
@@ -37621,7 +37618,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
-  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
+  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
     `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
   ).option(
@@ -37633,7 +37630,8 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
-      const profile = await ProfileManager.getProfile(ctx.profile);
+      const initialSnapshot = options2.grant ? await readProfileSnapshot(ctx.profile) : void 0;
+      const profile = initialSnapshot?.profile ?? await ProfileManager.getProfile(ctx.profile);
       if (options2.paste && (!options2.grant || options2.device || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--paste requires --grant on an OpenKey owner profile and cannot be combined with --device.", ExitCode.USAGE_ERROR);
       }
@@ -37641,7 +37639,8 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
       }
       const preset = resolveAppsAgentRequest(options2);
-      const requested = preset === void 0 ? await collectRequestedPermissions(options2, ctx.profile) : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
+      const resolutionOptions = { allowLogicalSpaces: true };
+      const requested = preset === void 0 ? await collectRequestedPermissions(options2, ctx.profile, resolutionOptions) : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile, resolutionOptions);
       const expiryOption = preset === void 0 ? parseExpiryOption(options2.expiry) : APPS_AGENT_EXPIRY;
       if (preset !== void 0) process.stderr.write(`
 ${appsAgentScopeNotice(preset.mode, preset.appIds)}
@@ -37666,14 +37665,18 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         await emitPermissionRequestArtifact(artifact, options2.emit);
         return;
       }
-      if (profile.authMethod === "openkey" || options2.device) assertNoCaveatLimits(requested);
-      const node = await ensureAuthenticated(ctx);
-      if (node.hasRuntimePermissions(requested)) {
+      const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
+      const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
+      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options2.device;
+      if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
+      await completeApprovalResult(ctx.profile);
+      let node;
+      if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
+      if (node?.hasRuntimePermissions(requested)) {
         outputJson({ changed: false, missing: [], added: [] });
         return;
       }
-      if (profile.authMethod === "openkey" || options2.device) {
-        const key = await ProfileManager.getKey(ctx.profile);
+      if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) {
         if (!key) {
           throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME20} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
         }
@@ -37698,27 +37701,23 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         for (const [index, group] of groups.entries()) {
           if (notices) process.stderr.write(`${notices.prompts[index]}
 `);
-          const reason = permissionGrantReason(
-            `Grant requested TinyCloud permissions from \`${CLI_NAME20} auth request --grant\`.`,
-            group
-          );
           const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
+          let bootstrapSessionData;
           const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
             let delegationData;
             if (options2.device) {
-              const approval = await acquireDeviceDelegation({
+              const approval2 = await acquireDeviceDelegation({
                 sessionDid: keyToDID(key),
                 jwk: key,
                 nodeOrigin: ctx.host,
                 shareOrigin: DEFAULT_SHARE_ORIGIN,
                 permissions: request,
                 expiry: parseRequestedExpiry(expiryOption ?? "7d"),
-                reason,
                 expectedOwner: pinnedOwner(profile),
                 openkeyHost: resolveDeviceApiHost(profile)
               });
-              declined.push(...approval.declined);
-              delegationData = approval.session;
+              declined.push(...approval2.declined);
+              delegationData = approval2.session;
             } else {
               delegationData = await startAuthFlow(profile.did, {
                 profileName: ctx.profile,
@@ -37726,7 +37725,6 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 jwk: key,
                 host: ctx.host,
                 permissions: request,
-                reason,
                 openkeyHost,
                 expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
                 noPopup: options2.popup === false,
@@ -37735,11 +37733,33 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
               });
             }
             seen.result = delegationData;
-            return portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
+            const approval = verifyOpenKeyApproval(delegationData, request, ctx.host, proof);
+            if (keyOnlyOpenKey && index === 0) bootstrapSessionData = approval.session;
+            return approval.delegation;
           });
+          if (bootstrapSessionData) {
+            const bootstrapProfile = {
+              ...profile,
+              posture: profile.posture ?? "owner-openkey",
+              sessionDid: profile.sessionDid ?? profile.did,
+              authMethod: "openkey",
+              spaceId: delegation.spaceId,
+              ...typeof bootstrapSessionData.ownerDid === "string" ? { ownerDid: bootstrapSessionData.ownerDid } : {}
+            };
+            await commitLogin(ctx.profile, initialSnapshot, {
+              key,
+              session: bootstrapSessionData,
+              profile: bootstrapProfile,
+              durable: true
+            });
+            await completeApprovalResult(ctx.profile, delegation);
+            node = await ensureAuthenticated(ctx);
+          }
           grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
         }
-        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options2.manifest ? "manifest" : "cli");
+        if (!node) node = await ensureAuthenticated(ctx);
+        const runtimeGrants = keyOnlyOpenKey ? grants.slice(1) : grants;
+        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, runtimeGrants, options2.manifest ? "manifest" : "cli");
         const delegationCids2 = grants.map(({ delegation }) => delegation.cid);
         const expiry2 = grants.at(-1)?.delegation.expiry.toISOString();
         reportDeclined(declined);
@@ -37764,6 +37784,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           ExitCode.USAGE_ERROR
         );
       }
+      if (!node) node = await ensureAuthenticated(ctx);
       const delegations = await node.grantRuntimePermissions(
         requested,
         expiryOption !== void 0 ? { expiry: expiryOption } : void 0
@@ -38007,7 +38028,6 @@ ${scope.text}
             parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
             OPENKEY_AGENT_MAX_LIFETIME_MS
           ),
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           exactApproval: true,
           noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
           commandIntent: approvalCommandIntent(parsed),
@@ -38040,7 +38060,6 @@ ${scope.text}
           node,
           requested,
           expiryOption: parsed.requestedExpiry,
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           yes: options2.yes === true || confirmedExtras
         });
         grant = await grantAuthRequest(node, resolvedRequest);
@@ -38453,7 +38472,7 @@ async function acquireOpenKeyApproval(params) {
       jwk: key,
       host: params.ctx.host,
       permissions: request,
-      reason: permissionGrantReason(params.reason, request),
+      ...params.reason === void 0 ? {} : { reason: params.reason },
       openkeyHost: resolveOpenKeyHost(params.profile),
       expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
       noPopup: params.noPopup,
@@ -38550,7 +38569,7 @@ async function ensureDelegationAuthority(params) {
           jwk: key,
           host: params.ctx.host,
           permissions: request,
-          reason: permissionGrantReason(params.reason, group),
+          ...params.reason === void 0 ? {} : { reason: params.reason },
           openkeyHost,
           expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
           noPopup: params.noPopup
@@ -38599,12 +38618,6 @@ function assertOpenKeyAgentRequest(requested) {
     );
   }
 }
-function permissionGrantReason(context2, permissions) {
-  const first = permissions[0];
-  const summary = first ? compactPermission(first) : "no permissions";
-  const more = permissions.length > 1 ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}` : "";
-  return `${context2} Requested: ${summary}${more}.`;
-}
 function execCapturedCommand(command) {
   return new Promise((resolve10, reject) => {
     const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
@@ -38629,16 +38642,19 @@ function execCapturedCommand(command) {
     });
   });
 }
-async function collectRequestedPermissions(options, profile) {
+async function collectRequestedPermissions(options, profile, resolutionOptions = {}) {
   const permissions = [];
   for (const spec of options.cap ?? []) {
-    permissions.push(await parseCapSpec(spec, profile));
+    permissions.push(await parseCapSpec(spec, profile, resolutionOptions));
   }
   if (options.permission) {
-    permissions.push(...await loadPermissionRequest(options.permission, profile));
+    permissions.push(...await loadPermissionRequest(options.permission, profile, resolutionOptions));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, {
+      ...resolutionOptions,
+      device: options.device === true
+    }));
   }
   return permissions;
 }
@@ -39340,7 +39356,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry: openKeyExpiry,
       // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
       ...plainPasteLink ? { expiryChangeable: true } : {},
-      ...permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
+      ...permissions && options.reason ? { reason: options.reason } : {}
     });
     seen.result = delegationData;
     let sanitizedSession;
@@ -40118,7 +40134,6 @@ function registerEnableCommand(program) {
         nodeOrigin: context2.host,
         shareOrigin: DEFAULT_SHARE_ORIGIN,
         permissions: sharePublishingPermissions(),
-        reason: "Allow this TinyCloud CLI profile to publish Share links.",
         replaceSession: options.replaceSession === true,
         persistHost: globalOptions.host !== void 0
       });
@@ -42380,7 +42395,7 @@ var ONBOARD_STEPS = [
   }
 ];
 function registerOnboardCommand(program) {
-  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
+  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
     try {
       const deadlineMs = options.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options.timeout);
       if (options.timeout !== void 0 && typeof options.code === "string" && options.code.trim() !== "") {
@@ -42416,8 +42431,7 @@ function registerOnboardCommand(program) {
           noPopup: true,
           ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } },
           onApprovalRequest: ({ approvalUrl }) => {
-            console.error(`${flow.reason}
-Approve in OpenKey (open the complete link):
+            console.error(`Approve in OpenKey (open the complete link):
 ${approvalUrl}
 ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
           }
@@ -42425,13 +42439,11 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
       };
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         currentStep = index + 1;
-        const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
         const session2 = await ProfileManager.getSession(ctx.profile);
         if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
           const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
             permissions: step.permissions,
             expiry: ONBOARD_EXPIRY,
-            reason,
             persistHost: globalOpts.host !== void 0,
             openKeyAcquisition: acquire,
             ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
@@ -42451,7 +42463,6 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           node: await ensureAuthenticated(ctx),
           requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
           expiryOption: ONBOARD_EXPIRY,
-          reason,
           yes: true,
           exactApproval: true,
           openKeyAcquisition: acquire
@@ -44275,7 +44286,6 @@ async function runSecretOperation(params) {
       node: params.node,
       requested,
       expiryOption: void 0,
-      reason: secretPermissionReason(params.action, params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
@@ -44283,10 +44293,6 @@ async function runSecretOperation(params) {
     })
   );
   return runSecretOperationAttempt(params.label, params.operation);
-}
-function secretPermissionReason(action, name) {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME34} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
 }
 function assertOwnerApprovalPossible(profileName2, profile, action, name, missing = []) {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
@@ -44398,7 +44404,6 @@ async function canonicalSecretGet(params, collect) {
       node,
       requested: first.missing,
       expiryOption: void 0,
-      reason: secretPermissionReason("get", params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,

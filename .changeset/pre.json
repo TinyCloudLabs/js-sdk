@@ -32,6 +32,15 @@
     "signout-local-first-fence",
     "space-hosting-probe-node-sdk",
     "space-hosting-probe-web-sdk",
-    "tc2380-q2"
+    "tc-2416-app-task-bundle",
+    "tc-2416-apps-context-annotation",
+    "tc-2416-apps-layout",
+    "tc-2416-catalog-bundles",
+    "tc-2416-catalog-routing",
+    "tc-2416-connect-unavailable",
+    "tc-2416-mcp-layout",
+    "tc-2490-cli-reason",
+    "tc2380-q2",
+    "tidy-names-openkey-grant"
   ]
 }

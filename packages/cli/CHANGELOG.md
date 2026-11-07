@@ -1,5 +1,38 @@
 # @tinycloud/cli
 
+## 1.6.3-beta.6
+
+### Patch Changes
+
+- 8bb35f2: Preserve named permission spaces in `tc auth request` until the owner resolves them, including `--grant` from a key-only profile.
+
+  Details: TC-2473
+
+## 1.6.3-beta.5
+
+### Patch Changes
+
+- 68a8bd1: Omit generated OpenKey approval reasons when no explicit reason was provided.
+
+  Details: TC-2490
+
+## 1.6.3-beta.4
+
+### Patch Changes
+
+- Updated dependencies [2a1ac15]
+- Updated dependencies [2a1ac15]
+  - @tinycloud/operations@0.9.0-beta.4
+
+## 1.6.3-beta.3
+
+### Patch Changes
+
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
 ## 1.6.3-beta.2
 
 ### Patch Changes

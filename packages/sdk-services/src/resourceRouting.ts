@@ -41,7 +41,7 @@ export async function verifyResourceDestination(target: ResourceDestination, fet
 export class NodeNotRespondingError extends Error {
   readonly code = "NODE_NOT_RESPONDING";
   constructor(readonly hosts: readonly string[], readonly cause?: unknown) {
-    super("The place where your data is at is not responsive right now. Please try again.");
+    super("The place your data is stored isn't responding right now. Please try again.");
     this.name = "NodeNotRespondingError";
   }
 }

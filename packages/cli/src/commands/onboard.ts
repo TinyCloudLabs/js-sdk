@@ -55,7 +55,7 @@ export const ONBOARD_STEPS: ReadonlyArray<{
 export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
-    .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
+    .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (options, cmd) => {
@@ -93,20 +93,18 @@ export function registerOnboardCommand(program: Command): void {
             ...flow, profileName: ctx.profile, noPopup: true,
             ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } }),
             onApprovalRequest: ({ approvalUrl }) => {
-              console.error(`${flow.reason}\nApprove in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
+              console.error(`Approve in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
             },
           });
         };
 
         for (const [index, step] of ONBOARD_STEPS.entries()) {
           currentStep = index + 1;
-          const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
           const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
             const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
               permissions: step.permissions,
               expiry: ONBOARD_EXPIRY,
-              reason,
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
               ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
@@ -123,7 +121,6 @@ export function registerOnboardCommand(program: Command): void {
             node: await ensureAuthenticated(ctx),
             requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
             expiryOption: ONBOARD_EXPIRY,
-            reason,
             yes: true,
             exactApproval: true,
             openKeyAcquisition: acquire,

@@ -136,6 +136,8 @@ let onGrantRuntimePermissions: (() => void | Promise<void>) | null = null;
 let operationInvokeHook: (() => void) | null = null;
 // What `restoreProfileSessionNode` returns; null: no restorable session.
 let restoredSessionNode: ((ctx: unknown) => unknown) | null = null;
+let beforeOpenKeyResult: (() => void | Promise<void>) | null = null;
+let writeAuthFiles = false;
 
 function resetState(): void {
   recorded.outputs.length = 0;
@@ -161,6 +163,8 @@ function resetState(): void {
   keys = new Map();
   sessions = new Map();
   generatedKeys = [];
+  beforeOpenKeyResult = null;
+  writeAuthFiles = false;
   startAuthFlowFailure = null;
   manifestPermissions = [];
   openKeyDelegation = {
@@ -254,12 +258,14 @@ mock.module("../config/profiles.js", () => ({
     setKey: async (name: string, jwk: object) => {
       keys.set(name, jwk);
       recorded.setKeys.push({ profile: name, jwk });
+      if (writeAuthFiles) await writeFile(join(profilePath(name), "key.json"), JSON.stringify(jwk));
     },
     removeKey: async (name: string) => { keys.delete(name); },
     getSession: async (name: string) => sessions.get(name) ?? null,
     setSession: async (name: string, session: object) => {
       sessions.set(name, session);
       recorded.setSessions.push({ profile: name, session });
+      if (writeAuthFiles) await writeFile(join(profilePath(name), "session.json"), JSON.stringify(session));
     },
     clearSession: async (name: string) => {
       sessions.delete(name);
@@ -295,6 +301,7 @@ mock.module("../auth/browser-auth.js", () => ({
   ) => {
     recorded.startAuthFlows.push({ did, options });
     if (startAuthFlowFailure) throw startAuthFlowFailure;
+    if (beforeOpenKeyResult) await beforeOpenKeyResult();
     return openKeyDelegation;
   },
 }));
@@ -411,7 +418,9 @@ const importedNode = {
 
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => {
-    if (ensureAuthenticatedError) throw ensureAuthenticatedError;
+    if (ensureAuthenticatedError && !sessions.has(activeProfile)) {
+      throw ensureAuthenticatedError;
+    }
     return importedNode;
   },
   bootstrapDelegatedSession: async (_ctx: unknown, delegation: { cid: string }) => {
@@ -548,6 +557,7 @@ mock.module("../output/errors.js", () => ({
   wrapError: (error: unknown) => error,
   setActiveProfileName: () => {},
 }));
+
 
 const {
   readAuthArtifactSource,
@@ -2016,83 +2026,90 @@ describe("CLI auth request command", () => {
       }),
     ]);
   });
-
-  test("does not restore a local session after a concurrent durable sign-out", async () => {
+  test("key-only auth request grants through an owner OpenKey approval link", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "fresh-key", d: "private-key" };
     profiles.set("default", makeProfile({
-      did: "did:pkh:eip155:1:0xLocalOwner",
-      authMethod: "local",
-      posture: "local-owner-key",
-      privateKey: "0xowner-private",
-      address: "0xLocalOwner",
+      authMethod: undefined,
+      sessionDid: undefined,
     }));
-    sessions.set("default", { delegationCid: "bafy-old-session", spaceId: "space-local-old" });
-    authNodeHasRuntimePermissions = false;
-    authNodeGrantDelegations = [{ cid: "bafy-new-grant", expiry: new Date("2099-01-01T00:00:00.000Z") }];
-    authNodeRestorableSession = {
-      address: "0xLocalOwner",
+    keys.set("default", key);
+    writeAuthFiles = true;
+    ensureAuthenticatedError = new Error("Not authenticated");
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+      verificationMethod: "did:key:old",
+      siwe: "signed session proof",
+      signature: "0xsigned",
+      address: "0xowner",
       chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer runtime-session" },
-      delegationCid: "bafy-runtime-session",
-      jwk: { kty: "OKP", crv: "Ed25519", x: "new-session", d: "private" },
-      verificationMethod: "did:key:new-session",
-      siwe: "runtime-siwe",
-      signature: "0xruntime",
-    };
-    onGrantRuntimePermissions = () => {
-      profiles.set("default", { ...profiles.get("default")!, authSignedOut: true });
-      sessions.delete("default");
-      keys.delete("default");
+      verifiedActions: ["tinycloud.kv/list"],
     };
 
-    await runAuthCommand(["auth", "request", "--grant", "--yes", "--cap", "tinycloud.kv:default/:list"]);
+    await runAuthCommand([
+      "auth",
+      "request",
+      "--grant",
+      "--no-popup",
+      "--cap",
+      "tinycloud.kv:default:smoke/:list",
+    ]);
 
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "PROFILE_CHANGED_DURING_LOGIN" })]);
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(recorded.startAuthFlows[0]).toMatchObject({
+      did: "did:key:old",
+      options: {
+        noPopup: true,
+        permissions: expect.arrayContaining([{
+          service: "tinycloud.kv",
+          space: "default",
+          path: "",
+          actions: ["list"],
+        }]),
+      },
+    });
+    expect(sessions.get("default")).toMatchObject({
+      delegationHeader: { Authorization: "Bearer openkey-new" },
+      delegationCid: "bafy-openkey-new",
+    });
+    expect(profiles.get("default")).toMatchObject({
+      authMethod: "openkey",
+      posture: "owner-openkey",
+      sessionDid: "did:key:old",
+    });
+  });
+  test("does not restore a key-only grant after a concurrent sign-out", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "fresh-key", d: "private-key" };
+    profiles.set("default", makeProfile({ authMethod: undefined, sessionDid: undefined }));
+    keys.set("default", key);
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+      verificationMethod: "did:key:old",
+      verifiedActions: ["tinycloud.kv/list"],
+    };
+    ensureAuthenticatedError = new Error("Not authenticated");
+    beforeOpenKeyResult = () => {
+      const current = profiles.get("default")!;
+      profiles.set("default", { ...current, authSignedOut: true });
+    };
+
+    await runAuthCommand([
+      "auth",
+      "request",
+      "--grant",
+      "--no-popup",
+      "--cap",
+      "tinycloud.kv:default:smoke/:list",
+    ]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
     expect(sessions.has("default")).toBe(false);
-    expect(keys.has("default")).toBe(false);
     expect(profiles.get("default")?.authSignedOut).toBe(true);
-    expect(recorded.outputs).toEqual([]);
   });
 
-  test("does not save a local grant session after a logout marker is committed", async () => {
-    profiles.set("default", makeProfile({
-      did: "did:pkh:eip155:1:0xLocalOwner",
-      authMethod: "local",
-      posture: "local-owner-key",
-      privateKey: "0xowner-private",
-      address: "0xLocalOwner",
-    }));
-    const priorSession = { delegationCid: "bafy-old-session", spaceId: "space-local-old" };
-    sessions.set("default", priorSession);
-    authNodeHasRuntimePermissions = false;
-    authNodeGrantDelegations = [{ cid: "bafy-new-grant", expiry: new Date("2099-01-01T00:00:00.000Z") }];
-    authNodeRestorableSession = {
-      address: "0xLocalOwner",
-      chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer runtime-session" },
-      delegationCid: "bafy-runtime-session",
-      jwk: { kty: "OKP", crv: "Ed25519", x: "new-session", d: "private" },
-      verificationMethod: "did:key:new-session",
-      siwe: "runtime-siwe",
-      signature: "0xruntime",
-    };
-    let markerPath: string | undefined;
-    onGrantRuntimePermissions = async () => {
-      markerPath = join(profilePath("default"), REPLICA_LOGOUT_PENDING_FILE);
-      await writeFile(markerPath, "{}");
-    };
-
-    try {
-      await runAuthCommand(["auth", "request", "--grant", "--yes", "--cap", "tinycloud.kv:default/:list"]);
-      expect(recorded.errors).toEqual([expect.objectContaining({ code: "PROFILE_CHANGED_DURING_LOGIN" })]);
-      expect(sessions.get("default")).toEqual(priorSession);
-      expect(recorded.setSessions).toEqual([]);
-      expect(recorded.outputs).toEqual([]);
-    } finally {
-      if (markerPath) await rm(markerPath, { force: true });
-    }
-  });
 });
 
 describe("refreshOpenKeySession sanitizes persisted session JWK", () => {

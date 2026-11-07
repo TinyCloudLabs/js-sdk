@@ -1,129 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import type { OperationDefinition, RuntimeOperationContext } from "../contract.js";
-import { additionalDelegationsPath, withTinyCloudStateRoot, writeJsonAtomic } from "../state.js";
-import { TC_APPS_DATABASE, TC_APPS_ROOT as R, tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
+import type { RuntimeOperationContext } from "../contract.js";
+import { additionalDelegationsPath, writeJsonAtomic } from "../state.js";
+import { TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT as R, tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
 import { appsNow, appsTimezone, withLocalOffset } from "../tc-apps/state.js";
-import type { AppsKv, KvResult, KvValue } from "../tc-apps/kv.js";
-import { appsOperationDefinitions, type ContextOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
 import { checkCopyKinds, copyRowChunks, COPY_INSERT, COPY_DELETE, COPY_REQUEST_LIMIT, syncCopyRows, type AppsDatabase, type CopyRow } from "../tc-apps/copy.js";
 import { copyFailure } from "../tc-apps/copy.js";
-
-const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
-const app = { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" };
-const kind = { app: "fitness", kind: "weight", about: "Body weight", shape: "log", per: "day", v: 1, fields: { kg: "number" }, created: "2026-10-14" };
-const itemKind = { ...kind, kind: "goal", shape: "item", per: undefined, states: ["open", "done"] };
-const key = `${R}fitness/weight/2026-10/2026-10-14`;
-type Outputs = { context: ContextOutput; read: ReadOutput; write: WriteOutput; query: QueryOutput };
-function definition<N extends keyof Outputs>(name: N) {
-  const found = appsOperationDefinitions.find((entry) => entry.id === `tinycloud.apps.${name}`);
-  if (!found) throw new Error(`Missing ${name}`);
-  // The literal operation ID selects the corresponding input/output pair.
-  const operation = found as unknown as OperationDefinition<unknown, Outputs[N]>;
-  return {
-    ...operation,
-    async execute(context: RuntimeOperationContext, input: unknown) {
-      const result = await operation.execute(context, input);
-      return {
-        status: result.status,
-        get output() {
-          if (result.status !== "ok") throw new Error(`Expected ok, got ${result.status}`);
-          return result.output;
-        },
-        get error() {
-          if (result.status !== "error") throw new Error(`Expected error, got ${result.status}`);
-          return result.error;
-        },
-      };
-    },
-  };
-}
-function etag(number: number): string { return `"blake3-${number.toString(16).padStart(64, "0")}"`; }
-function failure(code: string): KvResult<KvValue> { return { ok: false, error: { code } }; }
-class FakeKv implements AppsKv {
-  readonly values = new Map<string, { text: string; etag: string }>();
-  readonly writes: { key: string; bytes: Uint8Array; options: { ifMatch?: string; ifNoneMatch?: "*" } }[] = [];
-  readonly reads: string[][] = [];
-  readonly lists: { prefix: string; limit: number; cursor?: string }[] = [];
-  readonly deletes: { key: string; options: { ifMatch?: string } }[] = [];
-  putFailure?: (key: string) => string | undefined;
-  deleteFailure?: string;
-  beforePut?: (key: string) => void;
-  listPages?: string[][];
-  pageSize = 1000;
-  omitReadEtag = false;
-  serial = 0;
-  seed(key: string, value: unknown) {
-    const entry = { text: JSON.stringify(value), etag: etag(++this.serial) };
-    this.values.set(key, entry);
-    return entry.etag;
-  }
-  async list(options: { prefix: string; limit: number; cursor?: string }) {
-    this.lists.push(options);
-    const page = Number(options.cursor ?? 0);
-    const all = [...this.values.keys()].filter((key) => key.startsWith(options.prefix));
-    const keys = this.listPages?.[page] ?? all.slice(page * this.pageSize, (page + 1) * this.pageSize);
-    const more = this.listPages ? page + 1 < this.listPages.length : (page + 1) * this.pageSize < all.length;
-    const nextCursor = more ? String(page + 1) : undefined;
-    return { ok: true as const, data: { keys, nextCursor, truncated: nextCursor !== undefined } };
-  }
-  async batchGet(keys: string[]) {
-    this.reads.push(keys);
-    return { ok: true as const, data: { results: keys.map((key) => {
-      const entry = this.values.get(key);
-      return { key, result: entry ? { ok: true as const, data: { data: entry.text, headers: this.omitReadEtag ? {} : { etag: entry.etag } } } : failure("KV_NOT_FOUND") };
-    }) } };
-  }
-  async put(key: string, bytes: Uint8Array, options: { ifMatch?: string; ifNoneMatch?: "*" }): Promise<KvResult<KvValue>> {
-    this.writes.push({ key, bytes, options });
-    this.beforePut?.(key);
-    const refused = this.putFailure?.(key);
-    if (refused) return failure(refused);
-    const current = this.values.get(key);
-    if ((options.ifNoneMatch && current) || (options.ifMatch && current?.etag !== options.ifMatch)) return failure("KV_PRECONDITION_FAILED");
-    const stored = { text: new TextDecoder().decode(bytes), etag: etag(++this.serial) };
-    this.values.set(key, stored);
-    return { ok: true, data: { data: undefined, headers: { etag: stored.etag } } };
-  }
-  async delete(key: string, options: { ifMatch?: string }): Promise<KvResult<KvValue>> {
-    this.deletes.push({ key, options });
-    if (this.deleteFailure) return failure(this.deleteFailure);
-    const current = this.values.get(key);
-    if (!current) return failure("KV_NOT_FOUND");
-    if (options.ifMatch && options.ifMatch !== current.etag) return failure("KV_PRECONDITION_FAILED");
-    this.values.delete(key);
-    return { ok: true, data: { data: undefined, headers: {} } };
-  }
-}
-async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext) => Promise<void>, timezone: string | null = "Europe/Berlin") {
-  const root = await mkdtemp(join(tmpdir(), "tc-apps-test-"));
-  try {
-    await withTinyCloudStateRoot(root, async () => {
-      const kv = new FakeKv();
-      kv.seed(`${R}catalog/fitness`, app);
-      kv.seed(`${R}catalog/fitness/weight`, kind);
-      const context: RuntimeOperationContext = {
-        summary: { profile: "apps", host: "https://node.example", posture: "delegate-session", space: SPACE },
-        runtime: { granted: [], node: { kvForSpace: (space: string) => { expect(space).toBe(SPACE); return kv; } } },
-      };
-      if (timezone) await appsTimezone("apps", timezone);
-      await run(kv, context);
-    });
-  } finally { await rm(root, { recursive: true, force: true }); }
-}
-async function write(context: RuntimeOperationContext, ops: unknown[]) {
-  const result = await definition("write").execute(context, { ops });
-  if (result.status === "ok") expect(definition("write").output.safeParse(result.output).success).toBe(true);
-  return result;
-}
+import { app, definition, FakeSql, fixture, itemKind, key, kind, LEGACY_ROOT_GRANT, SPACE, withGrants, withSql, write } from "./apps.fixtures.js";
 
 describe("personal apps records", () => {
-  test("every operation requests one full records-prefix grant, and approval text matches only its exact scopes", async () => {
+  test("legacy records need one full records-prefix grant for read and write, and approval text matches only its exact scopes", async () => {
     await fixture(async (_kv, context) => {
-      for (const name of ["context", "read", "write"] as const) {
-        const permissions = await definition(name).authority(context, {});
+      const inputs = { read: { keys: [key] }, write: { ops: [{ op: "put", key, value: { data: {} } }] } };
+      for (const name of ["read", "write"] as const) {
+        const permissions = await definition(name).authority(context, inputs[name] as never);
         expect(permissions).toEqual([{ service: "tinycloud.kv", space: SPACE, path: R, actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] }]);
         expect(tcAppsApprovalReason(permissions)).toContain("30 days");
         expect(tcAppsApprovalMessage(permissions)).toContain("OpenKey");
@@ -135,24 +24,25 @@ describe("personal apps records", () => {
   });
   test("context returns records rules, persists a tenant-local timezone, and reads catalog only through forty keys", async () => {
     await fixture(async (kv, context) => {
-      const first = await definition("context").execute(context, {});
+      const readable = withGrants(context, [LEGACY_ROOT_GRANT]);
+      const first = await definition("context").execute(readable, {});
       expect(first.output.timezone).toBeNull();
       expect(first.output.now).toMatch(/\+00:00$/);
       expect(first.output.catalog.records).toHaveLength(2);
-      expect(first.output.copy).toBe("none");
-      const zoned = await definition("context").execute(context, { timezone: "America/New_York" });
+      expect(first.output.apps).toEqual([{ app: "fitness", layout: "legacy", title: "Fitness", copy: "none" }]);
+      const zoned = await definition("context").execute(readable, { timezone: "America/New_York" });
       expect(zoned.output.timezone).toBe("America/New_York");
       expect(await appsTimezone("apps")).toBe("America/New_York");
       expect(await appsTimezone("another")).toBeNull();
-      expect((await definition("context").execute(context, { timezone: "not/a-zone" })).error.code).toBe("INPUT_INVALID");
-      const permissions = [{ service: "tinycloud.sql", space: SPACE, path: TC_APPS_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] }];
+      expect((await definition("context").execute(readable, { timezone: "not/a-zone" })).error.code).toBe("INPUT_INVALID");
+      const permissions = [{ service: "tinycloud.sql", space: SPACE, path: TC_APPS_LEGACY_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] }];
       await writeJsonAtomic(additionalDelegationsPath("apps"), [{ permissions, delegation: { expiry: "2000-01-01T00:00:00Z" } }]);
-      expect((await definition("context").execute(context, {})).output.copy).toBe("expired");
+      expect((await definition("context").execute(readable, {})).output.apps[0]?.copy).toBe("expired");
       await writeJsonAtomic(additionalDelegationsPath("apps"), [{ permissions, delegation: { expiry: "2999-01-01T00:00:00Z" } }]);
-      expect((await definition("context").execute(context, {})).output.copy).toBe("present");
+      expect((await definition("context").execute(readable, {})).output.apps[0]?.copy).toBe("present");
       kv.listPages = [Array.from({ length: 41 }, (_, i) => `${R}catalog/app-${i}`)];
       const reads = kv.reads.length;
-      expect((await definition("context").execute(context, {})).output.catalog.records).toBeUndefined();
+      expect((await definition("context").execute(readable, {})).output.catalog.records).toBeUndefined();
       expect(kv.reads.length).toBe(reads);
     }, null);
   });
@@ -346,57 +236,11 @@ describe("personal apps records", () => {
       kv.seed(key, { v: 1, at: "2026-10-14", data: { kg: 70 } });
       kv.omitReadEtag = true;
       expect((await definition("read").execute(context, { keys: [key] })).error.code).toBe("NODE_ERROR");
-      expect((await definition("context").execute(context, {})).error.code).toBe("NODE_ERROR");
+      expect((await definition("context").execute(withGrants(context, [LEGACY_ROOT_GRANT]), {})).error.code).toBe("NODE_ERROR");
     });
   });
 });
 
-class FakeSql {
-  readonly rows = new Map<string, unknown>();
-  readonly calls: { sql: string; params: unknown[] }[] = [];
-  table = true;
-  view = true;
-  failures: { code: string; message?: string; meta?: { status: number } }[] = [];
-  afterInsert?: () => void;
-  // The fake implements only the query/execute surface exercised by the copy.
-  handle(): AppsDatabase { return this as unknown as AppsDatabase; }
-  async execute(sql: string, params: unknown[] = []) {
-    this.calls.push({ sql, params });
-    const failure = this.failures.shift();
-    if (failure) return { ok: false as const, error: failure };
-    if (sql.startsWith("CREATE TABLE")) this.table = true;
-    else if (sql.startsWith("CREATE VIEW")) this.view = true;
-    else if (!this.table) return { ok: false as const, error: { code: "SQL_ERROR", message: "no such table: records", meta: { status: 400 } } };
-    else if (sql === COPY_INSERT || sql === COPY_DELETE) {
-      const rows = JSON.parse(String(params[0])) as CopyRow[];
-      for (const row of rows) {
-        if (sql === COPY_INSERT && row.r !== undefined) this.rows.set(row.k, row.r);
-        if (sql === COPY_DELETE && row.r === undefined) this.rows.delete(row.k);
-      }
-      if (sql === COPY_INSERT) this.afterInsert?.();
-    } else if (sql.startsWith("DELETE FROM records WHERE instr")) {
-      for (const key of this.rows.keys()) if (key.startsWith(String(params[0]))) this.rows.delete(key);
-    } else throw new Error(`Unexpected fake SQL: ${sql}`);
-    return { ok: true as const, data: { changes: 1, lastInsertRowId: null } };
-  }
-  async query(sql: string, params: unknown[] = []) {
-    this.calls.push({ sql, params });
-    const failure = this.failures.shift();
-    if (failure) return { ok: false as const, error: failure };
-    if (!this.table || (!this.view && sql.includes("entries"))) return { ok: false as const, error: { code: "SQL_ERROR", message: "no such table: entries", meta: { status: 400 } } };
-    if (sql.startsWith("SELECT count(*)")) {
-      const count = [...this.rows.keys()].filter((key) => key.startsWith(String(params[0]))).length;
-      return { ok: true as const, data: { columns: ["n"], rows: [[count]], rowCount: 1 } };
-    }
-    return { ok: true as const, data: { columns: ["answer"], rows: [[params[0] ?? 42]], rowCount: 1 } };
-  }
-}
-function withSql(context: RuntimeOperationContext, sql: FakeSql, granted = true): RuntimeOperationContext {
-  return { ...context, runtime: { ...context.runtime,
-    granted: granted ? [{ service: "tinycloud.sql", space: SPACE, path: TC_APPS_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] }] : [],
-    node: { ...context.runtime.node as object, sqlForSpace: () => ({ db: () => sql.handle() }) },
-  } };
-}
 const weightKind = { app: "fitness", kind: "weight" };
 const staleKey = `${R}index-stale/fitness/weight`;
 
@@ -494,7 +338,7 @@ describe("personal apps fast copy", () => {
       const sql = new FakeSql();
       sql.table = false;
       sql.view = false;
-      const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: "SELECT ? AS answer FROM entries", params: ["bound value"] });
+      const result = await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [weightKind], sql: "SELECT ? AS answer FROM entries", params: ["bound value"] });
       expect(result.output).toEqual({ kinds: [{ ...weightKind, records: 205 }], columns: ["answer"], rows: [["bound value"]], rowCount: 1 });
       expect([...sql.rows.keys()]).toEqual(keys);
       expect(kv.reads.every((batch) => batch.length <= 100)).toBe(true);
@@ -507,13 +351,13 @@ describe("personal apps fast copy", () => {
       kv.seed(key, value);
       const sql = new FakeSql();
       sql.rows.set(key, { data: { kg: 60 } });
-      expect(await checkCopyKinds(kv, sql.handle(), [weightKind])).toEqual({ kinds: [{ ...weightKind, records: 1 }] });
+      expect(await checkCopyKinds(kv, sql.handle(), "legacy", [weightKind])).toEqual({ kinds: [{ ...weightKind, records: 1 }] });
       expect(sql.rows.get(key)).toEqual({ data: { kg: 60 } });
       kv.seed(staleKey, { since: "2026-10-14" });
-      await checkCopyKinds(kv, sql.handle(), [weightKind]);
+      await checkCopyKinds(kv, sql.handle(), "legacy", [weightKind]);
       expect(sql.rows.get(key)).toEqual(value);
       sql.rows.set(`${key}-obsolete`, {});
-      await checkCopyKinds(kv, sql.handle(), [weightKind]);
+      await checkCopyKinds(kv, sql.handle(), "legacy", [weightKind]);
       expect([...sql.rows.keys()]).toEqual([key]);
       expect(kv.values.has(staleKey)).toBe(false);
     });
@@ -523,7 +367,7 @@ describe("personal apps fast copy", () => {
       kv.seed(key, { data: {} });
       const sql = new FakeSql();
       sql.afterInsert = () => { kv.seed(staleKey, { since: "2026-10-15" }); };
-      await expect(checkCopyKinds(kv, sql.handle(), [weightKind])).rejects.toThrow();
+      await expect(checkCopyKinds(kv, sql.handle(), "legacy", [weightKind])).rejects.toThrow();
       expect(JSON.parse(kv.values.get(staleKey)!.text)).toEqual({ since: "2026-10-15" });
     });
   });
@@ -531,7 +375,7 @@ describe("personal apps fast copy", () => {
     await fixture(async (kv) => {
       kv.seed(key, "not a record object");
       const sql = new FakeSql();
-      await expect(checkCopyKinds(kv, sql.handle(), [weightKind])).rejects.toThrow();
+      await expect(checkCopyKinds(kv, sql.handle(), "legacy", [weightKind])).rejects.toThrow();
       expect(kv.values.has(staleKey)).toBe(true);
       expect(sql.rows.has(key)).toBe(false);
     });
@@ -541,7 +385,7 @@ describe("personal apps fast copy", () => {
       kv.seed(key, { data: {} });
       const sql = new FakeSql();
       sql.afterInsert = () => { kv.seed(`${key}-new`, { data: {} }); };
-      await expect(checkCopyKinds(kv, sql.handle(), [weightKind])).rejects.toThrow();
+      await expect(checkCopyKinds(kv, sql.handle(), "legacy", [weightKind])).rejects.toThrow();
       expect(kv.values.has(staleKey)).toBe(true);
     });
   });
@@ -552,7 +396,7 @@ describe("personal apps fast copy", () => {
       const sql = new FakeSql();
       sql.rows.set(key, value);
       sql.view = false;
-      const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: "SELECT ? FROM entries", params: [72] });
+      const result = await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [weightKind], sql: "SELECT ? FROM entries", params: [72] });
       expect(result.output).toEqual({ kinds: [{ ...weightKind, records: 1 }], columns: ["answer"], rows: [[72]], rowCount: 1 });
       expect(sql.rows.get(key)).toEqual(value);
       expect(kv.writes).toEqual([]);
@@ -564,8 +408,8 @@ describe("personal apps fast copy", () => {
       const sql = new FakeSql();
       let now = 0;
       sql.afterInsert = () => { now = 60_000; };
-      const remaining = [{ app: "fitness", kind: "lift" }, { app: "todos", kind: "todo" }];
-      expect(await checkCopyKinds(kv, sql.handle(), [weightKind, ...remaining], () => now)).toEqual({ outcome: "COPY_PARTIAL", remaining });
+      const remaining = [{ app: "fitness", kind: "lift" }, { app: "fitness", kind: "goal" }];
+      expect(await checkCopyKinds(kv, sql.handle(), "legacy", [weightKind, ...remaining], () => now)).toEqual({ outcome: "COPY_PARTIAL", remaining });
       expect(sql.rows.has(key)).toBe(true);
       expect(kv.values.has(staleKey)).toBe(false);
       for (const kind of remaining) expect(kv.values.has(`${R}index-stale/${kind.app}/${kind.kind}`)).toBe(true);
@@ -576,18 +420,18 @@ describe("personal apps fast copy", () => {
     await fixture(async (_kv, context) => {
       const sql = new FakeSql();
       for (const statement of ["DELETE FROM records", "SELECT 1; SELECT 2", "PRAGMA table_info(records)", "WITH x AS (SELECT 1) DELETE FROM records"]) {
-        const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: statement });
+        const result = await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [weightKind], sql: statement });
         expect(result.error.code).toBe("INPUT_INVALID");
       }
       expect(sql.calls).toEqual([]);
-      expect((await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: "WITH x AS (SELECT 1) SELECT * FROM x" })).status).toBe("ok");
+      expect((await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [weightKind], sql: "WITH x AS (SELECT 1) SELECT * FROM x" })).status).toBe("ok");
     });
   });
   test("409 is nonretryable copy_unavailable, without an approval or retry loop", async () => {
     await fixture(async (kv, context) => {
       const sql = new FakeSql();
       sql.failures.push({ code: "NETWORK_ERROR", meta: { status: 409 } });
-      const result = await definition("query").execute(withSql(context, sql), { kinds: [weightKind], sql: "SELECT 1" });
+      const result = await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [weightKind], sql: "SELECT 1" });
       expect(result.error.code).toBe("NODE_ERROR");
       expect(result.error.retryable).toBe(false);
       expect(result.error.details).toEqual({ reason: "copy_unavailable" });

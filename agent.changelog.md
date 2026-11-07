@@ -3,6 +3,14 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-03
+
+- TC-2416: context accepts Health Log and Recipes catalog slugs, bundling
+  the known per-app task scopes and explaining read/change inputs in the schema.
+
+- TC-2416: personal-app context optionally bundles the named app and app list;
+  documented change/read access and reuse of read-only folder grants.
+
 ## 2026-11-02
 
 - Added explicit reusable read-scope consent, cursor-preserving discovery and

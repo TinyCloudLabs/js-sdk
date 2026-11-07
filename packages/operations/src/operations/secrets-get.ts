@@ -24,7 +24,7 @@ import {
 } from "../secrets.js";
 
 const NODE_NOT_RESPONDING_MESSAGE =
-  "The place where your data is at is not responsive right now. Please try again.";
+  "The place your data is stored isn't responding right now. Please try again.";
 
 interface SecretsGetOutput {
   readonly value: string;

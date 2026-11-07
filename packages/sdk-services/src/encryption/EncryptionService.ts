@@ -80,7 +80,7 @@ function decryptionError(input: EncryptionErrorInput): EncryptionError {
   return encryptionError(unavailable ? {
     ...input,
     code: "DECRYPTION_DEPENDENCY_UNAVAILABLE",
-    message: "The decryption service is not responsive right now. Please try again.",
+    message: "The decryption service isn't responding right now. Please try again.",
   } : input);
 }
 

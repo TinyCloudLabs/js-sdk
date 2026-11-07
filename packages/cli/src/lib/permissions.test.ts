@@ -116,6 +116,29 @@ test("a fresh delegate request preserves a logical space until the owner grants 
     actions: ["tinycloud.kv/list"],
   });
 });
+test("a key-only auth request can retain a named space for an OpenKey grant", async () => {
+  activeProfile = {
+    name: "default",
+    host: "https://node.tinycloud.test",
+    chainId: 1,
+    spaceName: "default",
+    did: "did:key:z6MkSession",
+    posture: "owner-openkey",
+    createdAt: "2026-06-01T00:00:00.000Z",
+  };
+
+  const permissions = await resolvePermissionSpaces([{
+    service: "tinycloud.kv",
+    space: "applications",
+    path: "xyz.tinycloud.listen/transcript/",
+    actions: ["list"],
+  }], "default", { allowLogicalSpaces: true });
+
+  expect(permissions[0]).toMatchObject({
+    space: "applications",
+    actions: ["tinycloud.kv/list"],
+  });
+});
 
 test("uses the public SDK capability-subset semantics for exact missing permissions", () => {
   const missing = diffPermissions(
