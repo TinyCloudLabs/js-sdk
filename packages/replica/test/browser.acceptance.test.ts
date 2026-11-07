@@ -19,6 +19,8 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { bootstrapSteps, signLocationRecordV2, verifyLocationRecordV2, type LocationRecordV2Payload } from "@tinycloud/sdk-core";
+import { privateKeyToAccount } from "viem/accounts";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -894,6 +896,119 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await closeContext(context);
     }
   });
+
+  scenario("15 registry HTTP cache cannot hide a signed node removal", async () => {
+    if (owner === undefined) throw new Error("owner not signed in");
+    const identity = await owner.activeNodeIdentity();
+    const wallet = privateKeyToAccount(WALLET_KEY as `0x${string}`);
+    const port = await freePort();
+    const cacheOrigin = `http://127.0.0.1:${port}`;
+    const locationPath = `/v2/locations/${wallet.address}`;
+    const locationUrl = `${cacheOrigin}${locationPath}`;
+    const spaces = [...new Set([
+      ...bootstrapSteps(wallet.address, 1).filter((step) => step.kind === "host").map((step) => step.spaceId.toLowerCase()),
+      ...["default", "account", "public"].map((name) => `tinycloud:pkh:eip155:1:${wallet.address}:${name}`.toLowerCase()),
+    ])];
+    const payload: LocationRecordV2Payload = {
+      version: 2,
+      subject: `did:pkh:eip155:1:${wallet.address}`,
+      sequence: 0,
+      updated_at: new Date().toISOString(),
+      nodes: [{ did: identity.nodeDid, url: cacheOrigin }],
+      spaces: spaces.map((space) => ({ space, nodes: [{ did: identity.nodeDid, mode: "read-write" }] })),
+      encryptionNode: identity.nodeDid,
+    };
+    const signer = { type: "did:pkh" as const, signMessage: (message: string) => wallet.signMessage({ message }) };
+    let current = await signLocationRecordV2(payload, signer);
+    const removed = await signLocationRecordV2({ ...payload, sequence: 1, nodes: [], spaces: [], encryptionNode: null }, signer);
+    expect(await verifyLocationRecordV2(removed)).toBe(true);
+    let registryRequests = 0;
+    let lastServedSequence = -1;
+    let dataRpcCalls = 0;
+    // Same-origin proxying supplies real HTTP/CORS without Playwright routing:
+    // page.route/context.route would disable the HTTP cache this case needs.
+    const cacheServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === locationPath) {
+          registryRequests += 1;
+          lastServedSequence = current.sequence;
+          return Response.json({ record: current }, { headers: { "cache-control": "public, max-age=3600" } });
+        }
+        if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/assets/")) {
+          const file = Bun.file(join(FIXTURE_DIST, url.pathname === "/" ? "index.html" : url.pathname));
+          if (!(await file.exists())) return new Response("not found", { status: 404 });
+          const type = url.pathname.endsWith(".js") ? "text/javascript" : url.pathname.endsWith(".wasm") ? "application/wasm" : "text/html";
+          return new Response(file, { headers: { "content-type": type } });
+        }
+        if (url.pathname === "/invoke") dataRpcCalls += 1;
+        const forwarded = new Request(new URL(`${url.pathname}${url.search}`, host), request);
+        forwarded.headers.delete("host");
+        forwarded.headers.set("accept-encoding", "identity");
+        return fetch(forwarded);
+      },
+    });
+    let cacheBrowser: Browser | undefined;
+    try {
+      cacheBrowser = await chromium.launch({ devtools: false });
+      const context = await cacheBrowser.newContext();
+      await context.addInitScript((allowedOrigin) => {
+        const nativeFetch = globalThis.fetch.bind(globalThis);
+        globalThis.fetch = (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+          if (url.origin !== allowedOrigin) throw new Error("HTTP-cache fixture refuses fetch outside its owned origin");
+          return nativeFetch(input, init);
+        };
+      }, cacheOrigin);
+      const page = await context.newPage();
+      await page.goto(cacheOrigin);
+      await page.waitForFunction(() => window.__tcw !== undefined);
+      expect(await page.evaluate(() => navigator.serviceWorker.controller === null)).toBe(true);
+      const primed = await page.evaluate(async (url) => {
+        const response = await fetch(url);
+        return { sequence: (await response.json()).record.sequence, etag: response.headers.get("etag") };
+      }, locationUrl);
+      expect(primed).toEqual({ sequence: 0, etag: null });
+      expect(registryRequests).toBe(1);
+      await page.evaluate((input) => window.__tcw.boot(input), {
+        host: cacheOrigin, registryUrl: cacheOrigin, walletKey: WALLET_KEY, prefix: "notes/", replication: "unset" as const,
+      });
+      await page.evaluate(() => window.__tcw.signIn());
+      expect(await page.evaluate(() => window.__tcw.kvGet("notes/a"))).toEqual({ status: "present", value: "alpha note" });
+      expect(dataRpcCalls).toBeGreaterThan(0);
+      // Finish initial sign-in work before changing authority. No wait follows removal.
+      await page.waitForLoadState("networkidle");
+      const requestsBeforeRemoval = registryRequests;
+      current = removed;
+      const cachedSequence = await page.evaluate(async (url) => (await (await fetch(url)).json()).record.sequence, locationUrl);
+      expect(cachedSequence).toBe(0);
+      expect(registryRequests).toBe(requestsBeforeRemoval);
+      const dataRpcBeforeSecondRead = dataRpcCalls;
+      const second = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      console.info("TC-2481 HTTP-cache routing receipt", JSON.stringify({
+        rawCachedSequenceAfterRemoval: cachedSequence,
+        requestsBeforeRemoval,
+        requestsAfterSecondRead: registryRequests,
+        lastServedSequence,
+        dataRpcBeforeSecondRead,
+        dataRpcAfterSecondRead: dataRpcCalls,
+        secondRead: second.status === "error" ? { status: second.status, code: second.code } : { status: second.status },
+      }));
+      expect(second).toEqual({ status: "error", code: "node_not_found" });
+      expect(dataRpcCalls).toBe(dataRpcBeforeSecondRead);
+      expect(registryRequests).toBeGreaterThan(requestsBeforeRemoval);
+      expect(lastServedSequence).toBe(1);
+    } finally {
+      try {
+        await cacheBrowser?.close();
+      } finally {
+        cacheServer.stop(true);
+      }
+    }
+  });
+
 
   // WebKit is out of scope: the harness is Chromium-only and records no placeholder for it.
 });
