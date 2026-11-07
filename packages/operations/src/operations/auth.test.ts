@@ -795,9 +795,15 @@ test("serializes an independently queued session writer after import and refuses
     ]);
     const writerExited = new AbortController();
     void writer.exited.then(() => writerExited.abort());
-    await waitForProfileLockProtocol(
-      contended, "the independent session writer reaching the held import lock", undefined, writerExited.signal,
-    );
+    try {
+      await waitForProfileLockProtocol(
+        contended, "the independent session writer reaching the held import lock", undefined, writerExited.signal,
+      );
+    } catch (error) {
+      releaseActivation();
+      const [exit, stdout, stderr] = await writerFinished;
+      throw new Error(`Profile writer exited ${exit} before contention: ${stderr || stdout}`, { cause: error });
+    }
     releaseActivation();
 
     expect(await importing).toMatchObject({
