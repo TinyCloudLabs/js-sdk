@@ -50,6 +50,8 @@ interface HeldProfileLock {
   readonly turnSlot: number;
   /** A deletion of the profile ran while this acquisition waited for the lock. */
   readonly deletedWhileWaiting: boolean;
+  /** The pin opened by this acquisition, not a borrowed lexical scope. Details: TC-2481. */
+  readonly ownedPin: PinnedProfileDirectory | undefined;
   active: boolean;
   deletedProfile?: boolean;
 }
@@ -831,6 +833,9 @@ export async function assertRealProfileDirectory(profile: string): Promise<void>
  * still takes the other root's lock) and lasts exactly as long as the
  * acquisition: it is revoked before release, so work deferred past the
  * critical section waits for the lock like any other caller.
+ *
+ * Independent acquisitions reopen pin scopes owned by completed acquisitions.
+ * Live lexical pin scopes remain intact. Details: TC-2481.
  */
 export async function withProfileLock<T>(
   profile: string,
@@ -839,14 +844,16 @@ export async function withProfileLock<T>(
 ): Promise<T> {
   const normalizedProfile = validateProfileName(profile);
   const lockPath = profileLockPath(normalizedProfile);
-  const held = (heldProfileLocks.getStore() ?? []).filter((ownership) => ownership.active);
+  const inheritedOwnership = heldProfileLocks.getStore() ?? [];
+  const held = inheritedOwnership.filter((ownership) => ownership.active);
   if (held.some((ownership) => ownership.lockPath === lockPath)) {
     await assertRealProfileDirectory(normalizedProfile);
     return action();
   }
   const named = namedProfilePath(normalizedProfile);
   const inherited = pinnedProfiles.getStore()?.get(named);
-  if (inherited && !isPinnedLive(inherited)) {
+  if (inherited && (!isPinnedLive(inherited) || inheritedOwnership.some((ownership) =>
+    !ownership.active && ownership.lockPath === lockPath && ownership.ownedPin === inherited))) {
     // Deferred work may explicitly acquire a new lock, but never reuse its old fd.
     const profiles = new Map(pinnedProfiles.getStore());
     profiles.delete(named);
@@ -862,6 +869,7 @@ export async function withProfileLock<T>(
       lockPath,
       turnSlot: acquired.turnSlot,
       deletedWhileWaiting: acquired.deletedWhileWaiting,
+      ownedPin: inherited ? undefined : pinnedProfiles.getStore()?.get(named),
       active: true,
     };
     try {
