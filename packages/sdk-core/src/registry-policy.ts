@@ -794,7 +794,15 @@ export async function resolveFailClosedTinyCloudHosts(
         return { hosts: [local.url], verdict };
       }
     }
-    const hosts = hostsForVerdict(verdict, newUserHost);
+    let hosts: string[];
+    try {
+      hosts = hostsForVerdict(verdict, newUserHost);
+    } catch (error) {
+      if (error instanceof NodeNotFoundError && error.verdict.status === "registered" && options.cacheStore) {
+        await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence);
+      }
+      throw error;
+    }
     warnRegistryCachedSettings(verdict, options);
     warnRegistryDefaultNode(verdict, options.cacheStore, options.onRegistryFallback);
     return { hosts, verdict };

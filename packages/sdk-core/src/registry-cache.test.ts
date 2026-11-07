@@ -540,3 +540,18 @@ test("browser deletion and persisted sequence survive a new cache adapter", asyn
     })).rejects.toMatchObject({ code: "registry_unavailable" });
   } finally { platform.restore(); }
 });
+
+test("a fresh registered owner without any usable host is dropped before subsequent outage", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+  const { signature: _, ...payload } = JSON.parse(await body(1)).record;
+  const record = await signLocationRecordV2({ ...payload, nodes: [], spaces: [], encryptionNode: null },
+    { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) });
+  const options = { cacheStore, sequenceStore, autoDiscoverLocalNode: false };
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: answer(JSON.stringify({ record })) }))
+    .rejects.toMatchObject({ code: "node_not_found" });
+  expect(await cacheStore.get(owner.address)).toBeUndefined();
+  expect(await sequenceStore.get(owner.address)).toBe(1);
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+});
