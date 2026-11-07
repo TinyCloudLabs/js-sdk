@@ -4690,7 +4690,7 @@ export class TinyCloudNode {
     this.sessionManager = stagedManager;
     this.sessionKeyId = stagedKeyId;
     this.sessionKeyJwk = stagedJwk;
-    if (resolvedHost) this.config.host = resolvedHost;
+    this.config.host = stagedHost;
     // Another account starts with no known rejection. Decide that from the
     // primary space's owner alone: restore metadata (address, SIWE) is
     // optional, so its appearing or disappearing says nothing about the owner.
