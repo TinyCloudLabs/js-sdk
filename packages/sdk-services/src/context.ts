@@ -22,7 +22,6 @@ import { tinyCloudDebugLogger } from "./debug";
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
-import { createResourceRoutingFetch, type ResourceRoutingConfig } from "./resourceRouting";
 
 /**
  * Configuration options for ServiceContext.
@@ -42,8 +41,6 @@ export interface ServiceContextConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Default-off telemetry event delivery. */
   telemetry?: TelemetryConfig;
-  /** Resource routing supplied by the SDK's verified owner registry adapter. */
-  resourceRouting?: ResourceRoutingConfig;
 }
 
 /**
@@ -87,8 +84,7 @@ export class ServiceContext implements IServiceContext {
     this._invokeAny = config.invokeAny
       ? this.wrapInvokeAny(config.invokeAny)
       : undefined;
-    const fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
-    this._fetch = this.wrapFetch(config.resourceRouting ? createResourceRoutingFetch(fetchFn, config.resourceRouting) : fetchFn);
+    this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
     this._hosts = config.hosts;
     this._session = config.session ?? null;
     this._retryPolicy = {

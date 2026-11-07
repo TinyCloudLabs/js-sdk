@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ServiceContext } from "./context";
 import { wrapError } from "./errors";
-import { verifyResourceDestination, NodeNotRespondingError } from "./resourceRouting";
+import { createResourceRoutingFetch, verifyResourceDestination, NodeNotRespondingError } from "./resourceRouting";
 import { KVService } from "./kv/KVService";
 import { DataVaultService } from "./vault/DataVaultService";
 import { SecretsService } from "./secrets/SecretsService";
@@ -25,7 +25,7 @@ function context(options: {
   const ctx = new ServiceContext({
     hosts: ["https://stale.invalid"],
     invoke: () => ({}),
-    fetch: async (url, init) => {
+    fetch: createResourceRoutingFetch(async (url, init) => {
       if (url.startsWith(options.failure ?? "never")) throw new TypeError("connection refused");
       const target = (options.targets ?? [box]).find((candidate) => url.startsWith(`${candidate.url}/`));
       if (url.endsWith("/info")) return Response.json({ nodeId: target?.nodeDid });
@@ -38,8 +38,7 @@ function context(options: {
       if (url.startsWith(options.notFound ?? "never")) return new Response("", { status: 404 });
       options.afterWrite?.();
       return ok();
-    },
-    resourceRouting: {
+    }, {
       resolveResource: async (resource: string, access: string) => {
         if (resource !== space || (access !== "read" && access !== "write")) return [];
         return options.targets ?? [box];
@@ -48,7 +47,7 @@ function context(options: {
         if (nodeDid === options.signingFailure) throw signingError;
         return `signed-for-${nodeDid}`;
       },
-    },
+    }),
   });
   return { ctx, requests, signingError };
 }
@@ -166,11 +165,12 @@ describe("signed resource routing", () => {
     });
     try {
       const ctx = new ServiceContext({
-        hosts: [server.url.origin], invoke: () => ({}), fetch: globalThis.fetch.bind(globalThis),
-        resourceRouting: {
+        hosts: [server.url.origin],
+        invoke: () => ({}),
+        fetch: createResourceRoutingFetch(globalThis.fetch.bind(globalThis), {
           resolveResource: async () => [{ url: server.url.origin, nodeDid: box.nodeDid }],
           bindAudience: async (authorization) => authorization,
-        },
+        }),
       });
       await expect(ctx.fetch(`${server.url.origin}/invoke`, {
         method: "POST", headers: { Authorization: token("tinycloud.kv/put") }, body: "dummy ciphertext",
