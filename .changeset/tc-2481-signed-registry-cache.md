@@ -16,4 +16,6 @@ Changed behavior: warm fallback requires a canonically verified cached entry str
 
 Single-host worker contexts no longer import optional resource-routing machinery.
 
+Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
 Details: TC-2481

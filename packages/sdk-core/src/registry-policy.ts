@@ -19,6 +19,7 @@ import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
   DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
   boundedResponseBytes,
+  canonicalLocationPayloadV2,
   defaultWebStorage,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
@@ -322,17 +323,35 @@ async function fetchOwnerRegistry(
   const v2 = await classifyObservation(subject, observation, 2, remembered ?? null);
   if (v2.status === "registered" && options.cacheStore && observation.kind === "http") {
     const candidate: RegistryCacheEntry = { ownerKey, responseBody: observation.body, fetchedAt: Date.now(), sequence: v2.sequence };
-    const accepted = await options.cacheStore.update(ownerKey, async (current) => {
-      const highest = Math.max((await store?.get(ownerKey)) ?? -1, cacheAuthority(options.cacheStore!, ownerKey).sequence);
-      const highWater = highest < 0 ? undefined : highest;
-      if (current !== undefined) {
-        const previous = await verifyRegistryCacheEntry(subject, ownerKey, current, highWater);
-        if (v2.sequence < previous.sequence) return current;
-        if (v2.sequence === previous.sequence) return { ...current, fetchedAt: candidate.fetchedAt };
-      }
-      await verifyRegistryCacheEntry(subject, ownerKey, candidate, highWater);
-      return candidate;
-    });
+    let accepted: RegistryCacheEntry;
+    let equalSequenceConflict = false;
+    try {
+      accepted = await options.cacheStore.update(ownerKey, async (current) => {
+        const highest = Math.max((await store?.get(ownerKey)) ?? -1, cacheAuthority(options.cacheStore!, ownerKey).sequence);
+        const highWater = highest < 0 ? undefined : highest;
+        if (current !== undefined) {
+          const previous = await verifyRegistryCacheEntry(subject, ownerKey, current, highWater);
+          if (v2.sequence < previous.sequence) return current;
+          if (v2.sequence === previous.sequence) {
+            // Both records passed the canonical verifier; only signed meaning
+            // must match, not response formatting or signature bytes.
+            if (canonicalLocationPayloadV2(v2.record!) !== canonicalLocationPayloadV2(previous.record!)) {
+              equalSequenceConflict = true;
+              throw new RegistryUnavailableError(subject, undefined, {
+                message: "equal-sequence registry response changes the accepted signed payload",
+              });
+            }
+            return { ...current, fetchedAt: candidate.fetchedAt };
+          }
+        }
+        await verifyRegistryCacheEntry(subject, ownerKey, candidate, highWater);
+        return candidate;
+      });
+    } catch (error) {
+      // Invalidate outside update: persistent adapters use a non-reentrant queue.
+      if (equalSequenceConflict) await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, v2.sequence);
+      throw error;
+    }
     const verdict = await verifyRegistryCacheEntry(subject, ownerKey, accepted);
     const authority = cacheAuthority(options.cacheStore, ownerKey);
     authority.sequence = Math.max(authority.sequence, verdict.sequence);
