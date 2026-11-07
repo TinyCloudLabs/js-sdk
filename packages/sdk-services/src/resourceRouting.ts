@@ -86,14 +86,24 @@ function isRoutingFailureCode(code: string): code is RoutingFailureCode {
 }
 /** Preserve routing failures through service-specific Result/error adapters. */
 export function routingFailure(error: unknown): RoutingFailure | undefined {
-  if (error instanceof NodeNotRespondingError) return { code: error.code, message: error.message, cause: error, meta: { hosts: error.hosts } };
-  if (error instanceof PartialNodeWriteError) return { code: error.code, message: error.message, cause: error, meta: { succeeded: error.succeeded, failed: error.failed } };
-  if (error instanceof NodeIdentityMismatchError || error instanceof ResourceNotRoutedError) return { code: error.code, message: error.message, cause: error };
+  // Normalize the public error shape without retaining transport constructors
+  // in single-host consumers that only import generic service error handling.
   if (typeof error === "object" && error !== null && "code" in error && "message" in error &&
     typeof error.code === "string" && typeof error.message === "string" &&
     isRoutingFailureCode(error.code)) {
-    const meta = "meta" in error && typeof error.meta === "object" && error.meta !== null && !Array.isArray(error.meta)
-      ? error.meta as Record<string, unknown> : undefined;
+    let meta: Record<string, unknown> | undefined;
+    if (error.code === "NODE_NOT_RESPONDING" && "hosts" in error && Array.isArray(error.hosts)) {
+      meta = { hosts: error.hosts };
+    } else if (error.code === "PARTIAL_NODE_WRITE" &&
+        "succeeded" in error && Array.isArray(error.succeeded) &&
+        "failed" in error && Array.isArray(error.failed)) {
+      meta = { succeeded: error.succeeded, failed: error.failed };
+    } else {
+      const candidate = "meta" in error ? error.meta : undefined;
+      if (typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)) {
+        meta = candidate as Record<string, unknown>;
+      }
+    }
     return { code: error.code, message: error.message, ...(error instanceof Error ? { cause: error } : {}), ...(meta ? { meta } : {}) };
   }
   return undefined;
