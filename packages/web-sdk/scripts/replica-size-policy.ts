@@ -358,6 +358,8 @@ export type Tc2379SignOutFence = HardeningRatchet & { replicaWorker: { delta: nu
 export type Tc2380SpaceHosting = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2380 Q2 one-click root admission; non-root buckets carry TC-2380 space hosting. */
 export type Tc2380Q2OneClick = Tc2380SpaceHosting;
+/** Exact TC-2481 worker-only admission; all other ceilings carry TC-2380 Q2 unchanged. */
+export type Tc2481RegistryFreshness = Tc2380Q2OneClick;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -429,6 +431,7 @@ export type Ledger = {
   tc2379SignOutFence?: Tc2379SignOutFence;
   tc2380SpaceHosting?: Tc2380SpaceHosting;
   tc2380Q2OneClick?: Tc2380Q2OneClick;
+  tc2481RegistryFreshness?: Tc2481RegistryFreshness;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1030,6 +1033,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2379SignOutFence !== undefined) pins.push({ row: "tc2379SignOutFence", pin: root.tc2379SignOutFence.sourceCommits.at(-1)! });
   if (root.tc2380SpaceHosting !== undefined) pins.push({ row: "tc2380SpaceHosting", pin: root.tc2380SpaceHosting.sourceCommits.at(-1)! });
   if (root.tc2380Q2OneClick !== undefined) pins.push({ row: "tc2380Q2OneClick", pin: root.tc2380Q2OneClick.sourceCommits.at(-1)! });
+  if (root.tc2481RegistryFreshness !== undefined) pins.push({ row: "tc2481RegistryFreshness", pin: root.tc2481RegistryFreshness.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1107,6 +1111,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2379SignOutFence", root.tc2379SignOutFence?.root.ceiling],
     ["tc2380SpaceHosting", root.tc2380SpaceHosting?.root.ceiling],
     ["tc2380Q2OneClick", root.tc2380Q2OneClick?.root.ceiling],
+    ["tc2481RegistryFreshness", root.tc2481RegistryFreshness?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2727,6 +2732,26 @@ export const approvedTc2380Q2OneClick: Tc2380Q2OneClick = {
   reason: "TC-2380 Q2 one-click hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2380 space hosting.",
 };
 
+export const approvedTc2481RegistryFreshness: Tc2481RegistryFreshness = {
+  label: "TC-2481 registry freshness and typed routing-error worker admission (PR #872)",
+  ruling: "Naomi approved 2026-11-07, confirmed by Holden: after the latest trim, admit only final pinned worker bytes with zero additional headroom and one combined exact-head Codex error-boundary/security/budget review. SQLite and PostgreSQL CI at 8bfeb9ab9af374c1c76ec5bd1068cc6e9dc29bd5 agree: kv-storage 777125 B (+564), replica worker 771018 B (+524). Bun 1.3.14; Rust 1.99.0. No root or other bucket increase is approved.",
+  base: "d6c7d58ef3d18629257fee647bf93092e581bf86",
+  sourceCommits: ["8bfeb9ab9af374c1c76ec5bd1068cc6e9dc29bd5"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42410717276",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42410717276/job/128518040075",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42410717276/job/128518040114",
+    ],
+  },
+  root: { delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: { "index.mjs": 1480070, "index.cjs": 1422484 } },
+  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } },
+  activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
+  worker: { delta: 564, ceiling: 777125 },
+  replicaWorker: { delta: 524, ceiling: 771018 },
+  reason: "The latest metadata-preserving error normalization trim retains required typed HTTP/refusal versus transport distinctions. Canonical kv-storage worker SHA-256 is 723bafa8ff1f01f0d26b062bc03047b9a264b4418c87e316fed7aa0109decbc2 in both pinned jobs. Only the two existing worker caps rise to their measured bytes; all root, first-import and activation ceilings carry TC-2380 Q2 unchanged, not new measurements or additional bucket admissions.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2826,6 +2851,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2379SignOutFence: approvedTc2379SignOutFence,
   tc2380SpaceHosting: approvedTc2380SpaceHosting,
   tc2380Q2OneClick: approvedTc2380Q2OneClick,
+  tc2481RegistryFreshness: approvedTc2481RegistryFreshness,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3142,6 +3168,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2380Q2OneClick !== undefined &&
       (!value.tc2380SpaceHosting || JSON.stringify(value.tc2380Q2OneClick) !== JSON.stringify(approvedTc2380Q2OneClick))) {
     throw new Error("Only the exact canonical TC-2380 Q2 one-click ratchet is approved.");
+  }
+  if (value.tc2481RegistryFreshness !== undefined &&
+      (!value.tc2380Q2OneClick || JSON.stringify(value.tc2481RegistryFreshness) !== JSON.stringify(approvedTc2481RegistryFreshness))) {
+    throw new Error("Only Naomi's exact canonical TC-2481 worker-only ratchet is approved.");
   }
 }
 
@@ -3540,6 +3570,14 @@ export function validateTc2380Q2OneClickTransition(base?: Tc2380Q2OneClick, curr
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2380Q2OneClick) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2380 Q2 one-click ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2481 worker-only ratchet is introduced once and immutable afterwards. */
+export function validateTc2481RegistryFreshnessTransition(base?: Tc2481RegistryFreshness, current?: Tc2481RegistryFreshness): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2481RegistryFreshness) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2481 worker-only ratchet may be introduced once and cannot change later.");
   }
 }
 

@@ -35,6 +35,7 @@ import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-polic
 import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
 import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
+import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -548,6 +549,13 @@ if (prBaseSha) {
   if (homeFeed !== undefined && baseLedger.tc2205HomeFeedRatchet === undefined &&
       (baseLedger.tc2202AgentShareReceiveRatchet === undefined || !hasAncestor(repoRoot, homeFeed.sourceCommits.at(-1)!))) {
     console.error("The Home feed ratchet requires the merged TC-2202 row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2481RegistryFreshnessTransition(baseLedger.tc2481RegistryFreshness, ledger.tc2481RegistryFreshness);
+  const registryFreshness = ledger.tc2481RegistryFreshness;
+  if (registryFreshness !== undefined && baseLedger.tc2481RegistryFreshness === undefined &&
+      (baseLedger.tc2380Q2OneClick === undefined || !hasAncestor(repoRoot, registryFreshness.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 worker-only ratchet requires the merged TC-2380 Q2 row and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

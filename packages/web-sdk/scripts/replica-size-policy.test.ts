@@ -2943,6 +2943,7 @@ delete tc2043Ledger.tc2418AbortListenerCleanup;
 delete tc2043Ledger.tc2379SignOutFence;
 delete tc2043Ledger.tc2380SpaceHosting;
 delete tc2043Ledger.tc2380Q2OneClick;
+delete tc2043Ledger.tc2481RegistryFreshness;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
