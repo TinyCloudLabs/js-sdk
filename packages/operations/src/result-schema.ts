@@ -99,7 +99,7 @@ const warningsSchema: JsonSchema = {
         type: "object",
         properties: {
           code: { const: "REGISTRY_UNAVAILABLE" },
-          reason: { const: "using_default_node" },
+          reason: { type: "string", enum: ["using_default_node", "using_cached_settings"] },
         },
         required: ["code", "reason"],
         additionalProperties: false,

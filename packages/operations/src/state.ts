@@ -1039,6 +1039,13 @@ export function createProfileRegistryCacheStore(profile: string): RegistryCacheS
           return { records: [...records.filter((current) => current.ownerKey !== key), entry], result: entry };
         }));
     },
+    delete(key) {
+      return withRegistryStoreUpdate(profile, "registry-cache", () =>
+        updateProfileStoreWhileLocked<RegistryCacheEntry, void>(profile, "registry-cache", (records) => {
+          find(records, key);
+          return { records: records.filter((entry) => entry.ownerKey !== key), result: undefined };
+        }));
+    },
   };
 }
 

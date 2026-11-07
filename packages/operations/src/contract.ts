@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { RegistryFallbackReason } from "@tinycloud/sdk-core";
 
 import type { OperationError, OperationErrorCode } from "./errors.js";
 
@@ -122,7 +123,7 @@ export type OperationWarning = Readonly<{
   grantCid?: string;
 }> | Readonly<{
   code: "REGISTRY_UNAVAILABLE";
-  reason: "using_default_node";
+  reason: RegistryFallbackReason;
   grantCid?: never;
 }>;
 

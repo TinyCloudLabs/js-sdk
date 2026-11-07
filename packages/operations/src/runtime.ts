@@ -3,6 +3,7 @@ import type {
   RuntimeDelegationActivator,
   TinyCloudNode,
 } from "@tinycloud/node-sdk";
+import type { RegistryFallbackReason } from "@tinycloud/sdk-core";
 import { CLI_NAME } from "./cli-name.js";
 import * as nodeSdk from "@tinycloud/node-sdk";
 
@@ -168,7 +169,7 @@ export async function createInvocationRuntime(
       host: summary.host,
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
-      onRegistryFallback: () => collectRegistryFallbackWarning(warnings),
+      onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(privateKey === undefined ? {} : { privateKey }),
     });
@@ -355,7 +356,7 @@ async function createRestoredRuntime(
       host: summary.host,
       registryCacheStore: createProfileRegistryCacheStore(profileName),
       registrySequenceStore: createProfileRegistrySequenceStore(profileName),
-      onRegistryFallback: () => collectRegistryFallbackWarning(warnings),
+      onRegistryFallback: (_message, reason) => collectRegistryFallbackWarning(warnings, reason),
       ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
     });
@@ -469,9 +470,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function collectRegistryFallbackWarning(warnings: OperationWarning[]): void {
-  if (!warnings.some(({ code }) => code === "REGISTRY_UNAVAILABLE")) {
-    warnings.push({ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" });
+function collectRegistryFallbackWarning(
+  warnings: OperationWarning[],
+  reason: RegistryFallbackReason = "using_default_node",
+): void {
+  if (!warnings.some((warning) => warning.code === "REGISTRY_UNAVAILABLE" && warning.reason === reason)) {
+    warnings.push({ code: "REGISTRY_UNAVAILABLE", reason });
   }
 }
 

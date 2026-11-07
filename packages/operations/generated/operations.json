@@ -237,7 +237,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -387,7 +391,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -604,7 +612,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -851,7 +863,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -1487,7 +1503,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -1637,7 +1657,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -1854,7 +1878,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -2101,7 +2129,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -2845,7 +2877,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -2995,7 +3031,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -3212,7 +3252,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -3459,7 +3503,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -4235,7 +4283,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -4385,7 +4437,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -4602,7 +4658,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -4849,7 +4909,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -5673,7 +5737,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -5823,7 +5891,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -6040,7 +6112,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -6287,7 +6363,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -7049,7 +7129,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -7199,7 +7283,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -7416,7 +7504,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -7663,7 +7755,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -8534,7 +8630,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -8684,7 +8784,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -8901,7 +9005,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -9148,7 +9256,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -9849,7 +9961,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -9999,7 +10115,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -10216,7 +10336,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -10463,7 +10587,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -11291,7 +11419,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -11441,7 +11573,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -11658,7 +11794,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -11905,7 +12045,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -12602,7 +12746,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -12752,7 +12900,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -12969,7 +13121,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -13216,7 +13372,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -13994,7 +14154,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -14144,7 +14308,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -14361,7 +14529,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -14608,7 +14780,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -15372,7 +15548,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -15522,7 +15702,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -15739,7 +15923,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -15986,7 +16174,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -16667,7 +16859,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -16817,7 +17013,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -17034,7 +17234,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -17281,7 +17485,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -17998,7 +18206,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -18148,7 +18360,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -18365,7 +18581,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -18612,7 +18832,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -19285,7 +19509,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -19435,7 +19663,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -19652,7 +19884,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -19899,7 +20135,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -20536,7 +20776,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -20686,7 +20930,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -20903,7 +21151,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -21150,7 +21402,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -21791,7 +22047,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -21941,7 +22201,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -22158,7 +22422,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -22405,7 +22673,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -23015,7 +23287,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -23165,7 +23441,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -23382,7 +23662,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -23629,7 +23913,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -24404,7 +24692,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -24554,7 +24846,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -24771,7 +25067,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -25018,7 +25318,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -25988,7 +26292,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -26138,7 +26446,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -26355,7 +26667,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -26602,7 +26918,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -27413,7 +27733,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -27563,7 +27887,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -27780,7 +28108,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -28027,7 +28359,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -28661,7 +28997,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -28811,7 +29151,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -29028,7 +29372,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -29275,7 +29623,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -29905,7 +30257,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -30055,7 +30411,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -30272,7 +30632,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -30519,7 +30883,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -31232,7 +31600,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -31382,7 +31754,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -31599,7 +31975,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -31846,7 +32226,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -32570,7 +32954,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -32720,7 +33108,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -32937,7 +33329,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -33184,7 +33580,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -33889,7 +34289,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -34039,7 +34443,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -34256,7 +34664,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -34503,7 +34915,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -35187,7 +35603,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -35337,7 +35757,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -35554,7 +35978,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [
@@ -35801,7 +36229,11 @@
                           "const": "REGISTRY_UNAVAILABLE"
                         },
                         "reason": {
-                          "const": "using_default_node"
+                          "type": "string",
+                          "enum": [
+                            "using_default_node",
+                            "using_cached_settings"
+                          ]
                         }
                       },
                       "required": [

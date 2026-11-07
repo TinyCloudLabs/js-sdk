@@ -117,7 +117,7 @@ const ROUTING_OPERATION_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof ro
   NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "The TinyCloud node identity does not match the signed registry.", retryable: false },
   PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "The operation did not complete on every required node.", retryable: false },
   RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "The signed registry has no destination for this resource.", retryable: false },
-  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "The location registry is unavailable.", retryable: true },
+  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "The storage settings are unreachable right now. Please try again.", retryable: true },
   node_not_found: { code: "NODE_NOT_FOUND", message: "No TinyCloud node is registered for this resource.", retryable: false },
   node_registry_entry_exists: { code: "NODE_REGISTRY_ENTRY_EXISTS", message: "The selected node is not authorized by the signed registry.", retryable: false },
 };

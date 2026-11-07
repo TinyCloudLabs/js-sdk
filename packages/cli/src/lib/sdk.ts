@@ -140,9 +140,9 @@ export type ProfileSessionRestore =
 export type ProfileSessionContext = Pick<CLIContext, "profile" | "host"> & Partial<CLIContext>;
 
 /**
- * Inspect a profile's persisted session without signing in or replaying a
- * stored grant. Restore may query the registry and resolved-node identity
- * endpoints to validate routing.
+ * Inspect a profile's persisted session without signing in, replaying a
+ * stored grant, or querying registry/node endpoints. Non-replicating restore
+ * verifies and hydrates authority locally; live operations resolve routing.
  */
 export async function restoreProfileSessionNode(
   ctx: ProfileSessionContext,
@@ -182,9 +182,9 @@ export async function restoreProfileSessionNode(
 }
 
 /**
- * Whether the profile's stored session, when `createSDKInstance` would restore
- * it, passes the same verification in a throwaway node without signing in or
- * writing profile state. Restore may query routing and node identity endpoints.
+ * Whether the profile's stored session passes verification in a throwaway,
+ * non-replicating node without signing in, writing profile state, or querying
+ * registry/node endpoints. Live operations still resolve fresh routing.
  * `true` when there is none to restore.
  */
 export async function storedSessionVerifiesLocally(profileName: string): Promise<boolean> {

@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { refreshOwnerRegistry, registryOwnerSubjectV1, resolveOwnerHosts, signLocationRecordV2 } from "@tinycloud/sdk-core";
+import { refreshOwnerRegistry, registryOwnerSubjectV1, resolveFailClosedTinyCloudHosts, resolveOwnerHosts, signLocationRecordV2 } from "@tinycloud/sdk-core";
 import type { RegistryCacheEntry, RegistryCacheStore } from "@tinycloud/sdk-core";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, profileConfigPath, profilePath, profileStorePath, withProfileLock, withTinyCloudStateRoot, writeJsonAtomic } from "./state.js";
 import { waitForProfileLockProtocol } from "./test-support/profile-lock-protocol.js";
@@ -98,6 +98,57 @@ async function signedCacheFixture(sequence: number) {
   return { subject, entry };
 }
 
+test("profile cache deletion waits for an active update, retains other owners and highwater, and cannot enable outage fallback", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc2481-cache-delete-"));
+  const [removed, retained] = await Promise.all([signedCacheFixture(11), signedCacheFixture(7)]);
+  const profile = "TEST-cache-delete";
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const pending: Promise<unknown>[] = [];
+  try {
+    await withTinyCloudStateRoot(home, async () => {
+      await writeJsonAtomic(profileConfigPath(profile), { name: profile });
+      const cache = createProfileRegistryCacheStore(profile);
+      const sequences = createProfileRegistrySequenceStore(profile);
+      await refreshOwnerRegistry(removed!.subject, {
+        cacheStore: cache, sequenceStore: sequences,
+        fetch: Object.assign(async () => new Response(removed!.entry.responseBody), { preconnect: fetch.preconnect }),
+      });
+      await withProfileLock(profile, async () => {
+        const updating = cache.update(removed!.entry.ownerKey, async (current) => {
+          entered.resolve();
+          await release.promise;
+          return current!;
+        });
+        pending.push(updating);
+        await entered.promise;
+        const deleting = createProfileRegistryCacheStore(profile).delete(removed!.entry.ownerKey);
+        const retaining = createProfileRegistryCacheStore(profile).update(retained!.entry.ownerKey, async () => retained!.entry);
+        pending.push(deleting, retaining);
+        release.resolve();
+        await Promise.all(pending);
+      });
+      const reloaded = createProfileRegistryCacheStore(profile);
+      expect(await reloaded.get(removed!.entry.ownerKey)).toBeUndefined();
+      expect(await reloaded.get(retained!.entry.ownerKey)).toEqual(retained!.entry);
+      const remembered = createProfileRegistrySequenceStore(profile);
+      expect(await remembered.get(removed!.entry.ownerKey)).toBe(11);
+      const warnings: string[] = [];
+      await expect(resolveFailClosedTinyCloudHosts(removed!.entry.ownerKey, {
+        cacheStore: reloaded, sequenceStore: remembered, newUserHost: "http://127.0.0.1:1",
+        fetch: Object.assign(async () => { throw new Error("TEST transport outage"); }, { preconnect: fetch.preconnect }),
+        onRegistryFallback: (reason) => { warnings.push(reason); },
+      })).rejects.toMatchObject({ code: "registry_unavailable" });
+      expect(warnings).toEqual([]);
+      expect(await reloaded.get(removed!.entry.ownerKey)).toBeUndefined();
+      expect(await remembered.get(removed!.entry.ownerKey)).toBe(11);
+    });
+  } finally {
+    release.resolve();
+    await Promise.allSettled(pending);
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("held profile registry siblings retain both real Core refreshes across adapter instances", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc2481-held-registry-"));
   const fixtures = await Promise.all([signedCacheFixture(3), signedCacheFixture(4)]);
@@ -112,6 +163,7 @@ test("held profile registry siblings retain both real Core refreshes across adap
         const backing = createProfileRegistryCacheStore(profile);
         const cacheStore: RegistryCacheStore = {
           get: backing.get,
+          delete: backing.delete,
           update: (key, update) => {
             const result = backing.update(key, async (current) => {
               active++; maximum = Math.max(maximum, active);
