@@ -1185,19 +1185,21 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
 
   async function withFetch<T>(
     handler: (call: FetchCall, count: number) => Response | Promise<Response>,
-    run: (calls: FetchCall[]) => Promise<T>,
+    run: (calls: FetchCall[], allCalls: FetchCall[]) => Promise<T>,
   ): Promise<T> {
     const original = globalThis.fetch;
     const calls: FetchCall[] = [];
+    const allCalls: FetchCall[] = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const call = { url: input instanceof Request ? input.url : String(input), init };
+      allCalls.push(call);
       const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
       if (registryResponse) return registryResponse;
-      const call = { url: String(input), init };
       calls.push(call);
       return handler(call, calls.length);
     }) as typeof fetch;
     try {
-      return await run(calls);
+      return await run(calls, allCalls);
     } finally {
       globalThis.fetch = original;
     }
@@ -1228,9 +1230,10 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
 
     test(`${mode}: restore stays offline and unknown; a 2xx read is hosted and cached`, async () => {
       const { node, proof, invokeAny } = await restoredNode({ abilities: LIST_GET }, withSigner);
-      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls, allCalls) => {
         expect(node.spaceHosting).toBe("unknown");
         expect(calls).toHaveLength(0);
+        expect(allCalls).toEqual([]);
 
         await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
         expect(node.spaceHosting).toBe("hosted");
@@ -1242,9 +1245,11 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
           { spaceId: proof.spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/list" },
         ]);
 
+        const afterFirstProbe = [...allCalls];
         // Hosting never goes away in normal operation: a second ask sends nothing.
         await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
         expect(calls).toHaveLength(1);
+        expect(allCalls).toEqual(afterFirstProbe);
       });
     });
   }
@@ -1356,11 +1361,12 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       abilities: { sql: { default: ["tinycloud.sql/read"] } },
       ownedSpaceAbilities: { account: { sql: { default: ["tinycloud.sql/read"] } } },
     });
-    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls, allCalls) => {
       await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
       await expect(node.checkSpaceHosting("account")).resolves.toBe("unknown");
       await expect(node.checkSpaceHosting("applications")).resolves.toBe("unknown");
       expect(calls).toHaveLength(0);
+      expect(allCalls).toEqual([]);
     });
   });
 
@@ -1370,9 +1376,10 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       host: RESTORE_HOST,
       wasmBindings: new NodeWasmBindings()
     });
-    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls, allCalls) => {
       await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
       expect(calls).toHaveLength(0);
+      expect(allCalls).toEqual([]);
     });
   });
 
@@ -1419,9 +1426,10 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       if (signOutFirst) await node.signOut();
 
       await node.restoreSession(await signedRestorableSession({ abilities: { kv: { "notes/": ["tinycloud.kv/put"] } } }));
-      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls, allCalls) => {
         await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
         expect(calls).toHaveLength(0);
+        expect(allCalls).toEqual([]);
       });
 
       // A session that does hold a read asks the node itself; it gets nothing from the earlier session.
@@ -1512,10 +1520,12 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
     const { node, proof } = await restoredNode({ abilities: LIST_GET });
     const address = /0x[0-9a-fA-F]{40}/.exec(proof.spaceId)![0];
     const shouted = proof.spaceId.replace(address, `0x${address.slice(2).toUpperCase()}`);
-    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls, allCalls) => {
       await expect(node.checkSpaceHosting(proof.spaceId)).resolves.toBe("hosted");
+      const afterFirstProbe = [...allCalls];
       await expect(node.checkSpaceHosting(shouted)).resolves.toBe("hosted");
       expect(calls).toHaveLength(1);
+      expect(allCalls).toEqual(afterFirstProbe);
     });
   });
 
