@@ -129,7 +129,7 @@ test("profile cache deletion waits for an active update, retains other owners an
       });
       const reloaded = createProfileRegistryCacheStore(profile);
       expect(await reloaded.get(removed!.entry.ownerKey)).toBeUndefined();
-      expect(await reloaded.get(retained!.entry.ownerKey)).toEqual(retained!.entry);
+      expect(await reloaded.get(retained!.entry.ownerKey)).toMatchObject(retained!.entry);
       const remembered = createProfileRegistrySequenceStore(profile);
       expect(await remembered.get(removed!.entry.ownerKey)).toBe(11);
       const warnings: string[] = [];
@@ -163,13 +163,14 @@ test("held profile registry siblings retain both real Core refreshes across adap
         const backing = createProfileRegistryCacheStore(profile);
         const cacheStore: RegistryCacheStore = {
           get: backing.get,
+          getRevision: backing.getRevision,
           delete: backing.delete,
           update: (key, update) => {
-            const result = backing.update(key, async (current) => {
+            const result = backing.update(key, async (current, revision) => {
               active++; maximum = Math.max(maximum, active);
               try {
                 if (index === 0) { firstEntered.resolve(); await releaseFirst.promise; }
-                return await update(current);
+                return await update(current, revision);
               } finally { active--; }
             });
             if (index === 1) releaseFirst.resolve();
@@ -221,7 +222,7 @@ test("held profile registry sequence maxima and zero survive nested cross-store 
       const sequences = createProfileRegistrySequenceStore(profile);
       expect(await sequences.get(fixture.entry.ownerKey)).toBe(9);
       expect(await sequences.get(other)).toBe(0);
-      expect(await createProfileRegistryCacheStore(profile).get(fixture.entry.ownerKey)).toEqual(fixture.entry);
+      expect(await createProfileRegistryCacheStore(profile).get(fixture.entry.ownerKey)).toMatchObject(fixture.entry);
     });
   } finally { await rm(home, { recursive: true, force: true }); }
 });
@@ -248,7 +249,7 @@ test("held profile registry writer finishes before an already-contending outside
       proceed.resolve();
       await Promise.all([held, outside]);
       const reloaded = createProfileRegistryCacheStore(profile);
-      for (const fixture of fixtures) expect(await reloaded.get(fixture.entry.ownerKey)).toEqual(fixture.entry);
+      for (const fixture of fixtures) expect(await reloaded.get(fixture.entry.ownerKey)).toMatchObject(fixture.entry);
     });
   } finally {
     proceed.resolve(); await Promise.allSettled([held, outside]);
@@ -289,7 +290,7 @@ test("registry queues separate same-named profiles and recover from a rejected c
     expect(await first).toBe(failure);
     await second;
     for (const home of homes) await withTinyCloudStateRoot(home, async () => {
-      expect(await createProfileRegistryCacheStore(profile).get(fixture.entry.ownerKey)).toEqual(fixture.entry);
+      expect(await createProfileRegistryCacheStore(profile).get(fixture.entry.ownerKey)).toMatchObject(fixture.entry);
     });
   } finally {
     release.resolve(); await Promise.allSettled([first, second]);

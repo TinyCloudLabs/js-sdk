@@ -6,6 +6,7 @@ import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore, pr
 import { registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
 import { makeHome, removeHome, runTc, writeDelegateProfile, type WaitHermetic } from "../test-support/secrets-wait-harness.js";
 
+// Intentional test-fixture loading boundary: Node's source-only server is outside the CLI build.
 const { createHermeticEncryptedNode } = await import(
   new URL("../../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href
 ) as { createHermeticEncryptedNode(options: { secretPayloadValue: string }): Promise<WaitHermetic> };
@@ -63,7 +64,9 @@ for (const mode of ["503", "transport", "timeout", "4xx", "known", "node-down", 
       if (mode === "transport") await registry.stop(true);
       const preload = join(home, "fixture-only.mjs");
       const origins = [fixture.host, registryOrigin, warmNode?.url.origin, unlisted?.url.origin].filter(Boolean);
-      await writeFile(preload, `const raw=globalThis.fetch;const allowed=new Set(${JSON.stringify(origins)});globalThis.fetch=(input,init)=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url);if(!allowed.has(url.origin))throw Error('Non-fixture origin refused');return raw(input,init)};`);
+      // The Node child validates private HOME before importing the built CLI.
+      const bootstrap = new URL("../../../operations/test-support/test-bootstrap.mjs", import.meta.url).href;
+      await writeFile(preload, `import ${JSON.stringify(bootstrap)};\nconst raw=globalThis.fetch;const allowed=new Set(${JSON.stringify(origins)});globalThis.fetch=(input,init)=>{const url=new URL(typeof input==='string'||input instanceof URL?input:input.url);if(!allowed.has(url.origin))throw Error('Non-fixture origin refused');return raw(input,init)};`);
       const beforeReads = fixture.invocations().filter(({ action }) => action === "tinycloud.kv/get").length;
       if (mode === "node-down") fixture.stop();
       const result = await runTc(home, ["--json", "--profile", profile, "secrets", "get", "HERMETIC_DELEGATION_CANARY", "--raw",
@@ -104,7 +107,9 @@ for (const mode of ["503", "transport", "timeout", "4xx", "known", "node-down", 
         expect(lines).toHaveLength(1);
         expect(JSON.parse(lines[0]!)).toEqual({ warnings: [{ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" }] });
       }
-      if (!warm) expect(await Bun.file(join(home, ".tinycloud", "profiles", profile, "registry-cache.json")).exists()).toBe(false);
+      if (!warm) await withTinyCloudStateRoot(home, async () => {
+        expect(await createProfileRegistryCacheStore(profile).get(registryOwnerKeyV2(fixture.ownerDid))).toBeUndefined();
+      });
       if (mode !== "transport") expect(registryRequests).toBeGreaterThan(0);
     } finally {
       registry.stop(true);

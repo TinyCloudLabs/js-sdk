@@ -1,4 +1,4 @@
-import type { RegistryCacheEntry, RegistryCacheStore, RegistrySequenceStore } from "@tinycloud/sdk-core";
+import type { RegistryCacheEntry, RegistryCacheRecord, RegistryCacheStore, RegistryCacheTombstone, RegistrySequenceStore } from "@tinycloud/sdk-core";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from "node:fs";
@@ -1015,35 +1015,75 @@ async function withRegistryStoreUpdate<Result>(
   });
 }
 
+function validateProfileRegistryCacheRecord(entry: RegistryCacheRecord): void {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+      typeof entry.ownerKey !== "string" || entry.ownerKey.length === 0 ||
+      !Number.isSafeInteger(entry.revision === undefined ? 0 : entry.revision) ||
+      (entry.revision !== undefined && entry.revision < 0)) {
+    throw new Error("Invalid registry cache store");
+  }
+  if ("invalidated" in entry) {
+    if (entry.invalidated !== true || entry.revision === undefined || entry.revision === 0 || Object.keys(entry).length !== 3) {
+      throw new Error("Invalid registry cache tombstone");
+    }
+  } else if (typeof entry.responseBody !== "string" ||
+      !Number.isSafeInteger(entry.fetchedAt) || entry.fetchedAt < 0 ||
+      !Number.isSafeInteger(entry.sequence) || entry.sequence < 0) {
+    throw new Error("Invalid registry cache store");
+  }
+}
+
 /** Plain, owner-only profile file with the same atomic writer and process lock as grants. */
 export function createProfileRegistryCacheStore(profile: string): RegistryCacheStore {
-  const find = (records: readonly RegistryCacheEntry[], key: string): RegistryCacheEntry | undefined => {
+  const find = (records: readonly RegistryCacheRecord[], key: string): RegistryCacheRecord | undefined => {
+    if (typeof key !== "string" || key.length === 0) throw new Error("Invalid registry cache owner");
     const keys = new Set<string>();
+    let found: RegistryCacheRecord | undefined;
     for (const entry of records) {
-      if (!entry || typeof entry.ownerKey !== "string" || keys.has(entry.ownerKey)) {
-        throw new Error("Invalid registry cache store");
-      }
+      validateProfileRegistryCacheRecord(entry);
+      if (keys.has(entry.ownerKey)) throw new Error("Invalid registry cache store");
       keys.add(entry.ownerKey);
+      if (entry.ownerKey === key) found = entry;
     }
-    return records.find((entry) => entry.ownerKey === key);
+    return found;
   };
   return {
     async get(key) {
-      return find((await readProfileStore<RegistryCacheEntry>(profile, "registry-cache")).records, key);
+      const entry = find((await readProfileStore<RegistryCacheRecord>(profile, "registry-cache")).records, key);
+      return entry === undefined || "invalidated" in entry ? undefined : entry;
+    },
+    async getRevision(key) {
+      return find((await readProfileStore<RegistryCacheRecord>(profile, "registry-cache")).records, key)?.revision ?? 0;
     },
     update(key, update) {
       return withRegistryStoreUpdate(profile, "registry-cache", () =>
-        updateProfileStoreWhileLocked<RegistryCacheEntry, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
-          const entry = await update(find(records, key));
+        updateProfileStoreWhileLocked<RegistryCacheRecord, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
+          const current = find(records, key);
+          const revision = current?.revision ?? 0;
+          const entry = await update(current === undefined || "invalidated" in current ? undefined : current, revision);
           if (entry.ownerKey !== key) throw new Error("Registry cache owner mismatch");
-          return { records: [...records.filter((current) => current.ownerKey !== key), entry], result: entry };
+          const next = { ...entry, revision };
+          if ("invalidated" in next) throw new Error("Registry cache update requires a signed entry");
+          validateProfileRegistryCacheRecord(next);
+          return { records: [...records.filter((record) => record.ownerKey !== key), next], result: next };
         }));
     },
-    delete(key) {
+    delete(key, expectedRevision?: number, maximumSequence?: number) {
       return withRegistryStoreUpdate(profile, "registry-cache", () =>
-        updateProfileStoreWhileLocked<RegistryCacheEntry, void>(profile, "registry-cache", (records) => {
-          find(records, key);
-          return { records: records.filter((entry) => entry.ownerKey !== key), result: undefined };
+        updateProfileStoreWhileLocked<RegistryCacheRecord, void>(profile, "registry-cache", (records) => {
+          const current = find(records, key);
+          const revision = current?.revision ?? 0;
+          if ((expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) ||
+              (maximumSequence !== undefined && (!Number.isSafeInteger(maximumSequence) || maximumSequence < 0))) {
+            throw new Error("Invalid registry cache deletion guard");
+          }
+          if ((expectedRevision !== undefined && expectedRevision !== revision) ||
+              (maximumSequence !== undefined && current !== undefined && !("invalidated" in current) && current.sequence > maximumSequence)) {
+            throw new Error("Registry cache changed");
+          }
+          if (revision === Number.MAX_SAFE_INTEGER) throw new Error("Registry cache revision overflow");
+          const tombstone: RegistryCacheTombstone = { ownerKey: key, revision: revision + 1, invalidated: true };
+          return { records: [...records.filter((entry) => entry.ownerKey !== key), tombstone], result: undefined };
         }));
     },
   };
