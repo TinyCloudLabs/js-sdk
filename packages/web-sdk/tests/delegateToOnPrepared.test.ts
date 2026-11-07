@@ -142,6 +142,7 @@ async function makeSignedInWeb(): Promise<InstanceType<typeof TinyCloudWeb>> {
   await internals._initPromise;
   Object.assign(internals._node, {
     auth: {
+      resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
       tinyCloudSession: {
         address: OWNER,
         chainId: 1,

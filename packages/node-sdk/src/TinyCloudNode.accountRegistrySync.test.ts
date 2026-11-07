@@ -160,6 +160,8 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   (node as any).auth = {
     // The real NodeUserAuthorization reports its signed-in address; sign-in reads it.
     address: () => ADDRESS,
+    // This no-entry fixture places every account resource on its explicit host.
+    resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
     tinyCloudSession: {
       address: ADDRESS,
       chainId: 1,
