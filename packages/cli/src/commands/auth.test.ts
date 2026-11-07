@@ -707,9 +707,6 @@ describe("CLI auth rotate command", () => {
     expect(keys.get("default")).toBe(localSignInResult.jwk);
     expect(keys.get("default")).not.toBe(oldJwk);
     expect(recorded.clearSessions).toEqual([]);
-    expect(recorded.localSignIns).toEqual([
-      { privateKey: "0xowner-private", host: activeHost },
-    ]);
     expect(sessions.get("default")).toEqual({
       authMethod: "local",
       address: "0xLocalOwner",

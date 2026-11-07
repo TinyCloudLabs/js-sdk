@@ -32,6 +32,7 @@ test("a crash immediately after durable marker write removes both credentials be
   homes.push(home);
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
+    if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
     if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     return new Response("not found", { status: 404 });
@@ -40,7 +41,7 @@ test("a crash immediately after durable marker write removes both credentials be
   const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });
@@ -76,6 +77,7 @@ async function v2OrphanFixture(remoteCompleted = false) {
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     networkPaths.push(path);
+    if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
     if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     return new Response("not found", { status: 404 });
@@ -84,7 +86,7 @@ async function v2OrphanFixture(remoteCompleted = false) {
   const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });
@@ -225,6 +227,7 @@ for (const layout of ["unknown-child", "missing-pending"] as const) test(
     homes.push(home);
     const node = Bun.serve({ port: 0, fetch(request) {
       const path = new URL(request.url).pathname;
+      if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
       if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
       if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       return new Response("not found", { status: 404 });
@@ -233,7 +236,7 @@ for (const layout of ["unknown-child", "missing-pending"] as const) test(
     const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
     const paths = await withTinyCloudStateRoot(home, async () => {
       await writeJsonAtomic(profileConfigPath(PROFILE), {
-        name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+        name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
         ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
         createdAt: "2026-10-01T00:00:00.000Z",
       });
@@ -274,6 +277,7 @@ test("inactive gate marker survives credential-unlink crash and recovers legacy 
   homes.push(home);
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
+    if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
     if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     return new Response("not found", { status: 404 });
@@ -282,7 +286,7 @@ test("inactive gate marker survives credential-unlink crash and recovers legacy 
   const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });
