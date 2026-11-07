@@ -37,8 +37,9 @@ test("profile cache atomically retains the highest signed response against a lat
           fetch: Object.assign(async () => new Response(raw), { preconnect: fetch.preconnect }) };
         await refreshOwnerRegistry(subject, options);
         child.stdin.write("release\n"); child.stdin.end();
-        expect(await child.exited).toBe(0);
-        expect(await new Response(child.stderr).text()).toBe("");
+        const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+        expect(stderr).toBe("");
+        expect(exitCode).toBe(0);
         const reloaded = createProfileRegistryCacheStore(profile);
         expect((await reloaded.get(first.address))?.responseBody).toBe(raw);
         expect(await createProfileRegistrySequenceStore(profile).get(first.address)).toBe(21);

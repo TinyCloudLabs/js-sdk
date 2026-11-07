@@ -12,7 +12,8 @@ await refreshOwnerRegistry(subject, {
   fetch: Object.assign(async () => {
     process.stdout.write("ready\n");
     // The parent commits a newer response before releasing this older one.
-    for await (const _chunk of process.stdin) break;
+    // Bun1.2's Node-stream EOF leaves later directory handles unusable (EBADF).
+    await Bun.stdin.text();
     return new Response(body);
   }, { preconnect: fetch.preconnect }),
 });
