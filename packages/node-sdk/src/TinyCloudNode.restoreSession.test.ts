@@ -78,8 +78,8 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     const ownerDid = pkhDid(proof.address, proof.chainId);
     const nodeDid = proof.verificationMethod.split("#", 1)[0]!;
     const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
-      const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin);
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
       if (registryResponse) return registryResponse;
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });

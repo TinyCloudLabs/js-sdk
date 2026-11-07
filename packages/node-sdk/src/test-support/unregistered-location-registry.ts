@@ -32,6 +32,11 @@ export function unregisteredLocationRegistryResponse(
   const method = init?.method ?? (input instanceof Request ? input.method : "GET");
   if (url.origin !== registryOrigin || method !== "GET" ||
     !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return undefined;
+  const headers = new Headers(init?.headers !== undefined
+    ? init.headers : input instanceof Request ? input.headers : undefined);
+  if (headers.has("authorization")) {
+    throw new Error("Registry fixture metadata requests must not include Authorization");
+  }
   return new Response(REGISTRY_NOT_FOUND_BODY, {
     status: 404,
     headers: { "content-type": "application/json" },
