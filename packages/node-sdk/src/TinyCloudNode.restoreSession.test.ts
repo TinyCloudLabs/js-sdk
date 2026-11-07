@@ -3,6 +3,7 @@ import { parseUcanGrant } from "@tinycloud/replica";
 
 import {
   principalDidEquals,
+  pkhDid,
   type Delegation,
   type ISessionManager,
   type ReplicationAuthority,
@@ -73,21 +74,25 @@ function replicationAuthorityForTest(node: TinyCloudNode): Promise<ReplicationAu
 describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
   test("memoizes encryption descriptors within one session graph and refreshes after restore", async () => {
     const originalFetch = globalThis.fetch;
-    const networkId = "urn:tinycloud:encryption:did:key:zTest:default";
+    const proof = await signedRestorableSession();
+    const ownerDid = pkhDid(proof.address, proof.chainId);
+    const nodeDid = proof.verificationMethod.split("#", 1)[0]!;
+    const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
     let descriptorFetches = 0;
     globalThis.fetch = mock(async (input: string | URL | Request) => {
       const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin);
       if (registryResponse) return registryResponse;
       const url = String(input);
+      if (url.endsWith("/info")) return Response.json({ nodeId: nodeDid });
       if (!url.includes("/encryption/networks/")) {
         throw new Error(`Unexpected fetch: ${url}`);
       }
       descriptorFetches++;
       return new Response(JSON.stringify({
         networkId,
-        ownerDid: "did:key:zTest",
+        ownerDid,
         name: "default",
-        members: [{ nodeId: "did:key:zNode", role: "primary" }],
+        members: [{ nodeId: nodeDid, role: "primary" }],
         threshold: { n: 1, t: 1 },
         state: "active",
         publicEncryptionKey: "AQ==",
@@ -103,7 +108,6 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     }) as typeof fetch;
 
     try {
-      const proof = await signedRestorableSession();
       const node = new TinyCloudNode({
         tinycloudRegistryUrl: locationRegistry.url.origin,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
@@ -665,15 +669,22 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
   test("retires captured services and aborts in-flight requests after each successful restore", async () => {
     const originalFetch = globalThis.fetch;
     const requestSignals: AbortSignal[] = [];
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/metadata"] } },
+    });
+    const networkId = `urn:tinycloud:encryption:${pkhDid(proof.address, proof.chainId)}:network`;
     let requestStarted!: () => void;
     const started = new Promise<void>((resolve) => { requestStarted = resolve; });
     globalThis.fetch = mock(async (input: string, init?: RequestInit) => {
       const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
       if (registryResponse) return registryResponse;
+      if (String(input).endsWith("/info")) {
+        return Response.json({ nodeId: proof.verificationMethod.split("#", 1)[0] });
+      }
       return new Promise<Response>((_resolve, reject) => {
         const requestSignal = init?.signal;
         if (requestSignal) requestSignals.push(requestSignal);
-        requestStarted();
+        if (requestSignals.length === 2) requestStarted();
         requestSignal?.addEventListener("abort", () => {
           reject(new DOMException("retired", "AbortError"));
         }, { once: true });
@@ -681,9 +692,6 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     }) as typeof fetch;
 
     try {
-      const proof = await signedRestorableSession({
-        abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/metadata"] } },
-      });
       const node = new TinyCloudNode({
         tinycloudRegistryUrl: locationRegistry.url.origin,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
@@ -707,16 +715,13 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       };
       const inFlight = captured.kv.get("in-flight");
       const encryptionInFlight = (captured.encryption as any).config.node.fetchByNetworkId(
-        "urn:tinycloud:encryption:did:key:zTest:network",
+        networkId,
       );
       const encryptionFailure = encryptionInFlight.then(
         () => undefined,
         (error: unknown) => error,
       );
       await started;
-      // `postDecrypt` is async; let it reach the graph-bound fetch before
-      // replacing the graph so this exercises its in-flight cancellation.
-      await Promise.resolve();
 
       await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
 
@@ -734,7 +739,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       await expect(captured.sharing.generate({ path: "after", actions: ["tinycloud.kv/get"] }))
         .resolves.toMatchObject({ ok: false });
       await expect((captured.encryption as any).config.node.fetchByNetworkId(
-        "urn:tinycloud:encryption:did:key:zTest:network",
+        networkId,
       )).rejects.toThrow("Service graph has been retired");
       await expect((captured.encryption as any).config.signer.signDecryptInvocation({
         targetNode: "https://one.example",
@@ -803,12 +808,17 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
   test("rejects a captured encryption discovery that resolves after restore retires its graph", async () => {
     const originalFetch = globalThis.fetch;
     let requestSignal: AbortSignal | undefined;
+    const proof = await signedRestorableSession();
+    const networkId = `urn:tinycloud:encryption:${pkhDid(proof.address, proof.chainId)}:network`;
     let releaseResponse!: (response: Response) => void;
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
     globalThis.fetch = mock(async (input: string, init?: RequestInit) => {
       const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
       if (registryResponse) return registryResponse;
+      if (String(input).endsWith("/info")) {
+        return Response.json({ nodeId: proof.verificationMethod.split("#", 1)[0] });
+      }
       return new Promise<Response>((resolve) => {
         requestSignal = init?.signal;
         releaseResponse = resolve;
@@ -817,7 +827,6 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     }) as typeof fetch;
 
     try {
-      const proof = await signedRestorableSession();
       const node = new TinyCloudNode({
         tinycloudRegistryUrl: locationRegistry.url.origin,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
@@ -827,7 +836,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
 
       const captured = node.encryption;
       const inFlight = captured.discoverNetwork(
-        "urn:tinycloud:encryption:did:key:zTest:network",
+        networkId,
       );
       await started;
 
@@ -837,7 +846,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
 
       await expect(inFlight).rejects.toThrow("Service graph has been retired");
       await expect(captured.discoverNetwork(
-        "urn:tinycloud:encryption:did:key:zTest:network",
+        networkId,
       )).rejects.toThrow("Service graph has been retired");
     } finally {
       globalThis.fetch = originalFetch;
@@ -1186,7 +1195,7 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
 // TC-2380: one authorized read the session already holds says whether a space is hosted.
 describe("TinyCloudNode.checkSpaceHosting", () => {
   type FetchCall = { url: string; init?: RequestInit };
-  const headersOf = (call: FetchCall | undefined) => (call?.init?.headers ?? {}) as Record<string, string>;
+  const headersOf = (call: FetchCall | undefined) => new Headers(call?.init?.headers);
 
   async function withFetch<T>(
     handler: (call: FetchCall, count: number) => Response | Promise<Response>,
@@ -1241,7 +1250,7 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
         expect(node.spaceHosting).toBe("hosted");
         expect(calls).toHaveLength(1);
         expect(calls[0]!.url).toBe(`${RESTORE_HOST}/invoke`);
-        expect(headersOf(calls[0])["x-tinycloud-limit"]).toBe("1");
+        expect(headersOf(calls[0]).get("x-tinycloud-limit")).toBe("1");
         expect(calls[0]!.init?.signal).toBeInstanceOf(AbortSignal);
         expect(entriesOf(invokeAny)[0]).toEqual([
           { spaceId: proof.spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/list" },
@@ -1293,7 +1302,7 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       async (calls) => {
         await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
         expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke", "/delegate", "/invoke"]);
-        expect(headersOf(calls[1]).Authorization).toBe(proof.delegationHeader.Authorization);
+        expect(headersOf(calls[1]).get("authorization")).toBe(proof.delegationHeader.Authorization);
       },
     );
   });

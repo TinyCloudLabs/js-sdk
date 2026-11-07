@@ -1063,7 +1063,7 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
       path: "agents/demo/settings",
       actions: ["tinycloud.kv/get"],
     };
-    const requestId = await createBoundRequest(runtime, [requested]);
+    const requestId = await storeLegacyRequest(fixture, [requested]);
     const delegation = await signedLoginDelegation(fixture, runtime);
     const authorization = delegation.delegationHeader.Authorization;
     const expiry = delegation.expiry.getTime();
