@@ -705,6 +705,17 @@ describe("CLI secrets commands", () => {
     };
     await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
     expect(recorded.errors.pop()).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
+    canonicalResultOverride = {
+      status: "error",
+      operation: { operationId: "tinycloud.secrets.get", operationVersion: 1 },
+      context: { profile: "default", host: "https://tinycloud.test", posture: "owner-openkey" },
+      error: { code: "NODE_NOT_RESPONDING", message: "retry message from service", retryable: true },
+    };
+    await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY"]);
+    expect(recorded.errors.pop()).toMatchObject({
+      code: "NODE_NOT_RESPONDING",
+      exitCode: 6,
+    });
 
     const setup = operationSetupFor("ANTHROPIC_API_KEY");
     canonicalResultOverride = {

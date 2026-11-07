@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, type PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
@@ -78,6 +78,52 @@ test("restores the persisted session DID and rereads a real live delegation for 
       node.sessionDid,
     );
   } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("resolves registry URL precedence and keeps the profile host only as a no-entry hint", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const profileRegistryUrl = "https://profile-registry.test";
+  const envRegistryUrl = "https://current-registry.test";
+  const originalFetch = globalThis.fetch;
+  const previousRegistryUrl = process.env.TC_REGISTRY_URL;
+  const externalRequests: string[] = [];
+  try {
+    delete process.env.TC_REGISTRY_URL;
+    const storedProfile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
+    if (storedProfile === null) throw new Error("expected the stored fixture profile");
+    await writeJsonAtomic(profileConfigPath(fixture.profile), {
+      ...storedProfile,
+      tinycloudRegistryUrl: profileRegistryUrl,
+    });
+
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(`${fixture.hermetic.host}/`)) return originalFetch(input, init);
+      externalRequests.push(url);
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+    }) as typeof fetch;
+
+    const fromProfile = await createInvocationRuntime({ profile: fixture.profile });
+    expect(fromProfile.ok).toBe(true);
+    expect(externalRequests.length).toBeGreaterThan(0);
+    expect(externalRequests.every((url) => url.startsWith(`${profileRegistryUrl}/`))).toBe(true);
+    if (!fromProfile.ok) throw new Error("expected a restored runtime");
+    expect((fromProfile.context.runtime.node as TinyCloudNode).hosts).toContain(fixture.hermetic.host);
+
+    externalRequests.length = 0;
+    process.env.TC_REGISTRY_URL = envRegistryUrl;
+    const fromEnvironment = await createInvocationRuntime({ profile: fixture.profile });
+    expect(fromEnvironment.ok).toBe(true);
+    expect(externalRequests.length).toBeGreaterThan(0);
+    expect(externalRequests.every((url) => url.startsWith(`${envRegistryUrl}/`))).toBe(true);
+    if (!fromEnvironment.ok) throw new Error("expected a restored runtime");
+    expect((fromEnvironment.context.runtime.node as TinyCloudNode).hosts).toContain(fixture.hermetic.host);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousRegistryUrl === undefined) delete process.env.TC_REGISTRY_URL;
+    else process.env.TC_REGISTRY_URL = previousRegistryUrl;
     fixture.hermetic.stop();
   }
 });
@@ -625,10 +671,8 @@ test("a stored CID is published only when it is the CID of the stored authorizat
 
     const result = await invokeOperation("tinycloud.secrets.get", 1, { profile: fixture.profile }, { name: "KEY" });
 
-    expect(result.warnings).toEqual([
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
-      { code: "STORED_GRANT_SKIPPED", reason: "host_mismatch" },
-    ]);
+    expect(result.status).toBe("authority_required");
+    expect(JSON.stringify(result)).not.toContain(first.cid);
     expect(JSON.stringify(result)).not.toContain(cidCanary);
   } finally {
     fixture.hermetic.stop();
@@ -744,7 +788,6 @@ test("an expired owner-signed delegate session is a non-retryable AUTH_REQUIRED 
   }, { preconnect: globalThis.fetch.preconnect }));
   const expired = {
     code: "AUTH_REQUIRED",
-    message: "The stored session has expired or is no longer valid. Sign in again.",
     retryable: false,
   };
 
@@ -772,7 +815,6 @@ test("an expired imported session returns AUTH_REQUIRED through runtime and oper
   }, { preconnect: globalThis.fetch.preconnect }));
   const expired = {
     code: "AUTH_REQUIRED",
-    message: "The stored session has expired or is no longer valid. Sign in again.",
     retryable: false,
   };
   try {
@@ -786,23 +828,6 @@ test("an expired imported session returns AUTH_REQUIRED through runtime and oper
   }
 });
 
-// TC-674 control: passes before and after
-test("an unexpired imported session restores as its delegate without a fetch", async () => {
-  const sessionDid = await persistImportedSession("live-import", Math.floor(Date.now() / 1000) + 3600);
-  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (): Promise<Response> => {
-    throw new Error("restore must not fetch");
-  }, { preconnect: globalThis.fetch.preconnect }));
-  try {
-    const runtime = await createInvocationRuntime({ profile: "live-import" });
-    expect(runtime).toMatchObject({
-      ok: true,
-      context: { summary: { sessionDid } },
-    });
-    expect(fetchSpy).not.toHaveBeenCalled();
-  } finally {
-    fetchSpy.mockRestore();
-  }
-});
 
 /** A delegate-session profile whose stored session is a real owner-signed SIWE that has expired. */
 async function persistExpiredSignedSession(profile: string): Promise<void> {

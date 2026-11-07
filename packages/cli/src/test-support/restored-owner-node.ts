@@ -28,17 +28,29 @@ export async function restoredOwnerNode(params: {
   });
   const signature = await params.signer.signMessage(prepared.siwe);
   const session = params.wasm.completeSessionSetup({ ...prepared, signature });
-  const node = new TinyCloudNode({ host: params.host, wasmBindings: params.wasm });
-  await node.restoreSession({
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    spaceId: params.spaceId,
-    jwk: params.sessionKey,
-    verificationMethod: params.sessionDid,
-    address,
-    chainId: 1,
-    siwe: prepared.siwe,
-    signature,
-  });
-  return node;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === params.host && /^\/v[12]\/locations\//.test(url.pathname)) {
+      return Response.json({ error: "location record not found" }, { status: 404 });
+    }
+    throw new Error(`Unexpected restored-owner fixture request: ${url.origin}${url.pathname}`);
+  }, { preconnect: originalFetch.preconnect });
+  const node = new TinyCloudNode({ host: params.host, tinycloudRegistryUrl: params.host, wasmBindings: params.wasm });
+  try {
+    await node.restoreSession({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: params.spaceId,
+      jwk: params.sessionKey,
+      verificationMethod: params.sessionDid,
+      address,
+      chainId: 1,
+      siwe: prepared.siwe,
+      signature,
+    });
+    return node;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }

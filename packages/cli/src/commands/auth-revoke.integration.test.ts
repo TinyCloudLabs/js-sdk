@@ -129,7 +129,7 @@ async function seed(
   }
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host, tinycloudRegistryUrl: host, chainId: 1, spaceName: "default", did: ownerDid,
       sessionDid, ownerDid, spaceId, posture: authMethod === "local" ? "local-owner-key" : "owner-openkey",
       authMethod, ...(authMethod === "local" ? { privateKey: OWNER_KEY } : {}),
       operatorType: "human", createdAt: "2026-10-01T00:00:00.000Z",
@@ -154,7 +154,7 @@ async function seedWithPublicLogin(home: string, host: string): ReturnType<typeo
   const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host, tinycloudRegistryUrl: host, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });
@@ -198,6 +198,7 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
     async fetch(request) {
       const path = new URL(request.url).pathname;
       networkPaths.push(path);
+      if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
       if (path === "/delegation/query" && request.method === "POST" && queryRecords !== undefined) {
         queryRequests.push(request.headers.get("authorization") ?? "");
         return Response.json({ schemaVersion: 2, items: queryRecords });

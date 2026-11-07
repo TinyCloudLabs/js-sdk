@@ -51,6 +51,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     requests.push(path);
+    if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
     if (path === "/invoke") {
       // The invocation's capability targets, e.g. `<space>/sql/account`.
       const payload = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "").split(".")[1] ?? "";
@@ -79,7 +80,7 @@ async function preparedLogin(transport: "callback" | "paste", behavior: Behavior
   const directory = await withTinyCloudStateRoot(home, async () => {
     if (!priorHome) {
       await writeJsonAtomic(profileConfigPath(PROFILE), {
-        name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
+        name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
         ownerDid, posture: "owner-openkey", authMethod: "openkey",
         createdAt: "2026-10-01T00:00:00.000Z",
       });

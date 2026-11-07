@@ -403,7 +403,7 @@ describe("tc secrets run on a local owner key profile", () => {
     expect(activated.status).toBe(200);
     await withTinyCloudStateRoot(ROOT, async () => {
       await writeJsonAtomic(profileConfigPath(name), {
-        name, host: local.host, chainId: 1, spaceName: "secrets", spaceId,
+        name, host: local.host, tinycloudRegistryUrl: local.host, chainId: 1, spaceName: "secrets", spaceId,
         did: local.ownerDid, sessionDid, ownerDid: local.ownerDid, operatorType: "human",
         createdAt: "2026-10-26T00:00:00.000Z",
         authMethod: "local", posture: "local-owner-key", privateKey: local.ownerPrivateKey,

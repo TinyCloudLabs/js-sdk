@@ -244,6 +244,9 @@ function recordWarnings(warnings) {
   const holder = globalThis;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
+function recordRegistryFallbackWarning(_message, reason = "using_default_node") {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
+}
 function drainWarnings() {
   const holder = globalThis;
   const warnings = holder[PENDING_WARNINGS] ?? [];
@@ -265,9 +268,17 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
-  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`;
+  const fallback = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
+  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
+  const parts = fallback ? ["registry unavailable; using the default node"] : [];
+  if (cached) parts.push("Storage settings are unreachable; using cached settings checked less than 1 hour ago.");
+  if (skipped.length > 0) {
+    const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+    const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
+    parts.push(`${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`);
+  }
+  return parts.join(" ");
 }
 function outputError(code5, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
@@ -7286,9 +7297,17 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+function configuredRegistryUrl(contextUrl, profile) {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : void 0;
+}
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -7360,7 +7379,12 @@ async function restoreProfileSessionNode(ctx) {
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -7382,8 +7406,13 @@ async function storedSessionVerifiesLocally(profileName) {
     const session = await ProfileManager.getSession(profileName);
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
+    const tinycloudRegistryUrl = configuredRegistryUrl(void 0, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -7408,6 +7437,7 @@ async function createSDKInstance(ctx, options) {
     );
   }
   const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key = await ProfileManager.getKey(ctx.profile);
   const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
@@ -7429,7 +7459,11 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -7470,7 +7504,11 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
+    ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -8044,6 +8082,7 @@ var init_profiles = __esm({
        *
        * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
        * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+       * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
        *
        * Local-node discovery (TC-106) only runs when no explicit host was given
        * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -8063,6 +8102,9 @@ var init_profiles = __esm({
         } catch (error) {
           if (error instanceof ProfileSymlinkError2) throw error;
         }
+        const envRegistryUrl = process.env.TC_REGISTRY_URL;
+        const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+        const tinycloudRegistryUrl = typeof envRegistryUrl === "string" && envRegistryUrl.length > 0 ? envRegistryUrl : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0 ? profileRegistryUrl : void 0;
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
         const explicitEnvOff = envReplication === "0" || envReplication === "false" || envReplication === "off";
@@ -8087,6 +8129,7 @@ var init_profiles = __esm({
         return {
           profile,
           host,
+          ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
           verbose: options.verbose ?? false,
           noCache: options.noCache ?? false,
           quiet: options.quiet ?? false,
@@ -31235,10 +31278,11 @@ init_profiles();
 init_constants();
 init_errors();
 init_session_expired();
+init_warnings();
 import { chmod as chmod4, link as link3, open as open9, readFile as readFile7, stat as stat5, unlink as unlink5 } from "fs/promises";
 import { dirname as dirname5, join as join12 } from "path";
 import { createHash } from "crypto";
-import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
@@ -32166,7 +32210,22 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const nativeReader = async (link4) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false }).sharing);
+    let sharing = input.nativeSharing;
+    if (sharing === void 0) {
+      const selectedProfile2 = await profileName();
+      const selected = await ProfileManager.profileExists(selectedProfile2) ? await ProfileManager.getProfile(selectedProfile2) : void 0;
+      const registry = selected === void 0 ? {} : {
+        registryCacheStore: createProfileRegistryCacheStore2(selectedProfile2),
+        registrySequenceStore: createProfileRegistrySequenceStore2(selectedProfile2),
+        tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl
+      };
+      sharing = (host) => new TinyCloudNode2({
+        ...registry,
+        ...host === void 0 ? {} : { host },
+        autoDiscoverLocalNode: false,
+        onRegistryFallback: recordRegistryFallbackWarning
+      }).sharing;
+    }
     const token = parseNativeShareUrl(link4);
     const decoded = sharing(void 0).decodeLink(token);
     if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
@@ -34023,7 +34082,7 @@ program.hook("preAction", async (thisCommand) => {
   const commandName = thisCommand.name();
   const isRootCommand = thisCommand === program;
   const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create" || fullCommand === "registry show";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();

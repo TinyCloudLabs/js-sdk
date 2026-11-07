@@ -12,7 +12,7 @@ import {
   type RuntimeOperationContext,
   type TinyCloudPosture,
 } from "../contract.js";
-import { OperationInvocationError, operationError } from "../errors.js";
+import { OperationInvocationError, operationError, routingOperationError } from "../errors.js";
 import { missingSecretRecovery, ownerOfSpace } from "../secret-request.js";
 import {
   normalizeSecretsGetInput,
@@ -22,6 +22,9 @@ import {
   type SecretReference,
   type SecretsGetInput,
 } from "../secrets.js";
+
+const NODE_NOT_RESPONDING_MESSAGE =
+  "The place your data is stored isn't responding right now. Please try again.";
 
 interface SecretsGetOutput {
   readonly value: string;
@@ -147,10 +150,10 @@ async function executeSecretGet(
       name: reference.name,
       ...(reference.scope === undefined ? {} : { scope: reference.scope }),
     });
-  } catch {
+  } catch (error) {
     return {
       status: "error",
-      error: operationError(
+      error: routingOperationError(error) ?? operationError(
         "NODE_ERROR",
         "The TinyCloud node could not read the secret.",
         { retryable: true },
@@ -186,8 +189,8 @@ function classifySecretRead(
       return {
         status: "error",
         error: operationError(
-          "NODE_UNREACHABLE",
-          "The TinyCloud node could not be reached.",
+          "NODE_NOT_RESPONDING",
+          NODE_NOT_RESPONDING_MESSAGE,
           { retryable: true },
         ),
       };

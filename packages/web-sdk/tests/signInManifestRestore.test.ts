@@ -6,11 +6,35 @@ import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
 import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
 import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
-import { CaveatedDelegationUnsupportedError, composeManifestRequest, pkhDid, signLocationRecord } from "@tinycloud/sdk-core";
+import {
+  CaveatedDelegationUnsupportedError,
+  REGISTRY_NOT_FOUND_BODY,
+  composeManifestRequest,
+  pkhDid,
+  signLocationRecord,
+} from "@tinycloud/sdk-core";
 import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/memoryPendingStore";
 import type { Config } from "../src/modules/tcw";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
+const TEST_REGISTRY_URL = "https://registry.test";
+
+function registryNoEntryResponse(): Response {
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+}
+
+async function withNoEntryRegistry<T>(action: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    return await action();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
 
 global.TextEncoder = TE;
 global.TextDecoder = TD;
@@ -260,14 +284,26 @@ test("accountAuthorizationCid returns the delegation CID of a restored walletles
     })),
     clear: mock(async () => undefined),
   };
-  // No provider: the node has no auth layer, so the restored session is held by the node itself.
-  const tcw = new TinyCloudWeb({ sessionStorage: storage });
-
-  const result = await tcw.restoreSession(address);
-
-  expect(result.error).toBeUndefined();
-  expect(result.status).toBe("restored");
-  expect(tcw.accountAuthorizationCid()).toBe("bafy-restored-account");
+  // A restored walletless session uses the canonical two-namespace no-entry response.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    throw new TypeError(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  const tcw = new TinyCloudWeb({
+    sessionStorage: storage,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
+    autoDiscoverLocalNode: false,
+  });
+  try {
+    const result = await tcw.restoreSession(address);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("restored");
+    expect(tcw.accountAuthorizationCid()).toBe("bafy-restored-account");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", async () => {
@@ -287,6 +323,7 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
     if (url.endsWith("/info")) {
       return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     }
@@ -298,6 +335,7 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
   const tcw = new TinyCloudWeb({
     provider,
     persistSession: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
     tinycloudHosts: ["https://node.test.local"],
   });
 
@@ -612,20 +650,35 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
   const signature = await signer.signMessage(prepared.siwe);
   const completed = wasm.completeSessionSetup({ ...prepared, signature });
   // A real node-sdk session; the browser wallet flow is not under test.
-  const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
-  await node.restoreSession({
-    delegationHeader: completed.delegationHeader,
-    delegationCid: completed.delegationCid,
-    spaceId,
-    jwk,
-    verificationMethod: manager.getDID("default"),
-    address,
-    chainId,
-    siwe: prepared.siwe,
-    signature,
-    expiresAt: expirationTime,
-    tinycloudHosts: [host],
+  const node = new TinyCloudNode({
+    host,
+    signer,
+    wasmBindings: wasm,
+    autoBootstrapAccount: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
   });
+  const originalRestoreFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    return originalRestoreFetch(input, init);
+  }) as typeof fetch;
+  try {
+    await node.restoreSession({
+      delegationHeader: completed.delegationHeader,
+      delegationCid: completed.delegationCid,
+      spaceId,
+      jwk,
+      verificationMethod: manager.getDID("default"),
+      address,
+      chainId,
+      siwe: prepared.siwe,
+      signature,
+      expiresAt: expirationTime,
+      tinycloudHosts: [host],
+    });
+  } finally {
+    globalThis.fetch = originalRestoreFetch;
+  }
   const tcw = new TinyCloudWeb({});
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -687,6 +740,7 @@ test("signOut then signIn uses a fresh wallet SIWE even if another tab restores 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
     if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (url.endsWith("/delegate") && init?.method === "POST") {
       return Response.json({ activated: ["space"], skipped: [] });
@@ -696,6 +750,7 @@ test("signOut then signIn uses a fresh wallet SIWE even if another tab restores 
   const web = new TinyCloudWeb({
     provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
   });
   (web as any).wasmBindings = wasm;
   try {
@@ -710,6 +765,7 @@ test("signOut then signIn uses a fresh wallet SIWE even if another tab restores 
     const separatePage = new TinyCloudWeb({
       provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
       includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+      tinycloudRegistryUrl: TEST_REGISTRY_URL,
     });
     (separatePage as any).wasmBindings = wasm;
     const restored = await separatePage.restoreSession(address);
@@ -751,7 +807,13 @@ async function persistedRealSession(host: string) {
   });
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
-  const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
+  const node = new TinyCloudNode({
+    host,
+    signer,
+    wasmBindings: wasm,
+    autoBootstrapAccount: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
+  });
   const persisted = {
     address: proof.address,
     chainId: proof.chainId,
@@ -864,6 +926,7 @@ test.each([
   const web = new TinyCloudWeb({
     provider, sessionStorage: storage, tinycloudHosts: ["https://wallet-restore.test"],
     includeAccountRegistryPermissions: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
     replication: { enabled: true, prefixes: ["notes/"], onEvent: (event: unknown) => events.push(event),
       storage: {
         kind: "indexeddb", lifecycle,
@@ -915,7 +978,9 @@ test.each([
   let networkReads = 0;
   let offline = false;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-    if (String(input).endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: ["kv-sync-v1"] });
+    const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: ["kv-sync-v1"] });
     networkReads++;
     if (offline) throw new Error("Network unavailable during local read");
     return Response.json({ data: "network" });
@@ -1023,7 +1088,7 @@ test("signIn() starting during signOut() cannot reload the session being cleared
   } satisfies Storage;
   const storage = new BrowserSessionStorage({ storage: backend });
   await storage.save(address, persisted);
-  await node.restoreSession({
+  await withNoEntryRegistry(() => node.restoreSession({
     ...persisted.tinycloudSession,
     jwk: JSON.parse(persisted.sessionKey),
     address,
@@ -1032,7 +1097,7 @@ test("signIn() starting during signOut() cannot reload the session being cleared
     signature: persisted.signature,
     expiresAt: persisted.expiresAt,
     tinycloudHosts: persisted.tinycloudHosts,
-  });
+  }));
   const tcw = new TinyCloudWeb({ sessionStorage: storage, includeAccountRegistryPermissions: false });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -1064,7 +1129,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
   } satisfies Storage;
   const storage = new BrowserSessionStorage({ storage: backend });
   await storage.save(address, persisted);
-  await node.restoreSession({
+  await withNoEntryRegistry(() => node.restoreSession({
     ...persisted.tinycloudSession,
     jwk: JSON.parse(persisted.sessionKey),
     address,
@@ -1073,7 +1138,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
     signature: persisted.signature,
     expiresAt: persisted.expiresAt,
     tinycloudHosts: persisted.tinycloudHosts,
-  });
+  }));
   const tcw = new TinyCloudWeb({ sessionStorage: storage });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -1123,7 +1188,7 @@ test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale a
   const storage = new BrowserSessionStorage({ storage: backend });
   await storage.save(address, persisted);
   await storage.save(otherAddress, { ...persisted, address: otherAddress });
-  await node.restoreSession({
+  await withNoEntryRegistry(() => node.restoreSession({
     ...persisted.tinycloudSession,
     jwk: JSON.parse(persisted.sessionKey),
     address,
@@ -1132,7 +1197,7 @@ test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale a
     signature: persisted.signature,
     expiresAt: persisted.expiresAt,
     tinycloudHosts: persisted.tinycloudHosts,
-  });
+  }));
   const tcw = new TinyCloudWeb({ sessionStorage: storage, includeAccountRegistryPermissions: false });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -1234,6 +1299,11 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
   const releaseGate = Promise.withResolvers<void>();
   const clearEntered = Promise.withResolvers<void>();
   const releaseClear = Promise.withResolvers<void>();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    return originalFetch(input, init);
+  }) as typeof fetch;
   try {
     const { KV_DATABASE } = require("../../replica/src/kv-storage/schema");
     await new Promise<void>((resolve, reject) => {
@@ -1283,11 +1353,13 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
       wasmBindings: wasm,
       autoBootstrapAccount: false,
       sessionStorage: storage,
+      tinycloudRegistryUrl: TEST_REGISTRY_URL,
       replication,
     });
     const web = new TinyCloudWeb({
       sessionStorage: storage,
       includeAccountRegistryPermissions: false,
+      tinycloudRegistryUrl: TEST_REGISTRY_URL,
       replication,
     });
     await (web as any)._initPromise;
@@ -1318,6 +1390,7 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
   } finally {
     releaseGate.resolve();
     releaseClear.resolve();
+    globalThis.fetch = originalFetch;
     globals.forEach((name, index) => {
       if (previous[index]) Object.defineProperty(globalThis, name, previous[index]);
       else Reflect.deleteProperty(globalThis, name);
@@ -1394,12 +1467,16 @@ test("useDelegation() and useRuntimeDelegation() waiting for initialisation are 
   expect(node.useRuntimeDelegation).not.toHaveBeenCalled();
 });
 
-describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
+describe("TinyCloudWeb restore registry defaults", () => {
   const REGISTRY = "https://registry.test";
+  const EXPLICIT_HOST = "https://explicit-hint.test";
+  const STALE_SESSION_HOST = "https://stale-session.test";
   const owner = new PrivateKeySigner(PROOF_PRIVATE_KEY);
 
-  /** A persisted walletless session with no hosts, so restore resolves one. */
-  async function restoreWithoutHosts(registry: () => Promise<Response>) {
+  async function restore(
+    registry: (url: string) => Promise<Response>,
+    options: { explicitHosts?: string[]; persistedHosts?: string[] } = {},
+  ) {
     const address = await owner.getAddress();
     const storage = {
       save: mock(async () => undefined),
@@ -1414,6 +1491,7 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
           delegationCid: "bafy-restored-account",
           spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
           verificationMethod: "did:key:default",
+          ...(options.persistedHosts === undefined ? {} : { tinycloudHosts: options.persistedHosts }),
         },
         expiresAt: "2099-01-01T00:00:00.000Z",
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -1426,13 +1504,13 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       requests.push(url);
-      if (url.startsWith(`${REGISTRY}/`)) return registry();
+      if (url.startsWith(`${REGISTRY}/`)) return registry(url);
       throw new TypeError(`unreachable: ${url}`);
     }) as typeof fetch;
     try {
       const tcw = new TinyCloudWeb({
         sessionStorage: storage,
-        registryPolicy: "fail-closed",
+        ...(options.explicitHosts === undefined ? {} : { tinycloudHosts: options.explicitHosts }),
         tinycloudRegistryUrl: REGISTRY,
         autoDiscoverLocalNode: false,
       });
@@ -1442,31 +1520,51 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
     }
   }
 
-  test("an unavailable registry fails the restore instead of using the hosted node", async () => {
-    const { result, requests } = await restoreWithoutHosts(async () => new Response("down", { status: 503 }));
+  test("default restore fails closed when the registry is unavailable despite an explicit host hint", async () => {
+    const { result, requests } = await restore(
+      async () => new Response("down", { status: 503 }),
+      { explicitHosts: [EXPLICIT_HOST] },
+    );
 
     expect(result.status).toBe("restore-failed");
-    expect(result.error).toMatchObject({ code: "registry_unavailable" });
+    expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
   });
 
-  test("a registered owner is restored onto the record's host", async () => {
-    const { tcw, result } = await restoreWithoutHosts(async () => {
-      const record = await signLocationRecord(
-        {
-          version: 1,
-          subject: pkhDid(await owner.getAddress(), 1),
-          multiaddrs: ["/dns4/my.node.example/tcp/443/https"],
-          updated_at: "2026-10-18T00:00:00.000Z",
-          sequence: 1,
-        },
-        { type: "did:pkh", signMessage: (message: string) => owner.signMessage(message) },
-      );
-      return Response.json({ record });
-    });
+  test("true no-entry restore uses the configured host hint after registry lookup", async () => {
+    const { tcw, result, requests } = await restore(
+      async () => registryNoEntryResponse(),
+      { explicitHosts: [EXPLICIT_HOST] },
+    );
 
     expect(result.status).toBe("restored");
-    expect(tcw._node.hosts[0]).toBe("https://my.node.example");
+    expect(tcw.hosts[0]).toBe(EXPLICIT_HOST);
+    expect(requests.some((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+    expect(requests.some((url) => url.includes("/v2/locations/"))).toBe(true);
+    expect(requests.some((url) => url.includes("/v1/locations/"))).toBe(true);
+  });
+
+  test("a v1-only entry cannot restore through explicit or persisted stale hosts", async () => {
+    const record = await signLocationRecord(
+      {
+        version: 1,
+        subject: pkhDid(await owner.getAddress(), 1),
+        multiaddrs: ["/dns4/my.node.example/tcp/443/https"],
+        updated_at: "2026-10-18T00:00:00.000Z",
+        sequence: 1,
+      },
+      { type: "did:pkh", signMessage: (message: string) => owner.signMessage(message) },
+    );
+    const { result, requests } = await restore(
+      async (url) => url.includes("/v2/locations/")
+        ? registryNoEntryResponse()
+        : Response.json({ record }),
+      { explicitHosts: [EXPLICIT_HOST], persistedHosts: [STALE_SESSION_HOST] },
+    );
+
+    expect(result.status).toBe("restore-failed");
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
   });
 });
 

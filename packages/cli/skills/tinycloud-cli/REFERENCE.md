@@ -3,11 +3,12 @@
 <!-- BEGIN GENERATED TINYCloud operations coverage -->
 This release has **Commander coverage tracked, not complete parity**:
 
-- 4 migrated registration(s).
+- 5 migrated registration(s).
 - 1 partially migrated registration(s).
 - 150 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
+- `registry show [did]` → `tinycloud.registry.show@1` (migrated).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
 - `secrets probe <name>` → `tinycloud.secrets.status@1` (migrated).
 - `knowledge list` → `tinycloud.knowledge.list@1` (migrated).

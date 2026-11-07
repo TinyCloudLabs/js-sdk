@@ -76,6 +76,18 @@ await tc.signIn();
 There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
+## Signed registry cache
+
+The browser client stores exact owner-signed v2 registry responses beside its identity pins, under `tinycloud.registryCache.v2:<ownerKey>`. Fetch time, invalidation revision and sequence metadata are outside the signed response. Every routing decision awaits a bounded, coalesced refresh and verifies cached responses again. Only a higher verified sequence replaces signed bytes; equal-sequence renewal requires identical canonical signed meaning, not identical HTTP formatting.
+
+Custom `RegistryCacheStore` adapters implement `get`, `getRevision`, atomic `update(ownerKey, (current, revision) => ...)`, and `delete(ownerKey, expectedRevision?, maximumSequence?)`. Forward both callback arguments and every deletion argument. The default persistent adapter uses the same per-entry Web Lock and storage key for updates and invalidation. Deletion atomically writes `{ ownerKey, revision: previousRevision + 1, invalidated: true }`, including when empty; `get` hides this metadata-only tombstone while `getRevision` preserves its history. Legacy live entries without revision are revision zero. Accepted writes retain the store's revision. Conditional deletion refuses without mutation if its revision differs or the current signed sequence exceeds the supplied maximum; malformed or overflowing revisions refuse.
+
+Revision capture before lookup, atomic commit checks and final fallback checks prevent older in-flight responses from repopulating invalidated settings. Positive persisted revisions remain known-owner evidence without a sequence adapter. The independent `tinycloud.registrySequences.v2` map keeps signed maxima under its storage-key Web Lock across owners. Storage absence uses memory; unreadable/corrupt state refuses. Browsers without Web Locks must supply transactional persistent cache and sequence adapters; a separate revision counter write is not atomic enough.
+
+Warm fallback requires a canonically reverified cache younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500, other statuses, invalid responses and invalid cached state refuse. Authoritative HTTP4xx responses and fresh signed records without the required route remove cached settings while retaining known-owner history. Cold HTTP5xx, transport errors and timeouts without cached or remembered registration retain configured/default-host compatibility. `onRegistryFallback(reason, code?)` receives `using_default_node` or `using_cached_settings` after actual route selection, once per owner/cache and fallback kind; without it the SDK logs a value-free warning. Non-replicating stored-session hydration is local-only; later live operations still refresh routing. Explicit replication retains preflight. Nodes performing online admission still require their registry connection.
+
+Details: TC-2481
+
 ## Optional local KV replication
 
 Install `@tinycloud/replica`, then load and register the optional browser plugin

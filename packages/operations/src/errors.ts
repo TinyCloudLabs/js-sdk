@@ -1,3 +1,5 @@
+import { PartialNodeWriteError, routingFailure } from "@tinycloud/sdk-services";
+
 export const OPERATION_ERROR_CODES = [
   "INPUT_INVALID",
   "OPERATION_NOT_FOUND",
@@ -17,6 +19,14 @@ export const OPERATION_ERROR_CODES = [
   "DELEGATION_REJECTED",
   "ENCRYPTION_NETWORK_UNRESOLVED",
   "NODE_UNREACHABLE",
+  "NODE_NOT_RESPONDING",
+  "DECRYPTION_DEPENDENCY_UNAVAILABLE",
+  "NODE_IDENTITY_MISMATCH",
+  "PARTIAL_NODE_WRITE",
+  "RESOURCE_NOT_ROUTED",
+  "REGISTRY_UNAVAILABLE",
+  "NODE_NOT_FOUND",
+  "NODE_REGISTRY_ENTRY_EXISTS",
   "NODE_ERROR",
   "STORAGE_QUOTA_EXCEEDED",
   "KV_NOT_FOUND",
@@ -99,6 +109,53 @@ export function nodeRetryOperationError(error: unknown): OperationError | undefi
   }
   if (code !== "NODE_BUSY" && code !== "REQUEST_TIMEOUT") return undefined;
   return operationError("NODE_ERROR", "The TinyCloud node was busy and applied nothing; try again shortly.", { retryable: true });
+}
+
+const ROUTING_OPERATION_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof routingFailure>>["code"], OperationError>> = {
+  NODE_NOT_RESPONDING: { code: "NODE_NOT_RESPONDING", message: "The place your data is stored isn't responding right now. Please try again.", retryable: true },
+  DECRYPTION_DEPENDENCY_UNAVAILABLE: { code: "DECRYPTION_DEPENDENCY_UNAVAILABLE", message: "The decryption service isn't responding right now. Please try again.", retryable: true },
+  NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "The TinyCloud node identity does not match the signed registry.", retryable: false },
+  PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "The operation did not complete on every required node.", retryable: false },
+  RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "The signed registry has no destination for this resource.", retryable: false },
+  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "The storage settings are unreachable right now. Please try again.", retryable: true },
+  node_not_found: { code: "NODE_NOT_FOUND", message: "No TinyCloud node is registered for this resource.", retryable: false },
+  node_registry_entry_exists: { code: "NODE_REGISTRY_ENTRY_EXISTS", message: "The selected node is not authorized by the signed registry.", retryable: false },
+};
+
+function partialRoutingDetails(partial: PartialNodeWriteError) {
+  return {
+    succeeded: partial.succeeded,
+    failed: partial.failed.map(({ url, status, cause }) => {
+      const code = routingFailure(cause)?.code;
+      return { url, ...(status === undefined ? {} : { status }), ...(code === undefined ? {} : { code }) };
+    }),
+  };
+}
+
+/** Preserve routing codes without exposing node response bodies or private causes. */
+export function routingOperationError(error: unknown): OperationError | undefined {
+  const failure = routingFailure(error);
+  if (!failure) return undefined;
+  const projected = ROUTING_OPERATION_ERRORS[failure.code];
+  return operationError(projected.code, projected.message, {
+    retryable: projected.retryable,
+    ...(error instanceof PartialNodeWriteError ? { details: partialRoutingDetails(error) } : {}),
+  });
+}
+
+/** Only grant registration may project all-unavailable partials as retryable availability. */
+export function activationRoutingOperationError(error: unknown): OperationError | undefined {
+  if (!(error instanceof PartialNodeWriteError)) return routingOperationError(error);
+  const details = partialRoutingDetails(error);
+  // Retrying the same grant registration is safe: no operation data has been written.
+  const unavailable = details.failed.length > 0 &&
+    details.failed.every(({ code }) => code === "NODE_NOT_RESPONDING");
+  const projected = ROUTING_OPERATION_ERRORS[unavailable ? "NODE_NOT_RESPONDING" : "PARTIAL_NODE_WRITE"];
+  return operationError(projected.code,
+    unavailable ? projected.message : "The grant was not registered on every required node.", {
+      retryable: projected.retryable,
+      details,
+    });
 }
 
 /**

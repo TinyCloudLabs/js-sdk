@@ -39,6 +39,9 @@ describe("kvSyncTransport.syncPage", () => {
       [fail("AUTH_UNAUTHORIZED", "401 - Unauthorized Action", { status: 401 }), ReplicaErrorCode.GRANT_UNAUTHORIZED],
       [fail("NETWORK_ERROR", "fetch failed"), ReplicaErrorCode.NETWORK_ERROR],
       [fail("NETWORK_ERROR", "500 - boom", { status: 500 }), ReplicaErrorCode.NODE_ERROR],
+      [fail("NODE_NOT_RESPONDING", "The listed data node is offline"), ReplicaErrorCode.NETWORK_ERROR],
+      [fail("NODE_NOT_RESPONDING", "The node answered with an error", { status: 500 }), ReplicaErrorCode.NODE_ERROR],
+      [fail("registry_unavailable", "The signed routing settings could not be verified"), ReplicaErrorCode.NODE_ERROR],
     ];
     for (const [failure, expected] of cases) {
       const transport = kvSyncTransport(client({ changes: async () => failure }));

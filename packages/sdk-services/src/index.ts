@@ -140,6 +140,16 @@ export type {
 // Context
 export { ServiceContext } from "./context";
 export type { ServiceContextConfig } from "./context";
+export {
+  createResourceRoutingFetch,
+  verifyResourceDestination,
+  NodeNotRespondingError,
+  NodeIdentityMismatchError,
+  ResourceNotRoutedError,
+  PartialNodeWriteError,
+  routingFailure,
+} from "./resourceRouting";
+export type { ResourceAccess, ResourceDestination, ResourceRoutingConfig } from "./resourceRouting";
 
 // Developer request log
 export type { RequestEvent, RequestLog, RequestLogReader, RequestSink, RequestService } from "./telemetry/requestLog";
