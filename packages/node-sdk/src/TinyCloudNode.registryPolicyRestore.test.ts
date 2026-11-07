@@ -102,16 +102,20 @@ function newNode(
   });
 }
 
-test("an unknown owner's cold registry outage retains the configured hint only at the live boundary", async () => {
+test("an unknown owner's cold registry outage refuses the first live read without using a host hint", async () => {
   const requests = installNetwork(async () => new Response("down", { status: 503 }));
   const proof = await signedRestorableSession();
   const node = newNode(STALE_HOST);
 
   await node.restoreSession({ ...proof, tinycloudHosts: [STALE_HOST] });
   expect(requests).toEqual([]);
-  expect(await node.kv.get("route-probe")).toMatchObject({ ok: true });
+  expect(await node.kv.get("route-probe")).toMatchObject({
+    ok: false, error: { code: "registry_unavailable" },
+  });
+  await expect(node.readSecret({ space: proof.spaceId, name: "TEST" }))
+    .rejects.toMatchObject({ code: "registry_unavailable", meta: { reason: "no-saved-settings" } });
   expect(requests).toContain(`${REGISTRY}/v2/locations/${encodeURIComponent(proof.address)}`);
-  expect(requests).toContain(`${STALE_HOST}/invoke`);
+  expect(requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
 });
 
 test("a signed v2 full-space route overrides stale hints at the authorized live read", async () => {

@@ -307,15 +307,15 @@ describe("resolveFailClosedTinyCloudHosts", () => {
     expect(requests).toEqual([LOOKUP_URL]);
   });
 
-  it("uses the default for a fresh registry outage but refuses a missing registry URL", async () => {
+  it("refuses a fresh registry outage and a missing registry URL", async () => {
     const warnings: string[] = [];
-    const down = await resolveFailClosedTinyCloudHosts(owner.address, {
+    const down = resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
       fetch: registry([() => new Response("down", { status: 502 }), () => new Response("down", { status: 502 })]),
       onRegistryFallback: (reason) => { warnings.push(reason); },
     });
-    expect(down.hosts).toEqual([DEFAULT_NEW_USER_HOST]);
-    expect(warnings).toEqual(["registry unavailable; using the default node"]);
+    await expect(down).rejects.toMatchObject({ code: "registry_unavailable", meta: { reason: "no-saved-settings" } });
+    expect(warnings).toEqual([]);
 
     const requests: string[] = [];
     const none = resolveFailClosedTinyCloudHosts(owner.address, {

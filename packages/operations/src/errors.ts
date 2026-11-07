@@ -137,7 +137,10 @@ export function routingOperationError(error: unknown): OperationError | undefine
   const failure = routingFailure(error);
   if (!failure) return undefined;
   const projected = ROUTING_OPERATION_ERRORS[failure.code];
-  return operationError(projected.code, projected.message, {
+  const message = failure.code === "registry_unavailable" && failure.meta?.reason === "no-saved-settings"
+    ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes."
+    : projected.message;
+  return operationError(projected.code, message, {
     retryable: projected.retryable,
     ...(error instanceof PartialNodeWriteError ? { details: partialRoutingDetails(error) } : {}),
   });
