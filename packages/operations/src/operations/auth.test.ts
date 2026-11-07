@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   NodeWasmBindings,
   PrivateKeySigner,
@@ -38,6 +39,8 @@ import {
   type AuthRuntimeFixture,
   type StoredRuntimeDelegation,
 } from "../../test-support/auth-runtime.js";
+import { lockChildEnv } from "../test-support/lock-children.js";
+import { waitForProfileLockProtocol } from "../test-support/profile-lock-protocol.js";
 
 let definitions: readonly OperationDefinition<unknown, unknown>[] = [];
 
@@ -733,50 +736,87 @@ test("rechecks real on-disk session rotation before reporting import success", a
   }
 });
 
-test("does not hold the production profile lock during delayed activation and rejects rotated state", async () => {
+test("serializes an independently queued session writer after import and refuses the rotated replay", async () => {
   const fixture = await createAuthRuntimeFixture();
+  let releaseActivation!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseActivation = resolve; });
+  let importing: Promise<unknown> | undefined;
+  let writerFinished: Promise<[number, string, string]> | undefined;
   try {
     const runtime = await runtimeContext(fixture.profile);
     const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
-    const node = runtime.runtime.node as {
-      useRuntimeDelegation(delegation: unknown): Promise<void>;
-    };
+    const delegation = await fixture.hermetic.mintDelegation();
+    const node = runtime.runtime.node as TinyCloudNode;
     const activate = node.useRuntimeDelegation.bind(node);
     let activationStarted!: () => void;
-    let releaseActivation!: () => void;
     const started = new Promise<void>((resolve) => { activationStarted = resolve; });
-    const gate = new Promise<void>((resolve) => { releaseActivation = resolve; });
-    node.useRuntimeDelegation = async (delegation) => {
+    node.useRuntimeDelegation = async (...args: Parameters<TinyCloudNode["useRuntimeDelegation"]>) => {
       activationStarted();
       await gate;
-      await activate(delegation);
+      await activate(...args);
     };
-
-    const importPromise = importDefinition().execute(
-      runtime,
-      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
-    );
+    importing = importDefinition().execute(runtime, importArtifact(requestId, delegation));
     await started;
 
-    let writerEntered = false;
-    const writer = withProfileLock(fixture.profile, async () => {
-      writerEntered = true;
-      await writeJsonAtomic(sessionPath(fixture.profile), {
-        ...fixture.hermetic.restorableSession,
-        verificationMethod: fixture.hermetic.unrelatedAudience,
-      });
+    const contended = join(home, "import-writer-contended");
+    const writer = Bun.spawn([
+      process.execPath,
+      "--preload", new URL("../../test-support/test-bootstrap.mjs", import.meta.url).pathname,
+      "--eval", `
+        import { exitWithParent } from ${JSON.stringify(new URL("../../test-support/parent-watch.mjs", import.meta.url).href)};
+        import { PROFILE_LOCK_HELPER_DEADLINE_MS } from ${JSON.stringify(new URL("../test-support/profile-lock-protocol.ts", import.meta.url).href)};
+        import { withProfileLock, readAdditionalDelegations, sessionPath, writeJsonAtomic }
+          from ${JSON.stringify(new URL("../state.ts", import.meta.url).href)};
+        globalThis.fetch = () => { throw new Error("The local profile writer cannot use the network"); };
+        exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
+        const profile = process.env.TC_TEST_WRITER_PROFILE;
+        await withProfileLock(profile, async () => {
+          const records = await readAdditionalDelegations(profile);
+          await writeJsonAtomic(sessionPath(profile), JSON.parse(process.env.TC_TEST_WRITER_SESSION));
+          process.stdout.write(JSON.stringify(records.map((record) => record.delegation.cid)) + "\\n");
+        });
+      `,
+    ], {
+      env: {
+        ...lockChildEnv(home),
+        HOME: home,
+        USERPROFILE: home,
+        TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contended,
+        TC_TEST_WRITER_PROFILE: fixture.profile,
+        TC_TEST_WRITER_SESSION: JSON.stringify({
+          ...fixture.hermetic.restorableSession,
+          verificationMethod: fixture.hermetic.unrelatedAudience,
+        }),
+      },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
-    await Promise.race([
-      writer,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("profile writer blocked during activation")), 250)),
+    writerFinished = Promise.all([
+      writer.exited, new Response(writer.stdout).text(), new Response(writer.stderr).text(),
     ]);
-    expect(writerEntered).toBe(true);
-
+    const writerExited = new AbortController();
+    void writer.exited.then(() => writerExited.abort());
+    await waitForProfileLockProtocol(
+      contended, "the independent session writer reaching the held import lock", undefined, writerExited.signal,
+    );
     releaseActivation();
-    const result = await importPromise;
-    expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_AUDIENCE_MISMATCH" } });
-    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+
+    expect(await importing).toMatchObject({
+      status: "ok", output: { cid: delegation.cid, activated: true },
+    });
+    const [exit, stdout, stderr] = await writerFinished;
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toContain(delegation.cid);
+    expect(node.getRuntimePermissionDelegations()).toContainEqual(expect.objectContaining({ cid: delegation.cid }));
+    const stored = await readAdditionalDelegations(fixture.profile);
+    const beforeReplay = fixture.hermetic.requests();
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "error", error: { code: "DELEGATION_AUDIENCE_MISMATCH" },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(stored);
+    expect(fixture.hermetic.requests()).toEqual(beforeReplay);
   } finally {
+    releaseActivation();
+    await Promise.allSettled([importing, writerFinished]);
     fixture.hermetic.stop();
   }
 });

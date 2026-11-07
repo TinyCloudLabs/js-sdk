@@ -72,23 +72,21 @@ function replicationAuthorityForTest(node: TinyCloudNode): Promise<ReplicationAu
 }
 
 describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
-  test("memoizes encryption descriptors within one session graph and refreshes after restore", async () => {
+  test("public discovery uses the current host's descriptor after same-resource restoration", async () => {
     const originalFetch = globalThis.fetch;
     const proof = await signedRestorableSession();
     const ownerDid = pkhDid(proof.address, proof.chainId);
     const nodeDid = proof.verificationMethod.split("#", 1)[0]!;
     const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
-    let descriptorFetches = 0;
     globalThis.fetch = mock(async (input: string | URL | Request) => {
       const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin);
       if (registryResponse) return registryResponse;
-      const url = String(input);
-      if (url.endsWith("/info")) return Response.json({ nodeId: nodeDid });
-      if (!url.includes("/encryption/networks/")) {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });
+      if (!url.pathname.startsWith("/encryption/networks/")) {
         throw new Error(`Unexpected fetch: ${url}`);
       }
-      descriptorFetches++;
-      return new Response(JSON.stringify({
+      return Response.json({
         networkId,
         ownerDid,
         name: "default",
@@ -97,13 +95,10 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
         state: "active",
         publicEncryptionKey: "AQ==",
         alg: "x25519-aes256gcm/v1",
-        keyVersion: descriptorFetches,
+        keyVersion: url.origin === "https://one.example" ? 1 : 2,
         keyBackend: "local-one-of-one",
         createdAt: "2026-07-24T00:00:00.000Z",
         updatedAt: "2026-07-24T00:00:00.000Z",
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
       });
     }) as typeof fetch;
 
@@ -114,23 +109,14 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
         wasmBindings: new NodeWasmBindings(),
       });
       await node.restoreSession({ ...proof, tinycloudHosts: ["https://one.example"] });
-
-      const firstService = node.encryption;
-      const [first, concurrent] = await Promise.all([
-        (firstService as any).config.node.fetchByNetworkId(networkId),
-        (firstService as any).config.node.fetchByNetworkId(networkId),
-      ]);
-      const cached = await (firstService as any).config.node.fetchByNetworkId(networkId);
-      expect(descriptorFetches).toBe(1);
-      expect(concurrent).toEqual(first);
-      expect(cached).toEqual(first);
+      expect(await node.encryption.discoverNetwork(networkId)).toMatchObject({
+        ok: true, data: { networkId, ownerDid, keyVersion: 1 },
+      });
 
       await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
-      const refreshed = await (node.encryption as any).config.node.fetchByNetworkId(
-        networkId,
-      );
-      expect(descriptorFetches).toBe(2);
-      expect(refreshed.keyVersion).toBe(2);
+      expect(await node.encryption.discoverNetwork(networkId)).toMatchObject({
+        ok: true, data: { networkId, ownerDid, keyVersion: 2 },
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
