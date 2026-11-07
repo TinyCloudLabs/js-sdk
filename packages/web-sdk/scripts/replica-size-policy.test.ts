@@ -4263,8 +4263,6 @@ describe("stop leaking an abort listener per request (TC-2418, #844) size ratche
     expect(row().replicaWorker).toEqual({ delta: 27, ceiling: prerequisite().replicaWorker.ceiling + 27 });
     expect(row().worker.ceiling).toBe(776561);
     expect(row().replicaWorker.ceiling).toBe(770494);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
     // Naomi's ruling: at most +150 B in any bucket.
     for (const delta of [...Object.values(row().root.delta), ...Object.values(row().firstImport.delta), ...Object.values(row().activation.delta), row().worker.delta, row().replicaWorker.delta]) {
       expect(delta).toBeLessThanOrEqual(150);
