@@ -22,3 +22,18 @@ export function startUnregisteredLocationRegistry(): UnregisteredLocationRegistr
     },
   });
 }
+
+export function unregisteredLocationRegistryResponse(
+  input: string | URL | Request,
+  registryOrigin: string,
+  init?: RequestInit,
+): Response | undefined {
+  const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (url.origin !== registryOrigin || method !== "GET" ||
+    !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return undefined;
+  return new Response(REGISTRY_NOT_FOUND_BODY, {
+    status: 404,
+    headers: { "content-type": "application/json" },
+  });
+}

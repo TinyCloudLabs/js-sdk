@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { REGISTRY_NOT_FOUND_BODY, httpUrlToMultiaddr, parseSignedCompactUcanAttenuation, signLocationRecord, type LocationRecord, type LocationRecordV2, type PermissionEntry } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, createInMemoryRegistryCacheStore, httpUrlToMultiaddr, parseSignedCompactUcanAttenuation, signLocationRecord, type LocationRecord, type LocationRecordV2, type PermissionEntry, type RegistryCacheStore } from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
@@ -22,6 +22,7 @@ type ActivationMode = "encryption-only" | "mixed-repeat" | "listed-skipped";
 interface ScopedClientFixture {
   node: TinyCloudNode;
   staleRequests: string[];
+  requests: string[];
   refuseEncryption(): void;
   setActivationMode(mode: ActivationMode): void;
   probeDecrypt(authorization: string, cid: string): Promise<Response>;
@@ -31,6 +32,21 @@ interface ScopedClientFixture {
 async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<void>): Promise<void> {
   const original = globalThis.fetch;
   const staleRequests: string[] = [];
+  const requests: string[] = [];
+  const cache = createInMemoryRegistryCacheStore();
+  let initialActivationComplete = false;
+  let acceptStartupRefresh!: () => void;
+  const startupRefreshed = new Promise<void>((resolve) => { acceptStartupRefresh = resolve; });
+  const registryCacheStore: RegistryCacheStore = {
+    get: cache.get,
+    getRevision: cache.getRevision,
+    delete: (key, revision, sequence) => cache.delete(key, revision, sequence),
+    async update(key, update) {
+      const entry = await cache.update(key, update);
+      if (initialActivationComplete) acceptStartupRefresh();
+      return entry;
+    },
+  };
   let signedIn = false;
   let encryptionRefused = false;
   let activationMode: ActivationMode = "encryption-only";
@@ -43,6 +59,7 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
   const activeSpace = bindings.makeSpaceId(record.subject.slice(record.subject.lastIndexOf(":") + 1), 1, "secrets");
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    requests.push(url.href);
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     if (url.origin === registry) {
       if (!registryAbsent) return Response.json({ record });
@@ -69,6 +86,7 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
       const repeated = signedIn && activationMode === "mixed-repeat";
       const cid = node.computeDelegationCid(new Headers(init?.headers).get("authorization")!);
       proofs.get(target.did)!.add(cid);
+      if (!signedIn) initialActivationComplete = true;
       return Response.json({
         cid,
         activated: target.did === box.did && !skipListed && !repeated ? [activeSpace] : [],
@@ -92,6 +110,7 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
       host: stale,
       tinycloudRegistryUrl: registry,
       autoDiscoverLocalNode: false,
+      registryCacheStore,
       autoCreateSpace: false,
       autoBootstrapAccount: false,
       includeAccountRegistryPermissions: false,
@@ -105,8 +124,9 @@ async function withScopedClient(run: (fixture: ScopedClientFixture) => Promise<v
     });
     await node.signIn();
     signedIn = true;
+    await startupRefreshed;
     await run({
-      node, staleRequests,
+      node, staleRequests, requests,
       refuseEncryption: () => { encryptionRefused = true; },
       setActivationMode: (mode) => { activationMode = mode; },
       probeDecrypt: async (authorization, cid) => {
@@ -213,15 +233,28 @@ test("a classified encryption registry refusal is not mislabeled as node unrespo
   });
 });
 
-test.each([false, true])("v1-only registration on configured chain137 fails closed at restore (wallet: %s)", async (wallet) => {
-  await withScopedClient(async ({ node, useV1OnlyRegistry }) => {
+test.each([false, true])("v1-only registration on configured chain137 refuses the first authorized live read (wallet: %s)", async (wallet) => {
+  await withScopedClient(async ({ node, useV1OnlyRegistry, requests }) => {
     const saved = node.restorableSession!;
     await useV1OnlyRegistry();
     const restored = restoringClient(wallet, 137);
-    await expect(restored.restoreSession({ ...saved, tinycloudHosts: [encryption.url] })).rejects.toMatchObject({
-      code: "registry_unavailable", verdict: { reason: "unsupported-format" },
+    const beforeRestore = [...requests];
+    await restored.restoreSession({ ...saved, tinycloudHosts: [encryption.url] });
+    expect(requests).toEqual(beforeRestore);
+    expect(restored.restorableSession?.delegationCid).toBe(saved.delegationCid);
+    requests.length = 0;
+
+    expect(await restored.kv.get("vault/secrets/KEY", { prefix: "" })).toMatchObject({
+      ok: false,
+      error: {
+        code: "registry_unavailable",
+        cause: { verdict: { reason: "unsupported-format" } },
+      },
     });
-    expect(restored.restorableSession === undefined).toBe(true);
+    const legacyOwner = record.subject.replace(":1:", ":137:");
+    expect(requests).toContain(`${registry}/v1/locations/${encodeURIComponent(legacyOwner)}`);
+    expect(requests.every((url) => url.startsWith(`${registry}/`))).toBe(true);
+    expect(restored.restorableSession?.delegationCid).toBe(saved.delegationCid);
   });
 });
 

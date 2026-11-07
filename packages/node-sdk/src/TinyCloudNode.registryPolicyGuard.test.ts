@@ -7,12 +7,17 @@ import {
   NodeNotFoundError,
   REGISTRY_NOT_FOUND_BODY,
   RegistryUnavailableError,
+  createInMemoryRegistryCacheStore,
+  createInMemoryRegistrySequenceStore,
+  lookupOwnerRegistryVerdict,
   bootstrapSteps,
   pkhDid,
   signLocationRecordV2,
   type ISessionManager,
   type IWasmBindings,
   type LocationRecordV2Payload,
+  type RegistryCacheStore,
+  type RegistrySequenceStore,
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
@@ -118,7 +123,10 @@ function registryPayload(address: string, answer: V2Answer): LocationRecordV2Pay
   };
 }
 
-async function signedInOwner(registry: RegistryAnswer): Promise<Owner> {
+async function signedInOwner(
+  registry: RegistryAnswer,
+  stores?: { cache: RegistryCacheStore; sequences: RegistrySequenceStore },
+): Promise<Owner> {
   const address = await ownerKey.getAddress();
   const primarySpaceId = spaceId(address, "default");
   const requests: string[] = [];
@@ -200,6 +208,8 @@ async function signedInOwner(registry: RegistryAnswer): Promise<Owner> {
     },
     wasmBindings: wasmBindings(),
     tinycloudRegistryUrl: REGISTRY,
+    registryCacheStore: stores?.cache,
+    registrySequenceStore: stores?.sequences,
     autoDiscoverLocalNode: false,
   });
   const auth: NodeUserAuthorization = Reflect.get(node, "auth");
@@ -294,12 +304,34 @@ test("a listed owner node cannot host a full space missing from the signed membe
   expect(owner.signatures).not.toContain("host siwe");
 });
 
-test("an unavailable registry refuses hosting without using the configured host", async () => {
-  const owner = await signedInOwner("down");
+test("an unavailable registry refuses hosting after verified owner history and authoritative cache drop", async () => {
+  const address = await ownerKey.getAddress();
+  const record = await signLocationRecordV2(registryPayload(address, {}), {
+    type: "did:pkh", signMessage: (message) => ownerKey.signMessage(message),
+  });
+  const stores = {
+    cache: createInMemoryRegistryCacheStore(),
+    sequences: createInMemoryRegistrySequenceStore(),
+  };
+  let revoked = false;
+  const fetch = (async () => revoked
+    ? new Response("revoked", { status: 403 })
+    : Response.json({ record })) as typeof globalThis.fetch;
+  const options = {
+    registryUrl: REGISTRY, cacheStore: stores.cache, sequenceStore: stores.sequences, fetch,
+  };
+  expect(await lookupOwnerRegistryVerdict(pkhDid(address, 1), options))
+    .toMatchObject({ status: "registered" });
+  revoked = true;
+  expect(await lookupOwnerRegistryVerdict(pkhDid(address, 1), options))
+    .toMatchObject({ status: "unavailable" });
+  expect(await stores.cache.get(address)).toBeUndefined();
+  const owner = await signedInOwner("down", stores);
 
   await expect(owner.node.ensureOwnedSpaceHosted("secrets")).rejects.toBeInstanceOf(RegistryUnavailableError);
 
   expect(owner.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
   expect(owner.hostDelegations).toEqual([]);
   expect(owner.signatures).not.toContain("host siwe");
+  expect(await stores.sequences.get(address)).toBe(record.sequence);
 });
