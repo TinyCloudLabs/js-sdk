@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 // Browser globals the web SDK touches at import/construct time. Importing tcw
 // evaluates `class … extends HTMLElement` for the SDK's web components, and the
@@ -49,6 +50,8 @@ const BOB_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
 const OWNER = "0x0000000000000000000000000000000000000001";
 
 let events: string[] = [];
+let registry: UnregisteredLocationRegistry;
+let activation: Bun.Server<undefined>;
 
 // The signed session grants KV read on the whole default space.
 const grantedRecap = [{
@@ -135,14 +138,18 @@ const siwe = [
  * covers the requested KV read, so `delegateTo` takes the session-key path.
  */
 async function makeSignedInWeb(): Promise<InstanceType<typeof TinyCloudWeb>> {
-  const tcw = new TinyCloudWeb();
+  const tcw = new TinyCloudWeb({
+    tinycloudRegistryUrl: registry.url.origin,
+    tinycloudHosts: [activation.url.origin],
+    autoDiscoverLocalNode: false,
+  });
   // `_initPromise` and `_node` are private; the test reaches the real node
   // to install a session instead of driving a wallet sign-in.
   const internals = tcw as unknown as { _initPromise: Promise<void>; _node: object };
   await internals._initPromise;
   Object.assign(internals._node, {
     auth: {
-      resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
+      resolveResourceDestinations: async () => [{ url: activation.url.origin }],
       tinyCloudSession: {
         address: OWNER,
         chainId: 1,
@@ -167,20 +174,24 @@ const permission = {
   actions: ["tinycloud.kv/get"],
 };
 
-let originalFetch: typeof globalThis.fetch;
 beforeEach(() => {
   events = [];
-  originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    events.push(`fetch:${String(input)}`);
-    return new Response(JSON.stringify({ activated: [], skipped: [] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
+  registry = startUnregisteredLocationRegistry();
+  activation = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      events.push(`fetch:${request.url}`);
+      return new Response(JSON.stringify({ activated: [], skipped: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
 });
 afterEach(() => {
-  globalThis.fetch = originalFetch;
+  activation?.stop(true);
+  registry?.stop(true);
 });
 
 test("tcw.delegateTo runs onPrepared with the returned delegation before activation", async () => {

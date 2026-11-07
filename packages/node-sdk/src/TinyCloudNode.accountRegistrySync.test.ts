@@ -17,7 +17,7 @@
  * `syncAccessible()`.
  */
 
-import { afterEach, describe, expect, jest, mock, spyOn, test, type Mock } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, jest, mock, spyOn, test, type Mock } from "bun:test";
 import { inspect } from "node:util";
 import { SQLMigrations, tinyCloudDebugLogger } from "@tinycloud/sdk-services";
 
@@ -37,6 +37,15 @@ import {
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
+
+let locationRegistry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  locationRegistry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  locationRegistry?.stop(true);
+});
 
 async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
   const started = Date.now();
@@ -153,6 +162,7 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   };
   const node = new TinyCloudNode({
     host: "https://tinycloud.test",
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: signer as any,
     wasmBindings: wasm,
   });
@@ -1280,7 +1290,9 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     // Activation and host delegation both POST `/delegate` through the global
     // fetch; the host delegation carries its own Authorization header.
     let activations = 0;
-    const delegateFetch = async (_input: unknown, init?: { headers?: Record<string, string> }) => {
+    const delegateFetch = async (input: string | URL | Request, init?: { headers?: Record<string, string> }) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === locationRegistry.url.origin) return originalFetch(input, init);
       const ok = new Response("{}", { status: 200 });
       if (init?.headers?.Authorization === HOST_DELEGATION_AUTHORIZATION) {
         return wrapper === "owned-space create" ? failingResponse() : ok;
