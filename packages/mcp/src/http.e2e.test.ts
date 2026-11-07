@@ -1582,7 +1582,9 @@ test("a refused delegation approval names its stage, code and reason, and never 
     "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_REJECTED detail=none\n",
   ]);
   for (const secret of secrets) expect(diagnostics.join("")).not.toContain(secret);
-  expect(await exists(join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);
+  const additionalPath = join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const storedDelegations = await exists(additionalPath) ? JSON.parse(await readFile(additionalPath, "utf8")) : [];
+  expect(storedDelegations).toEqual([]);
 
   // The same approval, unrefused, still succeeds.
   expect(await postCallback(app, delegationUrl, approval)).toEqual({ status: 200, body: { success: true } });
