@@ -47,7 +47,8 @@ test("offline restore defers registry refresh until verified authority is used, 
     const manager = wasm.createSessionManager(), jwk = JSON.parse(manager.jwk("default")!);
     const primarySpace = fixture.ownerRestorableSession.spaceId;
     const prepared = wasm.prepareSession({ address: addressA, chainId: 1, domain: "cache-TEST.invalid", spaceId: primarySpace, jwk,
-      abilities: {}, rawAbilities: { [`${spaceA}/kv/`]: ["tinycloud.kv/get"] },
+      abilities: { kv: { "": ["tinycloud.kv/get"] } },
+      rawAbilities: { [`${spaceA}/kv/`]: ["tinycloud.kv/get"] },
       issuedAt: new Date().toISOString(), expirationTime: new Date(Date.now() + 600_000).toISOString() });
     const signature = await signerA.signMessage(prepared.siwe);
     const base = wasm.completeSessionSetup({ ...prepared, signature });
@@ -56,8 +57,11 @@ test("offline restore defers registry refresh until verified authority is used, 
     await node.restoreSession({ ...base, jwk, address: addressA, chainId: 1, siwe: prepared.siwe, signature, spaceId: primarySpace });
     expect([...observed]).toEqual([]);
     expect(nodeRequests).toEqual([]);
-    // The primary resource belongs to B; refresh A only from its verified signed capability.
-    node.refreshRegistryForCapabilities(node.getVerifiedSessionCapabilities());
+    // Keep exact signed resource owners: the display-oriented capability API shortens space names.
+    const verified = node.verifySessionGrant({
+      ...base, address: addressA, chainId: 1, siwe: prepared.siwe, signature, spaceId: primarySpace,
+    });
+    node.refreshRegistryForCapabilities(verified.recap);
     await ownerRefresh;
     const grant = await fixture.mintDelegationForAudience(node.sessionDid.split("#", 1)[0]!);
     // An unsigned display owner C must not cause a lookup alongside A or signed owner B.
