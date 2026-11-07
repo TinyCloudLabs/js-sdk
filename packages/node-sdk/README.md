@@ -30,6 +30,8 @@ Every owner routing decision awaits a bounded registry refresh. Overlapping refr
 
 Each caller retains registration evidence observed before joining an in-flight refresh and checks current cache/high-water state before routing. Non-replicating `restoreSession()` verifies and hydrates signed session authority locally without registry or node I/O. Later live operations still resolve fresh routing through the service graph. The first live routing decision also starts background prefetch for the canonically verified wallet owner, independently of the requested resource's owner. Web startup's hosting probe and real held-grant activation use that same boundary; local-only inspection does not. Explicitly enabled replication retains its routing and node preflight.
 
+Restored host hints install alongside the replacement session and service graph. Subsequent public delegation preparation uses that installed hint when fresh routing permits onboarding; verified signed destinations still take precedence.
+
 Actual cold fallback logs `registry unavailable; using the default node`; warm fallback logs `Storage settings are unreachable; using cached settings checked less than 1 hour ago.` Each diagnostic is emitted once per owner/client cache and fallback kind, only after a route is selected. `onRegistryFallback(reason, code?)` collects these value-free diagnostics instead of the default console warning; semantic codes are `using_default_node` and `using_cached_settings`. Background refresh alone does not warn.
 
 This is a client cache: a node that performs online registry admission still needs its own registry connectivity. It is not a whole-service-outage guarantee.

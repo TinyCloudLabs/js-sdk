@@ -29,4 +29,8 @@ Preserve covered offline replica reads when the data node is unreachable, while 
 
 Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
 
+Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait for the import transaction instead of running alongside activation.
+
 Details: TC-2481
