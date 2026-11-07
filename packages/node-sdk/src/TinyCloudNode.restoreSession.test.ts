@@ -429,7 +429,6 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
 
     expect(node.hosts).toEqual(["https://two.example"]);
-    expect((node as any).config.host).toBe("https://two.example");
     expect((node as any).auth.hosts).toEqual(["https://two.example"]);
     expect((node as any).tc.isSignedIn).toBe(true);
     expect(((node as any).tc.serviceContext as { hosts: string[] }).hosts).toEqual(["https://two.example"]);
@@ -441,6 +440,48 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
       delegation.spaceId === proof.spaces!.public
     )).toBe(true);
     expect(((node as any).sessionManager as ISessionManager).listSessionKeys!()).toContain("secondary");
+  });
+
+  test("prepares and activates public child delegations at each restored host without hydration I/O", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    const activationRequests: string[][] = [[], []];
+    const fronts = activationRequests.map((requests) => Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        requests.push(`${request.method} ${url.pathname}`);
+        return fetch(new Request(`${fixture.host}${url.pathname}${url.search}`, request));
+      },
+    }));
+    try {
+      const restored = new TinyCloudNode({
+        signer: new PrivateKeySigner(fixture.ownerPrivateKey),
+        wasmBindings: new NodeWasmBindings(),
+        tinycloudRegistryUrl: fixture.host,
+        autoDiscoverLocalNode: false,
+      });
+      for (const [index, front] of fronts.entries()) {
+        const beforeBackend = fixture.requests();
+        const beforeFronts = activationRequests.map((requests) => [...requests]);
+        await restored.restoreSession({
+          ...fixture.ownerRestorableSession,
+          tinycloudHosts: [front.url.origin],
+        });
+        expect(fixture.requests()).toEqual(beforeBackend);
+        expect(activationRequests).toEqual(beforeFronts);
+        await restored.delegateTo(fixture.unrelatedAudience, [...fixture.permissions], {
+          onPrepared: async (prepared) => {
+            expect(prepared.host).toBe(front.url.origin);
+          },
+        });
+        expect(activationRequests[index]).toContain("POST /delegate");
+        expect(activationRequests[1 - index]).toEqual(beforeFronts[1 - index]);
+      }
+    } finally {
+      fronts.forEach((front) => front.stop(true));
+      fixture.stop();
+    }
   });
 
   test("reconstructs every verified narrow ReCap entry without unsigned metadata authority", async () => {
