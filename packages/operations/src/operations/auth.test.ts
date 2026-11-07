@@ -1101,12 +1101,33 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
   let announceRead!: () => void;
   const entered = new Promise<void>((resolve) => { announceRead = resolve; });
   let readSession: { mockRestore(): void } | undefined;
+  let proxy: ReturnType<typeof Bun.serve> | undefined;
+  let registryServer: ReturnType<typeof Bun.serve> | undefined;
+  let importing: Promise<unknown> | undefined;
   try {
     const profile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
     if (!profile) throw new Error("The signed-login session profile is missing");
     delete profile.privateKey;
+    const { nodeId } = await (await fetch(`${fixture.hermetic.host}/info`)).json() as { nodeId: string };
+    proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/.well-known/tinycloud/node-keys") {
+        return Response.json({ nodeDid: nodeId, shareInvitationPublicKey: "A".repeat(43) });
+      }
+      return fetch(new Request(`${fixture.hermetic.host}${url.pathname}${url.search}`, request));
+    } });
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    const ownerAddress = await signer.getAddress();
+    const record = await signLocationRecordV2({
+      version: 2, subject: fixture.hermetic.ownerDid,
+      nodes: [{ did: nodeId, url: proxy.url.origin }],
+      spaces: [{ space: fixture.hermetic.ownerRestorableSession.spaceId, nodes: [{ did: nodeId, mode: "read-write" }] }],
+      encryptionNode: nodeId, updated_at: new Date().toISOString(), sequence: 0,
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    registryServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ record }) });
     await writeJsonAtomic(profileConfigPath(fixture.profile), {
       ...profile, posture: "delegate-session", operatorType: "agent", authMethod: "openkey",
+      tinycloudRegistryUrl: registryServer.url.origin,
     });
     const runtime = await runtimeContext(fixture.profile);
     const requested: PermissionEntry = {
@@ -1131,8 +1152,13 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
       }
       return session;
     });
-    const importing = withProfileLock(fixture.profile, () =>
-      importDefinition().execute(runtime, importArtifact(requestId, delegation)));
+    importing = withProfileLock(fixture.profile, async () => {
+      const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+      expect(await state.createProfileRegistryCacheStore(fixture.profile).get(ownerAddress)).toMatchObject({
+        ownerKey: ownerAddress, sequence: record.sequence,
+      });
+      return result;
+    });
     await entered;
     delegation.expiry.setTime(0);
     delegation.delegationHeader.Authorization = "caller-mutated-authorization";
@@ -1160,7 +1186,10 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
     }]);
   } finally {
     releaseRead();
+    await Promise.allSettled([importing]);
     readSession?.mockRestore();
+    registryServer?.stop(true);
+    proxy?.stop(true);
     fixture.hermetic.stop();
   }
 });
