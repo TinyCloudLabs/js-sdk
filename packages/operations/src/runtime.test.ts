@@ -84,7 +84,7 @@ test("restores the persisted session DID and rereads a real live delegation for 
 });
 
 test("resolves registry URL precedence and keeps the profile host only as a no-entry hint", async () => {
-  const fixture = await createAuthRuntimeFixture({ delegateBasePermissions: true });
+  const fixture = await createAuthRuntimeFixture();
   const key = "vault/secrets/HERMETIC_DELEGATION_CANARY";
   const profileRegistryUrl = "https://profile-registry.test";
   const envRegistryUrl = "https://current-registry.test";
@@ -93,6 +93,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
   const allRequests: string[] = [];
   const externalRequests: string[] = [];
   try {
+    const delegation = await fixture.hermetic.mintDelegation();
     delete process.env.TC_REGISTRY_URL;
     const storedProfile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
     if (storedProfile === null) throw new Error("expected the stored fixture profile");
@@ -118,6 +119,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
     if (!fromProfile.ok) throw new Error("expected a restored runtime");
     const profileNode = fromProfile.context.runtime.node as TinyCloudNode;
     expect(profileNode.hosts).toContain(fixture.hermetic.host);
+    await profileNode.useRuntimeDelegation(delegation);
     expect((await profileNode.kv.get(key)).ok).toBe(true);
     expect(externalRequests.length).toBeGreaterThan(0);
     expect(externalRequests.every((url) => url.startsWith(`${profileRegistryUrl}/`))).toBe(true);
@@ -131,6 +133,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
     if (!fromEnvironment.ok) throw new Error("expected a restored runtime");
     const environmentNode = fromEnvironment.context.runtime.node as TinyCloudNode;
     expect(environmentNode.hosts).toContain(fixture.hermetic.host);
+    await environmentNode.useRuntimeDelegation(delegation);
     expect((await environmentNode.kv.get(key)).ok).toBe(true);
     expect(externalRequests.length).toBeGreaterThan(0);
     expect(externalRequests.every((url) => url.startsWith(`${envRegistryUrl}/`))).toBe(true);
