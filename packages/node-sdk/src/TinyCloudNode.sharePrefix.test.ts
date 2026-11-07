@@ -1,8 +1,7 @@
 /*
- * TC-2242. Sign-in accepts `key.create` beside `decrypt` on the CURRENT owner's default-network `share/` prefix (so one sign-in can
- * create the per-share keys), and nothing wider: `NodeUserAuthorization` builds the recap's raw abilities and refuses every other
- * encryption entry that is not a whole network ("named keys go in manifest.keys"). The fake WASM `prepareSession` records the abilities.
- * (Helpers are duplicated from TinyCloudNode.signInManifest.test.ts so this file stands alone.)
+ * Sign-in accepts only `decrypt` on the CURRENT owner's default-network `share/` prefix: `NodeUserAuthorization` builds the recap's raw
+ * abilities and refuses every other encryption entry that is not a whole network ("named keys go in manifest.keys"), `key.create` included.
+ * The fake WASM `prepareSession` records the abilities. (Helpers are duplicated from TinyCloudNode.signInManifest.test.ts so this file stands alone.)
  */
 
 import { describe, expect, mock, test } from "bun:test";
@@ -259,32 +258,22 @@ async function signInWith(permissions: { path: string; actions: string[] }[]) {
   return (wasm.prepareSession as any).mock.calls[0][0].rawAbilities as Record<string, string[]>;
 }
 
-describe("sign-in: key.create on the current owner's default share prefix", () => {
-  test("one entry with decrypt and key.create reaches the recap as raw abilities on the prefix", async () => {
-    expect(await signInWith([{ path: PREFIX, actions: ["decrypt", "key.create"] }])).toEqual({ [PREFIX]: [DECRYPT, CREATE] });
-  });
-
-  test("two entries (decrypt, key.create) and the full ability spelling give the same abilities", async () => {
-    expect(await signInWith([{ path: PREFIX, actions: [DECRYPT] }, { path: PREFIX, actions: [CREATE] }])).toEqual({ [PREFIX]: [DECRYPT, CREATE] });
-  });
-
-  test("key.create alone on the prefix is accepted", async () => {
-    expect(await signInWith([{ path: PREFIX, actions: ["key.create"] }])).toEqual({ [PREFIX]: [CREATE] });
-  });
-
-  test("decrypt alone on the prefix is unchanged", async () => {
+describe("sign-in: the current owner's default share prefix", () => {
+  test("decrypt on the prefix reaches the recap as a raw ability", async () => {
     expect(await signInWith([{ path: PREFIX, actions: ["decrypt"] }])).toEqual({ [PREFIX]: [DECRYPT] });
   });
 
   const refused: [string, string, string[]][] = [
+    ["key.create on the share prefix", PREFIX, ["key.create"]],
+    ["decrypt + key.create on the share prefix", PREFIX, ["decrypt", "key.create"]],
     ["key.create on a whole network", NETWORK, ["key.create"]],
     ["key.create on another prefix", `${NETWORK}/other/`, ["key.create"]],
     ["key.create on an apps prefix", `${NETWORK}/apps/billing/`, ["key.create"]],
-    ["key.create on an exact share key (the runtime route)", `${NETWORK}/share/abc`, ["key.create"]],
+    ["key.create on an exact share key", `${NETWORK}/share/abc`, ["key.create"]],
     ["key.create on another owner's share prefix", OTHER_OWNER_PREFIX, ["key.create"]],
     ["decrypt + key.create on another owner's share prefix", OTHER_OWNER_PREFIX, ["decrypt", "key.create"]],
     ["key.create on a non-default network's share prefix", `${NETWORK.replace(":default", ":other")}/share/`, ["key.create"]],
-    ["a third action beside decrypt and key.create", PREFIX, ["decrypt", "key.create", "network.create"]],
+    ["decrypt + network.create on the share prefix", PREFIX, ["decrypt", "network.create"]],
     ["network.create on the share prefix", PREFIX, ["network.create"]],
   ];
   for (const [name, path, actions] of refused) {
@@ -322,12 +311,13 @@ async function signInWithCapabilityRequest(resources: { path: string; actions: s
 }
 
 describe("sign-in through the explicit capabilityRequest (node-sdk's own check, without the manifest expander)", () => {
-  test("accepts decrypt and key.create on the current owner's default share prefix", async () => {
-    expect(await signInWithCapabilityRequest([{ path: PREFIX, actions: [DECRYPT, CREATE] }])).toEqual({ [PREFIX]: [DECRYPT, CREATE] });
-    expect(await signInWithCapabilityRequest([{ path: PREFIX, actions: [CREATE] }])).toEqual({ [PREFIX]: [CREATE] });
+  test("accepts decrypt on the current owner's default share prefix", async () => {
+    expect(await signInWithCapabilityRequest([{ path: PREFIX, actions: [DECRYPT] }])).toEqual({ [PREFIX]: [DECRYPT] });
   });
 
   const refused: [string, string, string[]][] = [
+    ["key.create on the share prefix", PREFIX, [CREATE]],
+    ["decrypt + key.create on the share prefix", PREFIX, [DECRYPT, CREATE]],
     ["key.create on another prefix", `${NETWORK}/other/`, [CREATE]],
     ["key.create on an apps prefix", `${NETWORK}/apps/billing/`, [CREATE]],
     ["key.create on a non-default network's share prefix", `${NETWORK.replace(":default", ":other")}/share/`, [CREATE]],

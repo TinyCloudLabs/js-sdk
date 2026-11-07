@@ -11,14 +11,12 @@
  * @packageDocumentation
  */
 
-import { expandRuntimePermissionEntries, type Manifest, type PermissionEntry } from "@tinycloud/sdk-core";
+import { type Manifest, type PermissionEntry } from "@tinycloud/sdk-core";
 import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
 export interface RequestPermissionsCoreDeps {
   /** Current stored manifest. Must be defined — caller validates first. */
   manifest: Manifest;
-  /** Authenticated owner from the current node, never from a requested resource. */
-  ownerDid?: string;
   /**
    * Show the permission request modal. Resolves with `{ approved }`
    * once the user interacts. In tests this is a stub; in production it
@@ -69,28 +67,6 @@ export function validateAdditionalPermissions(
 }
 
 /**
- * Normalize only encryption key creation here. Other runtime entries retain
- * their existing Web consent representation; the node validates them.
- */
-export function normalizeRuntimeKeyCreatePermissions(
-  additional: PermissionEntry[],
-  ownerDid?: string,
-): PermissionEntry[] {
-  let normalized = additional;
-  for (let index = 0; index < additional.length; index++) {
-    const entry = additional[index]!;
-    if (entry.service !== "tinycloud.encryption" ||
-      !entry.actions.some((action) => action === "key.create" || action === "tinycloud.encryption/key.create")) {
-      continue;
-    }
-    const expanded = expandRuntimePermissionEntries([entry], ownerDid);
-    if (normalized === additional) normalized = additional.slice();
-    normalized[index] = expanded[0]!;
-  }
-  return normalized;
-}
-
-/**
  * Core escalation flow. See the TinyCloudWeb.requestPermissions JSDoc
  * for the full spec-level description — this function is the plumbing.
  *
@@ -108,14 +84,13 @@ export async function requestPermissionsCore(
   if (expiryMs !== undefined && !(expiryMs > 0 && Number.isFinite(expiryMs))) {
     throw new Error("requestPermissions expiryMs must be a positive finite number");
   }
-  const requested = normalizeRuntimeKeyCreatePermissions(additional, deps.ownerDid);
 
   let shouldSuppressPrompt = false;
   if (deps.isPromptSuppressed?.() !== true) {
     const modalResult = await deps.showModal({
       appName: deps.manifest.name,
       appIcon: deps.manifest.icon,
-      additional: requested,
+      additional,
     });
 
     if (!modalResult.approved) {
@@ -127,8 +102,8 @@ export async function requestPermissionsCore(
 
   const delegations =
     options === undefined
-      ? await deps.grantPermissions(requested)
-      : await deps.grantPermissions(requested, options);
+      ? await deps.grantPermissions(additional)
+      : await deps.grantPermissions(additional, options);
 
   if (shouldSuppressPrompt) {
     deps.suppressPromptFor30Days?.();

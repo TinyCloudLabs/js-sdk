@@ -138,9 +138,6 @@ const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
 
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 
-/** Creating the per-share named keys: allowed at sign-in only beside decrypt, on the owner's default-network `share/` prefix (TC-2242). */
-const KEY_CREATE_ACTION = "tinycloud.encryption/key.create";
-
 /** `<status> - <server text>` for a failed host activation. */
 function describeHostFailure(result: SpaceHostResult): string {
   const text = result.error?.trim();
@@ -1189,7 +1186,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         : { ...parseNetworkId(entry.path), kind: "network" as const };
       const sharePrefix = parsed.kind === "prefix" && parsed.network === "default" &&
         parsed.prefix === "share" && entry.actions.length > 0 &&
-        entry.actions.every((action) => action === DECRYPT_ACTION || action === KEY_CREATE_ACTION) &&
+        entry.actions.every((action) => action === DECRYPT_ACTION) &&
         didPrincipalMatches(parsed.ownerDid, currentDid);
       if (parsed.kind !== "network" && !sharePrefix) {
         throw new ManifestValidationError("named keys go in manifest.keys");

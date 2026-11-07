@@ -2,7 +2,6 @@ import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
 import { generateNonce, SiweMessage } from "siwe";
-import { didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
 /**
  * TinyCloudNode - High-level API for Node.js users.
  *
@@ -137,7 +136,6 @@ import {
   canonicalizeRecapCaveats,
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
-  expandRuntimePermissionEntries,
   expandDelegationPermissionEntries,
   isCapabilitySubset,
   isExplicitOnlyAction,
@@ -1066,8 +1064,6 @@ export interface RuntimePermissionGrantOptions {
    * session's address.
    */
   signMessage?: (siwe: string) => Promise<string>;
-  /** In-memory key snapshot captured when exact Share-key consent opened. */
-  expectedSessionKey?: Readonly<TinyCloudSession["jwk"]>;
 }
 
 export interface EnsureEncryptionNetworkOptions {
@@ -6847,7 +6843,7 @@ export class TinyCloudNode {
       return false;
     }
 
-    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
+    const expanded = expandPermissionEntriesCore(permissions);
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return true;
     }
@@ -6877,7 +6873,7 @@ export class TinyCloudNode {
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return [];
     }
-    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
+    const expanded = expandPermissionEntriesCore(permissions);
     return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
       (grant) => grant.delegation,
     );
@@ -7083,39 +7079,7 @@ export class TinyCloudNode {
       }
     }
 
-    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
-    const bindsShareKey = expanded.some((entry) => entry.service === ENCRYPTION_PERMISSION_SERVICE &&
-      entry.actions.includes("tinycloud.encryption/key.create"));
-    const captured = bindsShareKey
-      ? { ...session, jwk: { ...(options?.expectedSessionKey ?? session.jwk) } }
-      : session;
-    const assertCapturedKey = bindsShareKey ? () => {
-      const live = session.jwk as JWK;
-      const key = captured.jwk as JWK;
-      if (this.currentTinyCloudSession() !== session ||
-        session.verificationMethod !== captured.verificationMethod ||
-        session.delegationCid !== captured.delegationCid || session.spaceId !== captured.spaceId ||
-        session.address !== captured.address || session.chainId !== captured.chainId ||
-        live?.kty !== key.kty || live?.crv !== key.crv || live?.x !== key.x ||
-        live?.y !== key.y || live?.d !== key.d) {
-        throw new Error("Runtime permission request cancelled because the session key changed.");
-      }
-    } : undefined;
-    // The node's own session key, not the mutable label on `restorableSession`, anchors the consent key.
-    const sessionKeyDid = bindsShareKey ? this.sessionDid : undefined;
-    if (bindsShareKey) {
-      const key = captured.jwk as JWK;
-      if (key.kty !== "OKP" || key.crv !== "Ed25519" || typeof key.x !== "string") {
-        throw new Error("Runtime permission session key does not match its signed identity.");
-      }
-      const keyDid = didKeyFromEd25519PublicKey(base64UrlDecode(key.x));
-      if (!didPrincipalMatches(keyDid, sessionKeyDid!) ||
-        !didPrincipalMatches(keyDid, captured.verificationMethod) ||
-        !didPrincipalMatches(keyDid, new SiweMessage(session.siwe).uri)) {
-        throw new Error("Runtime permission session key does not match its signed identity.");
-      }
-      assertCapturedKey!();
-    }
+    const expanded = expandPermissionEntriesCore(permissions);
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
@@ -7173,13 +7137,13 @@ export class TinyCloudNode {
             ...(rawForDelegation.length > 0
               ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
               : {}),
-            address: this.wasmBindings.ensureEip55(captured.address),
-            chainId: captured.chainId,
+            address: this.wasmBindings.ensureEip55(session.address),
+            chainId: session.chainId,
             domain: this.siweDomain,
             issuedAt: now.toISOString(),
             expirationTime: expiresAt.toISOString(),
             spaceId,
-            jwk: captured.jwk,
+            jwk: session.jwk,
           });
         } catch (error) {
           if (
@@ -7194,11 +7158,6 @@ export class TinyCloudNode {
           throw error;
         }
       })();
-      if (bindsShareKey &&
-        !didPrincipalMatches(new SiweMessage(prepared.siwe).uri, sessionKeyDid!)) {
-        throw new Error("Prepared runtime permission targets a different session key.");
-      }
-      assertCapturedKey?.();
 
       if (options?.signMessage !== undefined) {
         this.assertRuntimeGrantMessage(prepared.siwe, session);
@@ -7214,7 +7173,6 @@ export class TinyCloudNode {
       }
       // Nothing is activated for a session that ended while the wallet signed.
       graph.assertActive();
-      assertCapturedKey?.();
       const delegatedSession = this.wasmBindings.completeSessionSetup({
         ...prepared,
         signature,
@@ -7249,20 +7207,19 @@ export class TinyCloudNode {
         delegatedSession,
         delegatedEntries,
         spaceId,
-        captured,
+        session,
         expiresAt,
         { siwe: prepared.siwe, signature },
       );
       // The session may have been replaced or signed out while signing.
       graph.assertActive();
-      assertCapturedKey?.();
       this.runtimePermissionGrants.push({
         session: {
           delegationHeader: delegatedSession.delegationHeader,
           delegationCid: delegatedSession.delegationCid,
           spaceId,
-          verificationMethod: captured.verificationMethod,
-          jwk: captured.jwk,
+          verificationMethod: session.verificationMethod,
+          jwk: session.jwk,
         },
         delegation,
         operations: this.permissionOperations(delegatedEntries, spaceId),
