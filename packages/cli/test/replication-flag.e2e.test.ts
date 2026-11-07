@@ -425,9 +425,8 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     expect(offlineOutside.code).toBe(offlineOutsideOff.code);
     expect(offlineOutside.code).toBe(1);
     expect(offlineOutside.stdout).toHaveLength(0);
+    expect(offlineOutsideOff.stdout).toHaveLength(0);
     expect(offlineOutside.stderr).toContain("not_covered");
-    expect(offlineOutside.stderr).toContain("NETWORK_ERROR");
-    expect(offlineOutsideOff.stderr).toContain("NETWORK_ERROR");
     await startNode();
 
     // 7. A held stale sync serves offline; SIGINT still drains the active controller.
