@@ -460,6 +460,7 @@ async function importRequestBoundDelegation(
             typeof reason === "string" ? { reason } : undefined,
           );
         }
+        if (expiresAt <= Date.now()) return expiredDelegation();
         const output: AuthImportOutput = {
           cid: activated.cid,
           effectivePermissions: canonicalizeCapabilities(activated.effectivePermissions),

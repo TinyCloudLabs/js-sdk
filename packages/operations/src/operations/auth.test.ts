@@ -1141,3 +1141,35 @@ test("a native activation refusal restores the prior same-CID binding and audit 
     fixture.hermetic.stop();
   }
 });
+
+test("activation completion at signed expiry refuses success and restores the stored grant rows", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  let completion: { mockRestore(): void } | undefined;
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const node = runtime.runtime.node as TinyCloudNode;
+    const refresh = node.refreshRegistryForCapabilities.bind(node);
+    completion = spyOn(node, "refreshRegistryForCapabilities").mockImplementation((permissions) => {
+      expect(node.getRuntimePermissionDelegations()).toContainEqual(expect.objectContaining({
+        cid: delegation.cid,
+      }));
+      refresh(permissions);
+      setSystemTime(delegation.expiry);
+    });
+    const previous = await readAdditionalDelegations(fixture.profile);
+    const before = fixture.hermetic.requests().length;
+    const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+
+    expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_EXPIRED" } });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(previous);
+    expect(fixture.hermetic.requests().slice(before).some((request) =>
+      request.method === "POST" && request.path === "/delegate")).toBe(true);
+    expect(node.getRuntimePermissionDelegations()).toEqual([]);
+  } finally {
+    completion?.mockRestore();
+    setSystemTime();
+    fixture.hermetic.stop();
+  }
+});
