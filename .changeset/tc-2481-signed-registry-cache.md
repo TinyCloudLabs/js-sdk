@@ -33,4 +33,6 @@ Non-replicating restore installs host hints with the replacement session graph f
 
 Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait for the import transaction instead of running alongside activation.
 
+Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
 Details: TC-2481
