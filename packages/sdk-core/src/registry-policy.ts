@@ -596,6 +596,8 @@ async function readRegistry(
   try {
     response = await fetchFn(url, {
       redirect: "error",
+      // A browser-cached HTTP 200 must not renew signed-cache freshness.
+      cache: "no-store",
       headers: { accept: "application/json" },
       signal,
     });

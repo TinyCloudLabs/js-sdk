@@ -27,4 +27,6 @@ Current-runtime invalidation attempts retain their local fence across overlappin
 
 Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
 
+Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
 Details: TC-2481
