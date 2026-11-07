@@ -200,8 +200,8 @@ export interface Config extends ClientConfig {
   registrySequenceStore?: RegistrySequenceStore;
   /** Exact signed responses in browser storage, reverified on every routing read. */
   registryCacheStore?: RegistryCacheStore;
-  /** Called after actual cold default-node selection; defaults to an SDK console warning. */
-  onRegistryFallback?: (reason: string) => void;
+  /** Called after an actual cached-settings or default-node fallback. */
+  onRegistryFallback?: TinyCloudNodeConfig["onRegistryFallback"];
   /** Called only when no host resolves for a genuinely unregistered owner. */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe local nodes only for owners absent from both registry namespaces. Default: true. */

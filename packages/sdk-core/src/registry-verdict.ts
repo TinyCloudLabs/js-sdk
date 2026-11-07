@@ -86,6 +86,8 @@ export interface RegisteredRegistryVerdict {
   readonly record?: LocationRecordV2;
   /** Listed hosts in record order. Empty when the record lists no usable host. */
   readonly hosts: readonly RegistryHost[];
+  /** Routing used a reverified cache younger than one hour after an eligible outage. */
+  readonly offline?: true;
 }
 
 export interface UnregisteredRegistryVerdict {

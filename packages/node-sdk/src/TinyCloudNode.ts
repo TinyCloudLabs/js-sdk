@@ -181,6 +181,7 @@ import {
   refreshOwnerRegistry,
   registryOwnerKeyV2,
   type RegistryCacheStore,
+  type RegistryFallbackReason,
   publishLocationRecord,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
@@ -902,8 +903,8 @@ export interface TinyCloudNodeConfig {
   registrySequenceStore?: RegistrySequenceStore;
   /** Exact signed-v2 responses; pass a persistent adapter to survive restarts. */
   registryCacheStore?: RegistryCacheStore;
-  /** Value-free warning after actual cold default-node selection; defaults to console.warn. */
-  onRegistryFallback?: (reason: string) => void;
+  /** Value-free warning after an actual cached-settings or default-node fallback. */
+  onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Retry or abort when registry resolution fails; `use-host` is accepted only for genuine no-entry onboarding. */
   onNodeNotFound?: OnNodeNotFound;
   /** Probe configured local nodes only for genuine no-entry onboarding. Default: true. */
@@ -2247,6 +2248,7 @@ export class TinyCloudNode {
       registryChainId: this.config.registryChainId,
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
+      onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
       const hint = noEntryHosts === undefined ? this.explicitHost ?? this.config.host : noEntryHosts[0];
@@ -4549,8 +4551,12 @@ export class TinyCloudNode {
       stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
     const restoreHints = this.explicitHost ? [this.explicitHost] : sessionData.tinycloudHosts ?? [];
-    const resolvedHost = (await this.routingDestinations(sessionData.spaceId, "read", restoreHints))[0]?.url;
-    const stagedHost = resolvedHost ?? this.config.host!;
+    // Hydration verifies local authority only. Every later live operation uses
+    // the routed service graph; explicit replication still performs its preflight.
+    const resolvedHost = this.config.replication?.enabled
+      ? (await this.routingDestinations(sessionData.spaceId, "read", restoreHints))[0]?.url
+      : undefined;
+    const stagedHost = resolvedHost ?? exactHttpOrigin(restoreHints[0] ?? this.config.host!, "restored host hint");
     let restoredNodeFeatures: string[] | undefined;
     let replicaProtocolMismatch = false;
     if (this.config.replication?.enabled) {
@@ -4750,8 +4756,10 @@ export class TinyCloudNode {
       if (attempt === this.latestSessionAttempt) await this.endSession();
       this.assertSessionEpoch(epoch, "Session restore");
     }
-    if (stagedAddress !== undefined) this.refreshRegistryOwner(pkhDid(stagedAddress, stagedChainId));
-    this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
+    if (this.config.replication?.enabled) {
+      if (stagedAddress !== undefined) this.refreshRegistryOwner(pkhDid(stagedAddress, stagedChainId));
+      this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
+    }
   }
 
   private stagePrimarySessionState(

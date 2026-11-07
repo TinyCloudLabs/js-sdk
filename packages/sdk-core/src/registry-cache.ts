@@ -10,10 +10,11 @@ export interface RegistryCacheEntry {
   readonly sequence: number;
 }
 
-/** update MUST serialize read/compare/write across all users of the backing store. */
+/** update and delete MUST serialize across all users of the backing store. */
 export interface RegistryCacheStore {
   get(ownerKey: string): Promise<RegistryCacheEntry | undefined>;
   update(ownerKey: string, update: (current: RegistryCacheEntry | undefined) => Promise<RegistryCacheEntry>): Promise<RegistryCacheEntry>;
+  delete(ownerKey: string): Promise<void>;
 }
 
 export function createInMemoryRegistryCacheStore(): RegistryCacheStore {
@@ -27,6 +28,11 @@ export function createInMemoryRegistryCacheStore(): RegistryCacheStore {
         entries.set(key, entry);
         return entry;
       });
+      tail = next.catch(() => undefined);
+      return next;
+    },
+    delete(key) {
+      const next = tail.then(() => { entries.delete(key); });
       tail = next.catch(() => undefined);
       return next;
     },
@@ -67,6 +73,20 @@ export function createLocalStorageRegistryCacheStore(
         // Without cross-tab locking, do not weaken persistent rollback protection.
         if (!locks) throw new Error("Persistent registry cache requires Web Locks");
         return locks.request(`${storageKey}:${key}`, commit);
+      });
+      tail = next.catch(() => undefined);
+      return next;
+    },
+    delete(key) {
+      const next = tail.then(async () => {
+        const navigator = globalThis.navigator as unknown as {
+          locks?: { request<T>(name: string, action: () => Promise<T>): Promise<T> };
+        } | undefined;
+        if (!navigator?.locks) throw new Error("Persistent registry cache requires Web Locks");
+        await navigator.locks.request(`${storageKey}:${key}`, async () => {
+          if (!backing.removeItem) throw new Error("Persistent registry cache requires storage deletion");
+          backing.removeItem(`${storageKey}:${key}`);
+        });
       });
       tail = next.catch(() => undefined);
       return next;

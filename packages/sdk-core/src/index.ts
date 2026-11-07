@@ -1092,6 +1092,8 @@ export {
   type FailClosedHostOptions,
   type FailClosedHosts,
   type LookupOwnerRegistryVerdictOptions,
+  type RegistryFallbackReason,
+  REGISTRY_CACHE_MAX_AGE_MS,
   type NodeNotFoundContext,
   type NodeNotFoundDecision,
   type OnNodeNotFound,

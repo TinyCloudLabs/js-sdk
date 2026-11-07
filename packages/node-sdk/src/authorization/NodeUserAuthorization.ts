@@ -42,6 +42,7 @@ import {
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
   type RegistryCacheStore,
+  type RegistryFallbackReason,
   registryOwnerSubjectV1,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
@@ -300,8 +301,8 @@ export interface NodeUserAuthorizationConfig {
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory. */
   registrySequenceStore?: RegistrySequenceStore;
   registryCacheStore?: RegistryCacheStore;
-  /** Value-free warning after actual cold default-node selection; defaults to console.warn. */
-  onRegistryFallback?: (reason: string) => void;
+  /** Value-free warning after an actual cached-settings or default-node fallback. */
+  onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /**
    * `fail-closed` only: called when sign-in resolves no host
    * (`NodeNotFoundError` or `RegistryUnavailableError`) to retry, use another
@@ -430,7 +431,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly registrySequenceStore: RegistrySequenceStore;
   private readonly registryCacheStore: RegistryCacheStore;
   private readonly onNodeNotFound?: OnNodeNotFound;
-  private readonly onRegistryFallback?: (reason: string) => void;
+  private readonly onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Verdict from the last `fail-closed` host resolution, reused by {@link assertMayCreateSpace}. */
   private registryVerdict?: RegistryVerdict;
   private readonly autoDiscoverLocalNode?: boolean;
@@ -732,6 +733,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           registryChainId: this.registryChainId,
           sequenceStore: this.registrySequenceStore,
           cacheStore: this.registryCacheStore,
+          onRegistryFallback: this.onRegistryFallback,
         });
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {

@@ -185,7 +185,7 @@ describe("v2-first owner lookup", () => {
   });
 
 
-  it.each(vectors.lookupCases)("classifies frozen lookup vector $id", async (vector) => {
+  it.each(vectors.lookupCases.filter(({ id }) => id !== "service-unavailable" && id !== "v1-service-unavailable"))("applies frozen lookup context $id", async (vector) => {
     const requests: string[] = [];
     const store = policy.createInMemoryRegistrySequenceStore();
     if (vector.rememberedSequence !== null) {
@@ -208,6 +208,28 @@ describe("v2-first owner lookup", () => {
     if (vector.id === "absent-after-registration") {
       expect(result).toMatchObject({ status: "unavailable", reason: "not-found-after-registered" });
     }
+  });
+
+  it.each(["service-unavailable", "v1-service-unavailable"])("distinguishes cold policy from raw outage vector %s and known-owner refusal", async (id) => {
+    const vector = vectors.lookupCases.find((entry) => entry.id === id)!;
+    const requests: string[] = [];
+    const answers = vector.responses.map(({ status, body }) => response(status, body));
+    // Cold v2 outage still probes v1 before allowing onboarding.
+    if (id === "service-unavailable") answers.push(v2NotFound());
+    const result = await policy.resolveOwnerHosts(vectors.publicTestIdentities.owner, {
+      registryUrl: "https://registry.test", fetch: responseQueue(answers, requests),
+    });
+    expect(result).toMatchObject({ status: "unregistered", offline: true, hosts: [] });
+    expect(requests).toEqual([v2LookupUrl, `https://registry.test/v1/locations/${encodeURIComponent(vectors.publicTestIdentities.owner)}`]);
+    const sequenceStore = policy.createInMemoryRegistrySequenceStore();
+    await sequenceStore.set(vectors.publicTestIdentities.ownerKey, 0);
+    const knownRequests: string[] = [];
+    expect(await policy.resolveOwnerHosts(vectors.publicTestIdentities.owner, {
+      registryUrl: "https://registry.test", sequenceStore,
+      fetch: responseQueue([response(503, "")], knownRequests),
+    })).toMatchObject({ status: "unavailable", reason: "http-status" });
+    expect(knownRequests).toEqual([v2LookupUrl]);
+    expect(await sequenceStore.get(vectors.publicTestIdentities.ownerKey)).toBe(0);
   });
 
   it("rejects duplicate JSON keys as malformed v2 without probing v1", async () => {
@@ -309,9 +331,11 @@ describe("v2 fail-closed host policy", () => {
     expect(requests.some((url) => url.startsWith("http://127.0.0.1:8000"))).toBe(false);
   });
 
-  it("does not let an unavailable registry be overridden by onNodeNotFound", async () => {
+  it("does not let a known owner's unavailable registry be overridden by onNodeNotFound", async () => {
+    const sequenceStore = policy.createInMemoryRegistrySequenceStore();
+    await sequenceStore.set(vectors.publicTestIdentities.ownerKey, 0);
     const result = policy.resolveFailClosedTinyCloudHosts(vectors.publicTestIdentities.ownerKey, {
-      registryUrl: "https://registry.test",
+      registryUrl: "https://registry.test", sequenceStore,
       fetch: responseQueue([response(503, "down")]),
       onNodeNotFound: () => ({ action: "use-host", host: "https://override.example" }),
     });

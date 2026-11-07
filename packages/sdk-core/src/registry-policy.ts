@@ -1,8 +1,8 @@
 /**
  * Signed-v2 registry policy for host resolution and space creation (TC-2481).
- * Verified cache routes immediately while a bounded refresh runs. Genuine
- * absence, or a cold registry outage without cached/remembered registration,
- * may use configured onboarding; invalid state and v1-only entries refuse.
+ * Every routing decision awaits a bounded refresh. A reverified cache younger
+ * than one hour can serve transport/timeouts or HTTP 502/503/504 only. Genuine
+ * absence and cold outages retain onboarding; invalid or known absent state refuses.
  *
  * V2 owner keys are chain-independent: EOA records use the exact EIP-55
  * address and did:key records use the exact DID. V1 probes distinguish
@@ -49,6 +49,10 @@ export const DEFAULT_NEW_USER_HOST = DEFAULT_TINYCLOUD_FALLBACK_HOST;
 export const DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS = 3_000;
 /** Default key {@link createLocalStorageRegistrySequenceStore} stores its sequences under. */
 export const DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY = "tinycloud.registrySequences.v2";
+/** Strict maximum age for cached routing during an eligible registry outage. */
+export const REGISTRY_CACHE_MAX_AGE_MS = 3_600_000;
+
+export type RegistryFallbackReason = "using_default_node" | "using_cached_settings";
 
 /** `did:pkh:eip155:` + a 16-digit safe-integer chain ID + `:` + a 42-character address. */
 const MAX_SUBJECT_LENGTH = 74;
@@ -72,11 +76,10 @@ export function registryOwnerSubjectV1(
  * sequence marks the subject as registered: a later not-found or an older
  * record is `unavailable`, never `unregistered`.
  *
- * `set` is only called with a sequence above the remembered one. A `get`
- * failure fails that lookup closed (`RegistryUnavailableError`, never
- * "nothing remembered"). A `set` failure is logged once and the verdict in
- * hand stands: failing to remember weakens later rollback detection but
- * never turns a correct `registered` answer into a lockout.
+ * Ordinary accepted-record `set` calls advance the remembered sequence; a
+ * failure is logged once and the accepted verdict stands. A `get` failure
+ * fails the lookup closed. Authoritative cache invalidation may restate the
+ * current maximum and requires that marker write to succeed before deletion.
  */
 export interface RegistrySequenceStore {
   get(subject: string): number | undefined | Promise<number | undefined>;
@@ -205,28 +208,41 @@ export async function resolveOwnerHosts(
   const ownerKey = registryOwnerKeyV2(subject);
   const store = options.sequenceStore;
   const remembered = store === undefined ? undefined : await store.get(ownerKey);
-  if (options.cacheStore) {
-    const cached = await options.cacheStore.get(ownerKey);
+  const cache = options.cacheStore;
+  const authority = cache ? cacheAuthority(cache, ownerKey) : undefined;
+  const highWater = Math.max(remembered ?? -1, authority?.sequence ?? -1);
+  if (cache) {
+    const cached = await cache.get(ownerKey);
     if (cached !== undefined) {
-      const verdict = await verifyRegistryCacheEntry(subject, ownerKey, cached, remembered);
+      const verdict = await verifyRegistryCacheEntry(subject, ownerKey, cached, highWater < 0 ? undefined : highWater);
+      authority!.sequence = Math.max(highWater, verdict.sequence);
       await rememberAcceptedSequence(store, ownerKey, remembered, verdict);
-      void refreshOwnerRegistry(subject, options).catch(() => undefined);
-      return verdict;
     }
-    return refreshCachedOwnerRegistry(subject, options, options.cacheStore, ownerKey, remembered);
+    return refreshCachedOwnerRegistry(subject, options, cache, ownerKey, Math.max(highWater, authority!.sequence) < 0
+      ? undefined : Math.max(highWater, authority!.sequence));
   }
-  return fetchOwnerRegistry(subject, options, remembered);
+  return (await fetchOwnerRegistry(subject, options, remembered)).verdict;
 }
 
-const refreshes = new WeakMap<RegistryCacheStore, Map<string, Promise<RegistryVerdict>>>();
+interface OwnerRegistryResult {
+  verdict: RegistryVerdict;
+  allowCached?: boolean;
+}
 
-/** One early refresh per owner in flight; no retry loop or polling daemon. */
+const cacheAuthorities = new WeakMap<RegistryCacheStore, Map<string, { sequence: number; invalidated: boolean }>>();
+function cacheAuthority(cache: RegistryCacheStore, key: string) {
+  let owners = cacheAuthorities.get(cache);
+  if (!owners) cacheAuthorities.set(cache, owners = new Map());
+  let authority = owners.get(key);
+  if (!authority) owners.set(key, authority = { sequence: -1, invalidated: false });
+  return authority;
+}
+
+const refreshes = new WeakMap<RegistryCacheStore, Map<string, Promise<OwnerRegistryResult>>>();
+
+/** Coalesce overlapping refreshes only; every later decision starts a new lookup. */
 export async function refreshOwnerRegistry(subject: string, options: ResolveOwnerHostsOptions): Promise<RegistryVerdict> {
-  assertRegistrySubject(subject);
-  const cache = options.cacheStore;
-  if (!cache) return resolveOwnerHosts(subject, options);
-  const key = registryOwnerKeyV2(subject);
-  return refreshCachedOwnerRegistry(subject, options, cache, key, await options.sequenceStore?.get(key));
+  return resolveOwnerHosts(subject, options);
 }
 
 async function refreshCachedOwnerRegistry(
@@ -253,18 +269,26 @@ async function refreshCachedOwnerRegistry(
     active.set(key, next);
     void next.finally(() => active!.delete(key)).catch(() => undefined);
   }
-  const verdict = await next;
-  if (verdict.status === "unavailable") return verdict;
+  const { verdict, allowCached } = await next;
+  if (verdict.status === "unavailable" && !allowCached) return verdict;
   // Routing authority is caller-specific, even when cache identity is shared.
   // Recheck at the end of shared I/O and retain evidence observed before joining.
   const current = await cache.get(key);
   const latest = await options.sequenceStore?.get(key);
-  const highWater = Math.max(remembered ?? -1, latest ?? -1);
+  const authority = cacheAuthority(cache, key);
+  const highWater = Math.max(remembered ?? -1, latest ?? -1, authority.sequence);
   if (current !== undefined) {
     const verified = await verifyRegistryCacheEntry(subject, key, current, highWater < 0 ? undefined : highWater);
+    authority.sequence = Math.max(highWater, verified.sequence);
     await rememberAcceptedSequence(options.sequenceStore, key, latest, verified);
+    if (verdict.status === "unavailable") {
+      const age = Date.now() - current.fetchedAt;
+      if (!allowCached || authority.invalidated || age < 0 || age >= REGISTRY_CACHE_MAX_AGE_MS) return verdict;
+      return { ...verified, offline: true };
+    }
     return verified;
   }
+  if (verdict.status === "unavailable") return verdict;
   if (verdict.status === "registered") {
     // The cache may disappear after I/O; the verified result still needs this caller's bound.
     if (verdict.sequence < highWater) return {
@@ -286,7 +310,7 @@ async function fetchOwnerRegistry(
   options: ResolveOwnerHostsOptions,
   remembered?: number,
   cached?: RegistryCacheEntry,
-): Promise<RegistryVerdict> {
+): Promise<OwnerRegistryResult> {
   const ownerKey = registryOwnerKeyV2(subject);
   const store = options.sequenceStore;
   const registryUrl = options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL;
@@ -299,23 +323,36 @@ async function fetchOwnerRegistry(
   if (v2.status === "registered" && options.cacheStore && observation.kind === "http") {
     const candidate: RegistryCacheEntry = { ownerKey, responseBody: observation.body, fetchedAt: Date.now(), sequence: v2.sequence };
     const accepted = await options.cacheStore.update(ownerKey, async (current) => {
-      const highWater = await store?.get(ownerKey);
+      const highest = Math.max((await store?.get(ownerKey)) ?? -1, cacheAuthority(options.cacheStore!, ownerKey).sequence);
+      const highWater = highest < 0 ? undefined : highest;
       if (current !== undefined) {
         const previous = await verifyRegistryCacheEntry(subject, ownerKey, current, highWater);
-        if (v2.sequence <= previous.sequence) return current;
+        if (v2.sequence < previous.sequence) return current;
+        if (v2.sequence === previous.sequence) return { ...current, fetchedAt: candidate.fetchedAt };
       }
       await verifyRegistryCacheEntry(subject, ownerKey, candidate, highWater);
       return candidate;
     });
     const verdict = await verifyRegistryCacheEntry(subject, ownerKey, accepted);
+    const authority = cacheAuthority(options.cacheStore, ownerKey);
+    authority.sequence = Math.max(authority.sequence, verdict.sequence);
+    authority.invalidated = false;
     await rememberAcceptedSequence(store, ownerKey, remembered, verdict);
-    return verdict;
+    return { verdict };
+  }
+  if (options.cacheStore && (cached !== undefined || remembered !== undefined) &&
+      observation.kind === "http" && observation.status >= 400 && observation.status < 500) {
+    await dropOwnerRegistryCache(subject, options.cacheStore, store, ownerKey, Math.max(remembered ?? 0, cached?.sequence ?? 0));
   }
   const fresh = cached === undefined && remembered === undefined;
   const coldOffline = fresh && v2.status === "unavailable" && registryOutage(observation);
   if (v2.status !== "unregistered" && !coldOffline) {
     await rememberAcceptedSequence(store, ownerKey, remembered, v2);
-    return v2;
+    const allowCached = v2.status === "unavailable" && (
+      observation.kind === "network-error" || observation.kind === "timeout" ||
+      (observation.kind === "http" && [502, 503, 504].includes(observation.status))
+    );
+    return { verdict: v2, allowCached };
   }
 
   const v1Subject = legacyRegistrySubject(subject, options.registryChainId);
@@ -325,18 +362,38 @@ async function fetchOwnerRegistry(
     // Legacy registration is evidence, not v2 sequence authority. Zero marks
     // known registration without preventing a future first v2 sequence of zero.
     await store?.set(ownerKey, Math.max(remembered ?? 0, 0));
-    return {
+    return { verdict: {
       status: "unavailable",
       subject,
       source: "offchain",
       reason: "unsupported-format",
       message: "owner has a v1 location record but no signed-v2 routing record",
       hosts: [],
-    };
+    } };
   }
   const legacyOffline = fresh && v1.status === "unavailable" && registryOutage(v1Observation);
-  if (v1.status === "unavailable" && !legacyOffline) return { ...v1, subject };
-  return { status: "unregistered", subject, source: "offchain", hosts: [], ...(coldOffline || legacyOffline ? { offline: true } : {}) };
+  if (v1.status === "unavailable" && !legacyOffline) return { verdict: { ...v1, subject } };
+  return { verdict: { status: "unregistered", subject, source: "offchain", hosts: [], ...(coldOffline || legacyOffline ? { offline: true } : {}) } };
+}
+
+async function dropOwnerRegistryCache(
+  subject: string,
+  cache: RegistryCacheStore,
+  store: RegistrySequenceStore | undefined,
+  key: string,
+  sequence: number,
+): Promise<void> {
+  const authority = cacheAuthority(cache, key);
+  authority.sequence = Math.max(authority.sequence, sequence);
+  authority.invalidated = true;
+  // Deletion cannot forget known registration. Unlike ordinary accepted-record
+  // writes, this marker must persist before the signed cache is removed.
+  try {
+    if (store) await store.set(key, Math.max(authority.sequence, (await store.get(key)) ?? -1));
+    await cache.delete(key);
+  } catch (cause) {
+    throw new RegistryUnavailableError(subject, undefined, { message: "cached storage settings could not be invalidated", cause });
+  }
 }
 
 let sequenceWriteWarned = false;
@@ -357,18 +414,34 @@ const fallbackWarnings = new WeakMap<RegistryCacheStore, Set<string>>();
 export function warnRegistryDefaultNode(
   verdict: RegistryVerdict,
   cacheStore?: RegistryCacheStore,
-  onRegistryFallback?: (reason: string) => void,
+  onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void,
 ): void {
   if (verdict.status !== "unregistered" || !verdict.offline) return;
+  warnRegistryFallback(verdict.subject, "using_default_node", cacheStore, onRegistryFallback);
+}
+
+function warnRegistryCachedSettings(verdict: RegistryVerdict, options: LookupOwnerRegistryVerdictOptions): void {
+  if (verdict.status === "registered" && verdict.offline) {
+    warnRegistryFallback(verdict.subject, "using_cached_settings", options.cacheStore, options.onRegistryFallback);
+  }
+}
+
+function warnRegistryFallback(
+  subject: string,
+  code: RegistryFallbackReason,
+  cacheStore?: RegistryCacheStore,
+  onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void,
+): void {
   if (cacheStore) {
-    const key = registryOwnerKeyV2(verdict.subject);
+    const key = `${code}:${registryOwnerKeyV2(subject)}`;
     let warned = fallbackWarnings.get(cacheStore);
     if (!warned) fallbackWarnings.set(cacheStore, warned = new Set());
     if (warned.has(key)) return;
     warned.add(key);
   }
-  const reason = "registry unavailable; using the default node";
-  if (onRegistryFallback) onRegistryFallback(reason);
+  const reason = code === "using_default_node" ? "registry unavailable; using the default node"
+    : "Storage settings are unreachable; using cached settings checked less than 1 hour ago.";
+  if (onRegistryFallback) onRegistryFallback(reason, code);
   else console.warn(reason);
 }
 
@@ -545,6 +618,8 @@ export interface LookupOwnerRegistryVerdictOptions {
   timeoutMs?: number;
   /** V1 format-probe chain for EOA owners. V2 lookup is chain-independent. */
   registryChainId?: number;
+  /** Value-free warning only after a fallback route is selected. */
+  onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
 }
 
 /**
@@ -598,14 +673,20 @@ export async function resolveRegistryResource(
       message: "registered owner has no verified v2 routing record",
     });
   }
+  const denyRoute = async (): Promise<never> => {
+    if (options.cacheStore) {
+      await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), verdict.sequence);
+    }
+    throw new NodeNotFoundError(subject, verdict);
+  };
 
   let targetDids: string[];
   if (access === "encryption") {
-    if (record.encryptionNode === null) throw new NodeNotFoundError(subject, verdict);
+    if (record.encryptionNode === null) return denyRoute();
     targetDids = [record.encryptionNode];
   } else {
     const space = record.spaces.find(({ space: signedSpace }) => sameSpaceIdentifier(signedSpace, resource));
-    if (space === undefined) throw new NodeNotFoundError(subject, verdict);
+    if (space === undefined) return denyRoute();
     targetDids = space.nodes
       .filter(({ mode }) => access !== "write" || mode === "read-write")
       .map(({ did }) => did);
@@ -621,7 +702,8 @@ export async function resolveRegistryResource(
     }
     return { nodeDid, urls: [url], source: "offchain" as const };
   });
-  if (hosts.length === 0) throw new NodeNotFoundError(subject, verdict);
+  if (hosts.length === 0) return denyRoute();
+  warnRegistryCachedSettings(verdict, options);
   return { verdict, hosts };
 }
 
@@ -663,8 +745,6 @@ export interface FailClosedHostOptions extends LookupOwnerRegistryVerdictOptions
   newUserHost?: string | null;
   /** Without a callback, resolution throws the error. */
   onNodeNotFound?: OnNodeNotFound;
-  /** Value-free warning after an actual cold fallback selection. Default: console.warn. */
-  onRegistryFallback?: (reason: string) => void;
   /**
    * Probe configured local candidates only after genuine unregistration.
    * Discovery never overrides a registered or unavailable verdict.
@@ -715,6 +795,7 @@ export async function resolveFailClosedTinyCloudHosts(
       }
     }
     const hosts = hostsForVerdict(verdict, newUserHost);
+    warnRegistryCachedSettings(verdict, options);
     warnRegistryDefaultNode(verdict, options.cacheStore, options.onRegistryFallback);
     return { hosts, verdict };
   };
