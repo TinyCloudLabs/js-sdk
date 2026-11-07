@@ -2237,6 +2237,10 @@ export class TinyCloudNode {
   }
 
   private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+    // Pure restoration stays offline; the first live route also prefetches the
+    // verified wallet owner when the requested resource belongs to someone else.
+    const session = this.currentTinyCloudSession();
+    if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
     if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
