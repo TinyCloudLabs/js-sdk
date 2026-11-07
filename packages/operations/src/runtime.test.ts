@@ -3,7 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
-import { REGISTRY_NOT_FOUND_BODY, type PermissionEntry } from "@tinycloud/sdk-core";
+import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { unregisteredLocationRegistryResponse } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
@@ -83,11 +84,13 @@ test("restores the persisted session DID and rereads a real live delegation for 
 });
 
 test("resolves registry URL precedence and keeps the profile host only as a no-entry hint", async () => {
-  const fixture = await createAuthRuntimeFixture();
+  const fixture = await createAuthRuntimeFixture({ delegateBasePermissions: true });
+  const key = "vault/secrets/HERMETIC_DELEGATION_CANARY";
   const profileRegistryUrl = "https://profile-registry.test";
   const envRegistryUrl = "https://current-registry.test";
   const originalFetch = globalThis.fetch;
   const previousRegistryUrl = process.env.TC_REGISTRY_URL;
+  const allRequests: string[] = [];
   const externalRequests: string[] = [];
   try {
     delete process.env.TC_REGISTRY_URL;
@@ -99,27 +102,38 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
     });
 
     globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith(`${fixture.hermetic.host}/`)) return originalFetch(input, init);
+      const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+      allRequests.push(url);
+      if (new URL(url).origin === fixture.hermetic.host) return originalFetch(input, init);
       externalRequests.push(url);
-      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+      const metadata = unregisteredLocationRegistryResponse(input, profileRegistryUrl, init)
+        ?? unregisteredLocationRegistryResponse(input, envRegistryUrl, init);
+      if (metadata !== undefined) return metadata;
+      throw new Error(`Unexpected registry-precedence fixture transport: ${url}`);
     }) as typeof fetch;
 
     const fromProfile = await createInvocationRuntime({ profile: fixture.profile });
     expect(fromProfile.ok).toBe(true);
+    expect(allRequests).toEqual([]);
+    if (!fromProfile.ok) throw new Error("expected a restored runtime");
+    const profileNode = fromProfile.context.runtime.node as TinyCloudNode;
+    expect(profileNode.hosts).toContain(fixture.hermetic.host);
+    expect((await profileNode.kv.get(key)).ok).toBe(true);
     expect(externalRequests.length).toBeGreaterThan(0);
     expect(externalRequests.every((url) => url.startsWith(`${profileRegistryUrl}/`))).toBe(true);
-    if (!fromProfile.ok) throw new Error("expected a restored runtime");
-    expect((fromProfile.context.runtime.node as TinyCloudNode).hosts).toContain(fixture.hermetic.host);
 
     externalRequests.length = 0;
+    allRequests.length = 0;
     process.env.TC_REGISTRY_URL = envRegistryUrl;
     const fromEnvironment = await createInvocationRuntime({ profile: fixture.profile });
     expect(fromEnvironment.ok).toBe(true);
+    expect(allRequests).toEqual([]);
+    if (!fromEnvironment.ok) throw new Error("expected a restored runtime");
+    const environmentNode = fromEnvironment.context.runtime.node as TinyCloudNode;
+    expect(environmentNode.hosts).toContain(fixture.hermetic.host);
+    expect((await environmentNode.kv.get(key)).ok).toBe(true);
     expect(externalRequests.length).toBeGreaterThan(0);
     expect(externalRequests.every((url) => url.startsWith(`${envRegistryUrl}/`))).toBe(true);
-    if (!fromEnvironment.ok) throw new Error("expected a restored runtime");
-    expect((fromEnvironment.context.runtime.node as TinyCloudNode).hosts).toContain(fixture.hermetic.host);
   } finally {
     globalThis.fetch = originalFetch;
     if (previousRegistryUrl === undefined) delete process.env.TC_REGISTRY_URL;

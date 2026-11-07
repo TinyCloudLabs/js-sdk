@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
+import { unregisteredLocationRegistryResponse } from "../../node-sdk/src/test-support/unregistered-location-registry";
 import { ledgerFor } from "../../replica/src/kv-storage/ledger";
 import { createIndexedDbLifecycle } from "../../replica/src/kv-storage/lifecycle";
 import { pkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
@@ -43,7 +44,12 @@ Object.defineProperty(globalThis, "indexedDB", { configurable: true, get() {
   importTouches.worker++;
   throw new Error("core or inert optional import started replica worker");
 } };
-(globalThis as any).fetch = async () => { throw new Error("offline by fixture"); };
+const registryOrigin = "https://registry.offline.test";
+globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+  const metadata = unregisteredLocationRegistryResponse(input, registryOrigin, init);
+  if (metadata !== undefined) return metadata;
+  throw new Error("offline by fixture");
+}) as typeof fetch;
 const entries = new Map<string, string>();
 const backend = {
   get length() { return entries.size; },
@@ -104,7 +110,7 @@ const provider = { request: async ({ method }: { method: string }) => {
   throw new Error("unexpected provider request " + method);
 } };
 const config = {
-  sessionStorage, tinycloudHosts: ["https://offline.test"], tinycloudRegistryUrl: null,
+  sessionStorage, tinycloudHosts: ["https://offline.test"], tinycloudRegistryUrl: registryOrigin,
   autoDiscoverLocalNode: false, includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
   replication: { enabled: true, prefixes: ["notes/"], storage: replicaStorage },
 };
