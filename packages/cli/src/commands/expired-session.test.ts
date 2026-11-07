@@ -4,7 +4,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PortableDelegation } from "@tinycloud/node-sdk";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 import { pathToFileURL } from "node:url";
+// Intentional fixture-loading boundary: Node source helpers are outside the CLI DTS graph.
 const { mintCompactDelegation } = await import(new URL("../../../node-sdk/src/test-support/compact-delegation.ts", import.meta.url).href) as {
   mintCompactDelegation(options: { audience: string; expSecs: number; host?: string; grant?: { path: string; actions: string[] } }): Promise<{
     delegation: PortableDelegation;
@@ -28,6 +30,7 @@ const { shareCliError } = await import("./share.js");
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 const cliEntry = join(import.meta.dir, "../../bin/tc");
 const requests: string[] = [];
+const registryRequests: Array<{ path: string; authorizationPresent: boolean }> = [];
 const localRequests: string[] = [];
 let node: Server<undefined>;
 let localNode: Server<undefined>;
@@ -36,13 +39,20 @@ type Posture = "delegate-session" | "local-owner-key" | "owner-openkey";
 
 beforeAll(() => {
   node = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch(request) {
-      requests.push(`${request.method} ${new URL(request.url).pathname}`);
+      const path = new URL(request.url).pathname;
+      requests.push(`${request.method} ${path}`);
+      if (request.method === "GET" && /^\/v[12]\/locations\//.test(path)) {
+        registryRequests.push({ path, authorizationPresent: request.headers.has("authorization") });
+        return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "content-type": "application/json" } });
+      }
       return new Response("{}", { status: 500 });
     },
   });
   localNode = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch(request) {
       const path = new URL(request.url).pathname;
@@ -92,6 +102,7 @@ async function seedProfile(home: string, posture: Posture, state: "expired" | "t
     await writeJsonAtomic(profileConfigPath("expired"), {
       name: "expired",
       host: node.url.origin,
+      tinycloudRegistryUrl: node.url.origin,
       chainId: 1,
       spaceName: "secrets",
       did: posture === "delegate-session" ? sessionDid : ownerDid,
@@ -121,6 +132,7 @@ async function run(home: string, argv: readonly string[]): Promise<{ exitCode: n
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
+  delete env.TC_REGISTRY_URL;
   const child = Bun.spawn([process.env.NODE_BINARY ?? "node", ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   return { exitCode, error: (JSON.parse(stderr) as { error: Record<string, unknown> }).error };
@@ -149,6 +161,7 @@ async function seedImportedProfile(
   const profile = {
     name: profileName,
     host: node.url.origin,
+    tinycloudRegistryUrl: node.url.origin,
     chainId: 1,
     spaceName: "secrets",
     did: sessionDid,
@@ -201,6 +214,7 @@ async function runBuiltCli(
   const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
+  delete env.TC_REGISTRY_URL;
   if (nowMs !== undefined) env.TC_TEST_NOW_MS = String(nowMs);
   else delete env.TC_TEST_NOW_MS;
   if (advanceAtDelegationWriteToMs !== undefined) {
@@ -567,6 +581,7 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
       const profile = {
         name: profileName,
         host: hermetic.host,
+        tinycloudRegistryUrl: hermetic.host,
         chainId: 1,
         spaceName: "secrets",
         did: sessionDid,
@@ -605,12 +620,21 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
     try {
       const seeded = await seedImportedProfile(home, "imported", expiry);
       requests.length = 0;
+      registryRequests.length = 0;
       const imported = await runBuiltCli(home, [
         "--profile", "imported", "--json", "auth", "import", seeded.artifactPath,
       ], expiry * 1000 - 60_000);
       expect(imported).toMatchObject({ exitCode: 0 });
       expect(JSON.parse(imported.stdout)).toMatchObject({ imported: true, activated: true });
-      expect(requests).toEqual([]);
+      // Successful live activation may prefetch registry metadata, but must not invoke the data node.
+      expect(requests).toEqual(registryRequests.map(({ path }) => `GET ${path}`));
+      for (const request of registryRequests) {
+        expect(request.path).toMatch(/^\/v[12]\/locations\/[^/]+$/);
+        expect(request.authorizationPresent).toBe(false);
+      }
+      // The setup process has exited; expiry and inspection below must perform zero I/O.
+      requests.length = 0;
+      registryRequests.length = 0;
 
       const expiredNow = expiry * 1000;
       for (const argv of [
@@ -632,6 +656,7 @@ describe("an expired or invalid stored session needs a new sign-in, not a retry"
       expect(JSON.parse(context.stdout)).toMatchObject({
         session: { state: "expired", expiresAt: new Date(expiredNow).toISOString() },
       });
+      expect(requests).toEqual([]);
 
       const liveRead = await runBuiltCli(home, ["--profile", "imported", "--json", "kv", "get", "KEY"], expiredNow - 1);
       expect(liveRead.exitCode).not.toBe(3);
@@ -926,7 +951,7 @@ describe("auth status and whoami report an expired session as signed out (TC-973
       expect(requests).toEqual([]);
       // A command agrees: signed out means AUTH_REQUIRED before any node request.
       const read = await runBuiltCli(home, ["--json", "--profile", "expired", "kv", "get", "KEY"]);
-      if (authenticated) expect(requests.length).toBeGreaterThan(0);
+      if (authenticated) expect(requests).toContain("POST /invoke");
       else expect({ exitCode: read.exitCode, code: read.error?.code, requests }).toEqual({ exitCode: 3, code: "AUTH_REQUIRED", requests: [] });
     } finally {
       await rm(home, { recursive: true, force: true });

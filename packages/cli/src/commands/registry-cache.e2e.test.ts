@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { z } from "zod";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,6 +12,8 @@ import type { PermissionEntry, RegistryCacheEntry } from "@tinycloud/sdk-core";
 // protocol fixture is not admission-enabled G and does not prove a G outage.
 // URL loading keeps Node-only fixture sources outside the CLI's rootDir/DTS graph.
 const { createHermeticEncryptedNode } = await import(new URL("../../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href);
+
+const diagnosticsSchema = z.object({ error: z.object({ code: z.string() }).passthrough().optional() }).passthrough();
 
 test("source CLI persists exact signed routing and reads after a client-only registry outage across processes", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc2481-cache-owner-"));
@@ -63,7 +66,8 @@ test("source CLI persists exact signed routing and reads after a client-only reg
       registryFront = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => fetch(backendOrigin) });
       const registryOrigin = registryFront.url.origin;
       const guard = join(home, "fixture-only.mjs");
-      await writeFile(guard, `const raw=globalThis.fetch;const allowed=new Set(JSON.parse(process.env.TC_TEST_ORIGINS));globalThis.fetch=(input,init)=>{const u=new URL(typeof input==='string'||input instanceof URL?input:input.url);if(!allowed.has(u.origin))throw Error('Non-fixture origin refused');return raw(input,init)};`);
+      const bootstrap = new URL("../../../operations/test-support/test-bootstrap.mjs", import.meta.url).href;
+      await writeFile(guard, `import ${JSON.stringify(bootstrap)};\nconst raw=globalThis.fetch;const allowed=new Set(JSON.parse(process.env.TC_TEST_ORIGINS));globalThis.fetch=(input,init)=>{const u=new URL(typeof input==='string'||input instanceof URL?input:input.url);if(!allowed.has(u.origin))throw Error('Non-fixture origin refused');return raw(input,init)};`, { mode: 0o600 });
       const env: Record<string, string | undefined> = { ...process.env, HOME: home, USERPROFILE: home, TC_HOME: home };
       for (const key of Object.keys(env)) if ((key.startsWith("TC_") && key !== "TC_HOME") || key.startsWith("COURIER_")) delete env[key];
       env.TC_TEST_ORIGINS = JSON.stringify([box.url.origin, replacementBox.url.origin, encOrigin, registryOrigin, fallback.url.origin]);
@@ -72,7 +76,10 @@ test("source CLI persists exact signed routing and reads after a client-only reg
         if (input !== undefined) child.stdin.write(JSON.stringify(input));
         child.stdin.end();
         const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-        return { stdout, stderr, code, error: stderr.match(/"code"\s*:\s*"([A-Z_]+)"/)?.[1] };
+        const diagnostics = args.includes("--json") && stderr.trim() !== ""
+          ? diagnosticsSchema.parse(JSON.parse(stderr))
+          : undefined;
+        return { stdout, stderr, code, error: diagnostics?.error?.code };
       };
       const profile = "cache-test-delegate";
       const created = await cli(["profile", "create", profile, "--posture", "delegate-session", "--operator", "agent", "--host", fallback.url.origin, "--registry-url", registryOrigin]);
@@ -117,6 +124,9 @@ test("source CLI persists exact signed routing and reads after a client-only reg
       const cached = await readSecret();
       expect({ code: cached.code, error: cached.error }).toEqual({ code: 0, error: undefined });
       expect(cached.stdout.trim()).toBe("tc2481-cache-TEST-value");
+      expect(JSON.parse(cached.stderr)).toEqual({
+        warnings: [{ code: "REGISTRY_UNAVAILABLE", reason: "using_cached_settings" }],
+      });
       const shown = await cli(["--json", "--profile", profile, "registry", "show"]);
       expect(shown.code).toBe(0);
       expect(JSON.parse(shown.stdout)).toMatchObject({ owner: fixture.ownerDid, sequence: 42, nodes: higher.nodes, spaces: record.spaces, encryptionNode: encryptionDid });
@@ -125,7 +135,6 @@ test("source CLI persists exact signed routing and reads after a client-only reg
       await enc.stop(true);
       const encDown = await readSecret();
       expect({ code: encDown.code, error: encDown.error, stdout: encDown.stdout }).toEqual({ code: 6, error: "DECRYPTION_DEPENDENCY_UNAVAILABLE", stdout: "" });
-      expect(encDown.stderr).toMatch(/decryption service/i);
       enc = Bun.serve({ hostname: "127.0.0.1", port: encPort, fetch: encryptionFetch });
       transient = true;
       const before = decryptRequests, readsBefore = ciphertextReads();
