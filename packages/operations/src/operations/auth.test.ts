@@ -997,6 +997,7 @@ function ownerAuthFixture(fixture: AuthRuntimeFixture): AuthRuntimeFixture {
 async function signedLoginDelegation(
   fixture: AuthRuntimeFixture,
   runtime: RuntimeOperationContext,
+  audienceJwk?: object,
 ): Promise<PortableDelegation> {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
@@ -1010,7 +1011,7 @@ async function signedLoginDelegation(
     issuedAt: issuedAt.toISOString(),
     expirationTime: new Date(issuedAt.getTime() + 60 * 60_000).toISOString(),
     spaceId: fixture.hermetic.ownerRestorableSession.spaceId,
-    jwk: fixture.hermetic.ownerRestorableSession.jwk as object,
+    jwk: audienceJwk ?? fixture.hermetic.ownerRestorableSession.jwk as object,
   });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -1095,7 +1096,7 @@ test("a verified full-resource registry accepts a grant's current data host whil
 });
 
 test("a held-lock import uses its captured signed-login proof despite caller mutation during local reads", async () => {
-  const fixture = ownerAuthFixture(await createAuthRuntimeFixture());
+  const fixture = await createAuthRuntimeFixture();
   let releaseRead!: () => void;
   const released = new Promise<void>((resolve) => { releaseRead = resolve; });
   let announceRead!: () => void;
@@ -1109,8 +1110,10 @@ test("a held-lock import uses its captured signed-login proof despite caller mut
       path: "agents/demo/settings",
       actions: ["tinycloud.kv/get"],
     };
-    const requestId = await storeLegacyRequest(fixture, [requested]);
-    const delegation = await signedLoginDelegation(fixture, runtime);
+    const requestId = await createBoundRequest(runtime, [requested]);
+    const delegation = await signedLoginDelegation(
+      fixture, runtime, (runtime.runtime.node as TinyCloudNode).restorableSession!.jwk as object,
+    );
     const authorization = delegation.delegationHeader.Authorization;
     const expiry = delegation.expiry.getTime();
     const proof = { ...delegation.siweProof! };
