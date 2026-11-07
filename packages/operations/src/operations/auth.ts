@@ -460,6 +460,18 @@ async function importRequestBoundDelegation(
             typeof reason === "string" ? { reason } : undefined,
           );
         }
+        const current = await importState(context, requestId);
+        if (!current.ok) return current.result;
+        if (current.sessionDid !== sessionDid || normalizeHost(current.host) !== normalizeHost(host)) {
+          return audienceMismatch(current.sessionDid, sessionDid);
+        }
+        if (JSON.stringify(canonicalizeOperationCapabilities(current.request.requested, resolveSpace)) !==
+          JSON.stringify(canonicalizeOperationCapabilities(state.request.requested, resolveSpace))) {
+          return operationFailure(
+            "DELEGATION_ARTIFACT_INVALID",
+            "The delegation does not reference a current stored request.",
+          );
+        }
         if (expiresAt <= Date.now()) return expiredDelegation();
         const output: AuthImportOutput = {
           cid: activated.cid,
