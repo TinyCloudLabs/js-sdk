@@ -45,6 +45,7 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
   };
   replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "[ANSI_REMOVED]");
   replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^/\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
   replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
   replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
   replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
@@ -55,8 +56,8 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
   replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
   replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
   replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
-  replace(/\b(profile|space|user|owner|account|name)\s*(?:name)?\s*[:=]\s*["'`]?[^\s,"'`}]+["'`]?/gi, (_match, label) => `${label}="[REDACTED_NAME]"`);
-  replace(/\b(profile|space|user|owner|account)(?:\s+name)?\s+(?:is\s+)?["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*[:=]\s*["'`]?[^\s,"'`}]+["'`]?/gi, (_match, label) => `${label}="[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
   replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");
   replace(/("(?:name|fullName|user|owner)"\s*:\s*)"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
   return { text, count };
@@ -71,15 +72,28 @@ function redactArgs(args: readonly string[]): string[] {
   const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-cli-logs"]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
+    if (arg === "--") break;
     if (!arg.startsWith("-")) continue;
     const equals = arg.indexOf("=");
     const flag = equals < 0 ? arg : arg.slice(0, equals);
-    if (equals >= 0) redacted.push(`${flag}=[REDACTED]`);
-    else if (booleanFlags.has(flag)) redacted.push(flag);
-    else if (args[index + 1] && !args[index + 1]!.startsWith("-")) {
+    if (equals >= 0) {
       redacted.push(`${flag}=[REDACTED]`);
+      continue;
+    }
+    if (booleanFlags.has(arg)) {
+      redacted.push(arg);
+      continue;
+    }
+    const shortFlag = /^-[A-Za-z]/.exec(arg)?.[0];
+    if (shortFlag && arg.length > shortFlag.length) {
+      redacted.push(`${shortFlag}=[REDACTED]`);
+      continue;
+    }
+    const next = args[index + 1];
+    if (next && next !== "--" && !booleanFlags.has(next)) {
+      redacted.push(`${arg}=[REDACTED]`);
       index += 1;
-    } else redacted.push(flag);
+    } else redacted.push(arg);
   }
   return redacted;
 }
