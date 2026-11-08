@@ -876,7 +876,7 @@ function registryUnavailableError(error) {
   if (failure?.code !== "registry_unavailable") return void 0;
   return new CLIError(
     "REGISTRY_UNAVAILABLE",
-    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't reach your storage settings. Try again in a few minutes.",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't get your storage settings. Try again in a few minutes.",
     ExitCode.ERROR
   );
 }
