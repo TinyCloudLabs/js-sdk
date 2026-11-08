@@ -2,6 +2,6 @@
 "@tinycloud/cli": minor
 ---
 
-Add locally redacted, owner-confirmed CLI diagnostic attachments to bug reports, with a bounded owner-only diagnostic log.
+Add owner-confirmed CLI log attachments to bug reports with sensitive values removed where found.
 
 Details: TC-2515

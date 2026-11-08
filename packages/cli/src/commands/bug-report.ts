@@ -21,7 +21,7 @@ type BugReportDependencies = {
 };
 
 async function readToken(useStdin: boolean): Promise<string> {
-  if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Pipe the attachment token to --token-stdin, or set TINYCLOUD_BUG_ATTACH_TOKEN.");
+  if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
   const token = useStdin
     ? await new Promise<string>((resolve) => {
       const prompt = createInterface({ input: stdin });
@@ -37,9 +37,9 @@ async function readToken(useStdin: boolean): Promise<string> {
     })
     : process.env.TINYCLOUD_BUG_ATTACH_TOKEN?.trim() ?? "";
   if (!token) throw new CLIError("BUG_REPORT_TOKEN_MISSING", useStdin
-    ? "No attachment token was provided on stdin."
-    : "Set TINYCLOUD_BUG_ATTACH_TOKEN or pass --token-stdin to provide the attachment token.");
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CLIError("BUG_REPORT_TOKEN_INVALID", "The attachment token has an invalid format.");
+    ? "No attachment token came in on standard input."
+    : "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CLIError("BUG_REPORT_TOKEN_INVALID", "That attachment token isn't valid. Use the one the bug report returned.");
   return token;
 }
 
@@ -48,15 +48,15 @@ type ConfirmationIO = {
   question: () => Promise<string>;
 };
 
-export async function confirmUpload(summary: string, content: string, io?: ConfirmationIO): Promise<boolean> {
-  if (!io && !stderr.isTTY) throw new CLIError("BUG_REPORT_CONFIRMATION_REQUIRED", "Run this command in a terminal to review and confirm the CLI log.");
+export async function confirmUpload(summary: string, content: string, reportId: string, io?: ConfirmationIO): Promise<boolean> {
+  if (!io && !stderr.isTTY) throw new CLIError("BUG_REPORT_CONFIRMATION_REQUIRED", "This needs your yes, so run it in a terminal where you can answer.");
   const input = io ? undefined : stdin.isTTY ? stdin : createReadStream(process.platform === "win32" ? "CONIN$" : "/dev/tty");
   const prompt = input ? createInterface({ input, output: stderr }) : undefined;
   const write = io?.write ?? ((text: string) => { stderr.write(text); });
   const question = io?.question ?? (() => prompt!.question(""));
   try {
     while (true) {
-      write(`${summary}\nSend this CLI log with sensitive values removed where found? [y/N/v to view] `);
+      write(`${summary}\nSend this CLI log to report ${reportId}? Type v to view it first. [y/N/v] `);
       const answer = (await question()).trim().toLowerCase();
       if (answer === "v") {
         write(`\n--- CLI log ---\n${content}\n--- end CLI log ---\n`);
@@ -85,7 +85,7 @@ function attachmentError(status: number, code: string): CLIError {
     payload_too_large: "The CLI log exceeded the service upload limit.",
     unsupported_media_type: "The attachment service rejected the request format.",
     rate_limited: "The upload remained rate-limited after one automatic retry; try again later.",
-    intake_busy: "The bug-report service is full; try again later, perhaps in a day or more. Your CLI log remains available locally.",
+    intake_busy: "The bug service is full for now. Try again later, not right away; your CLI log stays on this computer.",
     too_deep: "The attachment request was rejected as invalid.",
   };
   return new CLIError(`BUG_REPORT_${code.toUpperCase()}`, messages[code] ?? `The CLI log upload was rejected (${code}).`, undefined, { status });
@@ -93,18 +93,18 @@ function attachmentError(status: number, code: string): CLIError {
 
 async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: BugReportDependencies): Promise<void> {
   const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "Report ID must be 26 uppercase Crockford base32 characters.");
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character id the bug report returned.");
   const token = await readToken(tokenStdin);
   const raw = await readDiagnosticLogs(dependencies.root ?? CONFIG_DIR);
-  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "No recent CLI log was found.");
+  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "There's no recent CLI log to attach.");
   let source = tailBytes(raw, MAX_CONTENT_BYTES);
   let redacted = redactDiagnosticLog(source);
   const payload = { type: "cli-log", content: redacted.text, name: "tc-debug.log" };
-  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "The CLI log is empty after sensitive values were removed.");
+  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "Nothing is left to attach after sensitive values were removed.");
   let body = JSON.stringify(payload);
   while (Buffer.byteLength(body) > MAX_BODY_BYTES) {
     const smaller = tailBytes(source, Math.floor(Buffer.byteLength(source) * 0.8));
-    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log could not be reduced to the upload limit.");
+    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log is too big to attach, even after trimming.");
     source = smaller;
     redacted = redactDiagnosticLog(source);
     payload.content = redacted.text;
@@ -112,9 +112,9 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
   }
   const bytes = Buffer.byteLength(body);
   const lines = payload.content.split(/\r?\n/).filter(Boolean).length;
-  const summary = `Report ${reportId}: CLI log with sensitive values removed where found, ${bytes} bytes, ${lines} lines, ${redacted.count} local removals.`;
-  const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content);
-  if (!confirmed) { output("No attachment sent.\n"); return; }
+  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} lines, ${redacted.count} values hidden.`;
+  const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content, reportId);
+  if (!confirmed) { output("Nothing was sent.\n"); return; }
 
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const endpoint = dependencies.attachmentUrl ?? ATTACHMENT_URL;
@@ -130,7 +130,7 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
         body,
       });
     } catch {
-      throw new CLIError("BUG_REPORT_UPLOAD_UNKNOWN", "Upload result is unknown; the attachment may have been saved, so do not retry automatically.");
+      throw new CLIError("BUG_REPORT_UPLOAD_UNKNOWN", "Couldn't confirm the upload finished. You can try once more; the report may then get a second copy.");
     }
     if (response.status !== 429 || attempt > 0) break;
     await response.arrayBuffer();
@@ -145,22 +145,24 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
   }
   const receipt = await response.json().catch(() => null) as { redactions?: Record<string, number> } | null;
   if (!receipt) {
-    output(`Attached CLI log to report ${reportId}. Server removal count unavailable.\n`);
+    output(`Attached your CLI log to report ${reportId}. The server's hidden-value count is unavailable.\n`);
     return;
   }
   const serverCount = Object.values(receipt.redactions ?? {}).reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? value : 0), 0);
-  output(`Attached CLI log to report ${reportId}. Sensitive values removed locally: ${redacted.count}; removed by server: ${serverCount}.\n`);
+  output(serverCount > 0
+    ? `Attached your CLI log to report ${reportId}. The server hid ${serverCount} more values.\n`
+    : `Attached your CLI log to report ${reportId}.\n`);
 }
 
 export function registerBugReportCommand(program: Command, dependencies: BugReportDependencies = {}): void {
   const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
   const root = dependencies.root ?? CONFIG_DIR;
   const command = program.command("bug-report")
-    .description("Attach a recent CLI log to a bug report")
-    .option("--attach <report-id>", "Attach the recent CLI log to this report")
-    .option("--token-stdin", "Read a piped attachment token from stdin")
-    .option("--clear-logs", "Clear the local CLI log");
-  command.addHelpText("after", "\nThe CLI log is kept locally (up to 1 MiB, owner-only); sensitive values are removed where found. Set TINYCLOUD_CLI_LOGS=0 or pass --no-cli-logs to disable collection; use --clear-logs to remove the log.\n");
+    .description("Attach your recent CLI log to a bug report, with sensitive values removed where found")
+    .option("--attach <report-id>", "Attach your recent CLI log to this report")
+    .option("--token-stdin", "Read the attachment token from standard input")
+    .option("--clear-logs", "Delete the CLI log saved on this computer");
+  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete it, run tinycloud bug-report --clear-logs.\n");
   command.action(async (options) => {
     try {
       if (options.clearLogs && options.attach) {
@@ -168,7 +170,7 @@ export function registerBugReportCommand(program: Command, dependencies: BugRepo
       }
       if (options.clearLogs) {
         await clearDiagnosticLogs(root);
-        output("Local CLI log cleared.\n");
+        output("Deleted the CLI log on this computer.\n");
         return;
       }
       if (!options.attach) throw new CLIError("BUG_REPORT_USAGE", "Use `tinycloud bug-report --attach <report-id>` or `tinycloud bug-report --clear-logs`.");
