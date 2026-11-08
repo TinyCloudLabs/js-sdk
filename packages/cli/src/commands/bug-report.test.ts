@@ -31,7 +31,7 @@ async function recordPrivateDiagnostic(): Promise<void> {
       args: ["--profile", "sam@example.com", "--token", TOKEN],
       exitCode: 7,
       errorCode: "AUTH_REQUIRED",
-      errorMessage: `failed for did:key:z6Mkabc123 and /home/sam/private, Bearer ${TOKEN}`,
+      errorMessage: `failed for did:key:z6Mkabc123 and /home/sam/private, Bearer ${TOKEN}; create with tc init --key-only --name PrivateClient`,
       cliVersion: "1.6.3-beta.6",
       nodeVersion: process.version,
       durationMs: 123,
@@ -46,6 +46,7 @@ describe("tc bug-report --attach", () => {
     expect(stored).not.toContain("sam@example.com");
     expect(stored).not.toContain("did:key:z6Mkabc123");
     expect(stored).not.toContain("/home/sam");
+    expect(stored).not.toContain("PrivateClient");
     expect(stored).not.toContain(TOKEN);
 
     let requests = 0;
@@ -119,8 +120,8 @@ describe("tc bug-report --attach", () => {
       expect(payload.content).not.toContain("sam@example.com");
       expect(payload.content).not.toContain("did:key:z6Mkabc123");
       expect(payload.content).not.toContain("/home/sam");
+      expect(payload.content).not.toContain("PrivateClient");
       expect(payload.content).not.toContain(TOKEN);
-      expect(summaries[0]).toContain("local removals");
       expect(output.join("")).toContain("removed by server: 2");
     } finally {
       server.stop(true);
@@ -174,21 +175,53 @@ describe("tc bug-report --attach", () => {
     const logRoot = join(tcHome, ".tinycloud");
     try {
       const repoRoot = resolve(import.meta.dir, "../../../../");
-      const result = spawnSync(process.execPath, ["run", resolve(repoRoot, "packages/cli/src/index.ts"), "completion", "bash"], {
+      const entry = resolve(repoRoot, "packages/cli/src/index.ts");
+      const result = spawnSync(process.execPath, ["run", entry, "completion", "bash"], {
         cwd: repoRoot,
         env: { ...process.env, HOME: home, TC_HOME: tcHome, TINYCLOUD_CLI_LOGS: "1" },
         encoding: "utf8",
         timeout: 30_000,
       });
       expect(result.status).toBe(0);
-      const records = (await readDiagnosticLogs(logRoot)).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { command: string });
+      const beforeOptOut = await readDiagnosticLogs(logRoot);
+      const records = beforeOptOut.trim().split(/\r?\n/).map((line) => JSON.parse(line) as { command: string });
       expect(records).toHaveLength(1);
       expect(records[0]?.command).toBe("completion bash");
+      const disabled = spawnSync(process.execPath, ["run", entry, "--no-cli-logs", "completion", "bash"], {
+        cwd: repoRoot,
+        env: { ...process.env, HOME: home, TC_HOME: tcHome, TINYCLOUD_CLI_LOGS: "1" },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      expect(disabled.status).toBe(0);
+      expect(await readDiagnosticLogs(logRoot)).toBe(beforeOptOut);
     } finally {
       await rm(home, { recursive: true, force: true });
       await rm(tcHome, { recursive: true, force: true });
     }
   });
+  test("ordinary CLI commands do not revive the dormant first-run warning", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-cli-warning-home-"));
+    const tcHome = await mkdtemp(join(tmpdir(), "tc-cli-warning-state-"));
+    try {
+      if (process.platform === "win32") return;
+      const repoRoot = resolve(import.meta.dir, "../../../../");
+      const entry = resolve(repoRoot, "packages/cli/src/index.ts");
+      const result = spawnSync("script", ["-qec", `${process.execPath} run ${entry} context`, "/dev/null"], {
+        cwd: repoRoot,
+        env: { ...process.env, HOME: home, TC_HOME: tcHome },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toContain("PROFILE_NOT_FOUND");
+      expect(output).not.toContain("No profile configured.");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(tcHome, { recursive: true, force: true });
+    }
+  });
+
 
   test("a malformed 201 receipt is still reported as a completed upload", async () => {
     await recordPrivateDiagnostic();

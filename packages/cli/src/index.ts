@@ -66,28 +66,28 @@ program
   .option("--no-cli-logs", "Disable local CLI log collection for this command");
 
 
-program.hook("preAction", async (_hookedCommand, actionCommand) => {
-  const opts = actionCommand.optsWithGlobals();
+program.hook("preAction", async (hookedCommand, actionCommand) => {
+  const opts = hookedCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
   applyNoRetryFlag(opts);
-  const parentName = actionCommand.parent?.name();
-  const isShareCommand = parentName === "share" || actionCommand.name() === "share";
+  const parentName = hookedCommand.parent?.name();
+  const isShareCommand = parentName === "share" || hookedCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
 
   // Config guard — warn if not configured for auth-required commands
-  const commandName = actionCommand.name();
-  const isRootCommand = actionCommand === program;
-  const fullCommand = fullCommandName(actionCommand);
+  const commandName = hookedCommand.name();
+  const isRootCommand = hookedCommand === program;
+  const fullCommand = fullCommandName(hookedCommand);
   setDiagnosticCommandContext({
-    command: fullCommand,
+    command: fullCommandName(actionCommand),
     args: process.argv.slice(2),
     disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || opts.cliLogs === false,
     cliVersion: version,
   });
   commandStartedAt = Date.now();
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status", "bug-report"].includes(commandName) ||
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
                     fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {

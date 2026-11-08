@@ -56,6 +56,7 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
   replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
   replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
   replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
+  replace(/(--(?:profile|space|user|owner|account|key|name)(?:=|\s+))(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s,;]+)/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
   replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*([:=]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`]?))[^\s,"'`}]+["'`]?/gi, (_match, label, separator) => `${label}${separator}"[REDACTED_NAME]"`);
   replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?(?!["'`]\[REDACTED(?:_[A-Z]+)?\]["'`])["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
   replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");

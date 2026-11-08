@@ -19,7 +19,7 @@ test("diagnostic logs redact sensitive values before writing owner-only files", 
     args: ["--profile", "private-profile", "--token", "secret-token-value", "-pClientAcme", "-pPrivateClient=prod", "-Hhttps://operator:ShortSecret@private.example/tenant?x=y", "--value", "-sekret", "--", "curl", "-uadmin:hunter2", "https://private.example"],
     exitCode: 1,
     errorCode: "AUTH_REQUIRED",
-    errorMessage: `failed for profile "private-profile" for key "clients/acme/payroll" https://operator:ShortSecret@private.example/tenant/spaceSecret did:key:z6MkExample alice@example.test /home/alice/.tinycloud/profile.json Bearer ${"A".repeat(43)} \u001b[31mcolored\u001b[0m`,
+    errorMessage: `failed for profile "private-profile" for key "clients/acme/payroll" https://operator:ShortSecret@private.example/tenant/spaceSecret did:key:z6MkExample alice@example.test /home/alice/.tinycloud/profile.json Bearer ${"A".repeat(43)} \u001b[31mcolored\u001b[0m; run tc init --key-only --name RecoveryName`,
     cliVersion: "1.2.3",
     nodeVersion: "v20.0.0",
     durationMs: 4,
@@ -27,7 +27,7 @@ test("diagnostic logs redact sensitive values before writing owner-only files", 
   const content = await readDiagnosticLogs(root);
   expect(content).toContain("auth request --grant");
   expect(content).toContain("AUTH_REQUIRED");
-  for (const secret of ["private-profile", "secret-token-value", "-pClientAcme", "ClientAcme", "PrivateClient", "prod", "operator:ShortSecret", "ShortSecret", "private.example/tenant", "spaceSecret", "sekret", "hunter2", "clients/acme/payroll", "did:key:z6MkExample", "alice@example.test", "/home/alice/", "A".repeat(43), "abcdef1234567890"]) {
+  for (const secret of ["private-profile", "secret-token-value", "-pClientAcme", "ClientAcme", "PrivateClient", "prod", "operator:ShortSecret", "ShortSecret", "private.example/tenant", "spaceSecret", "RecoveryName", "sekret", "hunter2", "clients/acme/payroll", "did:key:z6MkExample", "alice@example.test", "/home/alice/", "A".repeat(43), "abcdef1234567890"]) {
     expect(content).not.toContain(secret);
   }
   expect(content).not.toContain("\u001b[");
