@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
 import { ancestryPins, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, approvedTc1413Ratchet, approvedTc1432Ratchet, approvedMasterDriftRatchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, approvedTc2096RepairBackoffRatchet, approvedTc2096LazyContentRatchet, pinLandedOn, validateGatedOnlyRatchet, type GatedOnlyRatchet, type Ledger } from "./replica-size-policy";
-import { approvedTc2481RegistryFreshness, approvedTc2481WebRouting, hasTc2481WebEvidence, isTc2481ZeroRootEntry, type Tc2481WebRouting } from "./replica-size-policy";
+import { approvedTc2481RegistryFreshness, approvedTc2481WebRouting, approvedTc2481OfflineReplicaTransport, validateLedger, hasTc2481WebEvidence, isTc2481ZeroRootEntry, type Tc2481WebRouting } from "./replica-size-policy";
 export type OptionalWebRoutingRatchet = Pick<Tc2481WebRouting,
   "label" | "ruling" | "base" | "sourceCommits" | "firstImport" | "reason"> & {
   canonicalCI: Tc2481WebRouting["canonicalCI"] & { before: LoadedSizes; after: LoadedSizes; delta: LoadedSizes };
@@ -147,6 +147,19 @@ export const tc2481WebOptionalAllowance: LoadedSizes = {
   ...tc2096LazyOptionalAllowance,
   ...approvedTc2481WebRouting.firstImport.ceiling,
 };
+
+const tc2481OfflineOptionalAllowance: LoadedSizes = {
+  ...tc2481WebOptionalAllowance,
+  ...approvedTc2481OfflineReplicaTransport.firstImport.ceiling,
+};
+const tc2481OfflineOptionalDelta: LoadedSizes = {
+  "replica.mjs": -2, "replica.cjs": 31, "activation.mjs": 0, "activation.cjs": 1,
+};
+function hasTc2481OfflineOptionalEntry(value: OptionalLedger): boolean {
+  const entries = value.entries.filter((entry) => entry.pr === "#873");
+  return entries.length === 1 && entries[0].ticket === "TC-2481" &&
+    optionalFormats.every((format) => entries[0][format] === tc2481OfflineOptionalDelta[format]);
+}
 export const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
   ciRun: "38958197518",
@@ -165,7 +178,7 @@ export const approvedRelocations = [
 
 /** Validate the actual ledger before comparing its immutable prefix or built artifacts. */
 export function validateOptionalLedger(
-  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false, tc1432 = false, tc1475 = false, masterDrift = false, tc1789 = false, tc2043 = false, tc1888 = false, tc2096 = false, tc2096Lazy = false, tc2481Web = false,
+  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false, tc1432 = false, tc1475 = false, masterDrift = false, tc1789 = false, tc2043 = false, tc1888 = false, tc2096 = false, tc2096Lazy = false, tc2481Web = false, tc2481OfflineReplicaTransport?: Ledger["tc2481OfflineReplicaTransport"],
 ): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
@@ -186,7 +199,8 @@ export function validateOptionalLedger(
   const corrected = value.measurementCorrection !== undefined;
   const hasCompactFix = value.fixRequired !== undefined;
   const hasWebRouting = value.tc2481WebRouting !== undefined;
-  const ceiling = tc2481Web ? tc2481WebOptionalAllowance : tc2096Lazy ? tc2096LazyOptionalAllowance : tc2096 ? tc2096OptionalAllowance : tc1888 ? tc1888OptionalAllowance : tc2043 ? tc2043OptionalAllowance : tc1789 ? tc1789OptionalAllowance : masterDrift ? masterDriftOptionalAllowance : tc1475 ? tc1475OptionalAllowance : tc1432 ? tc1432OptionalAllowance : tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
+  const finalTransport = tc2481OfflineReplicaTransport !== undefined;
+  const ceiling = finalTransport ? tc2481OfflineOptionalAllowance : tc2481Web ? tc2481WebOptionalAllowance : tc2096Lazy ? tc2096LazyOptionalAllowance : tc2096 ? tc2096OptionalAllowance : tc1888 ? tc1888OptionalAllowance : tc2043 ? tc2043OptionalAllowance : tc1789 ? tc1789OptionalAllowance : masterDrift ? masterDriftOptionalAllowance : tc1475 ? tc1475OptionalAllowance : tc1432 ? tc1432OptionalAllowance : tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
     : ciToolchainCorrection ? ciOptionalAllowance : fixRequired ? fixRequiredOptionalAllowance
       : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
   if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
@@ -197,6 +211,9 @@ export function validateOptionalLedger(
       (tc2096Lazy && !tc2096) ||
       (hasWebRouting !== tc2481Web) ||
       (tc2481Web && (!tc2096Lazy || JSON.stringify(value.tc2481WebRouting) !== JSON.stringify(approvedTc2481WebOptional))) ||
+      (finalTransport && (!tc2481Web ||
+        JSON.stringify(tc2481OfflineReplicaTransport) !== JSON.stringify(approvedTc2481OfflineReplicaTransport) ||
+        !hasTc2481OfflineOptionalEntry(value))) ||
       (hasCompactFix && (!ciToolchainCorrection ||
         JSON.stringify(value.fixRequired) !== JSON.stringify([approvedCompactFixRequired])))) {
     throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed fix-required first-import caps are approved`);
@@ -217,6 +234,15 @@ export function evaluateOptionalBudget(value: OptionalLedger, root: Ledger, dire
     for (const format of optionalFormats) raw[format] += entry[format];
   }
   const effective = { ...raw };
+  let allowance = tc2481WebOptionalAllowance;
+  if (root.tc2481OfflineReplicaTransport !== undefined) {
+    validateLedger(root);
+    if (!hasTc2481OfflineOptionalEntry(value) ||
+        optionalFormats.some((format) => value.allowance[format] !== tc2481OfflineOptionalAllowance[format])) {
+      throw new Error("The final TC-2481 optional cap requires its matching true accounting and exact root admission.");
+    }
+    allowance = tc2481OfflineOptionalAllowance;
+  }
   if (value.tc2481WebRouting !== undefined || root.tc2481WebRouting !== undefined) {
     const entries = value.entries.filter((entry) => entry.pr === "#872");
     const rootEntries = root.entries.filter((entry) => entry.pr === "#872");
@@ -225,7 +251,7 @@ export function evaluateOptionalBudget(value: OptionalLedger, root: Ledger, dire
     if (JSON.stringify(value.tc2481WebRouting) !== JSON.stringify(approvedTc2481WebOptional) ||
         JSON.stringify(root.tc2481WebRouting) !== JSON.stringify(approvedTc2481WebRouting) ||
         JSON.stringify(root.tc2481RegistryFreshness) !== JSON.stringify(approvedTc2481RegistryFreshness) ||
-        optionalFormats.some((format) => value.allowance[format] !== tc2481WebOptionalAllowance[format]) ||
+        optionalFormats.some((format) => value.allowance[format] !== allowance[format]) ||
         rootEntries.length !== 1 || !isTc2481ZeroRootEntry(rootEntries[0]) ||
         entries.length !== 1 || entries[0].ticket !== "TC-2481" || !hasTc2481WebEvidence(entries[0].note) ||
         optionalFormats.some((format) => entries[0][format] !== approvedTc2481WebOptional.canonicalCI.delta[format]) ||

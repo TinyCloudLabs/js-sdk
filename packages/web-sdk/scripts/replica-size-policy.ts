@@ -2797,23 +2797,23 @@ export const approvedTc2481ColdDeviceRefusal: LogoutRatchet = {
 };
 
 export const approvedTc2481OfflineReplicaTransport: Tc2481RegistryFreshness = {
-  label: "TC-2481 offline replica transport worker admission (PR #873)",
-  ruling: "Naomi 8e3df7f3 authorizes only canonical worker 777149 B (+24) and legacy worker 771051 B (+33), with zero headroom. Both pinned SQLite and PostgreSQL jobs at 11f3b8a710846b33a1d4ef746a3690f8c3015050 agree. Bun 1.3.14; rustc 1.99.0. No other cap changes.",
+  label: "TC-2481 final cold refusal and offline replica transport admission (PR #873)",
+  ruling: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Final e4e3fef6 ruling sets ordinary cumulative allowances to 391/861, exact root caps 1491684/1432057 and initial CJS 68401. ESM initial, activation, gated and the already approved worker caps are unchanged. Both pinned SQLite and PostgreSQL jobs at 3e0d93224daac21f9a5fabdd0b1a628f77aad8a8 agree. Bun 1.3.14; rustc 1.99.0.",
   base: "e21f45ddb24cbf8d80a959ff43f504a475b4508e",
-  sourceCommits: ["11f3b8a710846b33a1d4ef746a3690f8c3015050"],
+  sourceCommits: ["3e0d93224daac21f9a5fabdd0b1a628f77aad8a8"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42508972622",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530086",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530258",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42508972622/job/128817683070",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42508972622/job/128817682994",
     ],
   },
-  root: { delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: { "index.mjs": 1491713, "index.cjs": 1432069 } },
-  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 53131, "replica.cjs": 68370 } },
+  root: { delta: { "index.mjs": -29, "index.cjs": -12 }, ceiling: { "index.mjs": 1491684, "index.cjs": 1432057 } },
+  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 31 }, ceiling: { "replica.mjs": 53131, "replica.cjs": 68401 } },
   activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
   worker: { delta: 24, ceiling: 777149 },
   replicaWorker: { delta: 33, ceiling: 771051 },
-  reason: "The approved narrow registry_unavailable-to-offline mapping in replica transport.ts is reached through kvSyncTransport from kv-storage/wasmDeps.ts and worker.ts. Canonical worker SHA-256 is 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115 in both pinned jobs. Root, initial, activation and gated caps are carried unchanged, not new measurements or new admissions. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
+  reason: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). True root charges raise cumulative ESM from 292 to 391, explicitly increasing its former 388 budget by 3; CJS is 241/861. Root cap deltas -29/-12 tighten the earlier root-only approval and are not the accounting charges. Actual optional deltas are -2/+31/0/+1; only initial CJS gains 31 cap bytes in the separately loaded replica parser closure. Canonical worker SHA-256 remains 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115. Activation, gated and worker caps do not change. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
 };
 
 const tc2481WebEvidence = [
@@ -2969,7 +2969,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   }
   const row = value.phase2Ratchet;
   if (row !== undefined) {
-    if (value.allowance["index.mjs"] !== 388 || value.allowance["index.cjs"] !== 861 ||
+    // Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping,
+    // +99/+104 root (base e21 → 3e0d9322); raise only ordinary ESM allowance 388 → 391.
+    const esmAllowance = value.tc2481OfflineReplicaTransport === undefined ? 388 : 391;
+    if (value.allowance["index.mjs"] !== esmAllowance || value.allowance["index.cjs"] !== 861 ||
         !row || Object.keys(row).some((key) =>
           !["label", "base", "toolchain", "baseline", "delta", "ceiling", "rationale", "safeCuts"].includes(key)) ||
         row.label !== approvedPhase2.label || row.base !== approvedPhase2.base ||
@@ -3276,9 +3279,14 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2481WebRouting || JSON.stringify(value.tc2481ColdDeviceRefusal) !== JSON.stringify(approvedTc2481ColdDeviceRefusal))) {
     throw new Error("Only Naomi's exact TC-2481 cold-device root-only ratchet is approved.");
   }
-  if (value.tc2481OfflineReplicaTransport !== undefined &&
-      (!value.tc2481ColdDeviceRefusal || JSON.stringify(value.tc2481OfflineReplicaTransport) !== JSON.stringify(approvedTc2481OfflineReplicaTransport))) {
-    throw new Error("Only Naomi's exact TC-2481 offline replica worker-only ratchet is approved.");
+  if (value.tc2481OfflineReplicaTransport !== undefined) {
+    const entries = value.entries.filter((entry) => entry.pr === "#873");
+    if (!value.tc2481ColdDeviceRefusal ||
+        JSON.stringify(value.tc2481OfflineReplicaTransport) !== JSON.stringify(approvedTc2481OfflineReplicaTransport) ||
+        entries.length !== 1 || entries[0].ticket !== "TC-2481" ||
+        entries[0]["index.mjs"] !== 99 || entries[0]["index.cjs"] !== 104) {
+      throw new Error("Only Naomi's exact final TC-2481 admission with its true root accounting is approved.");
+    }
   }
 }
 

@@ -1,7 +1,7 @@
 {
   "allowance": {
     "replica.mjs": 53131,
-    "replica.cjs": 68370,
+    "replica.cjs": 68401,
     "activation.mjs": 23412,
     "activation.cjs": 24981
   },
@@ -318,6 +318,15 @@
       "activation.mjs": -4262,
       "activation.cjs": -4863,
       "note": "Actual same-toolchain c7a9b68120b51b529db7e4f2637b01e0525b1319 merge-base deltas are 374/417/-4262/-4863. CJS cap growth is 413, not this measured 417: the validated TC-2481 record retires four pre-existing baseline bytes while preserving RAW 68374 and the mandatory DIRECT 68370 ceiling. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security ."
+    },
+    {
+      "pr": "#873",
+      "ticket": "TC-2481",
+      "replica.mjs": -2,
+      "replica.cjs": 31,
+      "activation.mjs": 0,
+      "activation.cjs": 1,
+      "note": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Actual optional deltas are -2/+31/0/+1; only initial CJS cap changes to 68401. The historical four-byte CJS baseline retirement is unchanged: RAW 68405, EFFECTIVE 68401, mandatory DIRECT cap 68401."
     }
   ]
 }

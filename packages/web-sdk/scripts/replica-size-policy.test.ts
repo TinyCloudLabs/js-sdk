@@ -60,7 +60,13 @@ import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "
 import { approvedTc2481ColdDeviceRefusal, validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
 import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
 
-const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+// Historical cases keep the earlier root-only admission and its original cumulative budget.
+// Current-PR controls below exercise the final shipped record and its true accounting.
+const current = structuredClone(shipped);
+delete current.tc2481OfflineReplicaTransport;
+current.entries = current.entries.filter((entry) => entry.pr !== "#873");
+current.allowance["index.mjs"] = 388;
 
 // Newest-row helpers. Order is the ledger file's key order and every ceiling is read from the ledger JSON, so
 // appending a row moves these assertions with it. The replica worker's own row is not a kv-storage worker row.
@@ -4772,38 +4778,28 @@ describe("TC-2481 cold-device root-only admission", () => {
   });
 });
 
-const offlineReplicaTransportAdmission = (): NonNullable<Ledger["tc2481RegistryFreshness"]> => ({
-  label: "TC-2481 offline replica transport worker admission (PR #873)",
-  ruling: "Naomi 8e3df7f3 authorizes only canonical worker 777149 B (+24) and legacy worker 771051 B (+33), with zero headroom. Both pinned SQLite and PostgreSQL jobs at 11f3b8a710846b33a1d4ef746a3690f8c3015050 agree. Bun 1.3.14; rustc 1.99.0. No other cap changes.",
-  base: "e21f45ddb24cbf8d80a959ff43f504a475b4508e",
-  sourceCommits: ["11f3b8a710846b33a1d4ef746a3690f8c3015050"],
-  canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097",
-    jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530086",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530258",
-    ],
-  },
-  root: { delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: { "index.mjs": 1491713, "index.cjs": 1432069 } },
-  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 53131, "replica.cjs": 68370 } },
-  activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
-  worker: { delta: 24, ceiling: 777149 },
-  replicaWorker: { delta: 33, ceiling: 771051 },
-  reason: "The approved narrow registry_unavailable-to-offline mapping in replica transport.ts is reached through kvSyncTransport from kv-storage/wasmDeps.ts and worker.ts. Canonical worker SHA-256 is 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115 in both pinned jobs. Root, initial, activation and gated caps are carried unchanged, not new measurements or new admissions. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
-});
-
-describe("TC-2481 offline replica transport worker-only admission", () => {
-  const admitted = () => Object.assign(copy(current), {
-    tc2481OfflineReplicaTransport: offlineReplicaTransportAdmission(),
+const offlineReplicaTransportAdmission = () => structuredClone(shipped.tc2481OfflineReplicaTransport!);
+const finalTransportLedger = () => {
+  const ledger = { ...structuredClone(shipped), tc2481OfflineReplicaTransport: offlineReplicaTransportAdmission() };
+  ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
+  ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
+  ledger.entries.push({
+    pr: "#873", ticket: "TC-2481", "index.mjs": 99, "index.cjs": 104,
+    note: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322)",
   });
+  return ledger;
+};
 
-  it("admits the reviewed workers while selecting only the carried root ceilings", () => {
+describe("TC-2481 final3e0 pinned accounting admission", () => {
+  const admitted = () => finalTransportLedger();
+
+  it("selects the tighter measured root caps while retaining the reviewed worker caps", () => {
     const ledger = admitted();
     expect(() => validateLedger(ledger)).not.toThrow();
     for (const format of ["index.mjs", "index.cjs"] as const) {
       expect(rootCeilingFor(ledger, format)).toEqual({
         row: "tc2481OfflineReplicaTransport",
-        ceiling: current.tc2481ColdDeviceRefusal!.root.ceiling[format],
+        ceiling: { "index.mjs": 1491684, "index.cjs": 1432057 }[format],
       });
     }
   });
@@ -4817,15 +4813,15 @@ describe("TC-2481 offline replica transport worker-only admission", () => {
     }
   });
 
-  it("does not admit growth in root, initial or activation buckets", () => {
+  it("refuses an extra byte above each reviewed root, initial or activation cap", () => {
     for (const field of ["root", "firstImport", "activation"] as const) {
-      const ledger = admitted();
-      const bucket = ledger.tc2481OfflineReplicaTransport[field];
-      for (const format of Object.keys(bucket.ceiling)) {
-        Object.assign(bucket.delta, { [format]: 1 });
+      for (const format of Object.keys(admitted().tc2481OfflineReplicaTransport![field].ceiling)) {
+        const ledger = admitted();
+        const bucket = ledger.tc2481OfflineReplicaTransport![field];
+        Object.assign(bucket.delta, { [format]: Reflect.get(bucket.delta, format) + 1 });
         Object.assign(bucket.ceiling, { [format]: Reflect.get(bucket.ceiling, format) + 1 });
+        expect(() => validateLedger(ledger)).toThrow();
       }
-      expect(() => validateLedger(ledger)).toThrow();
     }
   });
 
@@ -4850,5 +4846,44 @@ describe("TC-2481 offline replica transport worker-only admission", () => {
     changed.worker.delta++;
     expect(() => validateTc2481OfflineReplicaTransportTransition(row, changed)).toThrow();
     expect(() => validateTc2481OfflineReplicaTransportTransition(row, undefined)).toThrow();
+  });
+
+  it("keeps the true root charges visible in the exact ordinary cumulative budget", () => {
+    const ledger = admitted();
+    expect(() => validateLedger(ledger)).not.toThrow();
+    expect(ledger.entries.filter((entry) => entry.pr === "#873")).toMatchObject([
+      { ticket: "TC-2481", "index.mjs": 99, "index.cjs": 104 },
+    ]);
+    expect(ledger.entries.reduce((sum, entry) => sum + entry["index.mjs"], 0)).toBe(391);
+    expect(ledger.entries.reduce((sum, entry) => sum + entry["index.cjs"], 0)).toBe(241);
+    expect(ledger.allowance).toEqual({ "index.mjs": 391, "index.cjs": 861 });
+  });
+
+  it("refuses a fourth ESM cumulative byte, any CJS allowance increase or an unbound allowance", () => {
+    const ledger = admitted();
+    expect(() => validateLedger(ledger)).not.toThrow();
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      const changed = structuredClone(ledger);
+      changed.allowance[format]++;
+      expect(() => validateLedger(changed)).toThrow();
+    }
+    const missing = structuredClone(ledger);
+    delete missing.tc2481OfflineReplicaTransport;
+    expect(() => validateLedger(missing)).toThrow();
+  });
+
+  it("refuses zero, missing or duplicate current-PR root accounting", () => {
+    const ledger = admitted();
+    expect(() => validateLedger(ledger)).not.toThrow();
+    for (const mutate of [
+      (value: Ledger) => { value.entries.find((entry) => entry.pr === "#873")!["index.mjs"] = 0; },
+      (value: Ledger) => { value.entries.find((entry) => entry.pr === "#873")!["index.cjs"] = 0; },
+      (value: Ledger) => { value.entries = value.entries.filter((entry) => entry.pr !== "#873"); },
+      (value: Ledger) => { value.entries.push(structuredClone(value.entries.find((entry) => entry.pr === "#873")!)); },
+    ]) {
+      const changed = structuredClone(ledger);
+      mutate(changed);
+      expect(() => validateLedger(changed)).toThrow();
+    }
   });
 });

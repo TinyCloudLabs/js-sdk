@@ -118,7 +118,7 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const reading of evaluateOptionalBudget(optionalLedger, ledger, optionalCurrent)) {
   const { format, raw, effective, direct, ceiling } = reading;
@@ -580,10 +580,10 @@ if (prBaseSha) {
   validateTc2481OfflineReplicaTransportTransition(baseLedger.tc2481OfflineReplicaTransport, ledger.tc2481OfflineReplicaTransport);
   const offlineReplicaTransport = ledger.tc2481OfflineReplicaTransport;
   // Both admissions are introduced by this PR; the current cold-root row is
-  // already strictly validated, while the measured worker source must exist.
+  // already strictly validated, while the measured final source must exist.
   if (offlineReplicaTransport !== undefined && baseLedger.tc2481OfflineReplicaTransport === undefined &&
       (ledger.tc2481ColdDeviceRefusal === undefined || !hasAncestor(repoRoot, offlineReplicaTransport.sourceCommits.at(-1)!))) {
-    console.error("The TC-2481 offline replica worker ratchet requires the approved cold-root row and its measured source ancestor.");
+    console.error("The final TC-2481 cold routing and replica admission requires the approved cold-root row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
@@ -601,7 +601,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport);
   validateTc2481WebOptionalTransition(baseOptional.tc2481WebRouting, optionalLedger.tc2481WebRouting);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
