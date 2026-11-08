@@ -9,6 +9,9 @@ import { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./openKeyB
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.openkey-session-jwk.test";
 
 const PRIVATE_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
 
@@ -23,6 +26,8 @@ let originalFetch: typeof globalThis.fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (url.endsWith("/delegate") && init?.method === "POST") return Response.json({ activated: ["space"], skipped: [] });
@@ -37,6 +42,7 @@ const signer = new PrivateKeySigner("1".padStart(64, "0"));
 
 function authorization(): NodeUserAuthorization {
   return new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: new NodeWasmBindings(),
     signStrategy: { type: "auto-sign" },
