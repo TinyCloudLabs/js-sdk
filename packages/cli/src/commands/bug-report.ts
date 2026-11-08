@@ -93,7 +93,7 @@ function attachmentError(status: number, code: string): CLIError {
 
 async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: BugReportDependencies): Promise<void> {
   const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character id the bug report returned.");
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character ID the bug report returned.");
   const token = await readToken(tokenStdin);
   const raw = await readDiagnosticLogs(dependencies.root ?? CONFIG_DIR);
   if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "There's no recent CLI log to attach.");
@@ -151,9 +151,12 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
     return;
   }
   const serverCount = Object.values(receipt.redactions ?? {}).reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? value : 0), 0);
-  output(serverCount > 0
-    ? `Attached your CLI log to report ${reportId}. The server hid ${serverCount} more values.\n`
-    : `Attached your CLI log to report ${reportId}.\n`);
+  if (serverCount > 0) {
+    const valueLabel = serverCount === 1 ? "value" : "values";
+    output(`Attached your CLI log to report ${reportId}. The server hid ${serverCount} more ${valueLabel}.\n`);
+  } else {
+    output(`Attached your CLI log to report ${reportId}.\n`);
+  }
 }
 
 export function registerBugReportCommand(program: Command, dependencies: BugReportDependencies = {}): void {
