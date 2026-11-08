@@ -138,7 +138,6 @@ import { approvalNotices } from "../lib/approval-notices.js";
 import {
   APPS_AGENT_EXPIRY,
   APPS_AGENT_EXPIRY_DAYS,
-  APPS_AGENT_MAX_APPS,
   APPS_AGENT_PRESET,
   APPS_AGENT_SPACE,
   appsAgentPermissions,
@@ -950,7 +949,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     )
     .option(
       "--app <app_id>",
-      `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
+      `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeatable`,
       (value: string, previous: string[]) => [...previous, value],
       [],
     )
