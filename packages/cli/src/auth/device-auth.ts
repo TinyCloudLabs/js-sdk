@@ -11,7 +11,7 @@ import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
-import { isDeviceDefaultDecrypt } from "../lib/raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage } from "../lib/raw-encryption.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
@@ -431,13 +431,11 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
   // OpenKey's device flow admits one encryption entry, decrypt on the owner's own default network.
-  if (input.permissions.some((permission) =>
-    (permission.service === "tinycloud.encryption" && !isDeviceDefaultDecrypt(permission)) ||
-    permission.space === "secrets" ||
-    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+  const refused = deviceRefusal(input.permissions);
+  if (refused !== undefined) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use another OpenKey approval method for this manifest.",
+      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for anything else."),
       ExitCode.USAGE_ERROR,
     );
   }
