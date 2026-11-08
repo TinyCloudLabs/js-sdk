@@ -1,7 +1,8 @@
 import "./support/browserGlobalsShim";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 import { privateKeyToAccount } from "viem/accounts";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 // TC-2276: `openkey.expiryChangeable` is a pass-through. A popup-shaped approval that returns a message with a
 // different Expiration Time builds a session carrying the SIGNED expiry, and only when the app opted in.
@@ -26,6 +27,13 @@ let priorWindow: typeof globalThis.window | undefined;
 let priorStorage: PropertyDescriptor | undefined;
 let storage: MemoryStorage;
 let originalFetch: typeof globalThis.fetch;
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
 beforeEach(() => {
   priorWindow = globalThis.window;
   globalThis.window = {
@@ -39,7 +47,10 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage, writable: true });
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: unknown, init?: { method?: string }) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.startsWith(`${registry.url.origin}/`)) {
+      return originalFetch(input as Parameters<typeof globalThis.fetch>[0], init);
+    }
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
         status: 200, headers: { "content-type": "application/json" },
@@ -111,6 +122,7 @@ function create(expiry: string, openkeyOptions: { expiryChangeable?: boolean }) 
       provider,
       openkey: { client: openkey, ...openkeyOptions },
       tinycloudHosts: ["https://node.example.test"],
+      tinycloudRegistryUrl: registry.url.origin,
       autoDiscoverLocalNode: false,
       persistSession: true,
       autoCreateSpace: false,
