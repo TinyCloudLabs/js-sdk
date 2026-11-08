@@ -8,10 +8,22 @@ import type { ApprovalWait } from "./approval-wait.js";
 import { ProfileManager } from "../config/profiles.js";
 import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
+/** OpenKey PR #430 response metadata. Readiness never grants authority. */
+export interface RequestedSpaceStatus {
+  space: string;
+  spaceId: string;
+  spaceReady: boolean | null;
+  spacePending?: true;
+  spaceError?: string;
+}
+
 export interface DelegationData {
   delegationHeader: { Authorization: string };
   delegationCid: string;
+  /** Primary route only; permission resources retain their own spaces. */
   spaceId: string;
+  requestedSpaces?: RequestedSpaceStatus[];
+  spaceReady?: boolean | null;
   [key: string]: unknown;
 }
 

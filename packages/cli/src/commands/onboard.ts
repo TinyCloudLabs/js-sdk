@@ -5,6 +5,7 @@ import { startAuthFlow, delegationFromInput } from "../auth/browser-auth.js";
 import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
 import { completeApprovalResult } from "../auth/approval-request.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
+import { onboardingPlan } from "../auth/onboarding-scope.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -23,9 +24,7 @@ const kv = (actions: string[]) => actions.map((action) => `tinycloud.kv/${action
 const sql = (actions: string[]) => actions.map((action) => `tinycloud.sql/${action}`);
 
 /**
- * The starting grant, one OpenKey approval per space: OpenKey signs one space
- * per approval. The first approval also signs the owner in (or lets them
- * create an account) and hosts their spaces.
+ * Default onboarding permission groups. The command composes these into one approval.
  */
 export const ONBOARD_STEPS: ReadonlyArray<{
   space: string;
@@ -55,12 +54,15 @@ export const ONBOARD_STEPS: ReadonlyArray<{
 export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
-    .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
+    .description("Set up this computer with its owner's OpenKey approval and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
+    .option("--with <tasks>", "Tasks to authorize: apps (default), feed (Home/feed only), or apps,feed")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (options, cmd) => {
       try {
         // Refused before anything is created or contacted. One deadline bounds the whole command, every approval in it.
+        const { permissions, asks } = onboardingPlan(options.with);
+        const steps = [{ permissions, asks }];
         const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         if (options.timeout !== undefined && typeof options.code === "string" && options.code.trim() !== "") {
           throw new CLIError(
@@ -91,19 +93,21 @@ export function registerOnboardCommand(program: Command): void {
           }
           return startAuthFlow(did, {
             ...flow, profileName: ctx.profile, noPopup: true,
-            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } }),
+            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } }),
             onApprovalRequest: ({ approvalUrl }) => {
               console.error(`Approve in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
             },
           });
         };
 
-        for (const [index, step] of ONBOARD_STEPS.entries()) {
+        for (const [index, step] of steps.entries()) {
+          const reason = `TinyCloud onboarding, step ${index + 1} of ${steps.length}: ${step.asks}`;
           currentStep = index + 1;
           const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
             const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
               permissions: step.permissions,
+              reason,
               expiry: ONBOARD_EXPIRY,
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
@@ -111,20 +115,31 @@ export function registerOnboardCommand(program: Command): void {
             });
             // A new account's space can take OpenKey a minute or two to host; under --timeout the wait ends with the call's bound.
             await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,
-              deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }));
+              deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }));
             profile = await ProfileManager.getProfile(ctx.profile);
             continue;
           }
+          const node = await ensureAuthenticated(ctx);
+          const requested = await resolvePermissionSpaces(step.permissions, ctx.profile);
           await ensureDelegationAuthority({
             ctx,
             profile,
-            node: await ensureAuthenticated(ctx),
-            requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
+            node,
+            requested,
             expiryOption: ONBOARD_EXPIRY,
-            yes: true,
+            reason,
             exactApproval: true,
+            ...(deadlineMs === undefined ? {} : { spaceSetupTimeoutMs: () => spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }) }),
             openKeyAcquisition: acquire,
           });
+          // A saved grant can cover the task before OpenKey has finished hosting every space.
+          // Re-running onboarding rechecks each route even when no new approval is needed.
+          await ensureSpaceSetup(ctx, {
+            requestedSpaces: [...new Set(requested.map(p => p.space!))].map(spaceId => ({
+              space: spaceId, spaceId, spaceReady: null, spacePending: true,
+            })),
+          }, requested, deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }),
+          async () => ({ node }));
         }
 
         profile = await ProfileManager.getProfile(ctx.profile);
@@ -134,9 +149,9 @@ export function registerOnboardCommand(program: Command): void {
           profile: ctx.profile,
           ownerDid: profile.ownerDid ?? null,
           host: ctx.host,
-          granted: ONBOARD_STEPS.map(({ space, asks }) => ({ space, asks })),
+          granted: [...new Set(permissions.map(p => p.space))].map(space => ({ space })),
           expiresAt: storedSessionState(session, profile).expiresAt,
-        }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${ONBOARD_STEPS.map(({ asks }) => `  ${asks}`).join("\n")}`);
+        }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${steps.map(({ asks }) => `  ${asks}`).join("\n")}`);
       } catch (error) {
         return handleError(error);
       }

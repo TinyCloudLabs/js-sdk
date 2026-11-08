@@ -336,14 +336,17 @@ describe("a profile this command created and removed leaves no directory and no 
     await gone(profileName);
   });
 
-  test("onboard sends no generated OpenKey reason when none is supplied", async () => {
+  test("onboard supplies concise human context without capability strings", async () => {
     pickedLifetimeMs = 7 * DAY;
     tamper = "signature";
     const program = new Command();
     program.option("-p, --profile <name>");
     registerOnboardCommand(program);
-    await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard"], { from: "node" }));
-    expect(acquisitionReasons).toEqual([undefined]);
+    await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard", "--with", "feed"], { from: "node" }));
+    expect(acquisitionReasons).toEqual([
+      "TinyCloud onboarding, step 1 of 1: Use Home and your feed, and discover your spaces and apps, for 30 days.",
+    ]);
+    expect(acquisitionReasons[0]).not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
     await gone(profileName);
   });
@@ -650,14 +653,15 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
 });
 
 describe("ensureDelegationAuthority: a refused approval of an established profile", () => {
-  beforeEach(() => { signRequest = true; });
+  beforeEach(() => { signRequest = true; activationCalls = 0; });
   const owned = async () => {
     await createKeyOnlyProfile(profileName, HOST);
     const profile = { ...(await ProfileManager.getProfile(profileName)), authMethod: "openkey" as const, ownerDid: OWNER_DID, posture: "owner-openkey" as const };
     await ProfileManager.setProfile(profileName, profile);
     return profile;
   };
-  const node = { hasRuntimePermissions: () => false, useRuntimeDelegation: async () => { throw new Error("nothing may be activated"); } } as never;
+  let activationCalls = 0;
+  const node = { hasRuntimePermissions: () => false, useRuntimeDelegation: async () => { activationCalls += 1; throw new Error("nothing may be activated"); } } as never;
   const request = (space: string, path = ""): Permission => ({ service: "tinycloud.kv", space, path, actions: ["tinycloud.kv/get"] });
   const grantedFiles = (name: string) => existsSync(join(profilePath(name), "additional-delegations.json"));
   const ensure = (profile: Parameters<typeof ensureDelegationAuthority>[0]["profile"], requested: Permission[], extra: Record<string, unknown> = {}) =>
@@ -665,6 +669,19 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
       ctx: { profile: profileName, host: HOST }, profile, node, requested: requested as never, expiryOption: "7d", reason: "test",
       yes: true, consentAlreadyGiven: true, openKeyAcquisition: acquisitionFlow as never, ...extra,
     }));
+  const multiSpaceApproval = (approvedSpaces: Set<string>, refuse = false) =>
+    async (did: string, options: Record<string, unknown>) => {
+      const requested = options.permissions as Permission[];
+      const approved = requested.filter(permission => approvedSpaces.has(permission.space));
+      if (refuse) tamper = "signature";
+      const delegation = await acquisitionFlow(did, { ...options, permissions: approved });
+      const spaces = [...new Set(requested.map(permission => permission.space))];
+      return {
+        ...delegation,
+        requestedSpaces: spaces.map(space => ({ space, spaceId: wasm.makeSpaceId(address, 1, space), spaceReady: true })),
+        spaceReady: true,
+      };
+    };
 
   test("OPENKEY_OWNER_MISMATCH: the saved approval goes, the existing key stays, one kept notice names the CID, nothing is stored", async () => {
     const profile = await owned();
@@ -693,23 +710,47 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expectOneNotice("kept");
   });
 
-  test("a SECOND space refused after the first was approved: nothing is stored, ONE notice (for the refused delegation only)", async () => {
+  test("a refused single combined multi-space request leaves no grant, session, pending state, or activation", async () => {
     const profile = await owned();
     pickedLifetimeMs = 6 * DAY;
     let approvals = 0;
-    const secondRefused = async (did: string, options: Record<string, unknown>) => {
+    const refused = async (did: string, options: Record<string, unknown>) => {
       approvals += 1;
-      tamper = approvals === 2 ? "signature" : "none";
-      return acquisitionFlow(did, options);
+      return multiSpaceApproval(new Set(["default", "applications"]), true)(did, options);
     };
-    await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: secondRefused as never }))
+    await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: refused as never }))
       .rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
-    expect(approvals).toBe(2);
+    expect(approvals).toBe(1);
+    expect(savedPendingCopies).toBe(1);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(existsSync(join(profilePath(profileName), "approval-pending.json"))).toBe(false);
     expect(grantedFiles(profileName)).toBe(false);
+    expect(activationCalls).toBe(0);
     expect(noticeCount()).toBe(1);
     expect(text()).toContain(`Refused delegation: ${grantedCid}.`);
     expect(text()).toContain(REVOKE_URL);
   });
+
+  test("a narrowed multi-space approval names the omitted space and stores no grant", async () => {
+    const profile = await owned();
+    pickedLifetimeMs = 6 * DAY;
+    let approvals = 0;
+    const omittedDefault = async (did: string, options: Record<string, unknown>) => {
+      approvals += 1;
+      return multiSpaceApproval(new Set(["applications"]))(did, options);
+    };
+    await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: omittedDefault as never }))
+      .rejects.toMatchObject({
+        code: "OPENKEY_APPROVAL_NARROWER",
+        message: expect.stringContaining('The owner did not approve access to "default". This task needs all requested spaces.'),
+      });
+    expect(approvals).toBe(1);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(grantedFiles(profileName)).toBe(false);
+    expect(noticeCount()).toBe(1);
+    expect(activationCalls).toBe(0);
+  });
+
 
   test("a one-use approval (persist: false): refused, one kept notice, nothing is activated", async () => {
     const profile = await owned();

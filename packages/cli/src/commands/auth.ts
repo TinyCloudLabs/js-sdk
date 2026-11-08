@@ -940,7 +940,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.",
     )
     .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
-    .option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent")
+    .option("--grant", "Grant the requested permissions immediately with this owner profile")
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
@@ -2095,6 +2095,7 @@ export async function ensureDelegationAuthority(params: {
   noPopup?: boolean;
   /** Agent request: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
+  spaceSetupTimeoutMs?: () => number;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
   if (params.profile.authMethod === "openkey") assertNoCaveatLimits(params.requested);
@@ -2146,12 +2147,12 @@ export async function ensureDelegationAuthority(params: {
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
     const grants: StagedOpenKeyGrant[] = [];
-    for (const group of groupPermissionsBySpace(params.requested)) {
+    const readiness: Record<string, unknown>[] = [];
+    for (const group of [params.requested]) {
       // capabilities/read is part of the request, so the signed proof may
       // carry it without broadening the grant.
       const request = grantRequestPermissions(group, anchorSpace);
-      // A refusal drops only this group's approval and says so once. Groups approved before it stay pending, unstored, and
-      // resume without a new approval when the command is run again.
+      // Keep the complete task scope in one durable approval request.
       const delegation = await refusing({ profileName: params.ctx.profile, key, storedKey: key }, async (seen) => {
         const delegationData = await acquireOpenKey(params.profile.did, {
           profileName: params.ctx.profile,
@@ -2165,11 +2166,15 @@ export async function ensureDelegationAuthority(params: {
           noPopup: params.noPopup,
         });
         seen.result = delegationData;
+        readiness.push(delegationData);
         return portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       });
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
     await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
+    for (const [index, data] of readiness.entries()) {
+      await ensureSpaceSetup(params.ctx, data, grants[index]!.effective, params.spaceSetupTimeoutMs?.(), async () => ({ node: params.node }));
+    }
     return;
   }
 
@@ -2432,7 +2437,7 @@ export function verifyOpenKeyApproval(
     service: permission.service.slice("tinycloud.".length),
     space: isRawCidRevocationPermission(permission)
       ? permission.space!
-      : isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
+      : isVerifiedRawEncryptionPermission(permission) ? "encryption" : permission.space!,
     path: permission.path,
     actions: [...permission.actions],
     ...(permission.caveats === undefined ? {} : { caveats: structuredClone(permission.caveats) }),

@@ -381,6 +381,8 @@ describe("signed portable OpenKey grants", () => {
       "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get"], { from: "node" });
     expect(openKeyReasons).toEqual([undefined]);
     expect(JSON.stringify(openKeyReasons)).not.toContain("vault/secrets/KEY");
+    expect(openKeyReasons.filter((reason): reason is string => reason !== undefined).join("\n"))
+      .not.toMatch(/tinycloud\.[a-z0-9_-]+:/i);
   });
 
   test("auth grant omits generated reason containing requested capability", async () => {

@@ -318,6 +318,11 @@ async function ensureSecretsNode(
   return ensureAuthenticated(ctx, auth);
 }
 
+function secretCommandReason(action: SecretAction, name?: string): string {
+  const verb = action === "del" ? "delete" : action;
+  return `Allow \`tc secrets ${verb}${name ? ` ${name}` : ""}\`.`;
+}
+
 async function runSecretOperation<T>(params: {
   ctx: CLIContext;
   node: TinyCloudNode;
@@ -355,6 +360,7 @@ async function runSecretOperation<T>(params: {
       node: params.node,
       requested,
       expiryOption: undefined,
+      reason: secretCommandReason(params.action, params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
@@ -528,6 +534,7 @@ async function canonicalSecretGet(
       node,
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
+      reason: secretCommandReason("get", params.name),
       yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
