@@ -39,6 +39,8 @@
     "tc-2416-catalog-routing",
     "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
+    "tc-2481-signed-registry-cache",
+    "tc-2481-space-routing",
     "tc-2490-cli-reason",
     "tc-2526-mcp-approval-reason",
     "tc-2527-grant-no-terminal-question-openkey",
