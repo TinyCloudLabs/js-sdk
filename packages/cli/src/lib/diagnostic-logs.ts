@@ -98,7 +98,7 @@ export function redactDiagnosticLog(input: string): { text: string; count: numbe
 function redactArgs(args: readonly string[]): { values: string[]; count: number } {
   const values: string[] = [];
   let count = 0;
-  const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-cli-logs"]);
+  const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
     if (arg === "--") break;
