@@ -117,7 +117,7 @@ const ROUTING_OPERATION_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof ro
   NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "This storage server isn't the one in your storage settings, so TinyCloud didn't use it.", retryable: false },
   PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "This didn't finish on every server that needs a copy. Try again.", retryable: false },
   RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "Your storage settings don't say where this data goes.", retryable: false },
-  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "Couldn't load your storage settings. Try again in a minute.", retryable: true },
+  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "Couldn't reach your storage settings. Try again in a few minutes.", retryable: true },
   node_not_found: { code: "NODE_NOT_FOUND", message: "No storage server is set for this data.", retryable: false },
   node_registry_entry_exists: { code: "NODE_REGISTRY_ENTRY_EXISTS", message: "That storage server isn't in your storage settings, so it wasn't used.", retryable: false },
 };
