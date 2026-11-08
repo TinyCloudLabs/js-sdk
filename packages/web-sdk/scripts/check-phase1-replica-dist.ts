@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
@@ -37,6 +37,8 @@ import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size
 import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
 import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
+import { validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
+import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -116,7 +118,7 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const reading of evaluateOptionalBudget(optionalLedger, ledger, optionalCurrent)) {
   const { format, raw, effective, direct, ceiling } = reading;
@@ -568,6 +570,22 @@ if (prBaseSha) {
     console.error("The final TC-2481 Web routing ratchet requires the approved worker row and its final measured source ancestor.");
     failed = true;
   }
+  validateTc2481ColdDeviceRefusalTransition(baseLedger.tc2481ColdDeviceRefusal, ledger.tc2481ColdDeviceRefusal);
+  const coldDeviceRefusal = ledger.tc2481ColdDeviceRefusal;
+  if (coldDeviceRefusal !== undefined && baseLedger.tc2481ColdDeviceRefusal === undefined &&
+      (baseLedger.tc2481WebRouting === undefined || !hasAncestor(repoRoot, coldDeviceRefusal.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 cold-device root-only ratchet requires the merged Web routing row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2481OfflineReplicaTransportTransition(baseLedger.tc2481OfflineReplicaTransport, ledger.tc2481OfflineReplicaTransport);
+  const offlineReplicaTransport = ledger.tc2481OfflineReplicaTransport;
+  // Both admissions are introduced by this PR; the current cold-root row is
+  // already strictly validated, while the measured final source must exist.
+  if (offlineReplicaTransport !== undefined && baseLedger.tc2481OfflineReplicaTransport === undefined &&
+      (ledger.tc2481ColdDeviceRefusal === undefined || !hasAncestor(repoRoot, offlineReplicaTransport.sourceCommits.at(-1)!))) {
+    console.error("The final TC-2481 cold routing and replica admission requires the approved cold-root row and its measured source ancestor.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -583,7 +601,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport);
   validateTc2481WebOptionalTransition(baseOptional.tc2481WebRouting, optionalLedger.tc2481WebRouting);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
@@ -698,9 +716,18 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === tc2096LazyOptionalAllowance[format] &&
         optionalLedger.allowance[format] === tc2481WebOptionalAllowance[format]);
+    const tc2481OfflineTransition = baseLedger.tc2481OfflineReplicaTransport === undefined &&
+      offlineReplicaTransport !== undefined && baseLedger.tc2481WebRouting !== undefined &&
+      baseOptional.tc2481WebRouting !== undefined && optionalLedger.tc2481WebRouting !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2481WebOptionalAllowance[format] &&
+        optionalLedger.allowance[format] ===
+          (format === "replica.mjs" || format === "replica.cjs"
+            ? offlineReplicaTransport.firstImport.ceiling[format]
+            : offlineReplicaTransport.activation.ceiling[format]));
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet or final TC-2481 Web routing ratchet.`);
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet, TC-2481 Web routing ratchet or final TC-2481 cold-routing and replica admission.`);
       failed = true;
     }
   }
@@ -1010,20 +1037,39 @@ if (prBaseSha) {
   console.log("Replica size budget: no pull-request merge base; reporting only.");
 }
 
+async function runWebSdkTests(report: string) {
+  const stdoutFile = await open(`${report}.stdout.log`, "wx", 0o600);
+  try {
+    const stderrFile = await open(`${report}.stderr.log`, "wx", 0o600);
+    try {
+      // File-backed stdio retains the full result without spawnSync's output buffer.
+      const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
+        cwd: resolve(import.meta.dir, "../../.."),
+        stdio: ["ignore", stdoutFile.fd, stderrFile.fd],
+      });
+      const [stdout, stderr] = await Promise.all([
+        readFile(`${report}.stdout.log`, "utf8"),
+        readFile(`${report}.stderr.log`, "utf8"),
+      ]);
+      return { status: test.status, signal: test.signal, error: test.error, stdout, stderr };
+    } finally {
+      await stderrFile.close();
+    }
+  } finally {
+    await stdoutFile.close();
+  }
+}
+
 // Keep structural/size inspection independent of the web test suite.
 if (process.argv.includes("--dist-only")) process.exit(failed ? 1 : 0);
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {
   // Bun's file workers share global test shims; keep the suite in one worker.
-  const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
-    cwd: resolve(import.meta.dir, "../../.."),
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  if (test.error) throw test.error;
+  const test = await runWebSdkTests(report);
   process.stdout.write(test.stdout);
   process.stderr.write(test.stderr);
+  if (test.error) throw test.error;
   const exitFailure = webSdkTestExitFailure(test.status, test.signal);
   if (exitFailure) {
     console.error(`${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);

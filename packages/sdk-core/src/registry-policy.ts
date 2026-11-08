@@ -1,8 +1,8 @@
 /**
  * Signed-v2 registry policy for host resolution and space creation (TC-2481).
  * Every routing decision awaits a bounded refresh. A reverified cache younger
- * than one hour can serve transport/timeouts or HTTP 502/503/504 only. Genuine
- * absence and cold outages retain onboarding; invalid or known absent state refuses.
+ * than one hour can serve transport/timeouts or HTTP 502/503/504 only.
+ * Only verified absence permits onboarding; an outage without saved settings refuses.
  *
  * V2 owner keys are chain-independent: EOA records use the exact EIP-55
  * address and did:key records use the exact DID. V1 probes distinguish
@@ -695,9 +695,9 @@ export interface LookupOwnerRegistryVerdictOptions {
 }
 
 /**
- * {@link resolveOwnerHosts} for policy decisions: a lookup that throws, or no
- * configured registry, becomes {@link RegistryUnavailableError}. An
- * `unavailable` verdict is returned as a verdict.
+ * {@link resolveOwnerHosts} for policy decisions: a lookup that throws, no
+ * configured registry, or cold outage without saved settings becomes
+ * {@link RegistryUnavailableError}. Other `unavailable` verdicts remain verdicts.
  */
 export async function lookupOwnerRegistryVerdict(
   subject: string,
@@ -708,8 +708,9 @@ export async function lookupOwnerRegistryVerdict(
       message: "no location registry is configured",
     });
   }
+  let verdict: RegistryVerdict;
   try {
-    return await resolveOwnerHosts(subject, {
+    verdict = await resolveOwnerHosts(subject, {
       registryUrl: options.registryUrl,
       sequenceStore: options.sequenceStore,
       cacheStore: options.cacheStore,
@@ -723,6 +724,13 @@ export async function lookupOwnerRegistryVerdict(
       cause: error,
     });
   }
+  if (verdict.status === "unregistered" && verdict.offline) {
+    // Unreachable is not verified absence: no host hint may authorize routing.
+    throw Object.assign(new RegistryUnavailableError(subject, undefined, {
+      message: "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes.",
+    }), { meta: { reason: "no-saved-settings" } });
+  }
+  return verdict;
 }
 
 /**

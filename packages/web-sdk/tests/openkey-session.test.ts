@@ -1,10 +1,19 @@
-import { beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
 import type {
   EstablishOpenKeySessionOptions,
   EstablishOpenKeySessionResult,
 } from "../src/openkey-session";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
 
@@ -312,6 +321,7 @@ function TinyCloudWebTestSeam(config: any): any {
   const strategy = config.signStrategy;
   const client = new RealTinyCloudWeb({
     ...config,
+    tinycloudRegistryUrl: registry.url.origin,
     ...(realPersistenceEnabled ? {} : { persistSession: false }),
     signStrategy: {
       ...strategy,
@@ -747,8 +757,9 @@ test("real TinyCloudWeb forwards disabled auto-bootstrap into TinyCloudNode", as
     writable: true,
   });
   globalThis.fetch = async (resource, init) => {
-    const url = String(resource);
+    const url = resource instanceof Request ? resource.url : String(resource);
     nodeRequests.push({ url, body: String(init?.body ?? "") });
+    if (url.startsWith(`${registry.url.origin}/`)) return originalFetch(resource, init);
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "test", features: [] }), {
         status: 200,
