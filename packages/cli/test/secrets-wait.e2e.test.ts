@@ -7,6 +7,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
+import { startUnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+import type { UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 // TC-834 S3-T9: `tc secrets request` / `tc secrets wait` against a real local
 // node, pinning the consent-before-hosting spike (/tmp/tc834/spike). A
@@ -15,6 +17,7 @@ import { join, resolve } from "node:path";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const CLI = resolve(import.meta.dir, "../dist/index.js");
+const TEST_BOOTSTRAP = resolve(import.meta.dir, "../../operations/test-support/test-bootstrap.mjs");
 const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("TC_")));
 
 type Run = { code: number; stdout: string; stderr: string; startedAt: number; endedAt: number };
@@ -27,7 +30,7 @@ type Recorded = {
   authorization?: string;
   responseBody?: string;
 };
-type Proxy = { url: string; stop: () => void };
+type Proxy = { url: string; stop: () => Promise<void> };
 
 const childProcesses = new Set<ChildProcess>();
 
@@ -56,6 +59,9 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
   let agentProxy: Proxy;
   let ownerProxy: Proxy;
   let node: ChildProcess | undefined;
+  let registry: UnregisteredLocationRegistry;
+  let priorHome: string | undefined;
+  let priorTcHome: string | undefined;
   const log: Recorded[] = [];
   const agentWaitRuns: { step: string; from: number; to: number }[] = [];
   let onRecord: ((entry: Recorded) => void) | undefined;
@@ -117,6 +123,8 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
       env: {
         ...ambient,
         TMPDIR: temp,
+        HOME: home,
+        TC_HOME: home,
         TINYCLOUD_STORAGE__DATADIR: join(nodeData, "data"),
         TINYCLOUD_PORT: String(port),
         TINYCLOUD_ADDRESS: "127.0.0.1",
@@ -142,7 +150,7 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
 
   async function tc(args: string[], profile: string): Promise<Run> {
     const startedAt = Date.now();
-    const child = trackChild(spawn("node", [CLI, "-q", "--json", "--profile", profile, ...args], {
+    const child = trackChild(spawn("node", ["--import", TEST_BOOTSTRAP, CLI, "-q", "--json", "--profile", profile, ...args], {
       cwd: home,
       env: { ...ambient, TMPDIR: temp, TC_HOME: home, HOME: home },
       stdio: ["ignore", "pipe", "pipe"],
@@ -198,6 +206,11 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "tc834-wait-home-"));
+    priorHome = process.env.HOME;
+    priorTcHome = process.env.TC_HOME;
+    process.env.HOME = home;
+    process.env.TC_HOME = home;
+    registry = startUnregisteredLocationRegistry();
     temp = join(home, "tmp");
     await mkdir(temp, { mode: 0o700 });
     const nodeData = await mkdtemp(join(temp, "node-"));
@@ -214,6 +227,7 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
     secretsId = wasm.makeSpaceId(ownerAddress, 1, "secrets");
     ownerNode = new TinyCloudNode({
       host: ownerProxy.url,
+      tinycloudRegistryUrl: registry.url.origin,
       privateKey: pk,
       autoCreateSpace: true,
       autoBootstrapAccount: false,
@@ -235,10 +249,19 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
   }, 180_000);
 
   afterAll(async () => {
-    agentProxy?.stop();
-    ownerProxy?.stop();
-    for (const child of childProcesses) child.kill("SIGKILL");
-    if (home) await rm(home, { recursive: true, force: true });
+    try {
+      await Promise.all([...childProcesses].map((child) => new Promise<void>((done) => {
+        child.once("close", () => done());
+        child.kill("SIGKILL");
+      })));
+    } finally {
+      await agentProxy?.stop();
+      await ownerProxy?.stop();
+      await registry?.stop(true);
+      if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+      if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
+      if (home) await rm(home, { recursive: true, force: true });
+    }
   });
 
   test("(P) the owner's secrets space is not hosted: raw get answers 404 Space not found", async () => {
@@ -251,7 +274,7 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
   });
 
   test("(G) the agent's grant is skipped on <owner>:secrets, then imported into a delegate-session profile", async () => {
-    await ok(["profile", "create", "agent", "--posture", "delegate-session", "--host", agentProxy.url], "agent");
+    await ok(["profile", "create", "agent", "--posture", "delegate-session", "--host", agentProxy.url, "--registry-url", registry.url.origin], "agent");
     const agentProfile = JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "agent", "profile.json"), "utf8")) as { did: string };
     const agentDid = agentProfile.did.split("#", 1)[0]!;
     const from = log.length;
