@@ -85,6 +85,7 @@ _tc() {
     '--replication[Enable read-through replication]' \\
     '--no-replication[Disable replication]' \\
     '--replication-debug[Write replication diagnostics to stderr]' \\
+    '--no-cli-logs[Disable local CLI log collection]' \\
     '1:command:->cmd' \\
     '*::arg:->args'
 
@@ -148,5 +149,6 @@ complete -c ${CLI_NAME} -l quiet -s q -d "Suppress non-essential output"
 complete -c ${CLI_NAME} -l replication -d "Enable read-through replication"
 complete -c ${CLI_NAME} -l no-replication -d "Disable replication"
 complete -c ${CLI_NAME} -l replication-debug -d "Write replication diagnostics to stderr"
+complete -c ${CLI_NAME} -l no-cli-logs -d "Disable local CLI log collection"
 `;
 }

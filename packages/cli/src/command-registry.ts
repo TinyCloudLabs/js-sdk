@@ -1,6 +1,7 @@
 import { Command } from "commander";
 
 import { registerAccountCommand } from "./commands/account.js";
+import { registerBugReportCommand } from "./commands/bug-report.js";
 import { registerAuthCommand } from "./commands/auth.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerCourierCommand } from "./commands/courier.js";
@@ -61,4 +62,5 @@ export function registerTinyCloudCommands(program: Command): void {
   registerUpgradeCommand(program);
   registerStatusCommand(program);
   registerAccountCommand(program);
+  registerBugReportCommand(program);
 }

@@ -1,7 +1,8 @@
 import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
+import { ExitCode, CONFIG_DIR, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
+import { recordDiagnosticFailure } from "../lib/diagnostic-logs.js";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -244,8 +245,9 @@ export function storageFullError(error: unknown, progress?: string): CLIError | 
   return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
 
-export function handleError(error: unknown): Promise<never> {
+export async function handleError(error: unknown): Promise<never> {
   const cliError = wrapError(error);
+  await recordDiagnosticFailure(cliError, CONFIG_DIR).catch(() => undefined);
   const pending = approvalPendingOf(cliError);
   if (pending) {
     // Not a failure: the owner has not answered yet. stdout carries the one JSON object an agent acts on.

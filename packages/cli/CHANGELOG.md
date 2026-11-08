@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.13
+
+### Minor Changes
+
+- 44ccaf4: Add locally redacted, owner-confirmed CLI diagnostic attachments to bug reports, with a bounded owner-only diagnostic log.
+
+  Details: TC-2515
+
 ## 1.7.0-beta.12
 
 ### Minor Changes
