@@ -178,7 +178,7 @@ export function registerAuthGrantsCommand(
           grants,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
@@ -260,7 +260,7 @@ export function registerAuthGrantsCommand(
           else process.stdout.write(`Removed ${removed} local grant${removed === 1 ? "" : "s"} for ${cid}. The node delegation was not revoked.\n`);
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

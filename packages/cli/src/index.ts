@@ -66,20 +66,20 @@ program
   .option("--no-cli-logs", "Disable local CLI log collection for this command");
 
 
-program.hook("preAction", async (thisCommand) => {
-  const opts = thisCommand.optsWithGlobals();
+program.hook("preAction", async (_hookedCommand, actionCommand) => {
+  const opts = actionCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
   applyNoRetryFlag(opts);
-  const parentName = thisCommand.parent?.name();
-  const isShareCommand = parentName === "share" || thisCommand.name() === "share";
+  const parentName = actionCommand.parent?.name();
+  const isShareCommand = parentName === "share" || actionCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
 
   // Config guard — warn if not configured for auth-required commands
-  const commandName = thisCommand.name();
-  const isRootCommand = thisCommand === program;
-  const fullCommand = fullCommandName(thisCommand);
+  const commandName = actionCommand.name();
+  const isRootCommand = actionCommand === program;
+  const fullCommand = fullCommandName(actionCommand);
   setDiagnosticCommandContext({
     command: fullCommand,
     args: process.argv.slice(2),
@@ -87,7 +87,7 @@ program.hook("preAction", async (thisCommand) => {
     cliVersion: version,
   });
   commandStartedAt = Date.now();
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status", "bug-report"].includes(commandName) ||
                     fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
@@ -108,14 +108,14 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 
-program.hook("postAction", async (thisCommand) => {
+program.hook("postAction", async (_hookedCommand, actionCommand) => {
   outputWarnings([]);
-  if (thisCommand.name() === "bug-report") return;
+  if (actionCommand.name() === "bug-report") return;
   await appendDiagnosticLog({
     root: CONFIG_DIR,
-    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || thisCommand.optsWithGlobals().cliLogs === false,
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || actionCommand.optsWithGlobals().cliLogs === false,
     entry: {
-      command: fullCommandName(thisCommand),
+      command: fullCommandName(actionCommand),
       args: process.argv.slice(2),
       exitCode: 0,
       cliVersion: version,

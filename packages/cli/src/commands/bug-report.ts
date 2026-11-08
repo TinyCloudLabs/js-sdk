@@ -4,7 +4,7 @@ import { stderr, stdin } from "node:process";
 import { Command } from "commander";
 import { CONFIG_DIR } from "../config/constants.js";
 import { CLIError, handleError } from "../output/errors.js";
-import { clearDiagnosticLogs, readDiagnosticLogs, redactDiagnosticText } from "../lib/diagnostic-logs.js";
+import { clearDiagnosticLogs, readDiagnosticLogs, redactDiagnosticLog } from "../lib/diagnostic-logs.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTENT_BYTES = 128 * 1024;
@@ -23,13 +23,18 @@ type BugReportDependencies = {
 async function readToken(useStdin: boolean): Promise<string> {
   if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Pipe the attachment token to --token-stdin, or set TINYCLOUD_BUG_ATTACH_TOKEN.");
   const token = useStdin
-    ? await (() => {
-      const { promise, resolve } = Promise.withResolvers<string>();
+    ? await new Promise<string>((resolve) => {
       const prompt = createInterface({ input: stdin });
-      prompt.once("line", (line) => { prompt.close(); resolve(line.trim()); });
-      prompt.once("close", () => resolve(""));
-      return promise;
-    })()
+      let settled = false;
+      const finish = (value: string) => {
+        if (settled) return;
+        settled = true;
+        prompt.close();
+        resolve(value);
+      };
+      prompt.once("line", (line) => finish(line.trim()));
+      prompt.once("close", () => finish(""));
+    })
     : process.env.TINYCLOUD_BUG_ATTACH_TOKEN?.trim() ?? "";
   if (!token) throw new CLIError("BUG_REPORT_TOKEN_MISSING", useStdin
     ? "No attachment token was provided on stdin."
@@ -79,21 +84,21 @@ function attachmentError(status: number, code: string): CLIError {
     attachment_limit: "This report already has the maximum of five attachments.",
     payload_too_large: "The CLI log exceeded the service upload limit.",
     unsupported_media_type: "The attachment service rejected the request format.",
-    rate_limited: "The attachment service is rate-limited; retry once after 60 seconds.",
+    rate_limited: "The upload remained rate-limited after one automatic retry; try again later.",
     intake_busy: "The bug-report service is full; try again later, perhaps in a day or more. Your CLI log remains available locally.",
     too_deep: "The attachment request was rejected as invalid.",
   };
-  return new CLIError(`BUG_REPORT_${code}`, messages[code] ?? `The CLI log upload was rejected (${code}).`, undefined, { status });
+  return new CLIError(`BUG_REPORT_${code.toUpperCase()}`, messages[code] ?? `The CLI log upload was rejected (${code}).`, undefined, { status });
 }
 
 async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: BugReportDependencies): Promise<void> {
   const output = dependencies.write ?? ((text: string) => { stderr.write(text); });
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "Report ID must be 26 characters.");
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "Report ID must be 26 uppercase Crockford base32 characters.");
   const token = await readToken(tokenStdin);
   const raw = await readDiagnosticLogs(dependencies.root ?? CONFIG_DIR);
   if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "No recent CLI log was found.");
   let source = tailBytes(raw, MAX_CONTENT_BYTES);
-  let redacted = redactDiagnosticText(source);
+  let redacted = redactDiagnosticLog(source);
   const payload = { type: "cli-log", content: redacted.text, name: "tc-debug.log" };
   if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "The CLI log is empty after sensitive values were removed.");
   let body = JSON.stringify(payload);
@@ -101,7 +106,7 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
     const smaller = tailBytes(source, Math.floor(Buffer.byteLength(source) * 0.8));
     if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log could not be reduced to the upload limit.");
     source = smaller;
-    redacted = redactDiagnosticText(source);
+    redacted = redactDiagnosticLog(source);
     payload.content = redacted.text;
     body = JSON.stringify(payload);
   }
@@ -111,14 +116,11 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
   const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content);
   if (!confirmed) { output("No attachment sent.\n"); return; }
 
-
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   const endpoint = dependencies.attachmentUrl ?? ATTACHMENT_URL;
-  const sleep = dependencies.sleep ?? ((milliseconds: number) => {
-    const { promise, resolve } = Promise.withResolvers<void>();
+  const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => {
     setTimeout(resolve, milliseconds);
-    return promise;
-  });
+  }));
   let response: Response;
   for (let attempt = 0; ; attempt += 1) {
     try {
@@ -135,13 +137,17 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
     await sleep(60_000);
   }
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: { code?: unknown } } | null;
-    const code = typeof payload?.error?.code === "string" && /^[a-z][a-z0-9_]{1,63}$/i.test(payload.error.code)
-      ? payload.error.code
+    const receipt = await response.json().catch(() => null) as { error?: { code?: unknown } } | null;
+    const code = typeof receipt?.error?.code === "string" && /^[a-z][a-z0-9_]{1,63}$/i.test(receipt.error.code)
+      ? receipt.error.code
       : `HTTP_${response.status}`;
     throw attachmentError(response.status, code);
   }
-  const receipt = await response.json() as { redactions?: Record<string, number> };
+  const receipt = await response.json().catch(() => null) as { redactions?: Record<string, number> } | null;
+  if (!receipt) {
+    output(`Attached CLI log to report ${reportId}. Server removal count unavailable.\n`);
+    return;
+  }
   const serverCount = Object.values(receipt.redactions ?? {}).reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? value : 0), 0);
   output(`Attached CLI log to report ${reportId}. Sensitive values removed locally: ${redacted.count}; removed by server: ${serverCount}.\n`);
 }
@@ -157,6 +163,9 @@ export function registerBugReportCommand(program: Command, dependencies: BugRepo
   command.addHelpText("after", "\nThe CLI log is kept locally (up to 1 MiB, owner-only); sensitive values are removed where found. Set TINYCLOUD_CLI_LOGS=0 or pass --no-cli-logs to disable collection; use --clear-logs to remove the log.\n");
   command.action(async (options) => {
     try {
+      if (options.clearLogs && options.attach) {
+        throw new CLIError("BUG_REPORT_OPTIONS_CONFLICT", "Choose either --attach or --clear-logs; the CLI log was not changed.");
+      }
       if (options.clearLogs) {
         await clearDiagnosticLogs(root);
         output("Local CLI log cleared.\n");

@@ -47,7 +47,7 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
   replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
   replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
   replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
-  replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
+  replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
   replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
   replace(/\b(?:0x)?[a-f0-9]{64}\b/gi, "[REDACTED_KEY]");
   replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
@@ -56,60 +56,97 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
   replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
   replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
   replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
-  replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*[:=]\s*["'`]?[^\s,"'`}]+["'`]?/gi, (_match, label) => `${label}="[REDACTED_NAME]"`);
-  replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*([:=]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`]?))[^\s,"'`}]+["'`]?/gi, (_match, label, separator) => `${label}${separator}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?(?!["'`]\[REDACTED(?:_[A-Z]+)?\]["'`])["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
   replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");
-  replace(/("(?:name|fullName|user|owner)"\s*:\s*)"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  replace(/("(?:name|fullName|user|owner)"\s*:\s*)(?!\[REDACTED(?:_[A-Z]+)?\])"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
   return { text, count };
 }
 
-function redactText(input: string): string {
-  return redactDiagnosticText(input).text;
+export function redactDiagnosticLog(input: string): { text: string; count: number } {
+  let count = 0;
+  const lines: string[] = [];
+  const redactValue = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      const result = redactDiagnosticText(value);
+      count += result.count;
+      return result.text;
+    }
+    if (Array.isArray(value)) return value.map(redactValue);
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (typeof record.localRedactions === "number" && Number.isFinite(record.localRedactions)) {
+        count += Math.max(0, record.localRedactions);
+      }
+      return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, redactValue(child)]));
+    }
+    return value;
+  };
+  for (const line of input.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      lines.push(JSON.stringify(redactValue(JSON.parse(line))));
+    } catch {
+      count += 1;
+      lines.push(JSON.stringify({ message: "Malformed CLI log entry omitted", localRedactions: 1 }));
+    }
+  }
+  return { text: `${lines.join("\n")}${input.endsWith("\n") && lines.length ? "\n" : ""}`, count };
 }
 
-function redactArgs(args: readonly string[]): string[] {
-  const redacted: string[] = [];
+function redactArgs(args: readonly string[]): { values: string[]; count: number } {
+  const values: string[] = [];
+  let count = 0;
   const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-cli-logs"]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
     if (arg === "--") break;
     if (!arg.startsWith("-")) continue;
+    const shortFlag = /^-[A-Za-z]/.exec(arg)?.[0];
+    if (shortFlag && arg.length > shortFlag.length) {
+      values.push(`${shortFlag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
     const equals = arg.indexOf("=");
     const flag = equals < 0 ? arg : arg.slice(0, equals);
     if (equals >= 0) {
-      redacted.push(`${flag}=[REDACTED]`);
+      values.push(`${flag}=[REDACTED]`);
+      count += 1;
       continue;
     }
     if (booleanFlags.has(arg)) {
-      redacted.push(arg);
-      continue;
-    }
-    const shortFlag = /^-[A-Za-z]/.exec(arg)?.[0];
-    if (shortFlag && arg.length > shortFlag.length) {
-      redacted.push(`${shortFlag}=[REDACTED]`);
+      values.push(arg);
       continue;
     }
     const next = args[index + 1];
     if (next && next !== "--" && !booleanFlags.has(next)) {
-      redacted.push(`${arg}=[REDACTED]`);
+      values.push(`${arg}=[REDACTED]`);
+      count += 1;
       index += 1;
-    } else redacted.push(arg);
+    } else values.push(arg);
   }
-  return redacted;
+  return { values, count };
 }
 
-export function redactDiagnosticEntry(entry: DiagnosticEntry): DiagnosticEntry {
+export function redactDiagnosticEntry(entry: DiagnosticEntry): DiagnosticEntry & { localRedactions: number } {
+  const command = redactDiagnosticText(entry.command);
+  const args = redactArgs(entry.args);
+  const errorCode = entry.errorCode ? redactDiagnosticText(entry.errorCode) : undefined;
+  const errorMessage = entry.errorMessage ? redactDiagnosticText(entry.errorMessage) : undefined;
   return {
-    command: redactText(entry.command),
-    args: redactArgs(entry.args),
+    command: command.text,
+    args: args.values,
     exitCode: entry.exitCode,
-    ...(entry.errorCode ? { errorCode: redactText(entry.errorCode) } : {}),
-    ...(entry.errorMessage ? { errorMessage: redactText(entry.errorMessage) } : {}),
+    ...(errorCode ? { errorCode: errorCode.text } : {}),
+    ...(errorMessage ? { errorMessage: errorMessage.text } : {}),
     cliVersion: entry.cliVersion,
     nodeVersion: entry.nodeVersion,
     durationMs: entry.durationMs,
+    localRedactions: command.count + args.count + (errorCode?.count ?? 0) + (errorMessage?.count ?? 0),
   };
 }
+
 export async function recordDiagnosticFailure(error: {
   code: string;
   message: string;

@@ -1,9 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { join, resolve } from "node:path";
 import { Command } from "commander";
-import { appendDiagnosticLog, diagnosticLogPath } from "../lib/diagnostic-logs.js";
+import { appendDiagnosticLog, diagnosticLogPath, readDiagnosticLogs } from "../lib/diagnostic-logs.js";
 import { confirmUpload, registerBugReportCommand } from "./bug-report.js";
 
 const REPORT_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -126,6 +126,107 @@ describe("tc bug-report --attach", () => {
       server.stop(true);
     }
   });
+  test("the uploaded CLI log remains valid JSONL after the attachment redaction pass", async () => {
+    await recordPrivateDiagnostic();
+    let uploaded = "";
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      attachmentUrl: "https://bugs.tinycloud.xyz/reports",
+      confirm: async (_summary: string, content: string) => { uploaded = content; return true; },
+      fetchImpl: async () => Response.json({ redactions: {} }, { status: 201 }),
+      write: () => undefined,
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    const records = uploaded.trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ command: "auth login", args: ["--profile=[REDACTED]", "--token=[REDACTED]"] });
+    expect(records[0]?.localRedactions).toBeGreaterThan(0);
+  });
+
+  test("bug-report clear does not recreate logs or require a profile", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-bug-report-home-"));
+    const tcHome = await mkdtemp(join(tmpdir(), "tc-bug-report-state-"));
+    const logRoot = join(tcHome, ".tinycloud");
+    try {
+      await appendDiagnosticLog({ root: logRoot, entry: {
+        command: "kv get", args: [], exitCode: 0, cliVersion: "1.2.3", nodeVersion: process.version, durationMs: 1,
+      } });
+      const repoRoot = resolve(import.meta.dir, "../../../../");
+      const result = spawnSync(process.execPath, ["run", resolve(repoRoot, "packages/cli/src/index.ts"), "bug-report", "--clear-logs"], {
+        cwd: repoRoot,
+        env: { ...process.env, HOME: home, TC_HOME: tcHome, TINYCLOUD_CLI_LOGS: "1" },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toContain("No profile configured.");
+      expect(await readDiagnosticLogs(logRoot)).toBe("");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(tcHome, { recursive: true, force: true });
+    }
+  });
+  test("the CLI records the actual successful command name", async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc-cli-log-home-"));
+    const tcHome = await mkdtemp(join(tmpdir(), "tc-cli-log-state-"));
+    const logRoot = join(tcHome, ".tinycloud");
+    try {
+      const repoRoot = resolve(import.meta.dir, "../../../../");
+      const result = spawnSync(process.execPath, ["run", resolve(repoRoot, "packages/cli/src/index.ts"), "completion", "bash"], {
+        cwd: repoRoot,
+        env: { ...process.env, HOME: home, TC_HOME: tcHome, TINYCLOUD_CLI_LOGS: "1" },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      expect(result.status).toBe(0);
+      const records = (await readDiagnosticLogs(logRoot)).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { command: string });
+      expect(records).toHaveLength(1);
+      expect(records[0]?.command).toBe("completion bash");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+      await rm(tcHome, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed 201 receipt is still reported as a completed upload", async () => {
+    await recordPrivateDiagnostic();
+    let requests = 0;
+    const output: string[] = [];
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      confirm: async () => true,
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response("not-json", { status: 201 });
+      },
+      write: (text: string) => output.push(text),
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    expect(requests).toBe(1);
+    expect(output.join("")).toContain("Attached CLI log");
+    expect(output.join("")).toContain("Server removal count unavailable");
+  });
+
+  test("attach and clear options refuse without deleting the local log", async () => {
+    await recordPrivateDiagnostic();
+    const original = await readDiagnosticLogs(root);
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      write: () => undefined,
+      fetchImpl: async () => { throw new Error("must not upload"); },
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await expect(program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--clear-logs"], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_OPTIONS_CONFLICT" });
+    expect(await readDiagnosticLogs(root)).toBe(original);
+  });
+
+
   test("a 429 response retries once after sixty seconds", async () => {
     await recordPrivateDiagnostic();
     let requests = 0;
@@ -177,7 +278,7 @@ describe("tc bug-report --attach", () => {
     try {
       await expect(program.parseAsync(["node", "tc", "bug-report", "--attach", REPORT_ID], { from: "node" }))
         .rejects.toMatchObject({
-          code: "BUG_REPORT_intake_busy",
+          code: "BUG_REPORT_INTAKE_BUSY",
           message: expect.stringContaining("CLI log remains available locally"),
         });
       expect(requests).toBe(1);
