@@ -66,7 +66,7 @@ describe("tinycloud bug-report --attach", () => {
     try {
       await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
       expect(requests).toBe(0);
-      expect(summaries[0]).toMatch(new RegExp(`^Report ${REPORT_ID}: CLI log, \\d+ bytes, \\d+ lines, \\d+ values hidden\\.$`));
+      expect(summaries[0]).toMatch(new RegExp(`^Report ${REPORT_ID}: CLI log, \\d+ bytes, \\d+ lines?, \\d+ values? hidden\\.$`));
       expect(output.join("")).toBe("Nothing was sent.\n");
     } finally {
       server.stop(true);
@@ -86,14 +86,36 @@ describe("tinycloud bug-report --attach", () => {
   });
   test("asks which report to send the CLI log to and offers view-first consent", async () => {
     const writes: string[] = [];
-    const accepted = await confirmUpload(`Report ${REPORT_ID}: CLI log, 207 bytes, 1 lines, 2 values hidden.`, "safe log", REPORT_ID, {
+    const accepted = await confirmUpload(`Report ${REPORT_ID}: CLI log, 207 bytes, 1 line, 2 values hidden.`, "safe log", REPORT_ID, {
       write: (text) => writes.push(text),
       question: async () => "n",
     });
     expect(accepted).toBe(false);
     expect(writes.join("")).toBe(
-      `Report ${REPORT_ID}: CLI log, 207 bytes, 1 lines, 2 values hidden.\nSend this CLI log to report ${REPORT_ID}? Type v to view it first. [y/N/v] `,
+      `Report ${REPORT_ID}: CLI log, 207 bytes, 1 line, 2 values hidden.\nSend this CLI log to report ${REPORT_ID}? Type v to view it first. [y/N/v] `,
     );
+  });
+  test("uses singular units for a single hidden value and one-line CLI log", async () => {
+    await appendDiagnosticLog({
+      root,
+      entry: {
+        command: "kv list",
+        args: ["--profile", "PrivateClient"],
+        exitCode: 0,
+        cliVersion: "1.6.3",
+        nodeVersion: process.version,
+        durationMs: 1,
+      },
+    });
+    let summary = "";
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      confirm: async (nextSummary: string) => { summary = nextSummary; return false; },
+      write: () => undefined,
+    });
+    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    expect(summary).toMatch(new RegExp(`^Report ${REPORT_ID}: CLI log, \\d+ bytes, 1 line, 1 value hidden\\.$`));
   });
 
 
@@ -420,13 +442,13 @@ describe("tinycloud bug-report --attach", () => {
   });
 
   test.each([
-    ["invalid_attach_token", 401, "BUG_REPORT_INVALID_ATTACH_TOKEN", "The attachment token is invalid or expired; do not retry with this token."],
-    ["attachment_limit", 409, "BUG_REPORT_ATTACHMENT_LIMIT", "This report already has the maximum of five attachments."],
-    ["payload_too_large", 413, "BUG_REPORT_PAYLOAD_TOO_LARGE", "The CLI log exceeded the service upload limit."],
-    ["unsupported_media_type", 415, "BUG_REPORT_UNSUPPORTED_MEDIA_TYPE", "The attachment service rejected the request format."],
-    ["rate_limited", 429, "BUG_REPORT_RATE_LIMITED", "The upload remained rate-limited after one automatic retry; try again later."],
+    ["invalid_attach_token", 401, "BUG_REPORT_INVALID_ATTACH_TOKEN", "That attachment token isn't valid or has expired. Trying again with it won't work."],
+    ["attachment_limit", 409, "BUG_REPORT_ATTACHMENT_LIMIT", "This report already has five attachments, the most it can take."],
+    ["payload_too_large", 413, "BUG_REPORT_PAYLOAD_TOO_LARGE", "The CLI log is larger than the bug service accepts."],
+    ["unsupported_media_type", 415, "BUG_REPORT_UNSUPPORTED_MEDIA_TYPE", "The bug service didn't accept this upload's format. Updating the CLI may fix it."],
+    ["rate_limited", 429, "BUG_REPORT_RATE_LIMITED", "The bug service is still busy after one automatic retry. Try again in a few minutes."],
     ["intake_busy", 503, "BUG_REPORT_INTAKE_BUSY", "The bug service is full for now. Try again later, not right away; your CLI log stays on this computer."],
-    ["too_deep", 400, "BUG_REPORT_TOO_DEEP", "The attachment request was rejected as invalid."],
+    ["too_deep", 400, "BUG_REPORT_TOO_DEEP", "The bug service didn't accept this upload. Updating the CLI may fix it."],
   ] as const)("prints the exact CLI error for API code %s", async (apiCode, status, code, message) => {
     await recordPrivateDiagnostic();
     const program = new Command();

@@ -80,13 +80,13 @@ function tailBytes(text: string, maxBytes: number): string {
 
 function attachmentError(status: number, code: string): CLIError {
   const messages: Record<string, string> = {
-    invalid_attach_token: "The attachment token is invalid or expired; do not retry with this token.",
-    attachment_limit: "This report already has the maximum of five attachments.",
-    payload_too_large: "The CLI log exceeded the service upload limit.",
-    unsupported_media_type: "The attachment service rejected the request format.",
-    rate_limited: "The upload remained rate-limited after one automatic retry; try again later.",
+    invalid_attach_token: "That attachment token isn't valid or has expired. Trying again with it won't work.",
+    attachment_limit: "This report already has five attachments, the most it can take.",
+    payload_too_large: "The CLI log is larger than the bug service accepts.",
+    unsupported_media_type: "The bug service didn't accept this upload's format. Updating the CLI may fix it.",
+    rate_limited: "The bug service is still busy after one automatic retry. Try again in a few minutes.",
     intake_busy: "The bug service is full for now. Try again later, not right away; your CLI log stays on this computer.",
-    too_deep: "The attachment request was rejected as invalid.",
+    too_deep: "The bug service didn't accept this upload. Updating the CLI may fix it.",
   };
   return new CLIError(`BUG_REPORT_${code.toUpperCase()}`, messages[code] ?? `The CLI log upload was rejected (${code}).`, undefined, { status });
 }
@@ -112,7 +112,9 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
   }
   const bytes = Buffer.byteLength(body);
   const lines = payload.content.split(/\r?\n/).filter(Boolean).length;
-  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} lines, ${redacted.count} values hidden.`;
+  const lineLabel = lines === 1 ? "line" : "lines";
+  const valueLabel = redacted.count === 1 ? "value" : "values";
+  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} ${lineLabel}, ${redacted.count} ${valueLabel} hidden.`;
   const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content, reportId);
   if (!confirmed) { output("Nothing was sent.\n"); return; }
 
