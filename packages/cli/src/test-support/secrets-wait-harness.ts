@@ -300,7 +300,13 @@ export async function runTc(
   } = {},
 ): Promise<TcRun> {
   assertPrivateTestEnvironment(process.env, home);
-  const env: Record<string, string | undefined> = { ...process.env, HOME: home, TC_HOME: home, TC_HIDE_BANNER: "1" };
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    HOME: home,
+    TC_HOME: home,
+    TC_HIDE_BANNER: "1",
+    TINYCLOUD_CLI_LOGS: "0",
+  };
   delete env.TC_HOST;
   delete env.TC_PRIVATE_KEY;
   delete env.TC_PROFILE;
