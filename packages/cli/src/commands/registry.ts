@@ -20,13 +20,16 @@ export function registerRegistryCommand(program: Command): void {
         const value = result.output as { owner: string; sequence: number; ageMs: number; nodes: { did: string; url: string }[]; spaces: { space: string; nodes: { did: string; mode: string }[] }[]; encryptionNode: string | null };
         // JSON quoting prevents control characters in signed space names reaching the terminal.
         const quote = (text: string) => JSON.stringify(text);
-        process.stdout.write(`Account: ${quote(value.owner)}\nVersion: ${value.sequence}\nAge: ${Math.floor(value.ageMs / 1000)}s\n`);
+        const ageDivisor = value.ageMs < 60_000 ? 1_000 : value.ageMs > 7_200_000 ? 3_600_000 : 60_000;
+        const ageUnit = ageDivisor === 1_000 ? "second" : ageDivisor === 60_000 ? "minute" : "hour";
+        const ageCount = Math.floor(value.ageMs / ageDivisor);
+        process.stdout.write(`Account: ${quote(value.owner)}\nVersion: ${value.sequence}\nSaved: ${ageCount} ${ageUnit}${ageCount === 1 ? "" : "s"} ago\n`);
         const nodes = new Map(value.nodes.map((node) => [node.did, node.url]));
         for (const space of value.spaces) {
           process.stdout.write(`Space: ${quote(space.space)}\n`);
-          for (const node of space.nodes) process.stdout.write(`  ${quote(nodes.get(node.did)!)} ${node.mode} ${quote(node.did)}\n`);
+          for (const node of space.nodes) process.stdout.write(`  ${quote(nodes.get(node.did)!)} (${node.mode === "read-write" ? "read and write" : "read only"}), server ID ${quote(node.did)}\n`);
         }
-        process.stdout.write(`Decryption service: ${value.encryptionNode === null ? "none" : `${quote(nodes.get(value.encryptionNode)!)} ${quote(value.encryptionNode)}`}\n`);
+        process.stdout.write(`Decryption service: ${value.encryptionNode === null ? "none" : `${quote(nodes.get(value.encryptionNode)!)}, ID ${quote(value.encryptionNode)}`}\n`);
       } catch (error) { return handleError(error); }
     });
 }

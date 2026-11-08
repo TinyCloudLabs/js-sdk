@@ -155,7 +155,7 @@ export function activationRoutingOperationError(error: unknown): OperationError 
     details.failed.every(({ code }) => code === "NODE_NOT_RESPONDING");
   const projected = ROUTING_OPERATION_ERRORS[unavailable ? "NODE_NOT_RESPONDING" : "PARTIAL_NODE_WRITE"];
   return operationError(projected.code,
-    unavailable ? projected.message : "Access wasn't set up on every server that needs it.", {
+    unavailable ? projected.message : "This permission wasn't saved on every server that needs it. Try again.", {
       retryable: projected.retryable,
       details,
     });
