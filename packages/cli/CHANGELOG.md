@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.6.3-beta.10
+
+### Patch Changes
+
+- 7b24104: `auth request --preset apps-agent` now accepts any number of `--app` values (it used to stop at 5 and suggest read-only access to the whole space instead), and a preset request naming more than 5 apps is shown with the standard preset wording.
+
+  Details: TC-2533
+
 ## 1.6.3-beta.9
 
 ### Patch Changes
