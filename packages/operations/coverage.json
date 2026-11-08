@@ -79,7 +79,7 @@
     { "command": "node version", "status": "legacy" },
     { "command": "node status", "status": "legacy" },
     { "command": "registry", "status": "excluded", "reason": "Local signed registry cache command group." },
-    { "command": "registry show [did]", "status": "migrated", "operationId": "tinycloud.registry.show", "operationVersion": 1 },
+    { "command": "registry show [account-id]", "status": "migrated", "operationId": "tinycloud.registry.show", "operationVersion": 1 },
     { "command": "profile", "status": "legacy" },
     { "command": "profile list", "status": "legacy" },
     { "command": "profile create <name>", "status": "legacy" },

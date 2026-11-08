@@ -27495,8 +27495,8 @@
     {
       "id": "tinycloud.registry.show",
       "version": 1,
-      "title": "Inspect cached registry placement",
-      "description": "Read and verify the selected profile's cached signed registry entry without contacting a node or registry.",
+      "title": "Show saved storage settings",
+      "description": "Check the storage settings saved on this computer. Works offline, no sign-in.",
       "input": {
         "type": "object",
         "properties": {

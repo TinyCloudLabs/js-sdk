@@ -624,11 +624,10 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const fallback = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
   const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
   const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
-  const parts = fallback ? ["registry unavailable; using the default node"] : [];
-  if (cached) parts.push("Storage settings are unreachable; using cached settings checked less than 1 hour ago.");
+  const parts = [];
+  if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
   if (skipped.length > 0) {
     const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
     const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
@@ -877,7 +876,7 @@ function registryUnavailableError(error) {
   if (failure?.code !== "registry_unavailable") return void 0;
   return new CLIError(
     "REGISTRY_UNAVAILABLE",
-    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "The storage settings are unreachable right now. Please try again.",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't get your storage settings. Try again in a few minutes.",
     ExitCode.ERROR
   );
 }
@@ -43939,7 +43938,7 @@ init_errors();
 init_formatter();
 import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
 function registerRegistryCommand(program) {
-  program.command("registry").description("Inspect locally cached signed registry placement").command("show [did]").description("Verify and show cached owner, sequence, age, spaces, node modes and encryption destination (no network or sign-in)").action(async (did, _options, command) => {
+  program.command("registry").description("See where your data is stored, from the copy saved on this computer").command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did, _options, command) => {
     try {
       const options = command.optsWithGlobals();
       const result = await invokeOperation3("tinycloud.registry.show", 1, {
@@ -43948,7 +43947,7 @@ function registerRegistryCommand(program) {
       }, did === void 0 ? {} : { did });
       if (result.status !== "ok") {
         if (result.status === "error") throw new CLIError(result.error.code, result.error.message);
-        throw new CLIError("REGISTRY_UNAVAILABLE", "The cached registry entry could not be inspected.");
+        throw new CLIError("REGISTRY_UNAVAILABLE", "Couldn't read the storage settings saved on this computer.");
       }
       if (shouldOutputJson()) {
         outputJson(result.output);
@@ -43956,18 +43955,21 @@ function registerRegistryCommand(program) {
       }
       const value4 = result.output;
       const quote = (text2) => JSON.stringify(text2);
-      process.stdout.write(`Owner: ${quote(value4.owner)}
-Sequence: ${value4.sequence}
-Fetch age: ${Math.floor(value4.ageMs / 1e3)}s
+      const ageDivisor = value4.ageMs < 6e4 ? 1e3 : value4.ageMs > 72e5 ? 36e5 : 6e4;
+      const ageUnit = ageDivisor === 1e3 ? "second" : ageDivisor === 6e4 ? "minute" : "hour";
+      const ageCount = Math.floor(value4.ageMs / ageDivisor);
+      process.stdout.write(`Account: ${quote(value4.owner)}
+Version: ${value4.sequence}
+Saved: ${ageCount} ${ageUnit}${ageCount === 1 ? "" : "s"} ago
 `);
       const nodes = new Map(value4.nodes.map((node) => [node.did, node.url]));
       for (const space of value4.spaces) {
         process.stdout.write(`Space: ${quote(space.space)}
 `);
-        for (const node of space.nodes) process.stdout.write(`  ${quote(nodes.get(node.did))} ${node.mode} ${quote(node.did)}
+        for (const node of space.nodes) process.stdout.write(`  ${quote(nodes.get(node.did))} (${node.mode === "read-write" ? "read and write" : "read only"}), server ID ${quote(node.did)}
 `);
       }
-      process.stdout.write(`Encryption: ${value4.encryptionNode === null ? "none" : `${quote(nodes.get(value4.encryptionNode))} ${quote(value4.encryptionNode)}`}
+      process.stdout.write(`Decryption service: ${value4.encryptionNode === null ? "none" : `${quote(nodes.get(value4.encryptionNode))}, ID ${quote(value4.encryptionNode)}`}
 `);
     } catch (error) {
       return handleError(error);
