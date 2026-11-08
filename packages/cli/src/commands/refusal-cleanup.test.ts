@@ -663,7 +663,7 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
   const ensure = (profile: Parameters<typeof ensureDelegationAuthority>[0]["profile"], requested: Permission[], extra: Record<string, unknown> = {}) =>
     capturing(() => ensureDelegationAuthority({
       ctx: { profile: profileName, host: HOST }, profile, node, requested: requested as never, expiryOption: "7d", reason: "test",
-      yes: true, consentAlreadyGiven: true, openKeyAcquisition: acquisitionFlow as never, ...extra,
+      openKeyAcquisition: acquisitionFlow as never, ...extra,
     }));
 
   test("OPENKEY_OWNER_MISMATCH: the saved approval goes, the existing key stays, one kept notice names the CID, nothing is stored", async () => {

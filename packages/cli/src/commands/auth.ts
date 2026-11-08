@@ -150,7 +150,7 @@ import {
   finalizeSigningEntries,
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
-import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
+import { noteUnneededYes, UNNEEDED_YES_DESCRIPTION } from "../lib/yes-flag.js";
 import { assertNodeSupportsNamedKeys, keyAbilitiesFor, namedKeysGrantIn, parseKeysPrefix, partialKeysGrantError, withVerifiedNamedKeys, type ProfileNamedKeys } from "../lib/named-keys.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
@@ -942,7 +942,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     )
     .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
     .option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent")
-    .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--yes", UNNEEDED_YES_DESCRIPTION, false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
     .option(
@@ -959,6 +959,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)")
     .action(async (options, cmd) => {
       try {
+        noteUnneededYes(options.yes);
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
@@ -1117,18 +1118,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ...(options.device ? { declined } : {}),
           });
           return;
-        }
-
-        if (isInteractive()) {
-          if (!options.yes) {
-            await confirmPermissionRequest(requested);
-          }
-        } else if (!options.yes) {
-          throw new CLIError(
-            "CONFIRMATION_REQUIRED",
-            "Local-key permission requests in non-interactive mode require --yes.",
-            ExitCode.USAGE_ERROR,
-          );
         }
 
         if (!node) node = await ensureAuthenticated(ctx);
@@ -1355,10 +1344,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .description("Grant a TinyCloud permission request artifact to its requester")
     .option("--stdin", "Read the JSON request artifact from stdin")
     .option("--paste", "Read the JSON request artifact from stdin")
-    .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--yes", UNNEEDED_YES_DESCRIPTION, false)
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (source: string | undefined, options, cmd) => {
       try {
+        noteUnneededYes(options.yes);
         // Refused before the request is read or anything is contacted. An agent grant is one approval: step 1 of 1.
         const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         const globalOpts = cmd.optsWithGlobals();
@@ -1403,22 +1393,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           profile.authMethod === "openkey" ? OPENKEY_AGENT_MAX_LIFETIME_MS : undefined,
         );
         process.stderr.write(`\n${scope.text}\n\n`);
-        // The request file comes from the agent: anything the apps-agent preset could never grant
-        // is signed only after an explicit --yes or an interactive confirmation of the list above.
-        // The question is written to stderr and answered on stdin, so those two must be a terminal;
-        // stdout may be a file (scripts capture the grant artifact there) without losing the prompt.
-        let confirmedExtras = false;
-        if (scope.extras.length > 0 && options.yes !== true) {
-          if (!process.stdin.isTTY || !process.stderr.isTTY) {
-            throw new CLIError(
-              "CONFIRMATION_REQUIRED",
-              `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,
-              ExitCode.USAGE_ERROR,
-            );
-          }
-          await askYesNo(signExtrasQuestion(scope.extras.length), "Grant cancelled. Nothing was signed.");
-          confirmedExtras = true;
-        }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
         let grant: AuthDelegationArtifact;
@@ -1468,7 +1442,6 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             node,
             requested,
             expiryOption: parsed.requestedExpiry,
-            yes: options.yes === true || confirmedExtras,
           });
 
           // The grant logic lives in the SDK (grantAuthRequest) so it is callable
@@ -2085,12 +2058,9 @@ export async function ensureDelegationAuthority(params: {
   requested: PermissionEntry[];
   expiryOption: string | number | undefined;
   reason?: string;
-  yes: boolean;
   /** Keep command-scoped authority out of profile grant/history storage. */
   persist?: boolean;
   force?: boolean;
-  /** The command already prompted before doing its target lookup. */
-  consentAlreadyGiven?: boolean;
   /**
    * Space a decrypt-only grant is requested in. OpenKey signs only a request
    * with one space; defaults to the profile's primary space.
@@ -2105,13 +2075,6 @@ export async function ensureDelegationAuthority(params: {
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
   if (params.profile.authMethod === "openkey") assertNoCaveatLimits(params.requested);
-
-  if (
-    !params.consentAlreadyGiven &&
-    (params.persist === false || params.profile.authMethod !== "openkey")
-  ) {
-    await requirePermissionConsent(params.requested, params.yes);
-  }
 
   if (params.profile.authMethod === "openkey") {
     if (params.persist === false) {
@@ -2270,59 +2233,6 @@ async function collectRequestedPermissions(
     }));
   }
   return permissions;
-}
-
-async function askYesNo(question: string, cancelMessage: string): Promise<void> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
-
-  const answer = await new Promise<string>((resolve) => {
-    rl.question(question, resolve);
-  });
-  rl.close();
-
-  if (!/^y(es)?$/i.test(answer.trim())) {
-    throw new CLIError("REQUEST_CANCELLED", cancelMessage, ExitCode.ERROR);
-  }
-}
-
-async function confirmPermissionRequest(permissions: PermissionEntry[]): Promise<void> {
-  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
-  for (const permission of permissions) {
-    const dangerous = isDangerousPermission(permission);
-    const line = `  ${permissionConsentLine(permission)}`;
-    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
-  }
-  process.stderr.write("\n");
-  await askYesNo("Approve local-key delegation? [y/N] ", "Permission request cancelled.");
-}
-
-export async function requirePermissionConsent(
-  permissions: PermissionEntry[],
-  yes: boolean,
-): Promise<void> {
-  if (isInteractive()) {
-    if (!yes) await confirmPermissionRequest(permissions);
-  } else if (!yes) {
-    throw new CLIError(
-      "CONFIRMATION_REQUIRED",
-      "Permission grants in non-interactive mode require --yes.",
-      ExitCode.USAGE_ERROR,
-    );
-  }
-}
-
-function isDangerousPermission(permission: PermissionEntry): boolean {
-  if (permission.path === "" || permission.path === "/") return true;
-  return permission.actions.some((action) =>
-    action.includes("*") ||
-    action.endsWith("/write") ||
-    action.endsWith("/admin") ||
-    action.endsWith("/schema") ||
-    action.endsWith("/del"),
-  );
 }
 
 /**
