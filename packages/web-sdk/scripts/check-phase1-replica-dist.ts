@@ -39,6 +39,7 @@ import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
 import { validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
 import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
+import { validateTc2582PublicSessionKeyTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -584,6 +585,13 @@ if (prBaseSha) {
   if (offlineReplicaTransport !== undefined && baseLedger.tc2481OfflineReplicaTransport === undefined &&
       (ledger.tc2481ColdDeviceRefusal === undefined || !hasAncestor(repoRoot, offlineReplicaTransport.sourceCommits.at(-1)!))) {
     console.error("The final TC-2481 cold routing and replica admission requires the approved cold-root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2582PublicSessionKeyTransition(baseLedger.tc2582PublicSessionKey, ledger.tc2582PublicSessionKey);
+  const publicSessionKey = ledger.tc2582PublicSessionKey;
+  if (publicSessionKey !== undefined && baseLedger.tc2582PublicSessionKey === undefined &&
+      (baseLedger.tc2481OfflineReplicaTransport === undefined || !hasAncestor(repoRoot, publicSessionKey.sourceCommits.at(-1)!))) {
+    console.error("The TC-2582 root ratchet requires the merged TC-2481 final row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

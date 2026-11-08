@@ -59,12 +59,14 @@ import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, app
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
 import { approvedTc2481ColdDeviceRefusal, validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
 import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
+import { approvedTc2582PublicSessionKey, validateTc2582PublicSessionKeyTransition } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 // Historical cases keep the earlier root-only admission and its original cumulative budget.
 // Current-PR controls below exercise the final shipped record and its true accounting.
 const current = structuredClone(shipped);
 delete current.tc2481OfflineReplicaTransport;
+delete current.tc2582PublicSessionKey;
 current.entries = current.entries.filter((entry) => entry.pr !== "#873");
 current.allowance["index.mjs"] = 388;
 
@@ -4783,6 +4785,7 @@ describe("TC-2481 cold-device root-only admission", () => {
 const offlineReplicaTransportAdmission = () => structuredClone(shipped.tc2481OfflineReplicaTransport!);
 const finalTransportLedger = () => {
   const ledger = { ...structuredClone(shipped), tc2481OfflineReplicaTransport: offlineReplicaTransportAdmission() };
+  delete ledger.tc2582PublicSessionKey;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
   ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
   ledger.entries.push({
@@ -4887,5 +4890,54 @@ describe("TC-2481 final3e0 pinned accounting admission", () => {
       mutate(changed);
       expect(() => validateLedger(changed)).toThrow();
     }
+  });
+});
+
+describe("TC-2582 public-only session key root-only admission (#888)", () => {
+  const row = () => structuredClone(approvedTc2582PublicSessionKey);
+
+  it("is the newest root row, exactly the TC-2481 final caps plus the measured delta, with no owned charge", () => {
+    expect(() => validateLedger(shipped)).not.toThrow();
+    const previous = shipped.tc2481OfflineReplicaTransport!;
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(previous.root.ceiling[format] + row().root.delta[format]);
+      expect(rootCeilingFor(shipped, format)).toEqual({ row: "tc2582PublicSessionKey", ceiling: row().root.ceiling[format] });
+    }
+    expect(shipped.allowance).toEqual({ "index.mjs": 391, "index.cjs": 861 });
+    expect(shipped.entries.filter((entry) => entry.pr === "#888")).toEqual([]);
+  });
+
+  it("rejects extra bytes, altered provenance, other buckets and a missing prerequisite", () => {
+    const mutations: Array<(value: LogoutRatchet) => void> = [
+      (value) => { value.root.ceiling["index.mjs"]++; },
+      (value) => { value.root.ceiling["index.cjs"]++; },
+      (value) => { value.root.delta["index.cjs"]++; },
+      (value) => { value.base = "0".repeat(40); },
+      (value) => { value.sourceCommits[0] = "0".repeat(40); },
+      (value) => { value.canonicalCI.jobs.pop(); },
+      (value) => { value.ruling += " unapproved headroom"; },
+      (value) => { Object.assign(value, { worker: { delta: 1, ceiling: 777150 } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      const admission = row();
+      mutate(admission);
+      changed.tc2582PublicSessionKey = admission;
+      expect(() => validateLedger(changed)).toThrow("TC-2582");
+    }
+    // `current` is the consistent pre-#873 ledger; this row without its TC-2481 final prerequisite must fail.
+    const withoutPrerequisite = { ...copy(current), tc2582PublicSessionKey: row() };
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2582");
+  });
+
+  it("pins its measured source and may be introduced once, never changed or removed", () => {
+    expect(ancestryPins(shipped, false)).toContainEqual({ row: "tc2582PublicSessionKey", pin: row().sourceCommits[0] });
+    expect(() => validateTc2582PublicSessionKeyTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2582PublicSessionKeyTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2582PublicSessionKeyTransition(undefined, changed)).toThrow("TC-2582");
+    expect(() => validateTc2582PublicSessionKeyTransition(row(), changed)).toThrow("TC-2582");
+    expect(() => validateTc2582PublicSessionKeyTransition(row(), undefined)).toThrow("TC-2582");
   });
 });
