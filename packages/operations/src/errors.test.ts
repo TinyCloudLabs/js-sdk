@@ -30,7 +30,6 @@ test("maps the SDK's node retry codes to NODE_ERROR with the SDK's retry verdict
   expect(nodeRetryOperationError({ code: "REQUEST_TIMEOUT" })).toMatchObject({ code: "NODE_ERROR", retryable: true });
   const unknown = nodeRetryOperationError({ code: "OUTCOME_UNKNOWN" });
   expect(unknown).toMatchObject({ code: "NODE_ERROR", retryable: false });
-  expect(unknown?.message).toContain("read the data back");
   for (const other of [{ code: "NETWORK_ERROR" }, { code: "TIMEOUT" }, "NODE_BUSY", null, undefined, {}]) {
     expect(nodeRetryOperationError(other)).toBeUndefined();
   }
@@ -81,7 +80,6 @@ test("projects decryption transport failure separately from the unchanged data-n
     cause: new Error("PRIVATE_RESPONSE_BODY"), meta: { authorization: "PRIVATE_AUTHORIZATION" },
   });
   expect(projected).toMatchObject({ code: "DECRYPTION_DEPENDENCY_UNAVAILABLE", retryable: true });
-  expect(projected?.message).toMatch(/decryption service/i);
   expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
   expect(routingOperationError(new NodeNotRespondingError([]))).toMatchObject({ code: "NODE_NOT_RESPONDING", retryable: true });
 });

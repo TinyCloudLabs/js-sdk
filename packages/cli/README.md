@@ -59,7 +59,7 @@ value when explicitly requested; MCP hosts control their own transcript
 retention. Owner authority is an explicit posture choice, not an automatic
 fallback for delegated execution.
 
-## Inspect signed registry placement
+## Inspect saved storage settings
 
 ```bash
 tinycloud --profile agent registry show
@@ -67,7 +67,9 @@ tinycloud --profile agent registry show did:pkh:eip155:1:0x...
 tinycloud --json --profile agent registry show
 ```
 
-`registry show [did]` verifies the local signed cache and reports owner, sequence, fetch age, full space placement, node hostnames, read-write/read-only modes and encryption destination. Without a DID it uses the selected profile's owner, not its agent/session key. It performs no sign-in, grant activation, registry request or profile write.
+`registry show [account-id]` checks the storage settings saved on this computer and shows the account, version, age, spaces, servers, read-write/read-only modes and decryption service. Without an account ID it uses the selected profile's account, not its agent/session key. It works offline without sign-in or changing the profile. The argument accepts the same account identifiers as before; only its help label changed. Machine-readable JSON field names remain unchanged.
+
+Human output puts Account and Version first, then `Saved: … ago`: seconds below one minute, minutes through exactly two hours, and hours above two hours. Space labels and identifier values stay intact; server rows label “read and write” or “read only” and the server ID. The decryption service shows its URL and ID, or `none`. These display changes do not alter routing-cache age limits.
 
 The independently readable plain file is `~/.tinycloud/profiles/<profile>/registry-cache.json` (`0600`, directory `0700`). Each entry contains untouched signed response text plus separate fetch/owner/sequence metadata. CLI and canonical Operations runtimes share the profile lock and atomic writer. Every cached read reverifies the response; only a strictly higher sequence replaces it.
 
