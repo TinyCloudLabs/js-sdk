@@ -313,3 +313,26 @@ test("preparation keeps the active session key available until approval", async 
     expect((web as any).preparedSignIn.request.keyId).not.toBe(activeKey);
   });
 });
+
+const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+
+for (const prepared of [true, false]) {
+  test(`${prepared ? "prepared" : "unprepared"} OpenKey sign-in sends only the public session key`, async () => {
+    await withNodeFetch(async () => {
+      const sent: Array<Record<string, unknown>> = [];
+      const web = await client(async (request) => {
+        const jwk = "jwk" in request ? request.jwk : undefined;
+        expect(jwk).toBeObject();
+        sent.push(structuredClone(jwk as Record<string, unknown>));
+        return signedResult(request);
+      }).create();
+      if (prepared) await web.prepareSignIn();
+      await web.signIn();
+      expect(sent).toHaveLength(1);
+      const jwk = sent[0]!;
+      expect(Object.keys(jwk).sort()).toEqual(["crv", "kty", "x"]);
+      expect(jwk).toMatchObject({ kty: "OKP", crv: "Ed25519", x: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+      for (const member of PRIVATE_JWK_MEMBERS) expect(jwk).not.toHaveProperty(member);
+    });
+  });
+}

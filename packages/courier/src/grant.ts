@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
-import { TinyCloudNode, NodeWasmBindings } from '@tinycloud/node-sdk';
+import { TinyCloudNode, NodeWasmBindings, publicJwk } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
@@ -44,8 +44,7 @@ export interface GrantPayload {
 export function openKeyDelegateUrl(request: DelegateRequest): string {
   const params = new URLSearchParams({ did: request.did, host: request.host, reason: request.reason, expiry: request.expiry ?? AGENT_GRANT_EXPIRY, protocolVersion: '1' });
   if (request.callback) params.set('callback', request.callback);
-  const publicJwk = Object.fromEntries(Object.entries(request.publicJwk).filter(([key]) => !PRIVATE_JWK_FIELDS.has(key)));
-  params.set('jwk', Buffer.from(JSON.stringify(publicJwk)).toString('base64url'));
+  params.set('jwk', Buffer.from(JSON.stringify(publicJwk(request.publicJwk))).toString('base64url'));
   params.set('permissions', Buffer.from(JSON.stringify({ permissions: request.permissions, reason: request.reason })).toString('base64url'));
   return `${request.openkeyHost.replace(/\/$/, '')}/delegate?${params}`;
 }

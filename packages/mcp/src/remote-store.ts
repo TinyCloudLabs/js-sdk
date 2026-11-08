@@ -12,6 +12,7 @@ import {
   UnsupportedSessionRestoreError,
   isCapabilitySubset,
   principalDidEquals,
+  publicJwk,
   siweRuntimeDelegation,
   signedCompactUcanExpiry,
   type PermissionEntry,
@@ -1425,12 +1426,6 @@ function sessionFromCallback(data: Record<string, unknown>, privateJwk: Record<s
     siwe: data.siwe,
     signature: data.signature,
   };
-}
-
-function publicJwk(jwk: Record<string, unknown>): Record<string, unknown> {
-  const copy = { ...jwk };
-  for (const field of ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]) delete copy[field];
-  return copy;
 }
 
 function samePrincipal(left: string | undefined, right: string): boolean {

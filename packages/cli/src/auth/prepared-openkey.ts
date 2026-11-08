@@ -4,9 +4,9 @@ import type { Socket } from "node:net";
 import { createInterface } from "node:readline";
 import open from "open";
 import type { ISigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_OPENKEY_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
-import { publicJwkForDelegation } from "./browser-auth.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 
 type Authorize = Parameters<TinyCloudNode["signInWithOpenKey"]>[0];
@@ -209,11 +209,11 @@ export async function startPreparedOpenKeyHandoff(options: {
     state.fill(0);
   };
   try {
-    const publicJwk = publicJwkForDelegation(options.prepared.jwk) as Record<string, unknown>;
+    const sessionJwk = publicJwk(options.prepared.jwk);
     const payload = {
       transportVersion: 2,
       request: {
-        protocolVersion: 1, siwe: options.prepared.siwe, jwk: publicJwk,
+        protocolVersion: 1, siwe: options.prepared.siwe, jwk: sessionJwk,
         host: options.prepared.host,
         sessionDid: options.prepared.verificationMethod,
         ...(options.prepared.keyId ? { keyId: options.prepared.keyId } : {}),

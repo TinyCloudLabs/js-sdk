@@ -2807,7 +2807,7 @@ export class TinyCloudNode {
 
   /**
    * Fresh OpenKey sign-in. The callback receives the SDK's original SIWE and
-   * session JWK before approval; the signed result is verified against those
+   * public session JWK before approval; the signed result is verified against those
    * bytes before the network session or replica stamp is committed.
    */
   async signInWithOpenKey(
