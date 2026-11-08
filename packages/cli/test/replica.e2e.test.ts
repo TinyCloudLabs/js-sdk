@@ -8,6 +8,7 @@
  * TC_REPLICA_E2E_DATABASE_URL (a fresh, empty database) to run the node on
  * Postgres instead of SQLite.
  */
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { contentHash as hash } from "@tinycloud/replica";
@@ -50,6 +51,8 @@ type SyncOutput = { sync: Record<string, unknown>; status: { counts: unknown; so
 
 describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === undefined ? "SQLite" : "Postgres"})`, () => {
   let home: string;
+  const originalHome = process.env.HOME;
+  const originalTcHome = process.env.TC_HOME;
   let dataDir: string;
   let host: string;
   let port: number;
@@ -153,6 +156,8 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "tc-replica-e2e-home-"));
+    process.env.HOME = home;
+    process.env.TC_HOME = home;
     dataDir = await mkdtemp(join(tmpdir(), "tc-replica-e2e-node-"));
     registry = startUnregisteredLocationRegistry();
     port = await freePort();
@@ -164,10 +169,24 @@ describe.skipIf(!NODE_BIN)(`tc replica against a real node (${DATABASE_URL === u
   }, 60_000);
 
   afterAll(async () => {
-    await stopNode();
-    await rm(home, { recursive: true, force: true });
-    await rm(dataDir, { recursive: true, force: true });
-    registry?.stop(true);
+    try {
+      const stopped = await Promise.allSettled([
+        stopNode(),
+        Promise.resolve().then(() => registry?.stop(true)),
+      ]);
+      const removed = await Promise.allSettled([
+        ...(home ? [rm(home, { recursive: true, force: true })] : []),
+        ...(dataDir ? [rm(dataDir, { recursive: true, force: true })] : []),
+      ]);
+      const errors = [...stopped, ...removed].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalTcHome === undefined) delete process.env.TC_HOME;
+      else process.env.TC_HOME = originalTcHome;
+    }
   });
 
   test("grant, sync, offline restart reads, catch-up and scope", async () => {

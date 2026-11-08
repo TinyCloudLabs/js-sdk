@@ -220,6 +220,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#872",
+      "ticket": "TC-2481",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "The exact tc2481WebRouting absolute row admits actual root growth 11515/9469 at c7a9b68120b51b529db7e4f2637b01e0525b1319; this zero owned-budget charge does not claim zero growth or spend old headroom. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security ."
     }
   ],
   "phase2Ratchet": {
@@ -2678,5 +2685,24 @@
     "worker": { "delta": 564, "ceiling": 777125 },
     "replicaWorker": { "delta": 524, "ceiling": 771018 },
     "reason": "The latest metadata-preserving error normalization trim retains required typed HTTP/refusal versus transport distinctions. Canonical kv-storage worker SHA-256 is 723bafa8ff1f01f0d26b062bc03047b9a264b4418c87e316fed7aa0109decbc2 in both pinned jobs. Only the two existing worker caps rise to their measured bytes; all root, first-import and activation ceilings carry TC-2380 Q2 unchanged, not new measurements or additional bucket admissions."
+  },
+  "tc2481WebRouting": {
+    "label": "TC-2481 final root and initial replica admission after the canonical helper trim (PR #872)",
+    "ruling": "Naomi ruling 32e1c314: safe trim first, then exact final pinned-CI root and initial optional caps under the worker rule, zero additional headroom. Source c7a9b68120b51b529db7e4f2637b01e0525b1319; SQLite and PostgreSQL in run 42426460499 agree. Bun 1.3.14; rustc 1.99.0 (b940084d7). Final code freeze precedes Naomi's Sol review routing and Amos's merge decision; no other bucket increase.",
+    "base": "d6c7d58ef3d18629257fee647bf93092e581bf86",
+    "sourceCommits": ["c7a9b68120b51b529db7e4f2637b01e0525b1319"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42426460499",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42426460499/job/128565671827",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42426460499/job/128565672045"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 11515, "index.cjs": 9469 }, "ceiling": { "index.mjs": 1491585, "index.cjs": 1431953 } },
+    "firstImport": { "delta": { "replica.mjs": 374, "replica.cjs": 413 }, "ceiling": { "replica.mjs": 53131, "replica.cjs": 68370 } },
+    "activation": { "delta": { "activation.mjs": 0, "activation.cjs": 0 }, "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 } },
+    "worker": { "delta": 0, "ceiling": 777125 },
+    "replicaWorker": { "delta": 0, "ceiling": 771018 },
+    "reason": "After the canonical Services-helper trim, both pinned CI lanes agree on the remaining root and first-import bytes. Admit those four measured asset sizes only, with zero additional headroom; activation stays at its existing ceiling and both worker/gated caps remain unchanged. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . These bounded investigations do not attribute all growth to generic libraries or prove irreducibility. Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Historical replica-owned accounting entries are unchanged."
   }
 }
