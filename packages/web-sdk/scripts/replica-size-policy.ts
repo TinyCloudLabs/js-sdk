@@ -438,6 +438,7 @@ export type Ledger = {
   tc2481ColdDeviceRefusal?: LogoutRatchet;
   tc2481OfflineReplicaTransport?: Tc2481RegistryFreshness;
   tc2582PublicSessionKey?: LogoutRatchet;
+  tc2281OpenKeyConnectedKeyId?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1044,6 +1045,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2481ColdDeviceRefusal !== undefined) pins.push({ row: "tc2481ColdDeviceRefusal", pin: root.tc2481ColdDeviceRefusal.sourceCommits.at(-1)! });
   if (root.tc2481OfflineReplicaTransport !== undefined) pins.push({ row: "tc2481OfflineReplicaTransport", pin: root.tc2481OfflineReplicaTransport.sourceCommits.at(-1)! });
   if (root.tc2582PublicSessionKey !== undefined) pins.push({ row: "tc2582PublicSessionKey", pin: root.tc2582PublicSessionKey.sourceCommits.at(-1)! });
+  if (root.tc2281OpenKeyConnectedKeyId !== undefined) pins.push({ row: "tc2281OpenKeyConnectedKeyId", pin: root.tc2281OpenKeyConnectedKeyId.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1126,6 +1128,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2481ColdDeviceRefusal", root.tc2481ColdDeviceRefusal?.root.ceiling],
     ["tc2481OfflineReplicaTransport", root.tc2481OfflineReplicaTransport?.root.ceiling],
     ["tc2582PublicSessionKey", root.tc2582PublicSessionKey?.root.ceiling],
+    ["tc2281OpenKeyConnectedKeyId", root.tc2281OpenKeyConnectedKeyId?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2840,6 +2843,27 @@ export const approvedTc2582PublicSessionKey: LogoutRatchet = {
   reason: "Non-replica security fix: OpenKey sign-in sends only the public session key through one shared allowlist helper. Both canonical backends measured index.mjs 1,491,864 B and index.cjs 1,432,244 B, +180 / +187 over the TC-2481 final caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2582",
 };
 
+/**
+ * Naomi, TC-2281, 2026-11-08: runtime-grant signing through OpenKey with the connected keyId (PR #889). Root-only: the
+ * caps ratchet to the canonical CI bytes with zero headroom; first-import, activation, worker and gated caps and the
+ * ordinary cumulative allowances carry TC-2481 unchanged (a non-replica PR appends no owned-budget entry).
+ */
+export const approvedTc2281OpenKeyConnectedKeyId: LogoutRatchet = {
+  label: "TC-2281 OpenKey runtime-grant signing with the connected keyId, root admission (PR #889)",
+  ruling: "Naomi, TC-2281, 2026-11-08: SDK passes the connected keyId and connects first, a typed signing-key error, the session-change guard. Exact ratchet of the root caps to the true canonical CI measurement on top of #888, zero headroom, no trim. SQLite and PostgreSQL in run 42533686487 at 56ee19e667bf6ac44989c2a303c41e5a0a66a605 agree. Bun 1.3.14; rustc 1.99.0.",
+  base: "57a5cbfcaede94a360c1c59f2aaa021982e0145d",
+  sourceCommits: ["56ee19e667bf6ac44989c2a303c41e5a0a66a605"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487/job/128893204091",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487/job/128893204240",
+    ],
+  },
+  root: { delta: { "index.mjs": 163, "index.cjs": 145 }, ceiling: { "index.mjs": 1492027, "index.cjs": 1432389 } },
+  reason: "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first, and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,027 B and index.cjs 1,432,389 B, +163 / +145 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -2968,6 +2992,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2481ColdDeviceRefusal: approvedTc2481ColdDeviceRefusal,
   tc2481OfflineReplicaTransport: approvedTc2481OfflineReplicaTransport,
   tc2582PublicSessionKey: approvedTc2582PublicSessionKey,
+  tc2281OpenKeyConnectedKeyId: approvedTc2281OpenKeyConnectedKeyId,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3316,6 +3341,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2582PublicSessionKey !== undefined &&
       (!value.tc2481OfflineReplicaTransport || JSON.stringify(value.tc2582PublicSessionKey) !== JSON.stringify(approvedTc2582PublicSessionKey))) {
     throw new Error("Only Naomi's exact TC-2582 root-only ratchet is approved.");
+  }
+  if (value.tc2281OpenKeyConnectedKeyId !== undefined &&
+      (!value.tc2582PublicSessionKey || JSON.stringify(value.tc2281OpenKeyConnectedKeyId) !== JSON.stringify(approvedTc2281OpenKeyConnectedKeyId))) {
+    throw new Error("Only Naomi's exact TC-2281 root-only ratchet is approved.");
   }
 }
 
@@ -3752,6 +3781,14 @@ export function validateTc2582PublicSessionKeyTransition(base?: LogoutRatchet, c
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2582PublicSessionKey) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2582 root ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2281 root admission is introduced once and immutable afterwards. */
+export function validateTc2281OpenKeyConnectedKeyIdTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2281OpenKeyConnectedKeyId) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2281 root ratchet may be introduced once and cannot change later.");
   }
 }
 

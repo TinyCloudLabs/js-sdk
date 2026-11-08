@@ -2757,5 +2757,20 @@
     },
     "root": { "delta": { "index.mjs": 180, "index.cjs": 187 }, "ceiling": { "index.mjs": 1491864, "index.cjs": 1432244 } },
     "reason": "Non-replica security fix: OpenKey sign-in sends only the public session key through one shared allowlist helper. Both canonical backends measured index.mjs 1,491,864 B and index.cjs 1,432,244 B, +180 / +187 over the TC-2481 final caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2582"
+  },
+  "tc2281OpenKeyConnectedKeyId": {
+    "label": "TC-2281 OpenKey runtime-grant signing with the connected keyId, root admission (PR #889)",
+    "ruling": "Naomi, TC-2281, 2026-11-08: SDK passes the connected keyId and connects first, a typed signing-key error, the session-change guard. Exact ratchet of the root caps to the true canonical CI measurement on top of #888, zero headroom, no trim. SQLite and PostgreSQL in run 42533686487 at 56ee19e667bf6ac44989c2a303c41e5a0a66a605 agree. Bun 1.3.14; rustc 1.99.0.",
+    "base": "57a5cbfcaede94a360c1c59f2aaa021982e0145d",
+    "sourceCommits": ["56ee19e667bf6ac44989c2a303c41e5a0a66a605"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487/job/128893204091",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487/job/128893204240"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 163, "index.cjs": 145 }, "ceiling": { "index.mjs": 1492027, "index.cjs": 1432389 } },
+    "reason": "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first, and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,027 B and index.cjs 1,432,389 B, +163 / +145 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281"
   }
 }
