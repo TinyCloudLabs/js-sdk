@@ -205,9 +205,9 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
   }
 
   beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), "tc834-wait-home-"));
     priorHome = process.env.HOME;
     priorTcHome = process.env.TC_HOME;
+    home = await mkdtemp(join(tmpdir(), "tc834-wait-home-"));
     process.env.HOME = home;
     process.env.TC_HOME = home;
     registry = startUnregisteredLocationRegistry();
@@ -255,12 +255,19 @@ describe.skipIf(!NODE_BIN)("tc secrets request/wait against a real local node (S
         child.kill("SIGKILL");
       })));
     } finally {
-      await agentProxy?.stop();
-      await ownerProxy?.stop();
-      await registry?.stop(true);
-      if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
-      if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
-      if (home) await rm(home, { recursive: true, force: true });
+      try {
+        const stops = await Promise.allSettled([
+          Promise.resolve().then(() => agentProxy?.stop()),
+          Promise.resolve().then(() => ownerProxy?.stop()),
+          Promise.resolve().then(() => registry?.stop(true)),
+        ]);
+        const failedStop = stops.find((result) => result.status === "rejected");
+        if (failedStop?.status === "rejected") throw failedStop.reason;
+      } finally {
+        if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+        if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
+        if (home) await rm(home, { recursive: true, force: true });
+      }
     }
   });
 
