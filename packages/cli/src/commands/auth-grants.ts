@@ -18,6 +18,7 @@ import { ExitCode } from "../config/constants.js";
 import { loadAdditionalDelegations, removeStoredDelegations, type StoredAdditionalDelegation } from "../lib/permissions.js";
 import { ensureAuthenticated, restoreProfileSessionNode } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
+import { noteUnneededYes, UNNEEDED_YES_DESCRIPTION } from "../lib/yes-flag.js";
 import { discardWarnings } from "../output/warnings.js";
 import { CLIError, handleError, wrapError } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
@@ -185,11 +186,12 @@ export function registerAuthGrantsCommand(
   grants.command("remove <cid>")
     .description("Remove locally stored grants for exactly this CID; optionally revoke as the owner")
     .option("--revoke", "Revoke on the node before removing local grants")
-    .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--yes", UNNEEDED_YES_DESCRIPTION, false)
     .action(async (cid: string, flags: { revoke?: boolean; yes?: boolean }, cmd: Command) => {
       try {
+        noteUnneededYes(flags.yes);
         const { ctx, profile } = await localContext(cmd.optsWithGlobals());
-        // This gate precedes even a local lookup, consent, session restore and node requests.
+        // This gate precedes even a local lookup, session restore and node requests.
         if (flags.revoke && resolveProfilePosture(profile) === "delegate-session") {
           throw new CLIError(
             "REVOKE_UNAUTHORIZED",
@@ -221,7 +223,7 @@ export function registerAuthGrantsCommand(
             }
           }
           const revoked = await revokeDelegationOnNode({
-            ctx: revokeCtx, profile, node, cid, yes: flags.yes ?? false, localTarget,
+            ctx: revokeCtx, profile, node, cid, localTarget,
             openKeyAcquisition: options.openKeyAcquisition,
           });
           let removed: number;

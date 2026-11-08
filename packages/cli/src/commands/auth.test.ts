@@ -1951,7 +1951,7 @@ describe("CLI auth request command", () => {
     ]);
   });
 
-  test("persists the active local session after granting runtime permissions", async () => {
+  test("a local-key request --grant signs without --yes or a terminal and persists the active local session", async () => {
     const sessionJwk = {
       kty: "OKP",
       crv: "Ed25519",
@@ -1994,7 +1994,6 @@ describe("CLI auth request command", () => {
       "auth",
       "request",
       "--grant",
-      "--yes",
       "--cap",
       "tinycloud.kv:default/:list",
     ]);
@@ -2595,7 +2594,7 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
   });
 });
 
-describe("auth grant on a local-key profile asks the owner about entries beyond the preset on the terminal, wherever stdout goes", () => {
+describe("auth grant on a local-key profile signs entries beyond the preset without a question, wherever stdout goes", () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -2621,47 +2620,29 @@ describe("auth grant on a local-key profile asks the owner about entries beyond 
     return source;
   }
 
-  test("stdout redirected to a file still gets the question on the terminal, and a yes signs", async () => {
+  test.each([
+    ["a terminal attached", { stdin: true, stdout: true, stderr: true }],
+    ["stdout redirected to a file", { stdin: true, stdout: false, stderr: true }],
+    ["no terminal at all", { stdin: false, stdout: false, stderr: false }],
+    ["piped stdin, with stdout and stderr on a terminal", { stdin: false, stdout: true, stderr: true }],
+  ])("%s, no --yes: the list is printed, nothing is asked or read from stdin, and the grant is signed", async (_name, terminal) => {
     const source = await writeBeyondPresetRequest();
 
-    const { stderr, stdinRead } = await grantWith([source], { stdin: true, stdout: false, stderr: true }, "y\n");
+    const { stderr, stdinRead } = await grantWith([source], terminal, "n\n");
 
-    expect(stdinRead).toBe(true);
-    expect(stderr).toContain("1 entry marked !");
+    expect(stderr).toContain("MORE than the apps-agent preset");
+    expect(stderr).not.toContain("[y/N]");
+    expect(stdinRead).toBe(false);
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
   });
 
-  test("with stdout redirected, any answer but yes cancels and signs nothing", async () => {
-    const source = await writeBeyondPresetRequest();
-
-    await grantWith([source], { stdin: true, stdout: false, stderr: true }, "n\n");
-
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "REQUEST_CANCELLED" })]);
-    expect(recorded.grantedRequests).toEqual([]);
-  });
-
-  test.each([
-    ["no terminal at all", { stdin: false, stdout: false, stderr: false }],
-    ["piped stdin, even with stdout and stderr on a terminal", { stdin: false, stdout: true, stderr: true }],
-    ["stderr redirected, so the question would not be seen", { stdin: true, stdout: true, stderr: false }],
-  ])("%s: refused with CONFIRMATION_REQUIRED, nothing read from stdin, nothing signed", async (_name, terminal) => {
-    const source = await writeBeyondPresetRequest();
-
-    const { stderr, stdinRead } = await grantWith([source], terminal, "y\n");
-
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "CONFIRMATION_REQUIRED", exitCode: 2 })]);
-    expect(stdinRead).toBe(false);
-    expect(stderr).not.toContain("1 entry marked !");
-    expect(recorded.grantedRequests).toEqual([]);
-  });
-
-  test("--yes signs without a terminal and without asking", async () => {
+  test("--yes is still accepted and changes nothing; in JSON mode it adds nothing to stderr", async () => {
     const source = await writeBeyondPresetRequest();
 
     const { stderr } = await grantWith([source, "--yes"], { stdin: false, stdout: false, stderr: false });
 
-    expect(stderr).not.toContain("1 entry marked !");
+    expect(stderr).not.toContain("--yes");
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
   });
