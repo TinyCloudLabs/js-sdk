@@ -16,8 +16,22 @@ import { configureShareCommandServices, registerShareCommand } from "./commands/
 import { createShareAuthorityAdapters } from "./share/adapters.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
 import { applyNoRetryFlag } from "./lib/retry-policy.js";
+import { CONFIG_DIR } from "./config/constants.js";
+import { appendDiagnosticLog, setDiagnosticCommandContext } from "./lib/diagnostic-logs.js";
+
 
 const program = new Command();
+let commandStartedAt = Date.now();
+
+function fullCommandName(command: Command): string {
+  const names: string[] = [];
+  let current: Command | null = command;
+  while (current && current !== program) {
+    names.push(current.name());
+    current = current.parent;
+  }
+  return names.reverse().join(" ");
+}
 const shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch,
@@ -49,6 +63,8 @@ program
   .option("--replication", "Enable read-through replication for this invocation")
   .option("--no-replication", "Disable read-through replication for this invocation")
   .option("--replication-debug", "Write replication diagnostics to stderr")
+  .option("--no-diagnostic-logs", "Disable local diagnostic logging for this command");
+
 
 program.hook("preAction", async (thisCommand) => {
   const opts = thisCommand.optsWithGlobals();
@@ -63,7 +79,14 @@ program.hook("preAction", async (thisCommand) => {
   // Config guard — warn if not configured for auth-required commands
   const commandName = thisCommand.name();
   const isRootCommand = thisCommand === program;
-  const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
+  const fullCommand = fullCommandName(thisCommand);
+  setDiagnosticCommandContext({
+    command: fullCommand,
+    args: process.argv.slice(2),
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || opts.diagnosticLogs === false,
+    cliVersion: version,
+  });
+  commandStartedAt = Date.now();
   const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
                     fullCommand === "profile create";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
@@ -85,8 +108,21 @@ program.hook("preAction", async (thisCommand) => {
   }
 });
 
-program.hook("postAction", () => {
+program.hook("postAction", async (thisCommand) => {
   outputWarnings([]);
+  if (thisCommand.name() === "bug-report") return;
+  await appendDiagnosticLog({
+    root: CONFIG_DIR,
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || thisCommand.optsWithGlobals().diagnosticLogs === false,
+    entry: {
+      command: fullCommandName(thisCommand),
+      args: process.argv.slice(2),
+      exitCode: 0,
+      cliVersion: version,
+      nodeVersion: process.version,
+      durationMs: Date.now() - commandStartedAt,
+    },
+  }).catch(() => undefined);
 });
 
 configureShareCommandServices({
@@ -147,6 +183,12 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 });
 
 const commandToken = firstCommandToken(argv);
+setDiagnosticCommandContext({
+  command: commandToken ?? "unknown",
+  args: argv,
+  disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
+  cliVersion: version,
+});
 if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.

@@ -1,0 +1,174 @@
+import { constants as fsConstants } from "node:fs";
+import { mkdir, open, readFile, rm, lstat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const FILE_NAME = "cli-diagnostics.jsonl";
+const MAX_BYTES = 1024 * 1024;
+let activeCommand: string | undefined;
+let activeArgs: string[] = [];
+let activeDisabled = false;
+let activeCliVersion = "unknown";
+let activeStartedAt = Date.now();
+
+export function setDiagnosticCommandContext(options: {
+  command: string;
+  args: readonly string[];
+  disabled: boolean;
+  cliVersion: string;
+}): void {
+  activeCommand = options.command;
+  activeArgs = [...options.args];
+  activeDisabled = options.disabled;
+  activeCliVersion = options.cliVersion;
+  activeStartedAt = Date.now();
+}
+
+type DiagnosticEntry = {
+  command: string;
+  args: string[];
+  exitCode: number;
+  errorCode?: string;
+  errorMessage?: string;
+  cliVersion: string;
+  nodeVersion: string;
+  durationMs: number;
+};
+
+export function redactDiagnosticText(input: string): { text: string; count: number } {
+  let text = input;
+  let count = 0;
+  const replace = (pattern: RegExp, replacement: string | ((...matches: string[]) => string)) => {
+    text = text.replace(pattern, (...matches) => {
+      count += 1;
+      return typeof replacement === "string" ? replacement : replacement(...matches);
+    });
+  };
+  replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
+  replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
+  replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
+  replace(/\b(?:0x)?[a-f0-9]{64}\b/gi, "[REDACTED_KEY]");
+  replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
+  replace(/\bdid:[a-z0-9]+:[A-Za-z0-9._:%-]+/gi, "[REDACTED_DID]");
+  replace(/\b0x[a-f0-9]{40}\b/gi, "[REDACTED_ADDRESS]");
+  replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
+  replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
+  replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
+  replace(/\b(profile|space|user|owner|account|name)\s*(?:name)?\s*[:=]\s*["'`]?[^\s,"'`}]+["'`]?/gi, (_match, label) => `${label}="[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account)(?:\s+name)?\s+(?:is\s+)?["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
+  replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");
+  replace(/("(?:name|fullName|user|owner)"\s*:\s*)"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  return { text, count };
+}
+
+function redactText(input: string): string {
+  return redactDiagnosticText(input).text;
+}
+
+function redactArgs(args: readonly string[]): string[] {
+  const redacted: string[] = [];
+  const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (!arg.startsWith("-")) continue;
+    const equals = arg.indexOf("=");
+    const flag = equals < 0 ? arg : arg.slice(0, equals);
+    if (equals >= 0) redacted.push(`${flag}=[REDACTED]`);
+    else if (booleanFlags.has(flag)) redacted.push(flag);
+    else if (args[index + 1] && !args[index + 1]!.startsWith("-")) {
+      redacted.push(`${flag}=[REDACTED]`);
+      index += 1;
+    } else redacted.push(flag);
+  }
+  return redacted;
+}
+
+export function redactDiagnosticEntry(entry: DiagnosticEntry): DiagnosticEntry {
+  return {
+    command: redactText(entry.command),
+    args: redactArgs(entry.args),
+    exitCode: entry.exitCode,
+    ...(entry.errorCode ? { errorCode: redactText(entry.errorCode) } : {}),
+    ...(entry.errorMessage ? { errorMessage: redactText(entry.errorMessage) } : {}),
+    cliVersion: entry.cliVersion,
+    nodeVersion: entry.nodeVersion,
+    durationMs: entry.durationMs,
+  };
+}
+export async function recordDiagnosticFailure(error: {
+  code: string;
+  message: string;
+  exitCode: number;
+}, root: string): Promise<void> {
+  if (!activeCommand || activeCommand === "bug-report" || activeDisabled || process.env.TINYCLOUD_CLI_LOGS === "0") return;
+  await appendDiagnosticLog({
+    root,
+    entry: {
+      command: activeCommand,
+      args: activeArgs,
+      exitCode: error.exitCode,
+      errorCode: error.code,
+      errorMessage: error.message,
+      cliVersion: activeCliVersion,
+      nodeVersion: process.version,
+      durationMs: Date.now() - activeStartedAt,
+    },
+  });
+}
+
+
+export async function appendDiagnosticLog(options: {
+  root: string;
+  entry: DiagnosticEntry;
+  maxBytes?: number;
+  disabled?: boolean;
+}): Promise<void> {
+  if (options.disabled) return;
+  const maximum = options.maxBytes ?? MAX_BYTES;
+  await mkdir(options.root, { recursive: true, mode: 0o700 });
+  const path = join(options.root, FILE_NAME);
+  const line = `${JSON.stringify({ timestamp: new Date().toISOString(), ...redactDiagnosticEntry(options.entry) })}\n`;
+  const lineBytes = Buffer.byteLength(line);
+  if (lineBytes >= maximum) return;
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    if (current.size + lineBytes > maximum) {
+      const old = await readFile(path);
+      const tail = old.subarray(Math.max(0, old.length - Math.floor(maximum / 2)));
+      const firstNewline = tail.indexOf(0x0a);
+      await writeFile(path, firstNewline < 0 ? Buffer.alloc(0) : tail.subarray(firstNewline + 1), { mode: 0o600 });
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW, 0o600);
+  try {
+    await file.chmod(0o600);
+    await file.write(line);
+  } finally {
+    await file.close();
+  }
+}
+
+export async function readDiagnosticLogs(root: string, maxBytes = MAX_BYTES): Promise<string> {
+  const path = join(root, FILE_NAME);
+  let content: Buffer;
+  try {
+    const details = await lstat(path);
+    if (details.isSymbolicLink() || !details.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    content = await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+  if (content.length <= maxBytes) return content.toString("utf8");
+  const tail = content.subarray(content.length - maxBytes).toString("utf8");
+  const firstNewline = tail.indexOf("\n");
+  return firstNewline < 0 ? "" : tail.slice(firstNewline + 1);
+}
+
+export async function clearDiagnosticLogs(root: string): Promise<void> {
+  await rm(join(root, FILE_NAME), { force: true });
+}
+
+export const diagnosticLogPath = (root: string): string => join(root, FILE_NAME);
