@@ -2742,5 +2742,20 @@
     "worker": { "delta": 24, "ceiling": 777149 },
     "replicaWorker": { "delta": 33, "ceiling": 771051 },
     "reason": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). True root charges raise cumulative ESM from 292 to 391, explicitly increasing its former 388 budget by 3; CJS is 241/861. Root cap deltas -29/-12 tighten the earlier root-only approval and are not the accounting charges. Actual optional deltas are -2/+31/0/+1; only initial CJS gains 31 cap bytes in the separately loaded replica parser closure. Canonical worker SHA-256 remains 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115. Activation, gated and worker caps do not change. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481"
+  },
+  "tc2582PublicSessionKey": {
+    "label": "TC-2582 public-only session key, root admission (PR #888)",
+    "ruling": "Naomi, TC-2582, 2026-11-08: security fix, public-only session key. Exact ratchet of the root caps to the true canonical CI measurement on top of #873, zero headroom, no trim hunt. SQLite and PostgreSQL in run 42525481972 at 319b3b07ddba615802ce66f0f518cf1d1eadf01c agree. Bun 1.3.14; rustc 1.99.0.",
+    "base": "fe92071a468cc9f9c71f9aff97ed6320845e9c5d",
+    "sourceCommits": ["319b3b07ddba615802ce66f0f518cf1d1eadf01c"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42525481972",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42525481972/job/128868063921",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42525481972/job/128868064165"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 180, "index.cjs": 187 }, "ceiling": { "index.mjs": 1491864, "index.cjs": 1432244 } },
+    "reason": "Non-replica security fix: OpenKey sign-in sends only the public session key through one shared allowlist helper. Both canonical backends measured index.mjs 1,491,864 B and index.cjs 1,432,244 B, +180 / +187 over the TC-2481 final caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2582"
   }
 }

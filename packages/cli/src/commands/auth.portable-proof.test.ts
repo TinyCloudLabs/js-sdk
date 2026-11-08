@@ -31,10 +31,6 @@ mock.module("../auth/browser-auth.js", () => ({
     openKeyReasons.push(options.reason);
     return acquire(did, options);
   },
-  publicJwkForDelegation: (jwk: Record<string, unknown>) => {
-    const { d: _privateKey, ...publicKey } = jwk;
-    return publicKey;
-  },
   validateDelegationCallbackPayload: () => null,
 }));
 mock.module("../output/errors.js", () => ({
