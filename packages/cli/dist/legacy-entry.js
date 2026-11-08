@@ -377,7 +377,7 @@ function redactDiagnosticLog(input) {
 function redactArgs(args) {
   const values = [];
   let count = 0;
-  const booleanFlags = /* @__PURE__ */ new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-cli-logs"]);
+  const booleanFlags = /* @__PURE__ */ new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--") break;
@@ -21265,7 +21265,7 @@ var MAX_BODY_BYTES = 256 * 1024;
 var MAX_CONTENT_BYTES = 128 * 1024;
 var ATTACHMENT_URL = "https://bugs.tinycloud.xyz/reports";
 async function readToken(useStdin) {
-  if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Pipe the attachment token to --token-stdin, or set TINYCLOUD_BUG_ATTACH_TOKEN.");
+  if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
   const token = useStdin ? await new Promise((resolve10) => {
     const prompt = createInterface({ input: stdin });
     let settled = false;
@@ -21278,12 +21278,12 @@ async function readToken(useStdin) {
     prompt.once("line", (line) => finish(line.trim()));
     prompt.once("close", () => finish(""));
   }) : process.env.TINYCLOUD_BUG_ATTACH_TOKEN?.trim() ?? "";
-  if (!token) throw new CLIError("BUG_REPORT_TOKEN_MISSING", useStdin ? "No attachment token was provided on stdin." : "Set TINYCLOUD_BUG_ATTACH_TOKEN or pass --token-stdin to provide the attachment token.");
-  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CLIError("BUG_REPORT_TOKEN_INVALID", "The attachment token has an invalid format.");
+  if (!token) throw new CLIError("BUG_REPORT_TOKEN_MISSING", useStdin ? "No attachment token came in on standard input." : "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CLIError("BUG_REPORT_TOKEN_INVALID", "That attachment token isn't valid. Use the one the bug report returned.");
   return token;
 }
-async function confirmUpload(summary, content, io) {
-  if (!io && !stderr.isTTY) throw new CLIError("BUG_REPORT_CONFIRMATION_REQUIRED", "Run this command in a terminal to review and confirm the CLI log.");
+async function confirmUpload(summary, content, reportId, io) {
+  if (!io && !stderr.isTTY) throw new CLIError("BUG_REPORT_CONFIRMATION_REQUIRED", "This needs your yes, so run it in a terminal where you can answer.");
   const input = io ? void 0 : stdin.isTTY ? stdin : createReadStream(process.platform === "win32" ? "CONIN$" : "/dev/tty");
   const prompt = input ? createInterface({ input, output: stderr }) : void 0;
   const write2 = io?.write ?? ((text2) => {
@@ -21293,7 +21293,7 @@ async function confirmUpload(summary, content, io) {
   try {
     while (true) {
       write2(`${summary}
-Send this CLI log with sensitive values removed where found? [y/N/v to view] `);
+Send this CLI log to report ${reportId}? Type v to view it first. [y/N/v] `);
       const answer = (await question()).trim().toLowerCase();
       if (answer === "v") {
         write2(`
@@ -21319,13 +21319,13 @@ function tailBytes(text2, maxBytes) {
 }
 function attachmentError(status, code5) {
   const messages = {
-    invalid_attach_token: "The attachment token is invalid or expired; do not retry with this token.",
-    attachment_limit: "This report already has the maximum of five attachments.",
-    payload_too_large: "The CLI log exceeded the service upload limit.",
-    unsupported_media_type: "The attachment service rejected the request format.",
-    rate_limited: "The upload remained rate-limited after one automatic retry; try again later.",
-    intake_busy: "The bug-report service is full; try again later, perhaps in a day or more. Your CLI log remains available locally.",
-    too_deep: "The attachment request was rejected as invalid."
+    invalid_attach_token: "That attachment token isn't valid or has expired. Trying again with it won't work.",
+    attachment_limit: "This report already has five attachments, the most it can take.",
+    payload_too_large: "The CLI log is larger than the bug service accepts.",
+    unsupported_media_type: "The bug service didn't accept this upload's format. Updating the CLI may fix it.",
+    rate_limited: "The bug service is still busy after one automatic retry. Try again in a few minutes.",
+    intake_busy: "The bug service is full for now. Try again later, not right away; your CLI log stays on this computer.",
+    too_deep: "The bug service didn't accept this upload. Updating the CLI may fix it."
   };
   return new CLIError(`BUG_REPORT_${code5.toUpperCase()}`, messages[code5] ?? `The CLI log upload was rejected (${code5}).`, void 0, { status });
 }
@@ -21333,18 +21333,18 @@ async function attachLogs(reportId, tokenStdin, dependencies) {
   const output2 = dependencies.write ?? ((text2) => {
     stderr.write(text2);
   });
-  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "Report ID must be 26 uppercase Crockford base32 characters.");
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character ID the bug report returned.");
   const token = await readToken(tokenStdin);
   const raw = await readDiagnosticLogs(dependencies.root ?? CONFIG_DIR);
-  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "No recent CLI log was found.");
+  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "There's no recent CLI log to attach.");
   let source = tailBytes(raw, MAX_CONTENT_BYTES);
   let redacted = redactDiagnosticLog(source);
   const payload = { type: "cli-log", content: redacted.text, name: "tc-debug.log" };
-  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "The CLI log is empty after sensitive values were removed.");
+  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "Nothing is left to attach after sensitive values were removed.");
   let body = JSON.stringify(payload);
   while (Buffer.byteLength(body) > MAX_BODY_BYTES) {
     const smaller = tailBytes(source, Math.floor(Buffer.byteLength(source) * 0.8));
-    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log could not be reduced to the upload limit.");
+    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log is too big to attach, even after trimming.");
     source = smaller;
     redacted = redactDiagnosticLog(source);
     payload.content = redacted.text;
@@ -21352,10 +21352,12 @@ async function attachLogs(reportId, tokenStdin, dependencies) {
   }
   const bytes = Buffer.byteLength(body);
   const lines = payload.content.split(/\r?\n/).filter(Boolean).length;
-  const summary = `Report ${reportId}: CLI log with sensitive values removed where found, ${bytes} bytes, ${lines} lines, ${redacted.count} local removals.`;
-  const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content);
+  const lineLabel = lines === 1 ? "line" : "lines";
+  const valueLabel = redacted.count === 1 ? "value" : "values";
+  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} ${lineLabel}, ${redacted.count} ${valueLabel} hidden.`;
+  const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content, reportId);
   if (!confirmed) {
-    output2("No attachment sent.\n");
+    output2("Nothing was sent.\n");
     return;
   }
   const fetchImpl = dependencies.fetchImpl ?? fetch;
@@ -21372,7 +21374,7 @@ async function attachLogs(reportId, tokenStdin, dependencies) {
         body
       });
     } catch {
-      throw new CLIError("BUG_REPORT_UPLOAD_UNKNOWN", "Upload result is unknown; the attachment may have been saved, so do not retry automatically.");
+      throw new CLIError("BUG_REPORT_UPLOAD_UNKNOWN", "Couldn't confirm the upload finished. You can try once more; the report may then get a second copy.");
     }
     if (response.status !== 429 || attempt > 0) break;
     await response.arrayBuffer();
@@ -21385,21 +21387,27 @@ async function attachLogs(reportId, tokenStdin, dependencies) {
   }
   const receipt = await response.json().catch(() => null);
   if (!receipt) {
-    output2(`Attached CLI log to report ${reportId}. Server removal count unavailable.
+    output2(`Attached your CLI log to report ${reportId}. The server didn't say how many more values it hid.
 `);
     return;
   }
   const serverCount = Object.values(receipt.redactions ?? {}).reduce((sum, value4) => sum + (Number.isFinite(value4) && value4 > 0 ? value4 : 0), 0);
-  output2(`Attached CLI log to report ${reportId}. Sensitive values removed locally: ${redacted.count}; removed by server: ${serverCount}.
+  if (serverCount > 0) {
+    const valueLabel2 = serverCount === 1 ? "value" : "values";
+    output2(`Attached your CLI log to report ${reportId}. The server hid ${serverCount} more ${valueLabel2}.
 `);
+  } else {
+    output2(`Attached your CLI log to report ${reportId}.
+`);
+  }
 }
 function registerBugReportCommand(program, dependencies = {}) {
   const output2 = dependencies.write ?? ((text2) => {
     stderr.write(text2);
   });
   const root = dependencies.root ?? CONFIG_DIR;
-  const command = program.command("bug-report").description("Attach a recent CLI log to a bug report").option("--attach <report-id>", "Attach the recent CLI log to this report").option("--token-stdin", "Read a piped attachment token from stdin").option("--clear-logs", "Clear the local CLI log");
-  command.addHelpText("after", "\nThe CLI log is kept locally (up to 1 MiB, owner-only); sensitive values are removed where found. Set TINYCLOUD_CLI_LOGS=0 or pass --no-cli-logs to disable collection; use --clear-logs to remove the log.\n");
+  const command = program.command("bug-report").description("Attach your recent CLI log to a bug report, with sensitive values removed where found").option("--attach <report-id>", "Attach your recent CLI log to this report").option("--token-stdin", "Read the attachment token from standard input").option("--clear-logs", "Delete the CLI log saved on this computer");
+  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete it, run tinycloud bug-report --clear-logs.\n");
   command.action(async (options) => {
     try {
       if (options.clearLogs && options.attach) {
@@ -21407,7 +21415,7 @@ function registerBugReportCommand(program, dependencies = {}) {
       }
       if (options.clearLogs) {
         await clearDiagnosticLogs(root);
-        output2("Local CLI log cleared.\n");
+        output2("Deleted the CLI log on this computer.\n");
         return;
       }
       if (!options.attach) throw new CLIError("BUG_REPORT_USAGE", "Use `tinycloud bug-report --attach <report-id>` or `tinycloud bug-report --clear-logs`.");
@@ -39809,7 +39817,7 @@ _tc() {
     '--replication[Enable read-through replication]' \\
     '--no-replication[Disable replication]' \\
     '--replication-debug[Write replication diagnostics to stderr]' \\
-    '--no-cli-logs[Disable local CLI log collection]' \\
+    '--no-diagnostic-logs[Don't record a CLI log for this command]' \\
     '1:command:->cmd' \\
     '*::arg:->args'
 
@@ -39872,7 +39880,7 @@ complete -c ${CLI_NAME21} -l quiet -s q -d "Suppress non-essential output"
 complete -c ${CLI_NAME21} -l replication -d "Enable read-through replication"
 complete -c ${CLI_NAME21} -l no-replication -d "Disable replication"
 complete -c ${CLI_NAME21} -l replication-debug -d "Write replication diagnostics to stderr"
-complete -c ${CLI_NAME21} -l no-cli-logs -d "Disable local CLI log collection"
+complete -c ${CLI_NAME21} -l no-diagnostic-logs -d "Don't record a CLI log for this command"
 `;
 }
 
