@@ -72,7 +72,7 @@ function registryUnavailableError(error: unknown): CLIError | undefined {
     "REGISTRY_UNAVAILABLE",
     failure.meta?.reason === "no-saved-settings"
       ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes."
-      : "The storage settings are unreachable right now. Please try again.",
+      : "Couldn't load your storage settings. Try again in a minute.",
     ExitCode.ERROR,
   );
 }
