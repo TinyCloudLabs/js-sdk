@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { contentHash, parseUcanGrant } from "@tinycloud/replica";
 import { restoreSessionStamp } from "@tinycloud/replica/profile-gate";
@@ -36,6 +37,8 @@ type ReplicationEventLog = {
 
 describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL === undefined ? "SQLite" : "Postgres"})`, () => {
   let home: string;
+  const originalHome = process.env.HOME;
+  const originalTcHome = process.env.TC_HOME;
   let dataDir: string;
   let host: string;
   let port: number;
@@ -196,6 +199,8 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "tc-replication-flag-home-"));
+    process.env.HOME = home;
+    process.env.TC_HOME = home;
     dataDir = await mkdtemp(join(tmpdir(), "tc-replication-flag-node-"));
     registry = startUnregisteredLocationRegistry();
     port = await freePort();
@@ -207,10 +212,24 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
   }, 60_000);
 
   afterAll(async () => {
-    await stopNode();
-    await rm(home, { recursive: true, force: true });
-    await rm(dataDir, { recursive: true, force: true });
-    registry?.stop(true);
+    try {
+      const stopped = await Promise.allSettled([
+        stopNode(),
+        Promise.resolve().then(() => registry?.stop(true)),
+      ]);
+      const removed = await Promise.allSettled([
+        ...(home ? [rm(home, { recursive: true, force: true })] : []),
+        ...(dataDir ? [rm(dataDir, { recursive: true, force: true })] : []),
+      ]);
+      const errors = [...stopped, ...removed].flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalTcHome === undefined) delete process.env.TC_HOME;
+      else process.env.TC_HOME = originalTcHome;
+    }
   });
 
   test("covers the 12 Phase 1 CLI acceptance steps", async () => {
