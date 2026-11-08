@@ -496,7 +496,7 @@ export async function loadManifestPermissions(
       (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")) ||
       (Array.isArray(manifest.permissions) && manifest.permissions.some((entry: unknown) =>
         entry !== null && typeof entry === "object" && isDeviceRefusedEncryption(entry as Record<string, unknown>, manifest))))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use browser or --paste login.", ExitCode.USAGE_ERROR);
   }
 
   if (typeof manifest.id === "string") {
@@ -505,7 +505,7 @@ export async function loadManifestPermissions(
       (entry.service === "tinycloud.encryption" && !isDeviceDefaultDecrypt(entry)) ||
       entry.space === "secrets" ||
       entry.space?.endsWith(":secrets"))) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use browser or --paste login.", ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }

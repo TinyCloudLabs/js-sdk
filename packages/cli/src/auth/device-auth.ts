@@ -437,7 +437,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
     (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use another OpenKey approval method for this manifest.",
       ExitCode.USAGE_ERROR,
     );
   }
