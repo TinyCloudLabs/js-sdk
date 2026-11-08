@@ -417,11 +417,10 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const fallback = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
   const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
   const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
-  const parts = fallback ? ["registry unavailable; using the default node"] : [];
-  if (cached) parts.push("Storage settings are unreachable; using cached settings checked less than 1 hour ago.");
+  const parts = [];
+  if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
   if (skipped.length > 0) {
     const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
     const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
@@ -608,7 +607,7 @@ function registryUnavailableError(error) {
   if (failure?.code !== "registry_unavailable") return void 0;
   return new CLIError(
     "REGISTRY_UNAVAILABLE",
-    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "The storage settings are unreachable right now. Please try again.",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't reach your storage settings. Try again in a few minutes.",
     ExitCode.ERROR
   );
 }
