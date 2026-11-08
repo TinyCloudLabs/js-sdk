@@ -73,18 +73,12 @@ for (const mode of ["503", "transport", "timeout", "4xx", "known", "node-down", 
         ...(mode === "warm-output-failure" ? ["--output", outputPath] : [])], {
         env: { NODE_OPTIONS: `--import=${preload}`, TC_REGISTRY_URL: registryOrigin },
       });
-      if (mode === "known" || mode === "4xx") {
+      if (!warm) {
         expect({ exit: result.exitCode, stdout: result.stdout }).toEqual({ exit: 1, stdout: "" });
         expect(JSON.parse(result.stderr)).toMatchObject({ error: { code: "REGISTRY_UNAVAILABLE" } });
         expect(result.stderr).not.toContain("using_default_node");
         expect(fixture.invocations().filter(({ action }) => action === "tinycloud.kv/get").length).toBe(beforeReads);
-      } else if (mode === "node-down") {
-        expect({ exit: result.exitCode, stdout: result.stdout }).toEqual({ exit: 6, stdout: "" });
-        expect(JSON.parse(result.stderr)).toMatchObject({ error: {
-          code: "NODE_NOT_RESPONDING",
-          warnings: [{ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" }],
-        } });
-      } else if (warm) {
+      } else {
         if (mode === "warm-output-failure") {
           expect({ exit: result.exitCode, stdout: result.stdout }).toEqual({ exit: 2, stdout: "" });
           expect(JSON.parse(result.stderr)).toMatchObject({ error: {
@@ -101,11 +95,6 @@ for (const mode of ["503", "transport", "timeout", "4xx", "known", "node-down", 
         expect(fixture.invocations().filter(({ action }) => action === "tinycloud.kv/get").length).toBeGreaterThan(beforeReads);
         expect(unlistedRequests).toBe(0);
         expect(await readFile(join(home, ".tinycloud", "profiles", profile, "registry-cache.json"), "utf8")).toBe(beforeCache);
-      } else {
-        expect({ exit: result.exitCode, stdout: result.stdout.trim() }).toEqual({ exit: 0, stdout: "tc2481-cold-TEST-value" });
-        const lines = result.stderr.trim().split("\n");
-        expect(lines).toHaveLength(1);
-        expect(JSON.parse(lines[0]!)).toEqual({ warnings: [{ code: "REGISTRY_UNAVAILABLE", reason: "using_default_node" }] });
       }
       if (!warm) await withTinyCloudStateRoot(home, async () => {
         expect(await createProfileRegistryCacheStore(profile).get(registryOwnerKeyV2(fixture.ownerDid))).toBeUndefined();
