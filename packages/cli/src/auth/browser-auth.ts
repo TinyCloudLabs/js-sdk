@@ -1,4 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -60,30 +61,6 @@ export interface AuthFlowOptions {
   expiryChangeable?: boolean;
 }
 
-const PRIVATE_JWK_FIELDS = new Set([
-  "d",
-  "p",
-  "q",
-  "dp",
-  "dq",
-  "qi",
-  "oth",
-  "k",
-]);
-
-
-export function publicJwkForDelegation(jwk: object): object {
-  const publicJwk: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
-    }
-  }
-
-  return publicJwk;
-}
-
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */
 export async function startAuthFlow(
   did: string,
@@ -107,7 +84,7 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   if (options.jwk) {
     // base64url-encode the JWK
     const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk)),
+      JSON.stringify(publicJwk(options.jwk)),
     ).toString("base64url");
     params.set("jwk", jwkB64);
   }
@@ -209,7 +186,7 @@ function assertBoundToKey(parsed: unknown, did: string, localJwk: Record<string,
     !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
     jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
     typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
-    [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
+    "d" in jwk
   ) {
     throw new Error("Delegation is bound to a different CLI key.");
   }
@@ -221,7 +198,7 @@ export async function delegationFromInput(input: string, did: string, options: A
   let parsed: unknown;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
-    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
+    const localJwk = publicJwk(options.jwk);
     // OpenKey consumes the code on redeem: a code an interrupted run already redeemed is finished from its local copy.
     const saved = options.profileName === undefined ? undefined : await pendingDelegationFor(options.profileName, trimmed);
     if (saved !== undefined) {

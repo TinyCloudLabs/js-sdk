@@ -2807,7 +2807,7 @@ export class TinyCloudNode {
 
   /**
    * Fresh OpenKey sign-in. The callback receives the SDK's original SIWE and
-   * session JWK before approval; the signed result is verified against those
+   * public session JWK before approval; the signed result is verified against those
    * bytes before the network session or replica stamp is committed.
    */
   async signInWithOpenKey(
@@ -4555,12 +4555,9 @@ export class TinyCloudNode {
       stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
     const restoreHints = this.explicitHost ? [this.explicitHost] : sessionData.tinycloudHosts ?? [];
-    // Hydration verifies local authority only. Every later live operation uses
-    // the routed service graph; explicit replication still performs its preflight.
-    const resolvedHost = this.config.replication?.enabled
-      ? (await this.routingDestinations(sessionData.spaceId, "read", restoreHints))[0]?.url
-      : undefined;
-    const stagedHost = resolvedHost ?? exactHttpOrigin(restoreHints[0] ?? this.config.host!, "restored host hint");
+    // Hydration stages locally verified authority and host hints. Replication
+    // checks capabilities below; network operations still use the fresh routed graph.
+    const stagedHost = exactHttpOrigin(restoreHints[0] ?? this.config.host!, "restored host hint");
     let restoredNodeFeatures: string[] | undefined;
     let replicaProtocolMismatch = false;
     if (this.config.replication?.enabled) {

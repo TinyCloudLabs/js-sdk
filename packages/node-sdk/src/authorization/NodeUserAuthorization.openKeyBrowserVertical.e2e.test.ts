@@ -88,6 +88,9 @@ import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { wireOpenKeyAuthorize } from "./openKeyBridge";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.browser-vertical.test";
 
 // Deterministic test key — MUST match the harness signer so
 // `result.address === signer.getAddress()` holds and the widget's `key.address`
@@ -348,6 +351,8 @@ beforeAll(async () => {
   //    activation follow-ups in `signInWithPreparedSession` don't hit the
   //    network.
   globalThis.fetch = (async (input: any, init?: any) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
       return originalFetch(input, init);
@@ -384,11 +389,13 @@ afterAll(async () => {
     try {
       viteProc.kill("SIGTERM");
     } catch { /* ignore */ }
+    await viteProc.exited;
   }
   if (harnessProc) {
     try {
       harnessProc.kill("SIGTERM");
     } catch { /* ignore */ }
+    await harnessProc.exited;
   }
 });
 
@@ -418,6 +425,7 @@ test(
     const APP_NAME = "Vertical Test App";
     const APP_ID = "vertical-happy-path-test";
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer,
       wasmBindings: wasm,
       signStrategy: { type: "auto-sign" },

@@ -327,7 +327,7 @@ test("wireOpenKeyAuthorize rejects a response missing signedMessage", async () =
   };
   const authorize = wireOpenKeyAuthorize(badOpenKey);
   await expect(
-    authorize({ protocolVersion: 1, siwe: "irrelevant", jwk: {} }),
+    authorize({ protocolVersion: 1, siwe: "irrelevant", jwk: { kty: "OKP", crv: "Ed25519", x: "public" } }),
   ).rejects.toThrow(/no signedMessage/);
 });
 
@@ -346,7 +346,7 @@ test("wireOpenKeyAuthorize rejects an unsupported protocol version", async () =>
   };
   const authorize = wireOpenKeyAuthorize(badOpenKey);
   await expect(
-    authorize({ protocolVersion: 1, siwe: "irrelevant", jwk: {} }),
+    authorize({ protocolVersion: 1, siwe: "irrelevant", jwk: { kty: "OKP", crv: "Ed25519", x: "public" } }),
   ).rejects.toThrow(/unsupported protocolVersion 2/);
 });
 

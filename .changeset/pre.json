@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "openkey-public-session-key",
     "signout-local-first-fence",
     "space-hosting-probe-node-sdk",
     "space-hosting-probe-web-sdk",
@@ -39,6 +40,7 @@
     "tc-2416-catalog-routing",
     "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
+    "tc-2481-cold-device-refusal",
     "tc-2481-signed-registry-cache",
     "tc-2481-space-routing",
     "tc-2490-cli-reason",

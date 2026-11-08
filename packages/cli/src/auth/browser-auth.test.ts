@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import {
   buildAuthUrl,
-  publicJwkForDelegation,
   startAuthFlow,
   validateDelegationCallbackPayload,
 } from "./browser-auth.js";
@@ -29,7 +28,7 @@ function decodedJwkFromUrl(url: string): Record<string, unknown> {
 }
 
 describe("browser auth delegation URLs", () => {
-  test("only sends public JWK fields to OpenKey", () => {
+  test("only sends the public JWK members to OpenKey", () => {
     const privateJwk = {
       kid: "cli",
       kty: "OKP",
@@ -44,14 +43,6 @@ describe("browser auth delegation URLs", () => {
       oth: [{ r: "private" }],
       k: "symmetric-secret",
     };
-
-    expect(publicJwkForDelegation(privateJwk)).toEqual({
-      kid: "cli",
-      kty: "OKP",
-      crv: "Ed25519",
-      x: "public-key",
-    });
-
     const url = buildAuthUrl("did:key:z6MkDelegate", {
       openkeyHost: "https://openkey.test",
       jwk: privateJwk,

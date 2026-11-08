@@ -14,7 +14,7 @@
 // by hand — the wire shape it enforces exactly mirrors what OpenKey
 // emits and what `signInWithOpenKeyResult` accepts.
 
-import type { CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
+import { publicJwk, type CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
 
 /**
  * Structural shape of the OpenKey SDK's `authorizeTinyCloud()` method.
@@ -60,6 +60,7 @@ export interface OpenKeyAuthorizeTinyCloud {
 export interface OpenKeyBridgeInput {
   protocolVersion: 1;
   siwe: string;
+  /** The public session key. The bridge sends only its public members to OpenKey. */
   jwk: Record<string, unknown>;
   /** SDK-prepared session-key DID, for local handoff consistency only; not an OpenKey request field. */
   readonly verificationMethod: string;
@@ -116,7 +117,8 @@ export function wireOpenKeyAuthorize(
 ): NodeUserAuthorizationAuthorizeFn {
   return async (input) => {
     // The bridge does not fabricate any protocol fields — every value
-    // flows through unchanged. Wire drift (missing signedMessage,
+    // flows through unchanged, except the session key, which is reduced to
+    // its public members. Wire drift (missing signedMessage,
     // malformed selectedActionKeys, empty permissions on a capability-
     // bearing SIWE) is surfaced by `signInWithOpenKeyResult`; the
     // bridge only translates types.
@@ -124,7 +126,7 @@ export function wireOpenKeyAuthorize(
       protocolVersion: 1,
       siwe: input.siwe,
       keyId: input.keyId,
-      jwk: input.jwk,
+      jwk: publicJwk(input.jwk),
       host: input.host,
       // Forward the presentation envelope verbatim — the OpenKey SDK
       // validates and size-bounds it before use.

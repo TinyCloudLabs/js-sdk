@@ -55,6 +55,32 @@ describe("kvSyncTransport.syncPage", () => {
 
   test.each([
     {
+      name: "explicit cold outage",
+      failure: fail("registry_unavailable", "cold routing refused", { reason: "no-saved-settings" }),
+      expected: ReplicaErrorCode.NETWORK_ERROR,
+    },
+    {
+      name: "authoritative permission denial",
+      failure: fail("registry_unavailable", "refused", { reason: "no-saved-settings", status: 403 }),
+      expected: ReplicaErrorCode.GRANT_UNAUTHORIZED,
+    },
+    {
+      name: "authoritative server failure",
+      failure: fail("registry_unavailable", "invalid answer", { reason: "no-saved-settings", status: 500 }),
+      expected: ReplicaErrorCode.NODE_ERROR,
+    },
+    {
+      name: "other registry failure",
+      failure: fail("registry_unavailable", "rolled back", { reason: "rollback" }),
+      expected: ReplicaErrorCode.NODE_ERROR,
+    },
+  ])("keeps cold sync offline eligibility narrow: $name", async ({ failure, expected }) => {
+    const transport = kvSyncTransport(client({ changes: async () => failure }));
+    expect(await codeOf(transport.syncPage({ prefix: "notes/", limit: 10 }))).toBe(expected);
+  });
+
+  test.each([
+    {
       error: { code: "NODE_NOT_RESPONDING", message: "The node answered", hosts: ["http://127.0.0.1:19901"], meta: { status: 403 } },
       expected: ReplicaErrorCode.GRANT_UNAUTHORIZED,
     },

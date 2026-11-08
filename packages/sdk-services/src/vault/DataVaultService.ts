@@ -1310,6 +1310,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         if (this.usesNetworkEncryption) {
           const valueDelResult = await this.tc.kv.delete(`vault/${key}`);
           if (!valueDelResult.ok) {
+            const routing = routingFailure(valueDelResult.error);
+            if (routing) return vaultError(routing);
             return vaultError({ code: "KEY_NOT_FOUND", key });
           }
           return ok(undefined);
@@ -1322,11 +1324,15 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         ]);
 
         if (!keyDelResult.ok && !valueDelResult.ok) {
+          const routing = routingFailure(keyDelResult.error) ?? routingFailure(valueDelResult.error);
+          if (routing) return vaultError(routing);
           return vaultError({ code: "KEY_NOT_FOUND", key });
         }
 
         return ok(undefined);
       } catch (error) {
+        const routing = routingFailure(error);
+        if (routing) return vaultError(routing);
         return vaultError({
           code: "STORAGE_ERROR",
           cause:
@@ -1381,6 +1387,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         });
 
         if (!listResult.ok) {
+          const routing = routingFailure(listResult.error);
+          if (routing) return vaultError(routing);
           return vaultError({
             code: "STORAGE_ERROR",
             cause: new Error(
@@ -1408,6 +1416,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           ...(listResult.data.nextCursor === undefined ? {} : { nextCursor: listResult.data.nextCursor }),
         });
       } catch (error) {
+        const routing = routingFailure(error);
+        if (routing) return vaultError(routing);
         return vaultError({
           code: "STORAGE_ERROR",
           cause:

@@ -592,6 +592,7 @@ import {
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -601,6 +602,15 @@ function approvalPendingOf(error) {
   const { step, of, approvalUrl, expiresAt } = pending;
   if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
   return { step, of, approvalUrl, expiresAt };
+}
+function registryUnavailableError(error) {
+  const failure = routingFailure(error);
+  if (failure?.code !== "registry_unavailable") return void 0;
+  return new CLIError(
+    "REGISTRY_UNAVAILABLE",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "The storage settings are unreachable right now. Please try again.",
+    ExitCode.ERROR
+  );
 }
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
@@ -638,6 +648,8 @@ function wrapError(error) {
   if (verdict === "forbidden") {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
+  const unavailable = registryUnavailableError(error);
+  if (unavailable) return unavailable;
   if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
