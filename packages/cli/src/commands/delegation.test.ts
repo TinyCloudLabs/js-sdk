@@ -104,7 +104,6 @@ mock.module("./auth.js", () => ({
     hasRevokeAuthority = true;
     return { cid: "bafy-command-authority" };
   },
-  requirePermissionConsent: async () => {},
   prepareProfileRemoteLogout: async () => {
     throw new Error("Unrelated-CID tests must not prepare the current-session logout gate");
   },
@@ -193,7 +192,6 @@ describe("tc delegation revoke authority", () => {
         path: "",
         actions: ["tinycloud.delegation/revoke"],
       }],
-      yes: false,
       persist: false,
     });
     expect(authorityRequests[0]).not.toHaveProperty("reason");
@@ -205,14 +203,6 @@ describe("tc delegation revoke authority", () => {
       authorityScopeSource: "cid-resource",
       authorityScopeReason: "The revoke authority is scoped to the exact delegation CID.",
     }]);
-    expect(errors).toEqual([]);
-  });
-
-  test("--yes is forwarded as explicit consent", async () => {
-    await runRevoke("bafy-device-grant", true);
-
-    expect(authorityRequests[0]).toMatchObject({ yes: true, persist: false });
-    expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
     expect(errors).toEqual([]);
   });
 

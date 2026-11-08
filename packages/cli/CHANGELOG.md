@@ -1,5 +1,23 @@
 # @tinycloud/cli
 
+## 1.6.3-beta.8
+
+### Patch Changes
+
+- 0a1ea8e: The CLI no longer asks "Approve local-key delegation? [y/N]" or "Sign the N entries marked ! above, and the rest of the request? [y/N]" before signing a permission grant, and no longer refuses a run without a terminal with `CONFIRMATION_REQUIRED` (exit 2). This covers `auth request --grant` and `auth grant` on a local-key profile, and the one-use revoke authority behind `delegation revoke` and `auth grants remove --revoke`. On an OpenKey profile the OpenKey approval is unchanged and still required.
+
+  `--yes` is still accepted on `auth request`, `auth grant` and `auth grants remove` and does nothing; on a terminal it prints `--yes is no longer needed and has no effect.` (nothing in JSON mode, so stderr stays machine-readable). `delegation revoke --yes` still confirms revoking the current sign-in session, as before.
+
+  Details: TC-2531
+
+## 1.6.3-beta.7
+
+### Patch Changes
+
+- 2dedcde: `tinycloud auth grant` on an OpenKey profile no longer asks "Sign the N entries marked ! above, and the rest of the request? [y/N]" on the terminal for entries beyond the apps-agent preset, and no longer exits 2 with `CONFIRMATION_REQUIRED` without a terminal. It prints the list, with those entries marked `!`, and goes straight to the OpenKey approval, where the owner approves that exact list; the grant is signed only from that approval, as before. `--yes` is still accepted and changes nothing on an OpenKey profile. Local-key profiles are unchanged: entries beyond the preset still need `--yes` or a yes on the terminal.
+
+  Details: TC-2527
+
 ## 1.6.3-beta.6
 
 ### Patch Changes

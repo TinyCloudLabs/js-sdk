@@ -40,6 +40,9 @@
     "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
     "tc-2490-cli-reason",
+    "tc-2526-mcp-approval-reason",
+    "tc-2527-grant-no-terminal-question-openkey",
+    "tc-2531-no-local-key-confirmation",
     "tc2380-q2",
     "tidy-names-openkey-grant"
   ]
