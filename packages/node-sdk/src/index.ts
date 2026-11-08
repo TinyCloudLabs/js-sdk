@@ -40,6 +40,7 @@ import "./replication/node-loader";
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
+export { NodeNotRespondingError, NodeIdentityMismatchError, PartialNodeWriteError } from "@tinycloud/sdk-services";
 
 // Re-export core types
 export type {

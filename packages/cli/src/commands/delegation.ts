@@ -289,7 +289,7 @@ export function registerDelegationCommand(
   delegation
     .command("revoke <cid>")
     .description("Revoke a delegation")
-    .option("--yes", "Confirm revoking the current sign-in session or skip local-key TTY permission confirmation", false)
+    .option("--yes", "Confirm revoking the current sign-in session", false)
     .action(async (cid: string, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -311,7 +311,7 @@ export function registerDelegationCommand(
         const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
         const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
         const revoked = await revokeDelegationOnNode({
-          ctx, node, profile, cid, yes: options.yes === true || Boolean(currentSession),
+          ctx, node, profile, cid,
           openKeyAcquisition: configuration.openKeyAcquisition,
         });
         const replicasRemoved = prepared

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
+import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const wasm = new NodeWasmBindings();
@@ -56,16 +57,14 @@ const root = process.env.COURIER_TEST_HOME;
 assert.ok(root, 'COURIER_TEST_HOME (setup-home.mjs) must pin this test home');
 fs.mkdirSync(path.join(root, 'renew-guards'), { recursive: true });
 
-const childEnv = (home) => ({ ...process.env, COURIER_HOME: home, HOME: home });
-
 async function run(home, args) {
-  const { stdout } = await execFileAsync(process.execPath, [CLI, ...args], { env: childEnv(home), encoding: 'utf8' });
+  const { stdout } = await execFileAsync(process.execPath, [CLI, ...args], { env: courierRegistryFixtureEnv(home, HOST), encoding: 'utf8' });
   return JSON.parse(stdout);
 }
 
 async function runFail(home, args) {
   try {
-    await execFileAsync(process.execPath, [CLI, ...args], { env: childEnv(home), encoding: 'utf8' });
+    await execFileAsync(process.execPath, [CLI, ...args], { env: courierRegistryFixtureEnv(home, HOST), encoding: 'utf8' });
   } catch (e) {
     return { code: e.code, stdout: String(e.stdout), stderr: String(e.stderr) };
   }

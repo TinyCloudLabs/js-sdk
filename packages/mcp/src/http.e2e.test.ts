@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -14,6 +15,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { NodeWasmBindings, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
+import { registerMcpFixtureServer, resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import {
   OTHER_OWNER_KEY,
   REQUESTER_KEY,
@@ -28,7 +30,11 @@ const resources: Array<() => Promise<void>> = [];
 const nodeBinary = process.env.TC_MCP_TEST_NODE;
 
 afterEach(async () => {
-  await Promise.all(resources.splice(0).reverse().map((dispose) => dispose()));
+  try {
+    await Promise.all(resources.splice(0).reverse().map((dispose) => dispose()));
+  } finally {
+    resetMcpRegistryFixture();
+  }
 });
 
 test("official Streamable HTTP client authenticates and starts delegated setup", async () => {
@@ -225,7 +231,7 @@ test("a signed bootstrap and a signed delegation approval let a hosted tool use 
   // The loopback node lives in node-sdk's test sources, outside this package's
   // build graph; stdio.test.ts loads the same fixtures the same way.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -334,7 +340,7 @@ test("signed reusable read scope covers future children and digest-bound handoff
   // A static cross-package source import would pull this test-only node fixture
   // into MCP's build graph; load it at runtime as the other hosted tests do.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -1219,7 +1225,7 @@ type HostedApp = Awaited<ReturnType<typeof startHostedMcp>>["app"];
 
 for (const namedApp of [true, false]) {
 test(`/mcp apps approvals Health Log ${namedApp ? "bundled" : "per-call"} save the first meal`, async () => {
-  const hermeticModule = await import(new URL("../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermeticModule = await import(new URL("./test-support/hermetic-node.mjs", import.meta.url).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
@@ -1288,7 +1294,7 @@ for (const namedApp of [true, false]) {
 test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persist records and recover an expired session without losing grants`, async () => {
   // This loopback fixture is outside MCP's package build graph.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
+    "./test-support/hermetic-node.mjs", import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
@@ -1412,7 +1418,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
 
 test("an older app is moved into the new layout through the hosted tools, and both layouts then agree", async () => {
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
+    "./test-support/hermetic-node.mjs", import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
@@ -1484,7 +1490,7 @@ test("an older app is moved into the new layout through the hosted tools, and bo
 test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
   // The loopback node is outside this package's build graph, as above.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -1576,7 +1582,9 @@ test("a refused delegation approval names its stage, code and reason, and never 
     "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_REJECTED detail=none\n",
   ]);
   for (const secret of secrets) expect(diagnostics.join("")).not.toContain(secret);
-  expect(await exists(join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);
+  const additionalPath = join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const storedDelegations = await exists(additionalPath) ? JSON.parse(await readFile(additionalPath, "utf8")) : [];
+  expect(storedDelegations).toEqual([]);
 
   // The same approval, unrefused, still succeeds.
   expect(await postCallback(app, delegationUrl, approval)).toEqual({ status: 200, body: { success: true } });
@@ -1624,7 +1632,7 @@ async function approveWithStoredHost(storedHost: string): Promise<{
 }> {
   // The loopback node is outside this package's build graph, as above.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -1822,7 +1830,9 @@ async function serveJwks(jwk: object): Promise<string> {
   resources.push(() => closeServer(server));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("JWKS server did not start.");
-  return `http://127.0.0.1:${address.port}/jwks`;
+  const url = `http://127.0.0.1:${address.port}/jwks`;
+  registerMcpFixtureServer(server);
+  return url;
 }
 
 function closeServer(server: Server): Promise<void> {
@@ -1903,6 +1913,7 @@ async function serveNodeProxy(upstream: string): Promise<NodeProxy> {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("Node proxy did not start.");
   proxy.host = `http://127.0.0.1:${address.port}`;
+  registerMcpFixtureServer(server);
   return proxy;
 }
 
@@ -1923,7 +1934,7 @@ async function setupProxiedSession(): Promise<{
 }> {
   // Fixture source is outside MCP's package build graph; load only in the test.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
+    "./test-support/hermetic-node.mjs", import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());

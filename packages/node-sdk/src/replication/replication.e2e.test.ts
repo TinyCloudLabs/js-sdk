@@ -1,7 +1,7 @@
 import { createPrivateKey, sign as signEd25519 } from "node:crypto";
 import { ucanCid } from "@tinycloud/replica";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { ServiceContext, pkhDid } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, ServiceContext, pkhDid } from "@tinycloud/sdk-core";
 import {
   type KVReadThrough,
   type KVReplicaHandle,
@@ -26,6 +26,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSqliteReplicaStorage } from "./sqlite";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../test-support/unregistered-location-registry";
 
 const address = "0x0000000000000000000000000000000000000001";
 const space = `tinycloud:pkh:eip155:1:${address}:default`;
@@ -536,20 +537,23 @@ describe("node replication integration", () => {
     };
     const node = new TinyCloudNode({
       host: "https://signed-restore.example",
+      tinycloudRegistryUrl: "https://registry.test",
       autoBootstrapAccount: false,
       wasmBindings: wasm,
       replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground", profileDir },
     });
     const originalFetch = globalThis.fetch;
     try {
-      globalThis.fetch = async (input) => new Response(JSON.stringify(
-        String(input).endsWith("/info")
-          ? { protocol: wasm.protocolVersion(), version: "test", features: ["kv-sync-v1"] }
-          : { activated: [space, delegateSpace], skipped: [] },
-      ), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      globalThis.fetch = async (input) => {
+        if (new URL(String(input)).origin === "https://registry.test") {
+          return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+        }
+        return Response.json(
+          String(input).endsWith("/info")
+            ? { protocol: wasm.protocolVersion(), version: "test", features: ["kv-sync-v1"] }
+            : { activated: [space, delegateSpace], skipped: [] },
+        );
+      };
       await node.restoreSession({ ...signed.proof, replicaStamp, tinycloudHosts: ["https://signed-restore.example"] });
       await node.replication!.sync();
       expect(opened).toHaveLength(1);
@@ -577,6 +581,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
   let dataDir: string;
   let host: string;
   let child: ChildProcess | undefined;
+  let registry: UnregisteredLocationRegistry;
   async function guardedProfile(name: string) {
     const profileDir = await mkdtemp(join(tmpdir(), name));
     const guard = profileGuard(profileDir);
@@ -642,12 +647,14 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
 
   beforeAll(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "tc858-real-node-"));
+    registry = startUnregisteredLocationRegistry();
     await startNode();
   }, 60_000);
 
   afterAll(async () => {
     await stopNode();
     await rm(dataDir, { recursive: true, force: true });
+    registry?.stop(true);
   });
 
   test("default SQLite owner grants sync, scoped writes are read-your-writes, and offline reads fail closed", async () => {
@@ -655,6 +662,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const events: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
     const node = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -725,6 +733,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const events: ReplicationEvent[] = [];
     const node = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -777,6 +786,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const otherProfile = await guardedProfile("tc858-delegate-other-");
     const config = (key: string, prefixes: string[], profile: Awaited<ReturnType<typeof guardedProfile>>) => new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(key),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -811,6 +821,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const delegateEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
     const delegate = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       enablePublicSpace: false,
@@ -826,6 +837,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     });
     const mismatched = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       enablePublicSpace: false,
@@ -909,6 +921,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const profile = await guardedProfile("tc858-delegate-offline-");
     const owner = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -928,6 +941,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const offlineEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
     const offlineOptions = {
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       enablePublicSpace: false,
@@ -1060,6 +1074,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const events: ReplicationEvent[] = [];
     const node = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -1104,6 +1119,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const profile = await guardedProfile("tc848-sync-log-off-");
     const node = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",

@@ -88,7 +88,7 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
   });
   commandStartedAt = Date.now();
   const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
-                    fullCommand === "profile create";
+                    fullCommand === "profile create" || fullCommand === "registry show";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();

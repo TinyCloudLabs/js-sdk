@@ -76,6 +76,10 @@ export interface IEncryptionService extends IService {
    *
    * The capability proof must root at the network owner DID embedded
    * in the envelope's networkId.
+   *
+   * Unresponsive decrypt transports use DECRYPTION_DEPENDENCY_UNAVAILABLE.
+   * HTTP failure, identity, registry and caller-cancellation classifications
+   * remain distinct; a failed request never returns partial plaintext.
    */
   decryptEnvelope(
     envelope: InlineEncryptedEnvelope,

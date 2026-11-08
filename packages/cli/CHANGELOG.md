@@ -1,5 +1,110 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.12
+
+### Minor Changes
+
+- b32f52e: Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. Cold unknown-owner HTTP5xx, transport errors and timeouts retain configured/default-host compatibility. Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+### Patch Changes
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; v1-only registrations and registered resources without destinations do not fall back. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/operations@0.9.0-beta.5
+  - @tinycloud/sdk-services@3.12.0-beta.3
+
+## 1.6.3-beta.11
+
+### Patch Changes
+
+- 7ab4cfe: In an app manifest (one with `app_id`), a `tinycloud.encryption` entry no longer gets the app's path prefix, as in the SDK's own manifests: an encryption entry names a network, not a path in a space. Its network is the entry's own `space`, else the manifest's. So `{"service":"tinycloud.encryption","space":"default","path":"","actions":["decrypt"]}` now means decrypt on your own `default` network without `skipPrefix: true`, both for `tinycloud auth login --device` (which refused it with `DEVICE_AUTH_UNSUPPORTED_SCOPE`) and for browser and paste sign-in (which turned it into an unusable decrypt under the app's path).
+
+  `--device` still asks only for that one encryption entry. An encryption entry naming another network is now refused even when the manifest's top-level `space` is `default` (before, the entry's own `space` was ignored). The `DEVICE_AUTH_UNSUPPORTED_SCOPE` message now says what `--device` allows and what the manifest or request asked for.
+
+  Details: TC-2550
+
+## 1.6.3-beta.10
+
+### Patch Changes
+
+- 7b24104: `auth request --preset apps-agent` now accepts any number of `--app` values (it used to stop at 5 and suggest read-only access to the whole space instead), and a preset request naming more than 5 apps is shown with the standard preset wording.
+
+  Details: TC-2533
+
+## 1.6.3-beta.9
+
+### Patch Changes
+
+- 9a4efa9: `tinycloud auth login --device` no longer refuses a manifest that asks for decrypt on your own `default` network (`tinycloud.encryption/decrypt`, space `default`, empty path). The CLI sends that entry to OpenKey as written. When the owner approves it, OpenKey signs decrypt on the approving owner's own `default` network, and the CLI checks that signature against the verified owner and saves it with the session. An approval signed for anything broader (encrypt as well, another network, another owner's network, a path nested under the network, or decrypt inside the space) is refused and nothing is saved. Every other encryption entry and the `secrets` space are still refused before OpenKey is asked, with `DEVICE_AUTH_UNSUPPORTED_SCOPE`, whose message now reads "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network."
+
+  Details: TC-2534
+
+## 1.6.3-beta.8
+
+### Patch Changes
+
+- 0a1ea8e: The CLI no longer asks "Approve local-key delegation? [y/N]" or "Sign the N entries marked ! above, and the rest of the request? [y/N]" before signing a permission grant, and no longer refuses a run without a terminal with `CONFIRMATION_REQUIRED` (exit 2). This covers `auth request --grant` and `auth grant` on a local-key profile, and the one-use revoke authority behind `delegation revoke` and `auth grants remove --revoke`. On an OpenKey profile the OpenKey approval is unchanged and still required.
+
+  `--yes` is still accepted on `auth request`, `auth grant` and `auth grants remove` and does nothing; on a terminal it prints `--yes is no longer needed and has no effect.` (nothing in JSON mode, so stderr stays machine-readable). `delegation revoke --yes` still confirms revoking the current sign-in session, as before.
+
+  Details: TC-2531
+
+## 1.6.3-beta.7
+
+### Patch Changes
+
+- 2dedcde: `tinycloud auth grant` on an OpenKey profile no longer asks "Sign the N entries marked ! above, and the rest of the request? [y/N]" on the terminal for entries beyond the apps-agent preset, and no longer exits 2 with `CONFIRMATION_REQUIRED` without a terminal. It prints the list, with those entries marked `!`, and goes straight to the OpenKey approval, where the owner approves that exact list; the grant is signed only from that approval, as before. `--yes` is still accepted and changes nothing on an OpenKey profile. Local-key profiles are unchanged: entries beyond the preset still need `--yes` or a yes on the terminal.
+
+  Details: TC-2527
+
 ## 1.6.3-beta.6
 
 ### Patch Changes

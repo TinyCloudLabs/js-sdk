@@ -5,7 +5,7 @@
 //    2255-06-05T23:47:34Z, because the WASM builder fails beyond it.
 // A value past either limit is refused with a dated message BEFORE the signer or the WASM is called.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   MAX_SIWE_EXPIRY_MS,
   MAX_UCAN_EXPIRY_MS,
@@ -16,6 +16,7 @@ import {
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
@@ -31,10 +32,23 @@ const PRIVATE_KEY = "1".padStart(64, "0");
 const HOST = "https://node.example";
 
 let originalFetch: typeof globalThis.fetch;
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
+
+function registryMetadata(input: string | URL | Request, init?: RequestInit): Promise<Response> | undefined {
+  const url = input instanceof Request ? input.url : String(input);
+  if (url.startsWith(`${registry.url.origin}/`)) return originalFetch(input, init);
+}
+
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ activated: [], skipped: [] }), {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+    registryMetadata(input, init) ?? new Response(JSON.stringify({ activated: [], skipped: [] }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })) as typeof fetch;
@@ -61,6 +75,7 @@ async function ownerNode() {
   const address = await signer.getAddress();
   const node = new TinyCloudNode({
     host: HOST,
+    tinycloudRegistryUrl: registry.url.origin,
     domain: "limits.test",
     signer,
     wasmBindings: spied.wasm,
@@ -184,7 +199,7 @@ describe("the child token limit", () => {
     });
     const session = spied.wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
     spied.prepareSession.mockClear();
-    const node = new TinyCloudNode({ host: HOST, wasmBindings: spied.wasm });
+    const node = new TinyCloudNode({ host: HOST, tinycloudRegistryUrl: registry.url.origin, wasmBindings: spied.wasm });
     const wasmSession = {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
@@ -276,6 +291,8 @@ function siweWithExpiry(expirationTime: string): string {
 
 function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?: boolean } = {}) {
   const covered = options.covered ?? true;
+  const parseRecap = mock(() =>
+    covered ? [{ service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] }] : []);
   const createDelegation = mock(() => ({
     delegation: "fake-ucan",
     cid: "bafyfake",
@@ -283,17 +300,17 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
     expiry: Math.floor(Date.now() / 1000) + 3600,
     resources: [{ service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] }],
   }));
-  const prepareSession = mock((_config: unknown) => ({ siwe: "siwe" }));
+  const prepareSession = mock((config: { spaceId: string }) => ({ siwe: "siwe", spaceId: config.spaceId }));
   const wasm = {
     invoke: mock(() => Promise.resolve({})),
     invokeAny: mock(() => Promise.resolve({})),
     prepareSession,
-    completeSessionSetup: mock(() => ({ delegationCid: "bafysigned", delegationHeader: { Authorization: "signed.header" } })),
+    completeSessionSetup: mock((config: { spaceId: string }) => ({ spaceId: config.spaceId, delegationCid: "bafysigned", delegationHeader: { Authorization: "signed.header" } })),
     ensureEip55: (a: string) => a,
     makeSpaceId: (a: string, c: number, p: string) => `space://${a}:${c}:${p}`,
     createDelegation,
-    parseRecapFromSiwe: mock(() =>
-      covered ? [{ service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] }] : []),
+    parseRecapFromSiwe: parseRecap,
+    parseVerifiedRecapFromSiwe: parseRecap,
     protocolVersion: () => 1,
     createSessionManager: () => ({
       createSessionKey: (id: string) => id,
@@ -305,13 +322,16 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
   } as unknown as IWasmBindings;
   const signMessage = mock(async () => "signature");
   const node = new TinyCloudNode({
+    host: HOST,
+    tinycloudRegistryUrl: registry.url.origin,
     wasmBindings: wasm,
-    ...(options.signer ? { host: HOST, signer: { signMessage } as never } : {}),
+    ...(options.signer ? { signer: { signMessage } as never } : {}),
   });
   Object.assign(node, {
     _address: "0x0000000000000000000000000000000000000001",
     _chainId: 1,
     auth: {
+      resolveResourceDestinations: async () => [{ url: HOST }],
       tinyCloudSession: {
         address: "0x0000000000000000000000000000000000000001",
         chainId: 1,
@@ -469,7 +489,9 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
 
   function deliveryNode() {
     const requests: Array<Record<string, unknown>> = [];
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const metadata = registryMetadata(input, init);
+      if (metadata) return metadata;
       requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
@@ -484,7 +506,7 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
         jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
       }),
     } as unknown as IWasmBindings;
-    const node = new TinyCloudNode({ host: HOST, wasmBindings });
+    const node = new TinyCloudNode({ host: HOST, tinycloudRegistryUrl: registry.url.origin, wasmBindings });
     Object.assign(node, { _restoredTcSession: { spaceId: SPACE }, _serviceContext: { session: { spaceId: SPACE } } });
     const deliver = (expiresAt: string) =>
       node.authorizeShareDeliveryV3({
@@ -551,7 +573,8 @@ describe("createRootDelegationForSharing (the share link's wallet-signed root)",
     expect(await createRoot(ok, new Date(Date.now() + 100 * YEAR_MS))).toBeDefined();
 
     const failing = await ownerNode();
-    globalThis.fetch = (async () => new Response("denied", { status: 403 })) as typeof fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+      registryMetadata(input, init) ?? new Response("denied", { status: 403 })) as typeof fetch;
     expect(await createRoot(failing, new Date(Date.now() + 100 * YEAR_MS))).toBeUndefined();
   });
 });

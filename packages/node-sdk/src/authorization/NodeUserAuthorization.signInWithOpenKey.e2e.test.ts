@@ -26,16 +26,25 @@ import { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./openKeyB
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import {
+  startUnregisteredLocationRegistry,
+  unregisteredLocationRegistryResponse,
+  type UnregisteredLocationRegistry,
+} from "../test-support/unregistered-location-registry";
 
 // Route /info + /delegate hits through a stub so signIn's activation
 // flow doesn't hit a real network. `signInWithOpenKey → signInWithPreparedSession
 // → ensureSpaceExists` calls /delegate once.
 let originalFetch: typeof globalThis.fetch;
+let locationRegistry: UnregisteredLocationRegistry;
 
 beforeEach(() => {
+  locationRegistry = startUnregisteredLocationRegistry();
   originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: any, init?: any) => {
     const url = String(input);
+    const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+    if (registryResponse) return registryResponse;
     if (url.endsWith("/info")) {
       return new Response(
         JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }),
@@ -54,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  locationRegistry.stop(true);
 });
 
 const PRIVATE_KEY = "1".padStart(64, "0");
@@ -188,6 +198,7 @@ test("signInWithOpenKey completes an unmodified round trip via the bridge", asyn
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -214,11 +225,9 @@ test("signInWithOpenKey binds the registry/fallback-resolved host before authori
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
     domain: "example.com",
-    // Exercise the normal initially-unset host path without making a network
-    // request: disable local/registry discovery and let the resolver choose
-    // this deterministic fallback.
+    // Canonical registry absence selects this configured fallback before approval.
     autoDiscoverLocalNode: false,
-    tinycloudRegistryUrl: null,
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     tinycloudFallbackHosts: ["https://resolved.tinycloud.test"],
     sessionStorage: new MemorySessionStorage(),
   });
@@ -239,6 +248,7 @@ test("signInWithOpenKey uses a host override for both approval and activation", 
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -266,6 +276,7 @@ test("signInWithOpenKey completes with a narrowed selection via the bridge", asy
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -350,6 +361,7 @@ test("signInWithOpenKeyResult accepts a narrowed production-shape response verba
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },

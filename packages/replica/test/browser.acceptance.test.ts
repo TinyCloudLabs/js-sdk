@@ -19,6 +19,8 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { bootstrapSteps, signLocationRecordV2, verifyLocationRecordV2, type LocationRecordV2Payload } from "@tinycloud/sdk-core";
+import { privateKeyToAccount } from "viem/accounts";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -27,6 +29,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const STRICT = process.env.TC858_ACCEPTANCE_STRICT === "1";
@@ -118,6 +121,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
   let origin = "";
   let browser: Browser | undefined;
   let owner: TinyCloudNode | undefined;
+  let registry: UnregisteredLocationRegistry;
 
   async function startNode(port: number): Promise<void> {
     const child = spawn(NODE_BIN!, [], {
@@ -251,6 +255,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
   beforeAll(async () => {
     if (!STRICT) return;
     dataDir = await mkdtemp(join(tmpdir(), "tc858-acceptance-node-"));
+    registry = startUnregisteredLocationRegistry();
     const nodePort = await freePort();
     host = `http://127.0.0.1:${nodePort}`;
     await startNode(nodePort);
@@ -269,12 +274,12 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       },
     });
 
-    owner = new TinyCloudNode({ privateKey: WALLET_KEY, host, autoCreateSpace: true });
+    owner = new TinyCloudNode({ privateKey: WALLET_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
     await owner.signIn();
     await kvPut("notes/a", "alpha note");
     await kvPut("notes/b", "beta note");
     await kvPut("notes-secret/x", "OUT-OF-SCOPE-SECRET");
-    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, autoCreateSpace: true });
+    const ownerB = new TinyCloudNode({ privateKey: ACCOUNT_B_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
     await ownerB.signIn();
     const putB = await ownerB.kv.put("notes/b-only", new TextEncoder().encode("belongs to B"));
     if (!putB.ok) throw new Error(`account B seed failed: ${JSON.stringify(putB.error)}`);
@@ -286,6 +291,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     fixtureServer?.stop();
     await stopNode();
     if (dataDir !== "") await rm(dataDir, { recursive: true, force: true });
+    registry?.stop(true);
   });
 
   /** Node requests issued by each page, counted from the page's own `request` events. */
@@ -326,6 +332,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
     await page.waitForFunction(() => window.__tcw !== undefined);
     await page.evaluate((input) => window.__tcw.boot(input), {
       host,
+      registryUrl: registry.url.origin,
       walletKey: WALLET_KEY,
       prefix: "notes/",
       replication: "on" as const,
@@ -429,7 +436,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       offline.add(context);
       await page.reload();
       await page.waitForFunction(() => window.__tcw !== undefined);
-      await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await page.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
       expect(await page.evaluate(() => window.__tcw.restoreSession())).toEqual({ status: "restored" });
       const read = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
       expect(read).toMatchObject({ status: "present", value: "alpha note" });
@@ -469,7 +476,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       // The next startup's recovery completes the erase.
       await first.reload();
       await first.waitForFunction(() => window.__tcw !== undefined);
-      await first.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await first.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
       await first.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
       expect(await contentRows(first)).toBe(0);
     } finally {
@@ -491,7 +498,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.reload();
       await page.waitForFunction(() => window.__tcw !== undefined);
       // A fresh page load runs lifecycle recovery with the production eraser.
-      await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await page.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
       await page.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
       expect(await contentRows(page)).toBe(0);
     } finally {
@@ -555,7 +562,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
         );
         await page.reload();
         await page.waitForFunction(() => window.__tcw !== undefined);
-        await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+        await page.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
         await page.evaluate(() => window.__tcw.signOut());
         await page.evaluate(() => window.__tcw.signIn());
         sync = (await page.evaluate(() => window.__tcw.replicationSync())) as SyncResult;
@@ -592,7 +599,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       // The next startup's recovery removes the database the marker stood in for.
       await sibling.reload();
       await sibling.waitForFunction(() => window.__tcw !== undefined);
-      await sibling.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await sibling.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
       await sibling.waitForFunction(async () => {
         const rows = await window.__tcw.replicaRows();
         return (rows.entries ?? 0) + (rows.blobs ?? 0) === 0;
@@ -627,7 +634,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       // Startup recovery erases the denied partition's pending rows.
       await current.reload();
       await current.waitForFunction(() => window.__tcw !== undefined);
-      await current.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
+      await current.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: "on" as const });
       await current.waitForFunction(async () => (await window.__tcw.pendingPurgeCount()) === 0);
       expect(await pendingRows(current)).toBe(0);
       expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-after-erase"))).toMatchObject({
@@ -688,7 +695,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       // B's next load runs startup recovery, which erases A's condemned partition before B can open.
       await accountB.reload();
       await accountB.waitForFunction(() => window.__tcw !== undefined);
-      await accountB.evaluate((input) => window.__tcw.boot(input), { host, walletKey: ACCOUNT_B_KEY, prefix: "notes/", replication: "on" as const });
+      await accountB.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: ACCOUNT_B_KEY, prefix: "notes/", replication: "on" as const });
       await accountB.evaluate(() => window.__tcw.signIn());
       expect(await accountB.evaluate(() => window.__tcw.replicationSync())).toEqual({ status: "ok" });
       // A's partition was erased before B's opened: only B's one key (an entry and a blob) is present.
@@ -805,10 +812,10 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
         await page.goto(`${origin}/${variant === "baseline" ? "baseline.html" : "index.html"}`);
         if (variant === "baseline") {
           await page.waitForFunction(() => window.__baseline !== undefined);
-          await page.evaluate((input) => window.__baseline.boot(input), { host, walletKey: WALLET_KEY });
+          await page.evaluate((input) => window.__baseline.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY });
         } else {
           await page.waitForFunction(() => window.__tcw !== undefined);
-          await page.evaluate((input) => window.__tcw.boot(input), { host, walletKey: WALLET_KEY, prefix: "notes/", replication: variant });
+          await page.evaluate((input) => window.__tcw.boot(input), { host, registryUrl: registry.url.origin, walletKey: WALLET_KEY, prefix: "notes/", replication: variant });
         }
         const captured: Array<Promise<Seen>> = [];
         let phase: "signIn" | "kv" = "signIn";
@@ -889,6 +896,119 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await closeContext(context);
     }
   });
+
+  scenario("15 registry HTTP cache cannot hide a signed node removal", async () => {
+    if (owner === undefined) throw new Error("owner not signed in");
+    const identity = await owner.activeNodeIdentity();
+    const wallet = privateKeyToAccount(WALLET_KEY as `0x${string}`);
+    const port = await freePort();
+    const cacheOrigin = `http://127.0.0.1:${port}`;
+    const locationPath = `/v2/locations/${wallet.address}`;
+    const locationUrl = `${cacheOrigin}${locationPath}`;
+    const spaces = [...new Set([
+      ...bootstrapSteps(wallet.address, 1).filter((step) => step.kind === "host").map((step) => step.spaceId.toLowerCase()),
+      ...["default", "account", "public"].map((name) => `tinycloud:pkh:eip155:1:${wallet.address}:${name}`.toLowerCase()),
+    ])];
+    const payload: LocationRecordV2Payload = {
+      version: 2,
+      subject: `did:pkh:eip155:1:${wallet.address}`,
+      sequence: 0,
+      updated_at: new Date().toISOString(),
+      nodes: [{ did: identity.nodeDid, url: cacheOrigin }],
+      spaces: spaces.map((space) => ({ space, nodes: [{ did: identity.nodeDid, mode: "read-write" }] })),
+      encryptionNode: identity.nodeDid,
+    };
+    const signer = { type: "did:pkh" as const, signMessage: (message: string) => wallet.signMessage({ message }) };
+    let current = await signLocationRecordV2(payload, signer);
+    const removed = await signLocationRecordV2({ ...payload, sequence: 1, nodes: [], spaces: [], encryptionNode: null }, signer);
+    expect(await verifyLocationRecordV2(removed)).toBe(true);
+    let registryRequests = 0;
+    let lastServedSequence = -1;
+    let dataRpcCalls = 0;
+    // Same-origin proxying supplies real HTTP/CORS without Playwright routing:
+    // page.route/context.route would disable the HTTP cache this case needs.
+    const cacheServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === locationPath) {
+          registryRequests += 1;
+          lastServedSequence = current.sequence;
+          return Response.json({ record: current }, { headers: { "cache-control": "public, max-age=3600" } });
+        }
+        if (url.pathname === "/" || url.pathname.endsWith(".html") || url.pathname.startsWith("/assets/")) {
+          const file = Bun.file(join(FIXTURE_DIST, url.pathname === "/" ? "index.html" : url.pathname));
+          if (!(await file.exists())) return new Response("not found", { status: 404 });
+          const type = url.pathname.endsWith(".js") ? "text/javascript" : url.pathname.endsWith(".wasm") ? "application/wasm" : "text/html";
+          return new Response(file, { headers: { "content-type": type } });
+        }
+        if (url.pathname === "/invoke") dataRpcCalls += 1;
+        const forwarded = new Request(new URL(`${url.pathname}${url.search}`, host), request);
+        forwarded.headers.delete("host");
+        forwarded.headers.set("accept-encoding", "identity");
+        return fetch(forwarded);
+      },
+    });
+    let cacheBrowser: Browser | undefined;
+    try {
+      cacheBrowser = await chromium.launch({ devtools: false });
+      const context = await cacheBrowser.newContext();
+      await context.addInitScript((allowedOrigin) => {
+        const nativeFetch = globalThis.fetch.bind(globalThis);
+        globalThis.fetch = (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+          if (url.origin !== allowedOrigin) throw new Error("HTTP-cache fixture refuses fetch outside its owned origin");
+          return nativeFetch(input, init);
+        };
+      }, cacheOrigin);
+      const page = await context.newPage();
+      await page.goto(cacheOrigin);
+      await page.waitForFunction(() => window.__tcw !== undefined);
+      expect(await page.evaluate(() => navigator.serviceWorker.controller === null)).toBe(true);
+      const primed = await page.evaluate(async (url) => {
+        const response = await fetch(url);
+        return { sequence: (await response.json()).record.sequence, etag: response.headers.get("etag") };
+      }, locationUrl);
+      expect(primed).toEqual({ sequence: 0, etag: null });
+      expect(registryRequests).toBe(1);
+      await page.evaluate((input) => window.__tcw.boot(input), {
+        host: cacheOrigin, registryUrl: cacheOrigin, walletKey: WALLET_KEY, prefix: "notes/", replication: "unset" as const,
+      });
+      await page.evaluate(() => window.__tcw.signIn());
+      expect(await page.evaluate(() => window.__tcw.kvGet("notes/a"))).toEqual({ status: "present", value: "alpha note" });
+      expect(dataRpcCalls).toBeGreaterThan(0);
+      // Finish initial sign-in work before changing authority. No wait follows removal.
+      await page.waitForLoadState("networkidle");
+      const requestsBeforeRemoval = registryRequests;
+      current = removed;
+      const cachedSequence = await page.evaluate(async (url) => (await (await fetch(url)).json()).record.sequence, locationUrl);
+      expect(cachedSequence).toBe(0);
+      expect(registryRequests).toBe(requestsBeforeRemoval);
+      const dataRpcBeforeSecondRead = dataRpcCalls;
+      const second = await page.evaluate(() => window.__tcw.kvGet("notes/a"));
+      console.info("TC-2481 HTTP-cache routing receipt", JSON.stringify({
+        rawCachedSequenceAfterRemoval: cachedSequence,
+        requestsBeforeRemoval,
+        requestsAfterSecondRead: registryRequests,
+        lastServedSequence,
+        dataRpcBeforeSecondRead,
+        dataRpcAfterSecondRead: dataRpcCalls,
+        secondRead: second.status === "error" ? { status: second.status, code: second.code } : { status: second.status },
+      }));
+      expect(second).toEqual({ status: "error", code: "node_not_found" });
+      expect(dataRpcCalls).toBe(dataRpcBeforeSecondRead);
+      expect(registryRequests).toBeGreaterThan(requestsBeforeRemoval);
+      expect(lastServedSequence).toBe(1);
+    } finally {
+      try {
+        await cacheBrowser?.close();
+      } finally {
+        cacheServer.stop(true);
+      }
+    }
+  });
+
 
   // WebKit is out of scope: the harness is Chromium-only and records no placeholder for it.
 });

@@ -24,6 +24,7 @@ import { join, resolve } from "node:path";
 
 import { FakeNode, SPACE, deviceGrant, keyPair, owner, signUcan } from "./fixtures.js";
 import { ReplicaError, ReplicaErrorCode, isReplicaError } from "../src/errors.js";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 async function freePort(): Promise<number> {
   const { promise, resolve: done, reject: fail } = Promise.withResolvers<number>();
@@ -721,10 +722,12 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
   let node: ChildProcess | undefined;
   let host = "";
   let nodeOwner: TinyCloudNode;
+  let registry: UnregisteredLocationRegistry;
   let space = "";
 
   beforeAll(async () => {
     dataDir = await mkdtemp(join("/var/tmp", "tc-kv-storage-node-"));
+    registry = startUnregisteredLocationRegistry();
     const port = await freePort();
     host = `http://127.0.0.1:${port}`;
     const child = spawn(NODE_BIN!, [], {
@@ -752,7 +755,7 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
     child.stderr!.on("data", onData);
     child.once("exit", (code) => launched.reject(new Error(`node exited (${code}) before launching:\n${output.slice(-2000)}`)));
     await launched.promise;
-    nodeOwner = new TinyCloudNode({ privateKey: `0x${randomBytes(32).toString("hex")}`, host, autoCreateSpace: true });
+    nodeOwner = new TinyCloudNode({ privateKey: `0x${randomBytes(32).toString("hex")}`, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
     await nodeOwner.signIn();
     space = nodeOwner.session!.spaceId;
     const put = await nodeOwner.kv.put("notes/a", new TextEncoder().encode("from the node"));
@@ -768,6 +771,7 @@ describe.skipIf(!RUN || NODE_BIN === undefined)("kv-storage against a real node 
       await exited.promise;
     }
     if (dataDir !== "") await rm(dataDir, { recursive: true, force: true });
+    registry?.stop(true);
   });
 
   /** The node ships no CORS headers; add them at the driver layer, as browser.e2e does. */
