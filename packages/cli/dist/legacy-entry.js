@@ -3089,13 +3089,13 @@ async function loadManifestPermissions(source, profile, options = {}) {
     manifest.permissions = manifest.permissions.filter((entry) => !(entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"));
   }
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
-  if (options.device && typeof manifest.app_id === "string" && (manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") || Array.isArray(manifest.permissions) && manifest.permissions.some((entry) => entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+  if (options.device && typeof manifest.app_id === "string" && (manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") || Array.isArray(manifest.permissions) && manifest.permissions.some((entry) => entry !== null && typeof entry === "object" && isDeviceRefusedEncryption(entry, manifest)))) {
+    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use browser or --paste login.", ExitCode.USAGE_ERROR);
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
-    if (options.device && resolved.resources.some((entry) => entry.service === "tinycloud.encryption" || entry.space === "secrets" || entry.space?.endsWith(":secrets"))) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    if (options.device && resolved.resources.some((entry) => entry.service === "tinycloud.encryption" && !isDeviceDefaultDecrypt(entry) || entry.space === "secrets" || entry.space?.endsWith(":secrets"))) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use browser or --paste login.", ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
@@ -3127,6 +3127,19 @@ async function loadManifestPermissions(source, profile, options = {}) {
     'Manifest must contain either SDK field "id" or app manifest field "app_id".',
     ExitCode.USAGE_ERROR
   );
+}
+function isDeviceRefusedEncryption(entry, manifest) {
+  const service = normalizeService(String(entry.service ?? ""));
+  if (service !== "tinycloud.encryption") return false;
+  const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
+  const path = String(entry.path ?? "");
+  return !isDeviceDefaultDecrypt({
+    service,
+    space: String(manifest.space ?? "applications"),
+    path: entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id),
+    actions,
+    ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
+  });
 }
 async function secretPermissionsFromAppManifest(manifest, profile, requestedOwner) {
   if (manifest.secrets === void 0) {
@@ -3219,6 +3232,10 @@ async function resolvePermissionSpaces(entries, profile, options = {}) {
       continue;
     }
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
+      if (options.device) {
+        resolved.push({ service, space: "default", path: "", actions });
+        continue;
+      }
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }
@@ -18475,6 +18492,9 @@ function isRawCidRevocationPermission(permission2) {
   return permission2.service === "tinycloud.delegation" && permission2.space?.startsWith("urn:cid:") === true && permission2.path === "" && permission2.actions.includes("tinycloud.delegation/revoke");
 }
 function actionTuples(permission2, ownerDid) {
+  if (isDeviceDefaultDecrypt({ ...permission2, space: permission2.space ?? "" })) {
+    return [JSON.stringify([permission2.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission2.actions[0]])];
+  }
   const service = permission2.service.startsWith("tinycloud.") ? permission2.service : `tinycloud.${permission2.service}`;
   const rawEncryption = isVerifiedRawEncryptionPermission(permission2);
   const rawCidRevocation = isRawCidRevocationPermission(permission2);
@@ -19410,10 +19430,10 @@ function writeApprovalPrompt(prompt) {
 async function acquireDeviceDelegation(input) {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission2) => permission2.service === "tinycloud.encryption" || permission2.space === "secrets" || permission2.space?.startsWith("tinycloud:") && permission2.space.endsWith(":secrets"))) {
+  if (input.permissions.some((permission2) => permission2.service === "tinycloud.encryption" && !isDeviceDefaultDecrypt(permission2) || permission2.space === "secrets" || permission2.space?.startsWith("tinycloud:") && permission2.space.endsWith(":secrets"))) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use another OpenKey approval method for this manifest.",
       ExitCode.USAGE_ERROR
     );
   }
@@ -19603,6 +19623,7 @@ var init_device_auth = __esm({
     init_constants();
     init_errors();
     init_caveat_refusal();
+    init_raw_encryption();
     init_local_key();
     init_browser_auth();
     init_scoped_login();
