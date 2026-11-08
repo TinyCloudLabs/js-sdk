@@ -221,13 +221,26 @@ describe("OpenKey device authorization", () => {
     expect(result.approved.some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
   });
 
-  test("refuses an approval that signs decrypt on a network other than the owner's default", async () => {
+  test.each([
+    ["decrypt and encrypt on the owner's default network", (network: string) => ({ service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/encrypt"] })],
+    ["decrypt on another of the owner's networks", (network: string) => ({ service: "encryption", space: "encryption", path: network.replace(/:default$/, ":other"), actions: ["tinycloud.encryption/decrypt"] })],
+    ["decrypt on another owner's default network", (network: string) => ({ service: "encryption", space: "encryption", path: network.replace(ownerDid, "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb"), actions: ["tinycloud.encryption/decrypt"] })],
+    ["decrypt nested under the default network", (network: string) => ({ service: "encryption", space: "encryption", path: `${network}/share/`, actions: ["tinycloud.encryption/decrypt"] })],
+    ["decrypt nested inside the owner's space (unusable on the node)", () => ({ service: "tinycloud.encryption", space: spaceId, path: "", actions: ["tinycloud.encryption/decrypt"] })],
+  ])("refuses an approval that signs %s for the default-network decrypt request", async (_name, signedEntry) => {
     const permissions = [...requested, defaultDecrypt];
-    for (const path of [`urn:tinycloud:encryption:${ownerDid}:other`, `urn:tinycloud:encryption:${ownerDid}:default/share/`]) {
-      const signedDecrypt: PermissionEntry = { service: "encryption", space: "encryption", path, actions: ["tinycloud.encryption/decrypt"] };
-      const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...requested, signedDecrypt], binding: permissions }));
-      await expect(acquire(openkey, { permissions })).rejects.toMatchObject({ exitCode: expect.any(Number) });
-    }
+    const signedDecrypt = signedEntry(`urn:tinycloud:encryption:${ownerDid}:default`) as PermissionEntry;
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...requested, signedDecrypt], binding: permissions }));
+    await expect(acquire(openkey, { permissions })).rejects.toMatchObject({
+      code: expect.stringMatching(/^(OPENKEY_GRANT_BROADENED|OPENKEY_SCOPE_MISMATCH|DEVICE_AUTH_BINDING_MISMATCH)$/),
+    });
+  });
+
+  test("refuses a decrypt nested inside the owner's space even when OpenKey's binding and relay report it the same way", async () => {
+    const permissions = [...requested, defaultDecrypt];
+    const nested: PermissionEntry = { service: "tinycloud.encryption", space: spaceId, path: "", actions: ["tinycloud.encryption/decrypt"] };
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...requested, nested], binding: [...requested, nested] }));
+    await expect(acquire(openkey, { permissions })).rejects.toMatchObject({ code: "OPENKEY_GRANT_BROADENED" });
   });
 
   test("refuses encryption or secrets-space device scopes before starting the device API", async () => {
