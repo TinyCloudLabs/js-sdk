@@ -166,6 +166,31 @@ export function lifetimePhrase(ms: number): string {
   return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
+/**
+ * A signed lifetime, rounded DOWN so it never claims more than the signature: whole days from one day, whole hours
+ * below a day, whole minutes below an hour, and "less than a minute" below that.
+ */
+function grantedLifetimePhrase(ms: number): string {
+  const unit = phraseUnit(ms);
+  const count = Math.floor(ms / unit.ms);
+  if (count < 1) return "less than a minute";
+  return `${count} ${unit.name}${count === 1 ? "" : "s"}`;
+}
+
+function phraseUnit(ms: number): { ms: number; name: string } {
+  return ms >= DAY_MS ? { ms: DAY_MS, name: "day" } : ms >= 3_600_000 ? { ms: 3_600_000, name: "hour" } : { ms: 60_000, name: "minute" };
+}
+
+/**
+ * The line saying OpenKey signed a shorter lifetime than was asked, or undefined when it did not fall short by at
+ * least one whole unit of the granted phrase (89.5 of 90 days says nothing). The granted value is rounded down.
+ */
+export function shorterGrantNotice(grantedMs: number, askedMs: number): string | undefined {
+  const unit = phraseUnit(grantedMs).ms;
+  if (Math.ceil(grantedMs / unit) >= askedMs / unit) return undefined;
+  return `OpenKey granted this for ${grantedLifetimePhrase(grantedMs)} (you asked for ${grantedLifetimePhrase(askedMs)}).`;
+}
+
 function revokeSentence(lifetimeMs: number): string {
   return `It lasts up to ${lifetimePhrase(lifetimeMs)}; revoke it any time with \`${CLI_NAME} delegation revoke <id>\`.`;
 }

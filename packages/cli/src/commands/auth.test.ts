@@ -2512,15 +2512,39 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(stderr).toContain(requested === undefined ? "It lasts up to 7 days" : `It lasts up to ${Number.parseInt(requested, 10)} days`);
   });
 
-  test("an approval OpenKey signs for less than the request asked says so in one line; a full one adds nothing", async () => {
-    openKeyDelegation = approvalBy(primaryOwner, 30 * DAY_MS);
-    const shortened = await grantWith([await writeAgentRequest("openkey-agent-90d.json", "90d")], { stdin: false, stdout: false, stderr: false });
-    expect(recorded.errors).toEqual([]);
-    expect(shortened.stderr).toContain("OpenKey granted this for 30 days (you asked for 90 days).");
+  /** An approval whose SIWE was issued now and expires `ms` later, as OpenKey signs it. */
+  function signedFor(ms: number): Record<string, unknown> {
+    const issued = Date.now();
+    return { ...approvalBy(primaryOwner, ms), expiry: new Date(issued + ms).toISOString(), siwe: `openkey.so wants you to sign in\n\nIssued At: ${new Date(issued).toISOString()}` };
+  }
 
-    const full = await grantWith([await writeAgentRequest("openkey-agent-30d.json", "30d")], { stdin: false, stdout: false, stderr: false });
+  test.each([
+    ["90d", 14 * DAY_MS, "OpenKey granted this for 14 days (you asked for 90 days)."],
+    ["90d", 13.5 * DAY_MS, "OpenKey granted this for 13 days (you asked for 90 days)."],
+    ["90d", 13 * DAY_MS + 3_600_000, "OpenKey granted this for 13 days (you asked for 90 days)."],
+    ["90d", 36 * 3_600_000, "OpenKey granted this for 1 day (you asked for 90 days)."],
+    ["2d", 1.5 * 3_600_000, "OpenKey granted this for 1 hour (you asked for 2 days)."],
+    ["2h", 90_000, "OpenKey granted this for 1 minute (you asked for 2 hours)."],
+    ["2h", 59_000, "OpenKey granted this for less than a minute (you asked for 2 hours)."],
+  ])("a %s request OpenKey signs for %d ms says so, rounded down so it never claims more than was signed", async (requested, signedMs, line) => {
+    openKeyDelegation = signedFor(signedMs);
+    const { stderr } = await grantWith([await writeAgentRequest(`openkey-agent-short-${signedMs}.json`, requested)], { stdin: false, stdout: false, stderr: false });
     expect(recorded.errors).toEqual([]);
-    expect(full.stderr).not.toContain("OpenKey granted this for");
+    expect(stderr).toContain(line);
+  });
+
+  test.each([
+    ["30d", 30 * DAY_MS],
+    // 30 h of a 36 h request is shorter, but both read "1 day": no "granted 1 day (you asked for 1 day)".
+    ["36h", 30 * 3_600_000],
+    ["14d", 14 * DAY_MS - 20_000],
+    // 89.5 of 90 days falls short by less than a whole day: no "granted 90 days (you asked for 90 days)".
+    ["90d", 89.5 * DAY_MS],
+  ])("a %s request signed for its full lifetime (%d ms) prints no shorter-lifetime line", async (requested, signedMs) => {
+    openKeyDelegation = signedFor(signedMs);
+    const { stderr } = await grantWith([await writeAgentRequest(`openkey-agent-full-${requested}.json`, requested)], { stdin: false, stdout: false, stderr: false });
+    expect(recorded.errors).toEqual([]);
+    expect(stderr).not.toContain("OpenKey granted this for");
   });
 
   test("an approval from another owner is refused and no grant is stored", async () => {

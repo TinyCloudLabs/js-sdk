@@ -9,6 +9,7 @@ import {
   describeAction,
   describeGrantScope,
   matchAppsAgentRequest,
+  shorterGrantNotice,
   lifetimePhrase,
   resolveAppsAgentRequest,
 } from "./apps-agent-preset.js";
@@ -499,6 +500,36 @@ describe("lifetimePhrase: days in the singular for one, hours under a day, never
     [90_000, "1 hour"],
   ])("%d ms reads %s", (ms, phrase) => {
     expect(lifetimePhrase(ms)).toBe(phrase);
+  });
+});
+
+describe("shorterGrantNotice: the granted lifetime rounded down, and only when it falls a whole unit short", () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+  test.each([
+    [14 * DAY, 90 * DAY, "OpenKey granted this for 14 days (you asked for 90 days)."],
+    [13.5 * DAY, 90 * DAY, "OpenKey granted this for 13 days (you asked for 90 days)."],
+    [13 * DAY + HOUR, 90 * DAY, "OpenKey granted this for 13 days (you asked for 90 days)."],
+    [36 * HOUR, 90 * DAY, "OpenKey granted this for 1 day (you asked for 90 days)."],
+    [DAY, 7 * DAY, "OpenKey granted this for 1 day (you asked for 7 days)."],
+    [1.5 * HOUR, 2 * DAY, "OpenKey granted this for 1 hour (you asked for 2 days)."],
+    [23.5 * HOUR, 2 * DAY, "OpenKey granted this for 23 hours (you asked for 2 days)."],
+    [90_000, 2 * HOUR, "OpenKey granted this for 1 minute (you asked for 2 hours)."],
+    [90_000, HOUR, "OpenKey granted this for 1 minute (you asked for 1 hour)."],
+    [150_000, HOUR, "OpenKey granted this for 2 minutes (you asked for 1 hour)."],
+    [59_000, HOUR, "OpenKey granted this for less than a minute (you asked for 1 hour)."],
+  ])("%d ms signed of %d ms asked: %s", (granted, asked, line) => {
+    expect(shorterGrantNotice(granted, asked)).toBe(line);
+  });
+
+  test.each([
+    [89.5 * DAY, 90 * DAY],
+    [90 * DAY, 90 * DAY],
+    [14 * DAY - 40_000, 14 * DAY],
+    [30 * HOUR, 36 * HOUR],
+    [23.9 * HOUR, DAY],
+  ])("%d ms signed of %d ms asked: no line", (granted, asked) => {
+    expect(shorterGrantNotice(granted, asked)).toBeUndefined();
   });
 });
 
