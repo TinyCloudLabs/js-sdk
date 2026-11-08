@@ -862,6 +862,37 @@ test("accepted run lookup: no readable log fails closed unless the job and step 
     attemptJobs({ ...betaJob(), status: "in_progress" }),
     { ...base, jobs: [base.jobs[0], base.jobs[2]], total_count: 2 },
     { ...base, jobs: [...base.jobs, { name: "Brand New Job", status: "completed", conclusion: "success", steps: [jobStep([1, "Set up job", "success"])] }], total_count: 4 },
+    // Sol's cases: only a recognised, complete attempt shape counts.
+    // (1) a successful step under another name, beside or instead of the skipped known publish steps;
+    attemptJobs(betaJob([...REAL_BETA_STEPS, [48, "Publish packages with a new step name", "success"]])),
+    attemptJobs(betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => (name === "Publish beta to npm" ? [number, "Publish packages with a new step name", "success"] : [number, name, conclusion])))),
+    attemptJobs(betaJob([...REAL_BETA_STEPS, [48, "Publish packages with a new step name", "skipped"]])),
+    // (2) anything inside "Beta GitHub Releases", two of them, or a started "Stable Release";
+    { ...base, jobs: [base.jobs[0], base.jobs[1], { name: "Beta GitHub Releases", status: "completed", conclusion: "success", steps: [[1, "Set up job", "success"], [2, "Create GitHub Releases for published versions", "success"]].map(jobStep) }] },
+    { ...base, jobs: [base.jobs[0], base.jobs[1], { ...base.jobs[2], steps: [jobStep([1, "Set up job", "success"])] }] },
+    { ...base, jobs: [...base.jobs, base.jobs[2]], total_count: 4 },
+    { ...base, jobs: [base.jobs[0], base.jobs[2], base.jobs[2]] },
+    { ...base, jobs: [base.jobs[0], { ...base.jobs[1], conclusion: "success" }, base.jobs[2]] },
+    { ...base, jobs: [base.jobs[0], { ...base.jobs[1], steps: [jobStep([1, "Set up job", "skipped"])] }, base.jobs[2]] },
+    //     duplicate non-target step names (same count, one known step missing), and a second beta job;
+    attemptJobs(betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => [number, name === "Version and build" ? "Install wasm-pack" : name, conclusion]))),
+    attemptJobs(betaJob([...REAL_BETA_STEPS, [48, "Install wasm-pack", "success"]])),
+    { ...base, jobs: [base.jobs[0], base.jobs[0], base.jobs[2]] },
+    // (3) a pending or null-conclusion step that has started, or a skipped one that is not complete;
+    ...["Publish beta to npm", "Push beta version bumps"].flatMap((name) =>
+      [{ status: "pending" }, { status: "queued" }, { status: "in_progress" }, { status: "completed", conclusion: null }, { status: "pending", conclusion: "skipped" }, { status: "in_progress", conclusion: "skipped" }].map((fields) => {
+        const job = betaJob();
+        const step = job.steps.find((s) => s.name === name);
+        // Every case keeps started_at (as GitHub reports for a step that ran); pending needs it null to count as never started.
+        Object.assign(step, { conclusion: null, ...fields });
+        return attemptJobs(job);
+      }),
+    ),
+    // the steps that only run after a publish, and a non-publishing step in an impossible state.
+    attemptJobs(withConclusions({ "Confirm npm has every current version": "success" })),
+    attemptJobs(withConclusions({ "Keep the publish log for beta-github-releases": "success" })),
+    attemptJobs(withConclusions({ "Version and build": undefined })),
+    attemptJobs(withConclusions({ "Version and build": "stale" })),
   ];
   for (const [i, jobs] of unreadable.entries()) assert.throws(() => find(jobs), refused, `case ${i}`);
 });
