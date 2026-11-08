@@ -203,6 +203,6 @@
       "status": "excluded",
       "reason": "Local installer: verifies pinned Share bytes, runs pinned DDL, writes knowledge files via SDK KV/SQL; not a shared operation."
     },
-    { "command": "bug-report", "status": "excluded", "reason": "Uploads the locally redacted CLI log to bug-report intake; not a TinyCloud storage operation." }
+    { "command": "bug-report", "status": "excluded", "reason": "Local CLI command that uploads to bug-report intake, with no TinyCloud operation behind it; outside the Operations registry." }
   ]
 }
