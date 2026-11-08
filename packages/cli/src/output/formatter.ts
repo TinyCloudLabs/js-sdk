@@ -16,10 +16,9 @@ export interface OperationWarningOutput {
 }
 
 function warningLine(warnings: readonly OperationWarningOutput[]): string {
-  const fallback = warnings.some(({ code, reason }) => code === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
   const cached = warnings.some(({ code, reason }) => code === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
   const skipped = warnings.filter(({ code }) => code !== "REGISTRY_UNAVAILABLE");
-  const parts = fallback ? ["Couldn't reach your storage settings and none are saved on this computer yet, so this used the server the CLI would normally pick."] : [];
+  const parts: string[] = [];
   if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
   if (skipped.length > 0) {
     const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
