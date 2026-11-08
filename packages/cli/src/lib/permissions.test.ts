@@ -500,6 +500,40 @@ describe("loadManifestPermissions", () => {
       .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
   });
 
+  test("a device manifest keeps decrypt on the owner's default network as OpenKey's device flow takes it", async () => {
+    activeProfile = {
+      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
+      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const kv = { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["get"] };
+    const decrypt = { service: "tinycloud.encryption", path: "", skipPrefix: true, actions: ["decrypt"] };
+    const permissions = await loadManifestPermissions(
+      manifestSource({ app_id: "xyz.tinycloud.agent", space: "default", permissions: [kv, decrypt] }),
+      "agent", { allowLogicalSpaces: true, device: true },
+    );
+    expect(permissions.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
+      { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] },
+    ]);
+  });
+
+  test("a device manifest with any other encryption entry is refused", async () => {
+    activeProfile = {
+      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
+      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
+    };
+    const decrypt = { service: "tinycloud.encryption", path: "", skipPrefix: true, actions: ["decrypt"] };
+    for (const manifest of [
+      { space: "other", permissions: [decrypt] },
+      { space: "default", permissions: [{ ...decrypt, path: "share/" }] },
+      { space: "default", permissions: [{ ...decrypt, skipPrefix: false }] },
+      { space: "default", permissions: [{ ...decrypt, actions: ["encrypt"] }] },
+      { space: "default", permissions: [{ ...decrypt, path: `urn:tinycloud:encryption:${OWNER_DID}:default` }] },
+    ]) {
+      await expect(loadManifestPermissions(manifestSource({ app_id: "xyz.tinycloud.agent", ...manifest }), "agent", { allowLogicalSpaces: true, device: true }))
+        .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+    }
+  });
+
   test("does not add decrypt permission for write-only secrets", async () => {
     const permissions = await loadManifestPermissions(
       manifestSource({

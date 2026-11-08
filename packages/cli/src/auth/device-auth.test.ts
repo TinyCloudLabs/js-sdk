@@ -183,9 +183,25 @@ describe("OpenKey device authorization", () => {
     expect(new Set(requested.map((permission) => permission.space))).toEqual(new Set(["default"]));
   });
 
+  const defaultDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
+
+  test("sends OpenKey decrypt on the owner's default network, alone or with other scopes", async () => {
+    for (const permissions of [[defaultDecrypt], [...requested, defaultDecrypt]]) {
+      const openkey = openKeyRelayStub(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
+      await expect(acquire(openkey, { permissions })).rejects.toMatchObject({ code: expect.not.stringMatching(/^DEVICE_AUTH_UNSUPPORTED_SCOPE$/) });
+      expect(openkey.startBodies.map((body) => body.permissions)).toEqual([permissions]);
+    }
+  });
+
   test("refuses encryption or secrets-space device scopes before starting the device API", async () => {
     const forbidden: PermissionEntry[][] = [
       [...requested, { service: "tinycloud.encryption", space: "encryption", path: `urn:tinycloud:encryption:${ownerDid}:default`, actions: ["tinycloud.encryption/decrypt"] }],
+      [{ ...defaultDecrypt, space: "other" }],
+      [{ ...defaultDecrypt, space: `tinycloud:pkh:eip155:1:${address}:default` }],
+      [{ ...defaultDecrypt, path: "share/" }],
+      [{ ...defaultDecrypt, actions: ["tinycloud.encryption/encrypt"] }],
+      [{ ...defaultDecrypt, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/encrypt"] }],
+      [{ ...defaultDecrypt, space: "secrets" }],
       [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
       [{ service: "tinycloud.kv", space: `tinycloud:pkh:eip155:1:${address}:secrets`, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
     ];
