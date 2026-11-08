@@ -689,6 +689,183 @@ test("accepted run lookup: finds the acceptance in an earlier run's log, ignorin
   assert.throws(() => find(full), /cannot tell whether @x\/a@1\.0\.1-beta\.0 was accepted/);
 });
 
+// The job and step data of Release run 42535198919 attempt 1 (cancelled by hand before it pushed or
+// published; `gh run view --attempt 1 --log` answered "log not found: 128899407010"), as the
+// jobs-for-attempt endpoint returns it.
+const REAL_BETA_STEPS = [
+  [1, "Set up job", "success"],
+  [2, "Run actions/checkout@v4", "success"],
+  [3, "Run oven-sh/setup-bun@v1", "success"],
+  [4, "Run dtolnay/rust-toolchain@stable", "success"],
+  [5, "Install wasm-pack", "success"],
+  [6, "Run bun install --frozen-lockfile", "success"],
+  [7, "Check for pending changesets", "success"],
+  [8, "Install release deploy key", "success"],
+  [9, "Require sign-off for major bumps", "success"],
+  [10, "List pending changesets", "success"],
+  [11, "Refuse to run while a stable release is unfinished", "success"],
+  [12, "Version and build", "success"],
+  [13, "Verify node release pin", "success"],
+  [14, "Check internal dependency pins", "success"],
+  [15, "Commit beta version bumps", "success"],
+  [16, "Setup Node for npm publish", "cancelled"],
+  [17, "Check npm before publishing", "skipped"],
+  [18, "Push beta version bumps", "skipped"],
+  [19, "Publish beta to npm", "skipped"],
+  [20, "Record whether this run published versions", "success"],
+  [21, "Keep the publish log for beta-github-releases", "skipped"],
+  [22, "Confirm npm has every current version", "skipped"],
+  [23, "Remove release deploy key", "success"],
+  [44, "Post Setup Node for npm publish", "skipped"],
+  [45, "Post Run oven-sh/setup-bun@v1", "skipped"],
+  [46, "Post Run actions/checkout@v4", "success"],
+  [47, "Complete job", "success"],
+];
+const jobStep = ([number, name, conclusion]) => ({
+  number,
+  name,
+  status: conclusion === undefined ? "in_progress" : "completed",
+  conclusion: conclusion ?? null,
+  started_at: "2026-11-08T23:33:00Z",
+  completed_at: "2026-11-08T23:33:00Z",
+});
+const betaJob = (steps = REAL_BETA_STEPS) => ({ name: "Beta Release", status: "completed", conclusion: "cancelled", steps: steps.map(jobStep) });
+const attemptJobs = (beta = betaJob(), extra = {}) => {
+  const jobs = [
+    beta,
+    { name: "Stable Release", status: "completed", conclusion: "skipped", steps: [] },
+    { name: "Beta GitHub Releases", status: "completed", conclusion: "cancelled", steps: [] },
+  ];
+  return { total_count: jobs.length, jobs, ...extra };
+};
+// REAL_BETA_STEPS with the named steps' conclusions replaced.
+const withConclusions = (changes) =>
+  betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => [number, name, name in changes ? changes[name] : conclusion]));
+
+test("accepted run lookup: an attempt whose publish and push steps never ran, with no readable log, did not publish (TC-1457)", (t) => {
+  const r = repository(t);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const pkg = { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a" };
+  const created = new Date(Date.now() + 60_000).toISOString();
+  const cancelled = { databaseId: 42535198919, createdAt: created, status: "completed", url: "u", attempt: 1 };
+  const asked = [];
+  const find = (jobs, { runs = [cancelled], ...extra } = {}) =>
+    acceptedByEarlierRun({
+      pkg,
+      repo: r.repo,
+      head: version,
+      currentRunId: "9",
+      listRuns: () => runs,
+      runLog: () => {
+        throw new Error("gh run view 42535198919 --attempt 1 --log failed: log not found: 128899407010");
+      },
+      attemptJobs: (id, attempt) => {
+        asked.push(`${id}:${attempt}`);
+        if (jobs instanceof Error) throw jobs;
+        return jobs;
+      },
+      ...extra,
+    });
+
+  // Cancelled before the push and publish steps: not an acceptance, and the run is not an obstacle.
+  assert.equal(find(attemptJobs()), undefined);
+  assert.deepEqual(asked, ["42535198919:1"]);
+  // The same for this run's own earlier attempt (the re-run that hit the wedge).
+  assert.equal(find(attemptJobs(), { runs: [{ ...cancelled, status: "in_progress", attempt: 2 }], currentRunId: "42535198919", currentAttempt: 2 }), undefined);
+  // Steps are found by name, not position; a step that never started is also not a publish.
+  const reordered = betaJob([...REAL_BETA_STEPS].reverse().map(([, name, conclusion], i) => [i + 1, name, conclusion]));
+  assert.equal(find(attemptJobs(reordered)), undefined);
+  const queued = betaJob(REAL_BETA_STEPS);
+  for (const step of queued.steps) if (/^(Push beta|Publish beta)/.test(step.name)) Object.assign(step, { status: "pending", conclusion: null, started_at: null, completed_at: null });
+  assert.equal(find(attemptJobs(queued)), undefined);
+  // A job that never started (no steps) is not a publisher.
+  assert.equal(find(attemptJobs(betaJob([]))), undefined);
+
+  // A run whose log is readable is judged by its log, never by job data.
+  const logged = acceptedByEarlierRun({
+    pkg,
+    repo: r.repo,
+    head: version,
+    currentRunId: "9",
+    listRuns: () => [cancelled],
+    runLog: () => "tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n",
+    attemptJobs: () => {
+      throw new Error("must not be asked");
+    },
+  });
+  assert.deepEqual(logged, { id: 42535198919, attempt: 1, url: "u" });
+});
+
+test("accepted run lookup: no readable log fails closed unless the job and step data prove nothing was published (TC-1457)", (t) => {
+  const r = repository(t);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const pkg = { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a" };
+  const created = new Date(Date.now() + 60_000).toISOString();
+  const find = (jobs) =>
+    acceptedByEarlierRun({
+      pkg,
+      repo: r.repo,
+      head: version,
+      currentRunId: "9",
+      listRuns: () => [{ databaseId: 7, createdAt: created, status: "completed", url: "u", attempt: 1 }],
+      runLog: () => {
+        throw new Error("log not found: 128899407010");
+      },
+      attemptJobs: () => {
+        if (jobs instanceof Error) throw jobs;
+        return jobs;
+      },
+    });
+  const refused = /log not found: 128899407010.*cannot tell that Release run 7 \(attempt 1\) did not publish/s;
+
+  // The publish step ran: succeeded, failed, was cancelled while running, or is still running.
+  for (const conclusion of ["success", "failure", "cancelled", undefined]) {
+    assert.throws(() => find(attemptJobs(withConclusions({ "Publish beta to npm": conclusion }))), refused, String(conclusion));
+  }
+  // The push step ran (so the publish might have): same.
+  for (const conclusion of ["success", "failure", "cancelled"]) {
+    assert.throws(() => find(attemptJobs(withConclusions({ "Push beta version bumps": conclusion }))), refused, String(conclusion));
+  }
+  assert.throws(() => find(attemptJobs(withConclusions({ "Push beta version bumps": "success", "Publish beta to npm": "success" }))), refused);
+  // A stable publish that ran.
+  const stable = {
+    name: "Stable Release",
+    status: "completed",
+    conclusion: "success",
+    steps: [
+      [1, "Set up job", "success"],
+      [2, "Commit and push stable release", "skipped"],
+      [3, "Publish stable to npm", "success"],
+    ].map(jobStep),
+  };
+  const base = attemptJobs();
+  assert.throws(() => find({ ...base, jobs: [base.jobs[0], stable, base.jobs[2]] }), refused);
+
+  // Step or job data that is missing, unknown or unreadable.
+  const withoutStep = (name) => betaJob(REAL_BETA_STEPS.filter(([, step]) => step !== name));
+  const unknown = betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => [number, name, name === "Publish beta to npm" ? "stale" : conclusion]));
+  const twice = betaJob([...REAL_BETA_STEPS, [48, "Publish beta to npm", "success"]]);
+  const unreadable = [
+    new Error("gh api failed: HTTP 403"),
+    undefined,
+    null,
+    {},
+    { total_count: 0, jobs: [] },
+    { jobs: "nope", total_count: 1 },
+    attemptJobs(betaJob(), { total_count: 4 }),
+    attemptJobs(withoutStep("Publish beta to npm")),
+    attemptJobs(withoutStep("Push beta version bumps")),
+    attemptJobs(unknown),
+    attemptJobs(twice),
+    attemptJobs({ ...betaJob(), steps: undefined }),
+    attemptJobs({ ...betaJob(), name: "Beta Release (renamed)" }),
+    attemptJobs({ ...betaJob(), status: "in_progress" }),
+    { ...base, jobs: [base.jobs[0], base.jobs[2]], total_count: 2 },
+    { ...base, jobs: [...base.jobs, { name: "Brand New Job", status: "completed", conclusion: "success", steps: [jobStep([1, "Set up job", "success"])] }], total_count: 4 },
+  ];
+  for (const [i, jobs] of unreadable.entries()) assert.throws(() => find(jobs), refused, `case ${i}`);
+});
+
 test("changesets publish output: lists exactly what npm accepted", () => {
   const log = [
     "2026-10-18T15:40:00Z 🦋  info @x/c is not being published because version 1.0.0 is already published on npm",

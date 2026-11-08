@@ -117,10 +117,55 @@ function gh(args) {
   return result.stdout;
 }
 
+// The Release jobs that can push or publish, and their steps by name. Steps are found by
+// name because their numbers move with every workflow edit.
+const PUBLISHING_JOBS = {
+  "Beta Release": ["Push beta version bumps", "Publish beta to npm"],
+  "Stable Release": ["Commit and push stable release", "Publish stable to npm"],
+};
+// Release jobs that never touch npm.
+const NPM_FREE_JOBS = new Set(["Beta GitHub Releases"]);
+
+// Did a Release attempt provably never push or publish? Decided from the jobs-for-attempt
+// data ({ total_count, jobs: [{ name, status, conclusion, steps }] }), for an attempt whose log
+// cannot be read (a cancelled attempt has none). Only this counts as never: every publishing job
+// either never started (skipped or cancelled with no steps) or has each of its push and publish
+// steps skipped or still pending. A step that started (success, failure, cancelled mid-run, still
+// running) or data that is missing or unrecognised is not proof: { ok: false, reason }.
+export function attemptNeverPublished(data) {
+  const no = (reason) => ({ ok: false, reason });
+  const jobs = data?.jobs;
+  if (!Array.isArray(jobs) || jobs.length === 0) return no("the attempt lists no jobs");
+  if (data.total_count !== jobs.length) return no(`the attempt has ${data.total_count} jobs but ${jobs.length} were returned`);
+  for (const name of Object.keys(PUBLISHING_JOBS)) {
+    if (jobs.filter((job) => job?.name === name).length !== 1) return no(`the attempt does not list exactly one "${name}" job`);
+  }
+  for (const job of jobs) {
+    if (NPM_FREE_JOBS.has(job?.name)) continue;
+    const steps = PUBLISHING_JOBS[job?.name];
+    if (!steps) return no(`the attempt has an unrecognised job ${JSON.stringify(job?.name)}`);
+    if (job.status !== "completed" || !Array.isArray(job.steps)) return no(`"${job.name}" is not a completed job with a step list`);
+    if (job.steps.length === 0) {
+      if (job.conclusion === "skipped" || job.conclusion === "cancelled") continue;
+      return no(`"${job.name}" has no steps but concluded ${JSON.stringify(job.conclusion)}`);
+    }
+    for (const name of steps) {
+      const found = job.steps.filter((step) => step?.name === name);
+      if (found.length !== 1) return no(`"${job.name}" does not list exactly one "${name}" step`);
+      const [step] = found;
+      const neverRan = step.conclusion === "skipped" || (step.conclusion == null && (step.status === "pending" || step.status === "queued"));
+      if (!neverRan) return no(`"${job.name}" step "${name}" is ${step.status}/${step.conclusion ?? "no conclusion"}`);
+    }
+  }
+  return { ok: true };
+}
+
 // Did an earlier Release run get npm to accept this version? Looks at completed
 // runs created since the commit before the version commit (the run that made
 // the version commit started from there), other than this one, and reads their
-// logs through `gh` (needs `actions: read`). Fails closed: if the answer cannot
+// logs through `gh` (needs `actions: read`). A cancelled attempt has no log
+// (TC-1457); it is passed over only when the attempt's job and step data show
+// that its push and publish steps never ran. Fails closed: if the answer cannot
 // be found, pre-publish must not guess "never accepted".
 export function acceptedByEarlierRun({
   pkg,
@@ -131,6 +176,7 @@ export function acceptedByEarlierRun({
       gh(["run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", String(RUN_LIST_LIMIT), "--json", "databaseId,createdAt,status,url,attempt"]),
     ),
   runLog = (id, attempt) => gh(["run", "view", String(id), "--attempt", String(attempt), "--log"]),
+  attemptJobs = (id, attempt) => JSON.parse(gh(["api", `repos/{owner}/{repo}/actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`])),
   currentRunId = process.env.GITHUB_RUN_ID,
   currentAttempt = Number(process.env.GITHUB_RUN_ATTEMPT || 1),
 }) {
@@ -150,7 +196,22 @@ export function acceptedByEarlierRun({
     if (!current && run.status !== "completed") continue;
     const attempts = current ? currentAttempt - 1 : run.attempt ?? 1;
     for (let attempt = 1; attempt <= attempts; attempt++) {
-      if (acceptedFromRunLog(runLog(run.databaseId, attempt)).has(id)) return { id: run.databaseId, attempt, url: run.url };
+      let log;
+      try {
+        log = runLog(run.databaseId, attempt);
+      } catch (error) {
+        let verdict;
+        try {
+          verdict = attemptNeverPublished(attemptJobs(run.databaseId, attempt));
+        } catch (jobsError) {
+          verdict = { ok: false, reason: `its job and step data could not be read (${jobsError.message})` };
+        }
+        if (!verdict.ok) {
+          throw new Error(`${error.message}; cannot tell that Release run ${run.databaseId} (attempt ${attempt}) did not publish: ${verdict.reason}`);
+        }
+        continue;
+      }
+      if (acceptedFromRunLog(log).has(id)) return { id: run.databaseId, attempt, url: run.url };
     }
   }
   return undefined;
