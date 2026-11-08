@@ -77,12 +77,12 @@ const rootRowsInFileOrder = (ledger: Ledger) => {
 const newestRootRow = () => rootRowsInFileOrder(current).at(-1)!;
 const ceilingOfRootRow = (row: string) => (current as unknown as Record<string, { root: { ceiling: { "index.mjs": number; "index.cjs": number } } }>)[row]!.root.ceiling;
 const newestKvWorkerCeiling = () => {
-  const rows = current as unknown as Record<string, { worker?: { ceiling: number } } | undefined>;
+  const rows = shipped as unknown as Record<string, { worker?: { ceiling: number } } | undefined>;
   const newest = Object.keys(rows).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && rows[key]?.worker !== undefined).at(-1)!;
   return rows[newest]!.worker!.ceiling;
 };
 const newestReplicaWorkerCeiling = () => {
-  const rows = current as unknown as Record<string, { replicaWorker?: { ceiling: number } } | undefined>;
+  const rows = shipped as unknown as Record<string, { replicaWorker?: { ceiling: number } } | undefined>;
   const newest = Object.keys(rows).filter((key) => rows[key]?.replicaWorker !== undefined).at(-1)!;
   return rows[newest]!.replicaWorker!.ceiling;
 };
@@ -4436,6 +4436,8 @@ describe("the newest root ceiling is the only active one", () => {
   });
 
   it("pairs every ledger row with its approved constant, row for row, and keeps the root row count at least the frozen prefix", () => {
+    // Compare the live ledger with the live reviewed table, not the historical fixture.
+    const current = shipped;
     const rows = current as unknown as Record<string, unknown>;
     const ledgerRows = Object.keys(current).filter((key) => key !== "allowance" && key !== "entries");
     expect([...ledgerRows].sort()).toEqual(Object.keys(approvedLedgerRows).sort());

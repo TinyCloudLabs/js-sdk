@@ -716,9 +716,18 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === tc2096LazyOptionalAllowance[format] &&
         optionalLedger.allowance[format] === tc2481WebOptionalAllowance[format]);
+    const tc2481OfflineTransition = baseLedger.tc2481OfflineReplicaTransport === undefined &&
+      offlineReplicaTransport !== undefined && baseLedger.tc2481WebRouting !== undefined &&
+      baseOptional.tc2481WebRouting !== undefined && optionalLedger.tc2481WebRouting !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2481WebOptionalAllowance[format] &&
+        optionalLedger.allowance[format] ===
+          (format === "replica.mjs" || format === "replica.cjs"
+            ? offlineReplicaTransport.firstImport.ceiling[format]
+            : offlineReplicaTransport.activation.ceiling[format]));
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet or final TC-2481 Web routing ratchet.`);
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet, TC-2481 Web routing ratchet or final TC-2481 cold-routing and replica admission.`);
       failed = true;
     }
   }
