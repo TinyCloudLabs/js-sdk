@@ -37955,7 +37955,7 @@ ${scope.text}
 
 `);
       let confirmedExtras = false;
-      if (scope.extras.length > 0 && options2.yes !== true) {
+      if (profile.authMethod !== "openkey" && scope.extras.length > 0 && options2.yes !== true) {
         if (!process.stdin.isTTY || !process.stderr.isTTY) {
           throw new CLIError(
             "CONFIRMATION_REQUIRED",
