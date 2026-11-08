@@ -2512,6 +2512,17 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(stderr).toContain(requested === undefined ? "It lasts up to 7 days" : `It lasts up to ${Number.parseInt(requested, 10)} days`);
   });
 
+  test("an approval OpenKey signs for less than the request asked says so in one line; a full one adds nothing", async () => {
+    openKeyDelegation = approvalBy(primaryOwner, 30 * DAY_MS);
+    const shortened = await grantWith([await writeAgentRequest("openkey-agent-90d.json", "90d")], { stdin: false, stdout: false, stderr: false });
+    expect(recorded.errors).toEqual([]);
+    expect(shortened.stderr).toContain("OpenKey granted this for 30 days (you asked for 90 days).");
+
+    const full = await grantWith([await writeAgentRequest("openkey-agent-30d.json", "30d")], { stdin: false, stdout: false, stderr: false });
+    expect(recorded.errors).toEqual([]);
+    expect(full.stderr).not.toContain("OpenKey granted this for");
+  });
+
   test("an approval from another owner is refused and no grant is stored", async () => {
     openKeyDelegation = approvalBy(otherOwner, 2 * DAY_MS);
     const source = await writeAgentRequest("openkey-agent-refused.json");

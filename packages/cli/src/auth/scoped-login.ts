@@ -74,6 +74,16 @@ export function outlivesRequestFromIssuedAt(siwe: string, signedExpiry: number, 
 }
 
 /**
+ * How long a signed approval lasts: its expiry less the SIWE's own `Issued At`, or less now when that is unreadable.
+ * OpenKey may sign a shorter lifetime than the request asked for (the owner's choice, or its own limit).
+ */
+export function signedLifetimeMs(siwe: string | undefined, signedExpiry: number): number {
+  const raw = siwe === undefined ? undefined : [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
+  const issuedAt = raw === undefined ? NaN : Date.parse(raw);
+  return signedExpiry - (Number.isFinite(issuedAt) ? issuedAt : Date.now());
+}
+
+/**
  * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
  * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the lifetime that was
  * requested and the latest allowed time. `defaultRequest` is true when no `--expiry` was given. Any other error is not

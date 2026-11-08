@@ -157,7 +157,7 @@ function quoteApps(appIds: readonly string[]): string {
   return appIds.map((appId) => `\`${appId}\``).join(", ");
 }
 
-function lifetimePhrase(ms: number): string {
+export function lifetimePhrase(ms: number): string {
   if (ms >= DAY_MS) {
     const days = Math.ceil(ms / DAY_MS);
     return `${days} day${days === 1 ? "" : "s"}`;

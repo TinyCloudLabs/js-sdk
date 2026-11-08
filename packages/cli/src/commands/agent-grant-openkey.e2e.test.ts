@@ -192,7 +192,8 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
    */
   async function grantWithOpenKey(
     requestFile: string,
-    approve: (permissions: PermissionEntry[]) => { permissions: PermissionEntry[]; signer: PrivateKeySigner },
+    approve: (permissions: PermissionEntry[], grantLifetimeSeconds: number) =>
+      { permissions: PermissionEntry[]; signer: PrivateKeySigner; lifetimeSeconds?: number },
     args?: string[],
   ) {
     const preparedRequest = args === undefined ? JSON.parse(await readFile(requestFile, "utf8")) : {};
@@ -226,7 +227,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
         entry.agentTargetDid = preparedRequest.sessionDid;
         approvalCallbacks++;
         const requested = opened.request.permissions as PermissionEntry[];
-        const { permissions, signer } = approve(requested);
+        const { permissions, signer, lifetimeSeconds } = approve(requested, opened.request.grantLifetimeSeconds);
         const address = await signer.getAddress();
         const ownerDid = "did:pkh:eip155:1:" + address;
         const spaceName = (requested.find((p) => p.space)?.space ?? "applications").split(":").at(-1)!;
@@ -236,7 +237,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
         const prepared = wasm.prepareSession({
           abilities: abilitiesOf(permissions), address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
           jwk: opened.request.targetPublicJwk, issuedAt: new Date(now).toISOString(),
-          expirationTime: new Date(now + grantLifetimeSeconds * 1000).toISOString(),
+          expirationTime: new Date(now + (lifetimeSeconds ?? grantLifetimeSeconds) * 1000).toISOString(),
         });
         const signature = await signer.signMessage(prepared.siwe);
         const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -504,6 +505,21 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     expect(after.exitCode).not.toBe(0);
     expect(JSON.parse(after.stderr).error.code).toBe("GRANT_REVOKED");
     expect(after.stdout).not.toContain("hello-tc1422");
+  });
+
+  test("a 90 d request that OpenKey signs for 30 d gets a 30 d grant, and the owner is told it was shortened", async () => {
+    // As OpenKey does today: /api/delegate clamps the link's expiry with Math.min(MAX_DELEGATION_EXPIRY_MS = 30 d, ...)
+    // (openkey apps/api/src/routes/delegate.ts:357,422 at 1acd8c8); the approval page asks for grantLifetimeSeconds.
+    const OPENKEY_MAX_S = 30 * 86400;
+    const req = await agentRequest("agent90d", ["--cap", "tinycloud.kv:applications:demo/:get,list", "--expiry", "90d"]);
+    const result = await grantWithOpenKey(req, (permissions, asked) =>
+      ({ permissions, signer: ownerSigner, lifetimeSeconds: Math.min(asked, OPENKEY_MAX_S) }));
+    expect(result.exitCode).toBe(0);
+    expect(result.grantLifetimeSeconds).toBe(90 * 86400);
+    const grant = JSON.parse(result.stdout) as { expiry: string };
+    expect(hoursUntil(grant.expiry)).toBeGreaterThan(30 * 24 - 0.1);
+    expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(30 * 24);
+    expect(result.stderr).toContain("OpenKey granted this for 30 days (you asked for 90 days).");
   });
 
   test("an approval that unchecks an ability is refused with OPENKEY_APPROVAL_NARROWER and emits no grant", async () => {

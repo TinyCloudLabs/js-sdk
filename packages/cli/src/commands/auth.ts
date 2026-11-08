@@ -84,6 +84,8 @@ import {
   sessionStateIsUsable,
   storedSessionState,
   type StoredSessionState,
+  signedLifetimeMs,
+  CLOCK_SKEW_MS,
 } from "../auth/scoped-login.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
@@ -148,6 +150,7 @@ import {
   entriesForSigning,
   finalizeSigningEntries,
   resolveAppsAgentRequest,
+  lifetimePhrase,
 } from "../lib/apps-agent-preset.js";
 import { noteUnneededYes, UNNEEDED_YES_DESCRIPTION } from "../lib/yes-flag.js";
 import { assertNodeSupportsNamedKeys, keyAbilitiesFor, namedKeysGrantIn, parseKeysPrefix, partialKeysGrantError, withVerifiedNamedKeys, type ProfileNamedKeys } from "../lib/named-keys.js";
@@ -1401,11 +1404,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           // existing runtime or persisted authority and --yes do not skip it. The approval lasts the
           // request's lifetime (the apps-agent default when it names none), and the grant lasts as long
           // as it. There is no upper cap: revocation, not expiry, cuts an agent off early.
+          const askedMs = parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs;
           const approval = await acquireOpenKeyApproval({
             ctx,
             profile,
             requested,
-            expiryOption: parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
+            expiryOption: askedMs,
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
             commandIntent: approvalCommandIntent(parsed),
@@ -1426,6 +1430,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             };
           }
           process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.\n`);
+          // OpenKey may sign less than was asked (the owner's choice, or its own limit): say so, never shorten silently.
+          const grantedMs = signedLifetimeMs(approval.delegation.siweProof?.siwe, approval.delegation.expiry.getTime());
+          if (grantedMs < askedMs - CLOCK_SKEW_MS) {
+            process.stderr.write(`OpenKey granted this for ${lifetimePhrase(grantedMs)} (you asked for ${lifetimePhrase(askedMs)}).\n`);
+          }
           if (approvalResultNeedsAck(approval.delegation)) {
             await commitApprovalCommand(ctx.profile, approval.delegation, parsed, grant);
             await completeApprovalResult(ctx.profile, approval.delegation);
