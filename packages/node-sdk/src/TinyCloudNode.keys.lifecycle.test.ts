@@ -4,6 +4,9 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.keys-lifecycle.test";
 
 test("keys exposes only named-key operations and is safe to await", async () => {
   const node = new TinyCloudNode({ host: "https://one.example", wasmBindings: new NodeWasmBindings() });
@@ -25,6 +28,8 @@ test("named-key calls use the restored host after sign-in", async () => {
   globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     seen.push(url);
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     if (url === "https://one.example/delegate" && init?.method === "POST") {
       return new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 });
     }
@@ -42,6 +47,7 @@ test("named-key calls use the restored host after sign-in", async () => {
 
   try {
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,

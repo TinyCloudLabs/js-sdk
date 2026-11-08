@@ -9,12 +9,17 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import type { CapabilityKeyRegistry } from "@tinycloud/sdk-core";
 import { richResultFor, withExpiration } from "./test-support/openkey-result";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.signed-expiry.test";
 
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: unknown, init?: { method?: string }) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
@@ -43,6 +48,7 @@ const DAY_MS = 24 * HOUR_MS;
 function makeNode(sessionExpirationMs: number) {
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const node = new TinyCloudNode({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: new NodeWasmBindings(),
     host: "https://tinycloud.test",
@@ -137,6 +143,7 @@ describe("a restored session", () => {
 
     // A new process: same signer, a 30 day configured lifetime, only the persisted record to go on.
     const restored = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer: new PrivateKeySigner(PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       host: "https://tinycloud.test",

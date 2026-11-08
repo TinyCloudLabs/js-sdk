@@ -10,9 +10,13 @@ import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratche
 import { evaluateOptionalBudget, validateTc2481WebOptionalTransition } from "./replica-optional-size-policy";
 import type { Ledger } from "./replica-size-policy";
 
-const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+const finalShipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+// Keep earlier admissions in their original context; final3e0 controls use the live ledger below.
+const shipped = structuredClone(finalShipped);
+shipped.entries = shipped.entries.filter((entry) => entry.pr !== "#873");
+shipped.allowance["replica.cjs"] = 68370;
 // Historical cases retain the last pre-Web-routing allowance and metadata.
-// The new admission's live-ledger controls use `shipped` directly.
+// The #872-era controls below use `shipped`; final3e0 controls use `finalShipped`.
 const beforeWebRouting: OptionalLedger = {
   ...structuredClone(shipped),
   allowance: { ...tc2096LazyOptionalAllowance },
@@ -505,6 +509,9 @@ describe("TC-2096 lazy content fetch optional allowance", () => {
 
 describe("TC-2481 Web routing exact optional admission", () => {
   const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+  delete root.tc2481OfflineReplicaTransport;
+  root.entries = root.entries.filter((entry) => entry.pr !== "#873");
+  root.allowance["index.mjs"] = 388;
   const measured = shipped.tc2481WebRouting!.canonicalCI;
   const validate = (value: OptionalLedger, rootPresent = true, lazyPresent = true) =>
     validateOptionalLedger(value, true, true, true, true, true, true, true, true, true, true, true, lazyPresent, rootPresent);
@@ -664,5 +671,88 @@ describe("TC-2481 Web routing exact optional admission", () => {
     const cjs = evaluateOptionalBudget(beforeWebRouting, historicalRoot, beforeWebRouting.allowance)
       .find((reading) => reading.format === "replica.cjs")!;
     expect(cjs).toEqual({ format: "replica.cjs", raw: 67957, effective: 67957, direct: 67957, ceiling: 67957, exceeded: false });
+  });
+});
+
+describe("TC-2481 final3e0 optional accounting admission", () => {
+  const observed = { "replica.mjs": 53129, "replica.cjs": 68401, "activation.mjs": 19143, "activation.cjs": 20115 };
+  const fixture = () => {
+    const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+    root.allowance = { "index.mjs": 391, "index.cjs": 861 };
+    root.entries = root.entries.filter((entry) => entry.pr !== "#873");
+    root.entries.push({
+      pr: "#873", ticket: "TC-2481", "index.mjs": 99, "index.cjs": 104,
+      note: "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322)",
+    });
+    const optional = structuredClone(finalShipped);
+    optional.allowance["replica.cjs"] = 68401;
+    optional.entries = optional.entries.filter((entry) => entry.pr !== "#873");
+    optional.entries.push({
+      pr: "#873", ticket: "TC-2481", "replica.mjs": -2, "replica.cjs": 31,
+      "activation.mjs": 0, "activation.cjs": 1, note: "Actual3e0 controlled merge-base deltas; Naomi, TC-2523, 2026-11-08.",
+    });
+    return { root, optional };
+  };
+  const validate = (value: OptionalLedger, root: Ledger) => validateOptionalLedger(
+    value, true, true, true, true, true, true, true, true, true, true, true, true, true,
+    root.tc2481OfflineReplicaTransport,
+  );
+
+  it("admits the true optional charges without adding or repeating the historical four-byte retirement", () => {
+    const { root, optional } = fixture();
+    expect(() => validate(optional, root)).not.toThrow();
+    const readings = evaluateOptionalBudget(optional, root, observed);
+    expect(readings.find((reading) => reading.format === "replica.cjs")).toEqual({
+      format: "replica.cjs", raw: 68405, effective: 68401, direct: 68401, ceiling: 68401, exceeded: false,
+    });
+    for (const reading of readings) {
+      expect(reading.exceeded).toBe(false);
+      if (reading.format !== "replica.cjs") expect(reading.effective).toBe(reading.raw);
+    }
+  });
+
+  it("still refuses one direct byte above every bucket after the new CJS admission", () => {
+    const { root, optional } = fixture();
+    expect(() => validate(optional, root)).not.toThrow();
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      const reading = evaluateOptionalBudget(optional, root, { ...observed, [format]: optional.allowance[format] + 1 })
+        .find((candidate) => candidate.format === format)!;
+      expect(reading.effective).toBeLessThanOrEqual(reading.ceiling);
+      expect(reading.exceeded).toBe(true);
+    }
+  });
+
+  it("does not offset extra initial CJS charges with activation savings", () => {
+    const { root, optional } = fixture();
+    expect(() => validate(optional, root)).not.toThrow();
+    optional.entries.push({
+      pr: "#874", ticket: "TC-OTHER", "replica.mjs": 0, "replica.cjs": 1,
+      "activation.mjs": -1000, "activation.cjs": -1000, note: "Independent later accounting.",
+    });
+    const reading = evaluateOptionalBudget(optional, root, observed).find((value) => value.format === "replica.cjs")!;
+    expect(reading).toMatchObject({ effective: 68402, direct: 68401, ceiling: 68401, exceeded: true });
+  });
+
+  it("requires the matching final root record, true accounting and unchanged baseline evidence", () => {
+    const { root, optional } = fixture();
+    expect(() => validate(optional, root)).not.toThrow();
+    for (const mutate of [
+      (value: Ledger) => { delete value.tc2481OfflineReplicaTransport; },
+      (value: Ledger) => { value.tc2481OfflineReplicaTransport!.sourceCommits[0] = "0".repeat(40); },
+      (value: Ledger) => { value.entries.find((entry) => entry.pr === "#873")!["index.mjs"] = 0; },
+    ]) {
+      const changed = structuredClone(root);
+      mutate(changed);
+      expect(() => evaluateOptionalBudget(optional, changed, observed)).toThrow();
+    }
+    for (const mutate of [
+      (value: OptionalLedger) => { value.entries = value.entries.filter((entry) => entry.pr !== "#873"); },
+      (value: OptionalLedger) => { value.entries.find((entry) => entry.pr === "#873")!["replica.cjs"] = 30; },
+      (value: OptionalLedger) => { value.tc2481WebRouting!.baselineAlignment.alignment = -5; },
+    ]) {
+      const changed = structuredClone(optional);
+      mutate(changed);
+      expect(() => evaluateOptionalBudget(changed, root, observed)).toThrow();
+    }
   });
 });

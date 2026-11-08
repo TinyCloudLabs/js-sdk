@@ -18,6 +18,7 @@ import { safeBlock } from "./safe-text.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
+import { routingFailure } from "@tinycloud/sdk-services";
 
 let activeProfileName: string | undefined;
 
@@ -63,6 +64,19 @@ export class CLIError extends Error {
   }
 }
 
+/** Keep registry failures uniform and value-free across service and thrown errors. */
+function registryUnavailableError(error: unknown): CLIError | undefined {
+  const failure = routingFailure(error);
+  if (failure?.code !== "registry_unavailable") return undefined;
+  return new CLIError(
+    "REGISTRY_UNAVAILABLE",
+    failure.meta?.reason === "no-saved-settings"
+      ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes."
+      : "The storage settings are unreachable right now. Please try again.",
+    ExitCode.ERROR,
+  );
+}
+
 /**
  * Convert a service or operation result once, before the CLI's own errors
  * become immutable decisions. A typed HTTP status decides first. Without one,
@@ -85,6 +99,10 @@ export function cliErrorFromService(
   const status = error.status ?? error.statusCode;
   if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
   const verdict = authorizationVerdictOf({ ...error, meta });
+  if (verdict === undefined) {
+    const unavailable = registryUnavailableError(error);
+    if (unavailable) return unavailable;
+  }
   if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
@@ -158,6 +176,8 @@ export function wrapError(error: unknown): CLIError {
   if (verdict === "forbidden") {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
+  const unavailable = registryUnavailableError(error);
+  if (unavailable) return unavailable;
 
   // A genuinely untyped signer restore failure is local auth state. Never
   // interpret HTTP response text (or a command's deliberate CLIError) as JWK state.

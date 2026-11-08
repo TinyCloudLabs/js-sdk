@@ -1,6 +1,6 @@
 {
   "allowance": {
-    "index.mjs": 388,
+    "index.mjs": 391,
     "index.cjs": 861
   },
   "entries": [
@@ -227,6 +227,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "The exact tc2481WebRouting absolute row admits actual root growth 11515/9469 at c7a9b68120b51b529db7e4f2637b01e0525b1319; this zero owned-budget charge does not claim zero growth or spend old headroom. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security ."
+    },
+    {
+      "pr": "#873",
+      "ticket": "TC-2481",
+      "index.mjs": 99,
+      "index.cjs": 104,
+      "note": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Cumulative ESM is 391 against its former 388 budget: the exact 3-byte increase is explicit; CJS allowance remains 861."
     }
   ],
   "phase2Ratchet": {
@@ -2704,5 +2711,36 @@
     "worker": { "delta": 0, "ceiling": 777125 },
     "replicaWorker": { "delta": 0, "ceiling": 771018 },
     "reason": "After the canonical Services-helper trim, both pinned CI lanes agree on the remaining root and first-import bytes. Admit those four measured asset sizes only, with zero additional headroom; activation stays at its existing ceiling and both worker/gated caps remain unchanged. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . These bounded investigations do not attribute all growth to generic libraries or prove irreducibility. Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Historical replica-owned accounting entries are unchanged."
+  },
+  "tc2481ColdDeviceRefusal": {
+    "label": "TC-2481 cold-device routing and typed vault errors (PR #873)",
+    "ruling": "Naomi bf1e8a74 authorizes only the measured root bytes after a bounded source investigation, with zero additional headroom. PostgreSQL CI at source 772a1cf788442a9e62892601c3cd370a50ed48b7 measured 1491713/1432069 B. Bun 1.3.14; rustc 1.99.0. No other bucket changes.",
+    "base": "2c084d3cd931c3e88ac2f87a433fa82fa0c531dc",
+    "sourceCommits": ["772a1cf788442a9e62892601c3cd370a50ed48b7"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42466013006",
+      "jobs": ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42466013006/job/128685588492"]
+    },
+    "root": { "delta": { "index.mjs": 128, "index.cjs": 116 }, "ceiling": { "index.mjs": 1491713, "index.cjs": 1432069 } },
+    "reason": "The shared cold-routing refusal and typed vault delete/list propagation add code but no new runtime dependency. The existing get/put normalization pattern is retained; no correct bounded dependency or control-flow removal was established. Admit only the measured root bytes; the preceding first-import, activation, worker, gated and owned-accounting limits remain unchanged. Recovery is tracked at https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481"
+  },
+  "tc2481OfflineReplicaTransport": {
+    "label": "TC-2481 final cold refusal and offline replica transport admission (PR #873)",
+    "ruling": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Final e4e3fef6 ruling sets ordinary cumulative allowances to 391/861, exact root caps 1491684/1432057 and initial CJS 68401. ESM initial, activation, gated and the already approved worker caps are unchanged. Both pinned SQLite and PostgreSQL jobs at 3e0d93224daac21f9a5fabdd0b1a628f77aad8a8 agree. Bun 1.3.14; rustc 1.99.0.",
+    "base": "e21f45ddb24cbf8d80a959ff43f504a475b4508e",
+    "sourceCommits": ["3e0d93224daac21f9a5fabdd0b1a628f77aad8a8"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42508972622",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42508972622/job/128817683070",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42508972622/job/128817682994"
+      ]
+    },
+    "root": { "delta": { "index.mjs": -29, "index.cjs": -12 }, "ceiling": { "index.mjs": 1491684, "index.cjs": 1432057 } },
+    "firstImport": { "delta": { "replica.mjs": 0, "replica.cjs": 31 }, "ceiling": { "replica.mjs": 53131, "replica.cjs": 68401 } },
+    "activation": { "delta": { "activation.mjs": 0, "activation.cjs": 0 }, "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 } },
+    "worker": { "delta": 24, "ceiling": 777149 },
+    "replicaWorker": { "delta": 33, "ceiling": 771051 },
+    "reason": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). True root charges raise cumulative ESM from 292 to 391, explicitly increasing its former 388 budget by 3; CJS is 241/861. Root cap deltas -29/-12 tighten the earlier root-only approval and are not the accounting charges. Actual optional deltas are -2/+31/0/+1; only initial CJS gains 31 cap bytes in the separately loaded replica parser closure. Canonical worker SHA-256 remains 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115. Activation, gated and worker caps do not change. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481"
   }
 }

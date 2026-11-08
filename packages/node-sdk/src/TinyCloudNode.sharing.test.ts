@@ -1077,7 +1077,11 @@ describe("TinyCloudNode sharing", () => {
         expect(text).not.toContain("#v=4&k=");
         expect(text).not.toContain("unknown field");
       }
-      expect(JSON.stringify(failures[0], Object.getOwnPropertyNames(failures[0])).replace(/"stack":"[^"]*"/, "")).toBe(JSON.stringify(failures[1], Object.getOwnPropertyNames(failures[1])).replace(/"stack":"[^"]*"/, ""));
+      const serializedRefusal = (failure: unknown) => JSON.stringify(
+        failure,
+        Object.getOwnPropertyNames(failure).filter((name) => name !== "originalLine" && name !== "originalColumn"),
+      ).replace(/"stack":"[^"]*"/, "");
+      expect(serializedRefusal(failures[0])).toBe(serializedRefusal(failures[1]));
     });
 
     test("failures that come before any node reply carry neither the link nor its key", async () => {
