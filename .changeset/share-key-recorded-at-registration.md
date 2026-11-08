@@ -15,3 +15,5 @@ Breaking changes:
 - `@tinycloud/web-sdk`: `requestPermissions` no longer accepts `key.create` on an exact `share/<id>` key.
 
 `key.create` for `apps/<appId>/` keys (`manifest.keys`) and `NamedKeyClient.createKey` / `ensureKey` are unchanged.
+
+Details: TC-2525

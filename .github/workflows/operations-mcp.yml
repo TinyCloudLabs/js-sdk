@@ -89,7 +89,6 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-artifact.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share.integration.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/adapters.test.ts
-          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/path-bound-plan-permissions.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/short-links.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/bearer-revoke.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/native-receive.test.ts
