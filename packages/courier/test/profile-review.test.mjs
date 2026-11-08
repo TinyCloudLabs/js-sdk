@@ -18,6 +18,7 @@ import { installRefusing } from '../dist/grant.js';
 import { main } from '../dist/main.js';
 import { loadProfile, saveProfile, writeSecure } from '../dist/profile.js';
 import { homeFile, readHome, readySpace, scenario, signedGrant, stubSpaceProbe } from './support/approval-fixture.mjs';
+import { courierRegistryFixtureEnv, installCourierRegistryFixture } from './support/registry-fixture.mjs';
 
 const DAY = 86_400_000;
 const OWNER = 'did:pkh:eip155:1:0x0000000000000000000000000000000000000001';
@@ -43,11 +44,12 @@ const stub = http.createServer((req, res) => {
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 test.after(() => stub.close());
 const HOST = `http://127.0.0.1:${stub.address().port}`;
+installCourierRegistryFixture(HOST);
 
-const run = async (home, args) => JSON.parse((await execFileAsync(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' })).stdout);
+const run = async (home, args) => JSON.parse((await execFileAsync(process.execPath, [CLI, ...args], { env: courierRegistryFixtureEnv(home, HOST), encoding: 'utf8' })).stdout);
 async function runFail(home, args) {
   try {
-    await execFileAsync(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' });
+    await execFileAsync(process.execPath, [CLI, ...args], { env: courierRegistryFixtureEnv(home, HOST), encoding: 'utf8' });
   } catch (e) {
     return { stderr: String(e.stderr) };
   }

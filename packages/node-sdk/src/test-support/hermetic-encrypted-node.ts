@@ -7,6 +7,7 @@ import { Cbor } from "ox";
 import { SiweMessage } from "siwe";
 import {
   canonicalHashHex,
+  REGISTRY_NOT_FOUND_BODY,
   canonicalizeEncryptionJson,
   canonicalSignedResponse,
   extractRecapAttenuations,
@@ -568,6 +569,9 @@ class LoopbackEncryptedNode {
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204 });
+    if (request.method === "GET" && /^\/v[12]\/locations\//.test(url.pathname)) {
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "content-type": "application/json" } });
+    }
     if (url.pathname === "/healthz" && request.method === "GET") return new Response("ok");
     if (url.pathname === "/info" && request.method === "GET") {
       return this.json({
@@ -966,7 +970,7 @@ function makeNode(
   const signer = new PrivateKeySigner(privateKey, OWNER_CHAIN_ID);
   return {
     signer,
-    node: new TinyCloudNode({ host, signer, wasmBindings, signStrategy }),
+    node: new TinyCloudNode({ host, tinycloudRegistryUrl: host, signer, wasmBindings, signStrategy }),
   };
 }
 
@@ -1325,7 +1329,7 @@ export async function createHermeticEncryptedNode(
       envelope: encrypted.data,
     }),
     createRestoredDelegate: () =>
-      new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
+      new TinyCloudNode({ host: transport.host, tinycloudRegistryUrl: transport.host, wasmBindings: transport.wasm }),
     async createRotatedRestorableSession() {
       const rotatedRuntime = makeNode(
         transport.host,

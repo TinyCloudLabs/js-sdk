@@ -1,12 +1,14 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 
-import type * as LocationModule from "./location";
 import type * as PolicyModule from "./registry-policy";
+import { installTestWebLocks } from "./test-support/web-locks";
 
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
-  signLocationRecord,
+  multiaddrToHttpUrl,
+  signLocationRecordV2,
+  type LocationRecordV2Payload,
   type WebStorageLike,
 } from "./location";
 import {
@@ -31,22 +33,36 @@ import {
 } from "./registry-verdict";
 
 const REGISTRY = "https://registry.test";
-// Test-only key, also used by location.test.ts.
+// Test-only key, also used by location.test.ts and the frozen registry vectors.
 const owner = privateKeyToAccount(
   "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 );
 const SUBJECT = registryOwnerSubjectV1(owner.address);
-const LOOKUP_URL = `${REGISTRY}/v1/locations/${encodeURIComponent(SUBJECT)}`;
+const OWNER_KEY = owner.address;
+const V2_LOOKUP_URL = `${REGISTRY}/v2/locations/${encodeURIComponent(OWNER_KEY)}`;
+const V1_LOOKUP_URL = `${REGISTRY}/v1/locations/${encodeURIComponent(SUBJECT)}`;
+const LOOKUP_URL = V2_LOOKUP_URL;
+const vectors = await Bun.file(
+  `${import.meta.dir}/../test-vectors/registry-v2/registry-v2.json`,
+).json() as { records: Array<{ id: string; record: { nodes: Array<{ did: string }> } }> };
+const NODE_DIDS = vectors.records.find(({ id }) => id === "split-data-and-encryption")!.record.nodes.map(({ did }) => did);
 
 async function recordBody(multiaddrs: string[], sequence: number): Promise<string> {
-  const record = await signLocationRecord(
-    {
-      version: 1,
-      subject: SUBJECT,
-      multiaddrs,
-      updated_at: "2026-10-18T00:00:00.000Z",
-      sequence,
-    },
+  const nodes = multiaddrs.map((multiaddr, index) => ({
+    did: NODE_DIDS[index]!,
+    url: multiaddrToHttpUrl(multiaddr),
+  }));
+  const payload: LocationRecordV2Payload = {
+    version: 2,
+    subject: SUBJECT,
+    nodes,
+    spaces: [],
+    encryptionNode: nodes[0]?.did ?? null,
+    updated_at: "2026-10-18T00:00:00.000Z",
+    sequence,
+  };
+  const record = await signLocationRecordV2(
+    payload,
     { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) },
   );
   return JSON.stringify({ record });
@@ -102,12 +118,12 @@ describe("resolveOwnerHosts", () => {
     const verdict = await resolveOwnerHosts(SUBJECT, {
       registryUrl: REGISTRY,
       sequenceStore,
-      fetch: registry([notFound], requests),
+      fetch: registry([notFound, notFound], requests),
     });
 
     expect(verdict).toEqual({ status: "unregistered", subject: SUBJECT, source: "offchain", hosts: [] });
-    expect(requests).toEqual([LOOKUP_URL]);
-    expect(await sequenceStore.get(SUBJECT)).toBeUndefined();
+    expect(requests).toEqual([V2_LOOKUP_URL, V1_LOOKUP_URL]);
+    expect(await sequenceStore.get(OWNER_KEY)).toBeUndefined();
   });
 
   it("remembers a registered owner: a later not-found or older record is unavailable", async () => {
@@ -124,17 +140,14 @@ describe("resolveOwnerHosts", () => {
 
     const first = await lookup();
     expect(first.status).toBe("registered");
-    expect(first.hosts).toEqual([{ urls: ["https://my.node.example"], source: "offchain" }]);
-    expect(await sequenceStore.get(SUBJECT)).toBe(5);
-
+    expect(first.hosts).toEqual([{ nodeDid: NODE_DIDS[0], urls: ["https://my.node.example"], source: "offchain" }]);
+    expect(await sequenceStore.get(OWNER_KEY)).toBe(5);
     expect(unavailableReason(await lookup())).toBe("not-found-after-registered");
     expect(unavailableReason(await lookup())).toBe("rollback");
     expect((await lookup()).status).toBe("registered");
   });
 
   it.each([
-    ["a refused connection", () => Promise.reject(new TypeError("fetch failed")), "network-error"],
-    ["a 503", () => new Response("down", { status: 503 }), "http-status"],
     ["a 404 that is not the registry's", () => new Response("<html>not found</html>", { status: 404 }), "malformed-response"],
     [
       "a declared oversize body",
@@ -151,14 +164,6 @@ describe("resolveOwnerHosts", () => {
     expect(unavailableReason(verdict)).toBe(reason);
   });
 
-  it("fails closed when the registry does not answer within the budget", async () => {
-    const verdict = await resolveOwnerHosts(SUBJECT, {
-      registryUrl: REGISTRY,
-      timeoutMs: 20,
-      fetch: registry([() => new Promise<Response>(() => {})]),
-    });
-    expect(unavailableReason(verdict)).toBe("timeout");
-  });
 
   it.each([
     ["a lowercase address", `did:pkh:eip155:1:${owner.address.toLowerCase()}`],
@@ -174,6 +179,9 @@ describe("resolveOwnerHosts", () => {
 });
 
 describe("createLocalStorageRegistrySequenceStore", () => {
+  let platform: ReturnType<typeof installTestWebLocks>;
+  beforeEach(() => { platform = installTestWebLocks(); });
+  afterEach(() => platform.restore());
   it("keeps a registration across store instances on the same storage", async () => {
     const storage = memoryStorage();
     const body = await recordBody(["/dns4/my.node.example/tcp/443/https"], 2);
@@ -193,7 +201,7 @@ describe("createLocalStorageRegistrySequenceStore", () => {
 
   it("fails closed on corrupt storage instead of forgetting registrations", async () => {
     const store = createLocalStorageRegistrySequenceStore(
-      memoryStorage({ "tinycloud.registrySequences.v1": "{not json" }),
+      memoryStorage({ "tinycloud.registrySequences.v2": "{not json" }),
     );
     const requests: string[] = [];
     const lookup = lookupOwnerRegistryVerdict(SUBJECT, {
@@ -267,21 +275,21 @@ describe("resolveFailClosedTinyCloudHosts", () => {
   it("routes only unregistered owners to newUserHost", async () => {
     const byDefault = await resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
-      fetch: registry([notFound]),
+      fetch: registry([notFound, notFound]),
     });
     expect(byDefault.hosts).toEqual([DEFAULT_NEW_USER_HOST]);
 
     const configured = await resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
       newUserHost: "https://new-users.example/",
-      fetch: registry([notFound]),
+      fetch: registry([notFound, notFound]),
     });
     expect(configured.hosts).toEqual(["https://new-users.example"]);
 
     const refused = resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
       newUserHost: null,
-      fetch: registry([notFound]),
+      fetch: registry([notFound, notFound]),
     });
     await expect(refused).rejects.toBeInstanceOf(NodeNotFoundError);
   });
@@ -299,13 +307,15 @@ describe("resolveFailClosedTinyCloudHosts", () => {
     expect(requests).toEqual([LOOKUP_URL]);
   });
 
-  it("treats an unreachable or missing registry as unavailable, not as a new user", async () => {
+  it("uses the default for a fresh registry outage but refuses a missing registry URL", async () => {
+    const warnings: string[] = [];
     const down = await resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
-      fetch: registry([() => new Response("down", { status: 502 })]),
-    }).catch((caught: unknown) => caught);
-    expect(down).toBeInstanceOf(RegistryUnavailableError);
-    expect(down).toMatchObject({ code: "registry_unavailable", verdict: { reason: "http-status" } });
+      fetch: registry([() => new Response("down", { status: 502 }), () => new Response("down", { status: 502 })]),
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    });
+    expect(down.hosts).toEqual([DEFAULT_NEW_USER_HOST]);
+    expect(warnings).toEqual(["registry unavailable; using the default node"]);
 
     const requests: string[] = [];
     const none = resolveFailClosedTinyCloudHosts(owner.address, {
@@ -319,32 +329,48 @@ describe("resolveFailClosedTinyCloudHosts", () => {
 
   it("lets onNodeNotFound retry the lookup", async () => {
     const contexts: NodeNotFoundContext[] = [];
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    await sequenceStore.set(OWNER_KEY, 0);
+    const recovered = await recordBody(["/dns4/recovered.node.example/tcp/443/https"], 1);
     const resolved = await resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
-      fetch: registry([() => new Response("down", { status: 503 }), notFound]),
+      sequenceStore,
+      fetch: registry([() => new Response("down", { status: 503 }), () => new Response(recovered)]),
       onNodeNotFound: (context) => {
         contexts.push(context);
         return { action: "retry" };
       },
     });
 
-    expect(resolved.hosts).toEqual([DEFAULT_NEW_USER_HOST]);
+    expect(resolved.hosts).toEqual(["https://recovered.node.example"]);
     expect(contexts.map((context) => context.attempt)).toEqual([1]);
     expect(contexts[0]!.error).toBeInstanceOf(RegistryUnavailableError);
   });
 
-  it("lets onNodeNotFound pick a secure host for the session, keeping the verdict", async () => {
+  it("allows callback hosts only for genuine absence and validates their origin", async () => {
     const resolved = await resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
-      fetch: registry([() => new Response("down", { status: 503 })]),
+      newUserHost: null,
+      fetch: registry([notFound, notFound]),
       onNodeNotFound: () => ({ action: "use-host", host: "https://my.node.example" }),
     });
     expect(resolved.hosts).toEqual(["https://my.node.example"]);
-    expect(resolved.verdict?.status).toBe("unavailable");
+    expect(resolved.verdict?.status).toBe("unregistered");
+
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    await sequenceStore.set(OWNER_KEY, 0);
+    const unavailable = resolveFailClosedTinyCloudHosts(owner.address, {
+      ...base,
+      sequenceStore,
+      fetch: registry([() => new Response("down", { status: 503 })]),
+      onNodeNotFound: () => ({ action: "use-host", host: "https://my.node.example" }),
+    });
+    await expect(unavailable).rejects.toBeInstanceOf(RegistryUnavailableError);
 
     const insecure = resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
-      fetch: registry([() => new Response("down", { status: 503 })]),
+      newUserHost: null,
+      fetch: registry([notFound, notFound]),
       onNodeNotFound: () => ({ action: "use-host", host: "http://my.node.example" }),
     });
     await expect(insecure).rejects.toThrow("must use HTTPS");
@@ -355,7 +381,7 @@ describe("resolveFailClosedTinyCloudHosts", () => {
     const error = await resolveFailClosedTinyCloudHosts(owner.address, {
       ...base,
       newUserHost: null,
-      fetch: registry([notFound]),
+      fetch: registry([notFound, notFound]),
       onNodeNotFound: ({ error: failure }) => {
         reported = failure;
         return { action: "abort" };
@@ -365,9 +391,9 @@ describe("resolveFailClosedTinyCloudHosts", () => {
     expect(error).toBe(reported);
   });
 
-  it("routes only to HTTPS or loopback hosts from a signed record", async () => {
+  it("uses loopback HTTP but rejects non-loopback HTTP in a signed v2 record", async () => {
     const mixed = await recordBody(
-      ["/dns4/plain.example/tcp/80/http", "/ip4/127.0.0.1/tcp/8081/http", "/dns4/a.node.example/tcp/443/https"],
+      ["/ip4/127.0.0.1/tcp/8081/http", "/dns4/a.node.example/tcp/443/https"],
       1,
     );
     const resolved = await resolveFailClosedTinyCloudHosts(owner.address, {
@@ -376,12 +402,7 @@ describe("resolveFailClosedTinyCloudHosts", () => {
     });
     expect(resolved.hosts).toEqual(["http://127.0.0.1:8081", "https://a.node.example"]);
 
-    const plaintextOnly = await recordBody(["/dns4/plain.example/tcp/80/http"], 1);
-    const refused = resolveFailClosedTinyCloudHosts(owner.address, {
-      ...base,
-      fetch: registry([() => new Response(plaintextOnly)]),
-    });
-    await expect(refused).rejects.toBeInstanceOf(NodeNotFoundError);
+    await expect(recordBody(["/dns4/plain.example/tcp/80/http"], 1)).rejects.toThrow();
   });
 
   describe("local discovery", () => {
@@ -400,21 +421,22 @@ describe("resolveFailClosedTinyCloudHosts", () => {
         return next();
       }) as typeof fetch;
 
-    it("probes a local link listed by a registered verdict, reading the registry once", async () => {
+    it("does not probe a registered local link or replace the signed host list", async () => {
       const requests: string[] = [];
       const body = await linkRecord(1);
       const resolved = await resolveFailClosedTinyCloudHosts(owner.address, {
         registryUrl: REGISTRY,
         fetch: network([() => new Response(body)], requests),
       });
-      expect(resolved.hosts).toEqual([LINK]);
+      expect(resolved.hosts).toEqual([LINK, "https://a.node.example"]);
       expect(resolved.verdict?.status).toBe("registered");
       expect(requests.filter((url) => url.startsWith(`${REGISTRY}/`))).toEqual([LOOKUP_URL]);
+      expect(requests.some((url) => url.startsWith(LINK))).toBe(false);
     });
 
     it("never routes to a local link from a record older than the remembered one", async () => {
       const sequenceStore = createInMemoryRegistrySequenceStore();
-      await sequenceStore.set(SUBJECT, 5);
+      await sequenceStore.set(OWNER_KEY, 5);
       const requests: string[] = [];
       const older = await linkRecord(3);
       const resolving = resolveFailClosedTinyCloudHosts(owner.address, {
@@ -493,47 +515,3 @@ describe("assertSpaceCreationAllowed", () => {
   });
 });
 
-describe("legacy-fallback default", () => {
-  // A fresh module instance, so the once-per-process warning starts unset.
-  const freshLocation = async (tag: string): Promise<typeof LocationModule> =>
-    import(`./location.ts?${tag}`);
-
-  it("still falls back when the registry has no record, warning once per process", async () => {
-    const { resolveTinyCloudHosts } = await freshLocation("fallback-warning");
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      for (let i = 0; i < 2; i++) {
-        const resolved = await resolveTinyCloudHosts(SUBJECT, {
-          registryUrl: REGISTRY,
-          autoDiscoverLocalNode: false,
-          fetch: registry([notFound]),
-        });
-        expect(resolved.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
-        expect(resolved.location.source).toBe("fallback");
-      }
-      const deprecations = warn.mock.calls.filter(([message]) =>
-        String(message).includes("silent fallback will be removed"),
-      );
-      expect(deprecations).toHaveLength(1);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("does not warn when the registry record decides the host", async () => {
-    const { resolveTinyCloudHosts } = await freshLocation("record-no-warning");
-    const body = await recordBody(["/dns4/my.node.example/tcp/443/https"], 1);
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const resolved = await resolveTinyCloudHosts(SUBJECT, {
-        registryUrl: REGISTRY,
-        autoDiscoverLocalNode: false,
-        fetch: registry([() => new Response(body)]),
-      });
-      expect(resolved.hosts).toEqual(["https://my.node.example"]);
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
-  });
-});

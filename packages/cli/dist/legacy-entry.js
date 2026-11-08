@@ -403,6 +403,9 @@ function recordWarnings(warnings) {
   const holder = globalThis;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
+function recordRegistryFallbackWarning(_message, reason = "using_default_node") {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
+}
 function drainWarnings() {
   const holder = globalThis;
   const warnings = holder[PENDING_WARNINGS] ?? [];
@@ -430,9 +433,17 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
-  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`;
+  const fallback = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_default_node");
+  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
+  const parts = fallback ? ["registry unavailable; using the default node"] : [];
+  if (cached) parts.push("Storage settings are unreachable; using cached settings checked less than 1 hour ago.");
+  if (skipped.length > 0) {
+    const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+    const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
+    parts.push(`${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`);
+  }
+  return parts.join(" ");
 }
 function outputError(code5, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
@@ -5828,7 +5839,7 @@ function replicaErrorFromService(error, context2, request) {
   if (status !== void 0) {
     return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
   }
-  if (error.code === "NETWORK_ERROR" || /TIMEOUT|ABORT/.test(error.code)) {
+  if (error.code === "NETWORK_ERROR" || error.code === "NODE_NOT_RESPONDING" || /TIMEOUT|ABORT/.test(error.code)) {
     return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context2}: ${error.message}`, detail);
   }
   return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
@@ -9621,9 +9632,17 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+function configuredRegistryUrl(contextUrl, profile) {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : void 0;
+}
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -9695,7 +9714,12 @@ async function restoreProfileSessionNode(ctx) {
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -9717,8 +9741,13 @@ async function storedSessionVerifiesLocally(profileName2) {
     const session = await ProfileManager.getSession(profileName2);
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName2);
+    const tinycloudRegistryUrl = configuredRegistryUrl(void 0, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName2),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName2),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -9743,6 +9772,7 @@ async function createSDKInstance(ctx, options) {
     );
   }
   const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key = await ProfileManager.getKey(ctx.profile);
   const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
@@ -9764,7 +9794,11 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -9805,7 +9839,11 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
+    ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -10379,6 +10417,7 @@ var init_profiles = __esm({
        *
        * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
        * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+       * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
        *
        * Local-node discovery (TC-106) only runs when no explicit host was given
        * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -10398,6 +10437,9 @@ var init_profiles = __esm({
         } catch (error) {
           if (error instanceof ProfileSymlinkError2) throw error;
         }
+        const envRegistryUrl = process.env.TC_REGISTRY_URL;
+        const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+        const tinycloudRegistryUrl = typeof envRegistryUrl === "string" && envRegistryUrl.length > 0 ? envRegistryUrl : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0 ? profileRegistryUrl : void 0;
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
         const explicitEnvOff = envReplication === "0" || envReplication === "false" || envReplication === "off";
@@ -10422,6 +10464,7 @@ var init_profiles = __esm({
         return {
           profile,
           host,
+          ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
           verbose: options.verbose ?? false,
           noCache: options.noCache ?? false,
           quiet: options.quiet ?? false,
@@ -18844,6 +18887,7 @@ var init_pending_code = __esm({
 });
 
 // src/auth/local-key.ts
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore3, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore3 } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes3 } from "crypto";
@@ -18896,6 +18940,10 @@ async function localKeySignIn(options) {
     options.replication !== void 0
   );
   const node = new TinyCloudNode4({
+    registryCacheStore: createProfileRegistryCacheStore3(profile),
+    registrySequenceStore: createProfileRegistrySequenceStore3(profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,
@@ -18933,6 +18981,7 @@ var init_local_key = __esm({
   "src/auth/local-key.ts"() {
     "use strict";
     init_replication_config();
+    init_warnings();
     wasmInitialized = false;
   }
 });
@@ -21010,7 +21059,7 @@ import { createInterface as createInterface3 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { namedProfilePath as namedProfilePath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -35458,10 +35507,11 @@ init_profiles();
 init_constants();
 init_errors();
 init_session_expired();
+init_warnings();
 import { chmod as chmod4, link as link2, open as open9, readFile as readFile8, stat as stat4, unlink as unlink4 } from "fs/promises";
 import { dirname as dirname5, join as join12 } from "path";
 import { createHash } from "crypto";
-import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
@@ -35778,6 +35828,7 @@ async function assertShareHistoryAllowsKeyDrop(profileName2, action) {
 init_logout_pending();
 init_formatter();
 init_errors();
+init_warnings();
 init_constants();
 init_types();
 init_browser_auth();
@@ -37988,7 +38039,7 @@ ${scope.text}
         if (recovered) {
           grant = recovered;
         } else {
-          const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+          const approvalNode = await nodeFromOpenKeyApproval(ctx, approval.session);
           grant = {
             ...await grantAuthRequest(approvalNode, resolvedRequest, {
               expiry: approval.delegation.expiry.getTime() - Date.now()
@@ -38439,9 +38490,16 @@ async function acquireOpenKeyApproval(params) {
     });
   });
 }
-async function nodeFromOpenKeyApproval(host, session) {
+async function nodeFromOpenKeyApproval(ctx, session) {
   const ownerParts = session.ownerDid.split(":");
-  const node = new TinyCloudNode3({ host });
+  const host = ctx.host;
+  const node = new TinyCloudNode3({
+    host,
+    registryCacheStore: createProfileRegistryCacheStore4(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore4(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl
+  });
   await node.restoreSession({
     delegationHeader: session.delegationHeader,
     delegationCid: session.delegationCid,
@@ -38823,8 +38881,10 @@ async function handleLocalAuth(profileName2, host, options = {}) {
     return localKeySignIn({
       privateKey,
       host,
+      profile: profileName2,
+      tinycloudRegistryUrl: profile?.tinycloudRegistryUrl,
       ...namedKeys === void 0 ? {} : { keyAbilities: keyAbilitiesFor(namedKeys) },
-      ...replication?.prefixes.length ? { profile: profileName2, replication } : {}
+      ...replication?.prefixes.length ? { replication } : {}
     });
   });
   const key = sessionResult.jwk;
@@ -38959,6 +39019,10 @@ async function refreshPreparedOpenKeySession(params) {
     permissions
   }], { includeAccountRegistryPermissions: false });
   const node = new TinyCloudNode3({
+    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
     signer: ownerIdentitySigner(owner),
     capabilityRequest,
@@ -39089,6 +39153,10 @@ async function refreshPreparedKeysSession(params) {
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName2, "login");
   const node = new TinyCloudNode3({
+    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
     signer: ownerIdentitySigner(owner),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
@@ -42433,7 +42501,7 @@ function registerProfileCommand(program) {
       return handleError(error);
     }
   });
-  profile.command("create <name>").description("Create a new profile").option("--host <url>", "TinyCloud node URL").option(
+  profile.command("create <name>").description("Create a new profile").option("--host <url>", "TinyCloud node URL").option("--registry-url <url>", "TinyCloud location registry URL").option(
     "--posture <posture>",
     `Profile posture: ${CLI_PROFILE_POSTURES.join(", ")}. Defaults to owner-openkey.`
   ).option(
@@ -42443,6 +42511,7 @@ function registerProfileCommand(program) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
+      const tinycloudRegistryUrl = options.registryUrl?.length ? options.registryUrl : void 0;
       const posture = parseProfilePosture(options.posture);
       const operatorType = parseOperatorType(options.operator);
       if (await ProfileManager.profileExists(name)) {
@@ -42460,9 +42529,18 @@ function registerProfileCommand(program) {
         sessionDid: did,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         posture,
-        operatorType
+        operatorType,
+        ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl }
       });
-      outputJson({ profile: name, did, host, posture, operatorType, created: true });
+      outputJson({
+        profile: name,
+        did,
+        host,
+        ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
+        posture,
+        operatorType,
+        created: true
+      });
     } catch (error) {
       return handleError(error);
     }
@@ -42492,6 +42570,7 @@ function registerProfileCommand(program) {
         process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}
 `);
         process.stdout.write(formatField("Host", p.host) + "\n");
+        process.stdout.write(formatField("Registry URL", p.tinycloudRegistryUrl ?? null) + "\n");
         process.stdout.write(formatField("DID", p.did) + "\n");
         process.stdout.write(formatField("Session DID", p.sessionDid ?? null) + "\n");
         process.stdout.write(formatField("Posture", posture) + "\n");
@@ -43487,6 +43566,47 @@ ${describeStatus(status)}
   );
 }
 
+// src/commands/registry.ts
+init_errors();
+init_formatter();
+import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
+function registerRegistryCommand(program) {
+  program.command("registry").description("Inspect locally cached signed registry placement").command("show [did]").description("Verify and show cached owner, sequence, age, spaces, node modes and encryption destination (no network or sign-in)").action(async (did, _options, command) => {
+    try {
+      const options = command.optsWithGlobals();
+      const result = await invokeOperation3("tinycloud.registry.show", 1, {
+        ...options.profile ? { profile: options.profile } : {},
+        allowOwnerProfile: true
+      }, did === void 0 ? {} : { did });
+      if (result.status !== "ok") {
+        if (result.status === "error") throw new CLIError(result.error.code, result.error.message);
+        throw new CLIError("REGISTRY_UNAVAILABLE", "The cached registry entry could not be inspected.");
+      }
+      if (shouldOutputJson()) {
+        outputJson(result.output);
+        return;
+      }
+      const value4 = result.output;
+      const quote = (text2) => JSON.stringify(text2);
+      process.stdout.write(`Owner: ${quote(value4.owner)}
+Sequence: ${value4.sequence}
+Fetch age: ${Math.floor(value4.ageMs / 1e3)}s
+`);
+      const nodes = new Map(value4.nodes.map((node) => [node.did, node.url]));
+      for (const space of value4.spaces) {
+        process.stdout.write(`Space: ${quote(space.space)}
+`);
+        for (const node of space.nodes) process.stdout.write(`  ${quote(nodes.get(node.did))} ${node.mode} ${quote(node.did)}
+`);
+      }
+      process.stdout.write(`Encryption: ${value4.encryptionNode === null ? "none" : `${quote(nodes.get(value4.encryptionNode))} ${quote(value4.encryptionNode)}`}
+`);
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+}
+
 // src/commands/secrets.ts
 init_profiles();
 init_formatter();
@@ -43499,7 +43619,7 @@ import { readFile as readFile16 } from "fs/promises";
 import { join as join21 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
-import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
+import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
@@ -44203,7 +44323,7 @@ async function canonicalSecretGet(params, collect) {
   };
   const invoke = async () => collect(await withSpinner(
     params.label,
-    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation3("tinycloud.secrets.get", 1, target, input)
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation4("tinycloud.secrets.get", 1, target, input)
   ));
   let first = await invoke();
   if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
@@ -44276,6 +44396,9 @@ ${message}`,
           ExitCode.AUTH_REQUIRED,
           { hint: `Sign in with: ${CLI_NAME34} --profile ${result.context.profile} auth login` }
         );
+      }
+      if (result.error.code === "NODE_NOT_RESPONDING" || result.error.code === "DECRYPTION_DEPENDENCY_UNAVAILABLE") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.NETWORK_ERROR);
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
@@ -45286,7 +45409,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
     try {
       const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
       const privateKey = process.env.TC_PRIVATE_KEY;
-      const result = await invokeOperation3("tinycloud.secrets.status", 1, {
+      const result = await invokeOperation4("tinycloud.secrets.status", 1, {
         profile: ctx.profile,
         host: ctx.host,
         allowOwnerProfile: true,
@@ -48519,6 +48642,7 @@ function registerTinyCloudCommands(program) {
   registerShareCommand(program);
   registerNodeCommand(program);
   registerProfileCommand(program);
+  registerRegistryCommand(program);
   registerCompletionCommand(program);
   registerVaultCommand(program);
   registerSecretsCommand(program);

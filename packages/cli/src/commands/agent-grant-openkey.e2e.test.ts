@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createECDH, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,8 @@ import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinyc
 import { activateSessionWithHost } from "@tinycloud/sdk-core";
 import { checkLinkRecord, resolveApprovalRequest, signerFromJwk, type CheckedLinkRecord, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
 import { canonicalize } from "@tinycloud/share-envelope";
+import { startUnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+import type { UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
 
 // Real-node e2e for the agent OpenKey grant (TC-1422). The owner is an OpenKey
 // profile holding a broad 3 h session. A fake OpenKey answers the approval URL
@@ -18,6 +20,7 @@ import { canonicalize } from "@tinycloud/share-envelope";
 // immutable signed request is opened; its encrypted result is fetched and ACKed.
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const cliEntry = join(import.meta.dir, "../index.ts");
+const TEST_BOOTSTRAP = join(import.meta.dir, "../../../operations/test-support/test-bootstrap.mjs");
 const OWNER_SESSION_MS = 3 * 3600_000;
 const SEVEN_DAYS_S = 7 * 86400;
 const hoursUntil = (iso: string) => (Date.parse(iso) - Date.now()) / 3600_000;
@@ -27,6 +30,8 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
   let root: string;
   let host: string;
   let node: ChildProcess;
+  let registry: UnregisteredLocationRegistry;
+  let nativeOutput = "";
   let ownerSigner: PrivateKeySigner;
   let appSpace: string;
   const wasm = new NodeWasmBindings();
@@ -48,6 +53,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
   let requesterDid = "";
   let requesterJwk: OpenKeyApprovalRequestV1["targetPublicJwk"] | undefined;
   let priorTcHome: string | undefined;
+  let priorHome: string | undefined;
   const approvalRequests = new Map<string, ApprovalFixtureEntry>();
   const approvalResults = new Map<string, ApprovalFixtureEntry>();
   const seenProofs = new Set<string>();
@@ -150,6 +156,13 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
 
   const home = (profile: string) => join(root, `home-${profile}`);
 
+  async function recordChild(pid: number | undefined, argv: string[], result: Record<string, unknown>) {
+    const receipt = process.env.TC_AGENT_GRANT_FIXTURE_RECEIPT;
+    if (receipt) {
+      await appendFile(`${receipt}.children.jsonl`, JSON.stringify({ pid, argv, ...result }) + "\n", { mode: 0o600 });
+    }
+  }
+
   function cliArgs(profile: string, args: string[]) {
     const env: Record<string, string | undefined> = { ...process.env, HOME: home(profile), TC_HOME: home(profile) };
     delete env.TC_HOST;
@@ -160,7 +173,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     env.TC_LINKS_API_ORIGIN = approvalServer!.url.origin;
     env.NODE_EXTRA_CA_CERTS = approvalCertificatePath;
     env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
-    return { argv: [process.execPath, cliEntry, "--host", host, "--profile", profile, ...args], env };
+    return { argv: [process.execPath, "--preload", TEST_BOOTSTRAP, cliEntry, "--host", host, "--profile", profile, ...args], env };
   }
 
   async function cli(profile: string, args: string[]) {
@@ -171,6 +184,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
       new Response(child.stderr).text(),
       child.exited,
     ]);
+    await recordChild(child.pid, argv, { exitCode, stdout, stderr });
     return { exitCode, stdout, stderr };
   }
 
@@ -269,23 +283,26 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
         stderr += decoder.decode(value);
       }
       const exitCode = await child.exited;
+      const stdout = await stdoutText;
+      await recordChild(child.pid, argv, { exitCode, stdout, stderr });
       const entry = [...approvalRequests.values()].find((item) => item.preparedRequestId === preparedRequest.requestId);
       const observation = { preparedRequestId: preparedRequest.requestId, agentTargetDid: preparedRequest.sessionDid,
         approvalCallbacks, approvalRequestId: entry?.id, requestDigest: entry?.record.header.bodyCid,
         approvalTargetDid: requesterDid, resultRef: entry?.resultRef, exitCode };
       observations.push(observation);
-      return { exitCode, stdout: await stdoutText, stderr, sawUrl: url !== undefined, grantLifetimeSeconds,
+      return { exitCode, stdout, stderr, sawUrl: url !== undefined, grantLifetimeSeconds,
         approvalCallbacks, approvalRequestId: entry?.id, resultRef: entry?.resultRef };
     } catch (error) {
       child.kill();
-      await child.exited;
+      const exitCode = await child.exited;
+      await recordChild(child.pid, argv, { exitCode, stdout: await stdoutText, stderr, error: String(error), stderrComplete: false });
       throw error;
     }
   }
 
   async function agentRequest(name: string, args: string[]) {
     await mkdir(home(name), { recursive: true });
-    const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent"]);
+    const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent", "--registry-url", registry.url.origin]);
     expect(created.exitCode).toBe(0);
     const file = join(root, `${name}-req.json`);
     const made = await cli(name, ["auth", "request", ...args, "--emit", file]);
@@ -296,18 +313,23 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "tc-agent-openkey-e2e-"));
     priorTcHome = process.env.TC_HOME;
+    priorHome = process.env.HOME;
+    await mkdir(home("owner"), { recursive: true });
+    process.env.HOME = home("owner");
     process.env.TC_HOME = home("owner");
+    registry = startUnregisteredLocationRegistry();
     approvalCertificatePath = join(root, "approval-cert.pem");
     const approvalKeyPath = join(root, "approval-key.pem");
-    const certificate = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-      "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", approvalKeyPath, "-out", approvalCertificatePath],
-      { stdout: "pipe", stderr: "pipe" });
-    const [, certificateError, certificateExit] = await Promise.all([new Response(certificate.stdout).text(), new Response(certificate.stderr).text(), certificate.exited]);
+    const certificateArgs = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+      "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-keyout", approvalKeyPath, "-out", approvalCertificatePath];
+    const certificate = Bun.spawn(certificateArgs, { stdout: "pipe", stderr: "pipe" });
+    const [certificateOutput, certificateError, certificateExit] = await Promise.all([new Response(certificate.stdout).text(), new Response(certificate.stderr).text(), certificate.exited]);
+    await recordChild(certificate.pid, certificateArgs, { exitCode: certificateExit, stdout: certificateOutput, stderr: certificateError });
     if (certificateExit !== 0) throw new Error("Fixture TLS setup failed: " + certificateError);
     approvalCertificate = await readFile(approvalCertificatePath, "utf8");
     approvalServer = Bun.serve({ hostname: "127.0.0.1", port: 0,
       tls: { key: Bun.file(approvalKeyPath), cert: approvalCertificate }, fetch: approvalFixtureResponse });
-    const { profileConfigPath, profilePath, sessionPath, tinycloudConfigPath, writeJsonAtomic } = await import(
+    const { profileConfigPath, profilePath, sessionPath, tinycloudConfigPath, withTinyCloudStateRoot, writeJsonAtomic } = await import(
       "@tinycloud/operations/state"
     );
 
@@ -332,10 +354,9 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const launched = Promise.withResolvers<void>();
-    let output = "";
     const onData = (chunk: Buffer) => {
-      output += chunk.toString();
-      if (output.includes("Rocket has launched")) launched.resolve();
+      nativeOutput += chunk.toString();
+      if (nativeOutput.includes("Rocket has launched")) launched.resolve();
     };
     node.stdout!.on("data", onData);
     node.stderr!.on("data", onData);
@@ -343,7 +364,12 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
 
     // The owner wallet (local key) hosts the applications space and seeds one document.
     await mkdir(home("lowner"), { recursive: true });
-    expect((await cli("lowner", ["init", "--key-only"])).exitCode).toBe(0);
+    expect((await cli("lowner", ["init", "--name", "lowner", "--key-only"])).exitCode).toBe(0);
+    await withTinyCloudStateRoot(home("lowner"), async () => {
+      const path = profileConfigPath("lowner");
+      const profile = JSON.parse(await readFile(path, "utf8"));
+      await writeJsonAtomic(path, { ...profile, tinycloudRegistryUrl: registry.url.origin });
+    });
     expect((await cli("lowner", ["auth", "login", "--method", "local"])).exitCode).toBe(0);
     expect(
       (await cli("lowner", ["auth", "request", "--cap", "tinycloud.kv:applications::get,list,put,del", "--grant", "--yes"]))
@@ -394,6 +420,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     await writeJsonAtomic(profileConfigPath("owner"), {
       name: "owner",
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       chainId: 1,
       spaceName: "applications",
       spaceId: appSpace,
@@ -429,10 +456,21 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
         await writeFile(process.env.TC_AGENT_GRANT_FIXTURE_RECEIPT, JSON.stringify({ observations, ackEvidence }, null, 2), { mode: 0o600 });
       }
     } finally {
-      approvalServer?.stop(true);
-      if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
-      node?.kill("SIGTERM");
-      await rm(root, { recursive: true, force: true });
+      try {
+        if (node?.exitCode === null && node.signalCode === null) {
+          const exited = Promise.withResolvers<void>();
+          node.once("exit", () => exited.resolve());
+          node.kill("SIGTERM");
+          await exited.promise;
+        }
+        if (node) await recordChild(node.pid, [NODE_BIN!], { exitCode: node.exitCode, signalCode: node.signalCode, combinedOutput: nativeOutput });
+      } finally {
+        approvalServer?.stop(true);
+        registry?.stop(true);
+        if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
+        if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+        if (root) await rm(root, { recursive: true, force: true });
+      }
     }
   });
 

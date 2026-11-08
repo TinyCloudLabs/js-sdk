@@ -8,6 +8,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 const nodeBinary = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const ownerKey =
@@ -21,9 +22,11 @@ describe.skipIf(!nodeBinary)(
     let directory: string;
     let host: string;
     let child: ChildProcess | undefined;
+    let registry: UnregisteredLocationRegistry;
 
     beforeAll(async () => {
       directory = await mkdtemp("/var/tmp/tc721-sdk-revoke-");
+      registry = startUnregisteredLocationRegistry();
       const server = createServer();
       const port = await new Promise<number>((resolve, reject) => {
         server.once("error", reject);
@@ -74,12 +77,14 @@ describe.skipIf(!nodeBinary)(
         await exited.promise;
       }
       if (directory) await rm(directory, { recursive: true, force: true });
+      registry?.stop(true);
     });
 
     for (const forceWalletSign of [false, true]) {
       test(`${forceWalletSign ? "wallet-signed" : "session-key"} grant: owner revokes CID and delegate loses read access`, async () => {
         const owner = new TinyCloudNode({
           host,
+          tinycloudRegistryUrl: registry.url.origin,
           signer: new PrivateKeySigner(ownerKey),
           wasmBindings: new NodeWasmBindings(),
           domain: "revoke.test",
@@ -89,6 +94,7 @@ describe.skipIf(!nodeBinary)(
         });
         const delegate = new TinyCloudNode({
           host,
+          tinycloudRegistryUrl: registry.url.origin,
           wasmBindings: new NodeWasmBindings(),
           autoBootstrapAccount: false,
         });
@@ -143,6 +149,7 @@ describe.skipIf(!nodeBinary)(
     test("another owner cannot revoke a grant or stop its delegate", async () => {
       const owner = new TinyCloudNode({
         host,
+        tinycloudRegistryUrl: registry.url.origin,
         signer: new PrivateKeySigner(ownerKey),
         wasmBindings: new NodeWasmBindings(),
         domain: "revoke.test",
@@ -152,6 +159,7 @@ describe.skipIf(!nodeBinary)(
       });
       const outsider = new TinyCloudNode({
         host,
+        tinycloudRegistryUrl: registry.url.origin,
         signer: new PrivateKeySigner(otherKey),
         wasmBindings: new NodeWasmBindings(),
         domain: "revoke.test",
@@ -161,6 +169,7 @@ describe.skipIf(!nodeBinary)(
       });
       const reader = new TinyCloudNode({
         host,
+        tinycloudRegistryUrl: registry.url.origin,
         wasmBindings: new NodeWasmBindings(),
         autoBootstrapAccount: false,
       });

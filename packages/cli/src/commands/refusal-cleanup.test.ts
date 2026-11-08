@@ -741,12 +741,23 @@ describe("tc auth request --grant: a refused approval", () => {
   test("the saved approval goes, the signed-in key and session stay, one kept notice", async () => {
     pickedLifetimeMs = 6 * DAY;
     await login("--expiry", "7d");
+    const registry = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: () => Response.json({ error: "location record not found" }, { status: 404 }),
+    });
+    await ProfileManager.setProfile(profileName, {
+      ...await ProfileManager.getProfile(profileName), tinycloudRegistryUrl: registry.url.origin,
+    });
     expect(recordedErrors).toEqual([]);
     const before = { key: JSON.stringify(await ProfileManager.getKey(profileName)), session: JSON.stringify(await ProfileManager.getSession(profileName)) };
     stderr.length = 0;
     savedPendingCopies = 0;
     signRequest = false; // the owner signs the default read, not the list that was asked for
-    await runAuth("request", "--grant", "--paste", "--no-popup", "--cap", "tinycloud.kv:default:data/KEY:list", "--yes");
+    try {
+      await runAuth("request", "--grant", "--paste", "--no-popup", "--cap", "tinycloud.kv:default:data/KEY:list", "--yes");
+    } finally {
+      registry.stop(true);
+    }
     expect(recordedErrors).toEqual([expect.objectContaining({ code: expect.stringMatching(/^OPENKEY_(GRANT_BROADENED|APPROVAL_NARROWER|SCOPE_MISMATCH)$/) })]);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);

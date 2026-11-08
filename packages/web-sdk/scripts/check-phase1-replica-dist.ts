@@ -7,7 +7,7 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
   correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance,
-  tc2096OptionalAllowance, tc2096LazyOptionalAllowance,
+  tc2096OptionalAllowance, tc2096LazyOptionalAllowance, tc2481WebOptionalAllowance, validateTc2481WebOptionalTransition, evaluateOptionalBudget,
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
@@ -35,6 +35,8 @@ import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-polic
 import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
 import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
+import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy";
+import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -114,12 +116,12 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
-for (const format of optionalFormats) {
-  const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
-  console.log(`${format}: incremental loaded=${optionalCurrent[format]}; cumulative optional ledger=${total} / ${optionalLedger.allowance[format]} gzip-bytes`);
-  if (total > optionalLedger.allowance[format] || optionalCurrent[format] > optionalLedger.allowance[format]) {
+for (const reading of evaluateOptionalBudget(optionalLedger, ledger, optionalCurrent)) {
+  const { format, raw, effective, direct, ceiling } = reading;
+  console.log(`${format}: incremental loaded=${direct}; cumulative optional ledger RAW=${raw} EFFECTIVE=${effective}; DIRECT=${direct} / ${ceiling} gzip-bytes`);
+  if (reading.exceeded) {
     console.error(`${format}: optional no-growth allowance exceeded; changing this separate budget requires policy review.`);
     failed = true;
   }
@@ -550,6 +552,22 @@ if (prBaseSha) {
     console.error("The Home feed ratchet requires the merged TC-2202 row and its measured source commit.");
     failed = true;
   }
+  validateTc2481RegistryFreshnessTransition(baseLedger.tc2481RegistryFreshness, ledger.tc2481RegistryFreshness);
+  const registryFreshness = ledger.tc2481RegistryFreshness;
+  if (registryFreshness !== undefined && baseLedger.tc2481RegistryFreshness === undefined &&
+      (baseLedger.tc2380Q2OneClick === undefined || !hasAncestor(repoRoot, registryFreshness.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 worker-only ratchet requires the merged TC-2380 Q2 row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2481WebRoutingTransition(baseLedger.tc2481WebRouting, ledger.tc2481WebRouting);
+  const webRouting = ledger.tc2481WebRouting;
+  // The worker and Web admissions belong to the same PR; validateLedger has
+  // already validated the current worker row, which need not be merged yet.
+  if (webRouting !== undefined && baseLedger.tc2481WebRouting === undefined &&
+      (ledger.tc2481RegistryFreshness === undefined || !hasAncestor(repoRoot, webRouting.sourceCommits.at(-1)!))) {
+    console.error("The final TC-2481 Web routing ratchet requires the approved worker row and its final measured source ancestor.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -565,7 +583,8 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined);
+  validateTc2481WebOptionalTransition(baseOptional.tc2481WebRouting, optionalLedger.tc2481WebRouting);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
@@ -674,9 +693,14 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === tc2096OptionalAllowance[format] &&
         optionalLedger.allowance[format] === tc2096LazyOptionalAllowance[format]);
+    const tc2481WebTransition = baseLedger.tc2481WebRouting === undefined && ledger.tc2481WebRouting !== undefined &&
+      baseOptional.tc2481WebRouting === undefined && optionalLedger.tc2481WebRouting !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc2096LazyOptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2481WebOptionalAllowance[format]);
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet or TC-2096 lazy content fetch ratchet.`);
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet or final TC-2481 Web routing ratchet.`);
       failed = true;
     }
   }
@@ -945,6 +969,14 @@ if (prBaseSha) {
           }
         }
         console.log("The sdk-services 3.3.1 pin uses its exact absolute-root row, not additive old headroom.");
+      } else if (webRouting !== undefined && baseLedger.tc2481WebRouting === undefined && prefixMatches && appended.length === 1) {
+        try {
+          validateTc2481WebRootEntry(appended[0], deltas);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : "Invalid TC-2481 root accounting");
+          failed = true;
+        }
+        console.log("TC-2481 records the actual growth in its absolute root row; its owned-budget charge is zero.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";

@@ -13,6 +13,7 @@ import { replicationStorage, replicationHooks } from "./storage";
 type BootOptions = {
   /** TinyCloud node origin, e.g. http://127.0.0.1:8123. */
   host: string;
+  registryUrl: string;
   /** Throwaway wallet key; never a real identity. */
   walletKey: string;
   prefix: string;
@@ -69,7 +70,7 @@ const api = {
     const base = {
       provider: testWallet(options.walletKey),
       tinycloudHosts: [options.host],
-      tinycloudRegistryUrl: null,
+      tinycloudRegistryUrl: options.registryUrl,
       autoDiscoverLocalNode: false,
       autoCreateSpace: true,
       persistSession: true,

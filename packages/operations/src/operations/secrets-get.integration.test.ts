@@ -1,12 +1,13 @@
 import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { signLocationRecordV2, type PermissionEntry } from "@tinycloud/sdk-core";
 
 import { invokeOperation } from "../invoke.js";
 import { listPermissionRequests } from "../artifacts.js";
 import { createAuthRuntimeFixture, persistRuntimeDelegations } from "../../test-support/auth-runtime.js";
+import { additionalDelegationsPath, profileConfigPath, sessionPath, writeJsonAtomic } from "../state.js";
 
 let isolatedTestTail = Promise.resolve();
 
@@ -36,6 +37,86 @@ function isolatedTest(name: string, body: () => Promise<unknown>): void {
     }
   });
 }
+
+isolatedTest("stored valid authority survives identity, registry and node outages without requesting new consent or falling back", async () => {
+  const fixture = await createAuthRuntimeFixture({ secretPayloadValue: "tc2481-private-dummy" });
+  const previousRegistry = process.env.TC_REGISTRY_URL;
+  delete process.env.TC_REGISTRY_URL;
+  let proxy: ReturnType<typeof Bun.serve> | undefined;
+  let registry: ReturnType<typeof Bun.serve> | undefined;
+  let matchingIdentity = true;
+  let rejectRegistration = false;
+  try {
+    const wasm = new NodeWasmBindings();
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    const address = await signer.getAddress();
+    const chainId = await signer.getChainId();
+    const manager = wasm.createSessionManager();
+    const jwk = JSON.parse(manager.jwk("default")!);
+    const spaceId = fixture.hermetic.ownerRestorableSession.spaceId;
+    const prepared = wasm.prepareSession({
+      address, chainId, domain: "tc2481-replay.fixture.invalid", spaceId, jwk, abilities: {},
+      issuedAt: new Date().toISOString(), expirationTime: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    const signature = await signer.signMessage(prepared.siwe);
+    const session = wasm.completeSessionSetup({ ...prepared, signature });
+    const sessionDid = session.verificationMethod.split("#", 1)[0]!;
+    const grant = await fixture.hermetic.mintDelegationForAudience(sessionDid);
+    const { nodeId: nodeDid } = await (await fetch(`${fixture.hermetic.host}/info`)).json() as { nodeId: string };
+    proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/.well-known/tinycloud/node-keys") {
+        return Response.json({ nodeDid: matchingIdentity ? nodeDid : fixture.hermetic.unrelatedAudience, shareInvitationPublicKey: "A".repeat(43) });
+      }
+      if (rejectRegistration && url.pathname === "/delegate") {
+        return new Response("registry_unavailable: fixture registry refused", { status: 503 });
+      }
+      return fetch(new Request(`${fixture.hermetic.host}${url.pathname}${url.search}`, request));
+    } });
+    const record = await signLocationRecordV2({
+      version: 2, subject: fixture.hermetic.ownerDid, nodes: [{ did: nodeDid, url: proxy.url.origin }],
+      spaces: [{ space: spaceId, nodes: [{ did: nodeDid, mode: "read-write" }] }],
+      encryptionNode: nodeDid, updated_at: new Date().toISOString(), sequence: 0,
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    registry = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ record }) });
+    await writeJsonAtomic(profileConfigPath(fixture.ownerProfile), {
+      name: fixture.ownerProfile, host: fixture.hermetic.host, tinycloudRegistryUrl: registry.url.origin,
+      chainId, spaceName: "default", spaceId, did: fixture.hermetic.ownerDid, sessionDid,
+      posture: "local-owner-key", operatorType: "human", authMethod: "local", privateKey: fixture.hermetic.ownerPrivateKey,
+      address, createdAt: new Date().toISOString(),
+    });
+    await writeJsonAtomic(sessionPath(fixture.ownerProfile), {
+      delegationHeader: session.delegationHeader, delegationCid: session.delegationCid,
+      spaceId, jwk, verificationMethod: session.verificationMethod, address, chainId,
+      siwe: prepared.siwe, signature, tinycloudHosts: [fixture.hermetic.host],
+      expiresAt: prepared.siwe.match(/^Expiration Time: (.+)$/m)![1],
+    });
+    await writeJsonAtomic(additionalDelegationsPath(fixture.ownerProfile), [{
+      delegation: grant,
+      authorityRequest: { requestId: "req_tc2481_original_authority", requested: fixture.hermetic.permissions },
+    }]);
+    const invoke = () => invokeOperation("tinycloud.secrets.get", 1, {
+      profile: fixture.ownerProfile, allowOwnerProfile: true,
+    }, { name: "HERMETIC_DELEGATION_CANARY" });
+    expect(await invoke()).toMatchObject({ status: "ok", output: { value: "tc2481-private-dummy" } });
+
+    matchingIdentity = false;
+    expect(await invoke()).toMatchObject({ status: "error", error: { code: "NODE_IDENTITY_MISMATCH", retryable: false } });
+    matchingIdentity = true;
+    rejectRegistration = true;
+    expect(await invoke()).toMatchObject({ status: "error", error: { code: "REGISTRY_UNAVAILABLE", retryable: true } });
+    rejectRegistration = false;
+    proxy.stop(true);
+    expect(await invoke()).toMatchObject({ status: "error", error: { code: "NODE_NOT_RESPONDING", retryable: true } });
+    expect(await listPermissionRequests(fixture.ownerProfile)).toEqual([]);
+  } finally {
+    registry?.stop(true);
+    proxy?.stop(true);
+    fixture.hermetic.stop();
+    if (previousRegistry === undefined) delete process.env.TC_REGISTRY_URL;
+    else process.env.TC_REGISTRY_URL = previousRegistry;
+  }
+});
 
 isolatedTest("registered secret invocation preflights the exact KV/encryption union", async () => {
   const fixture = await createAuthRuntimeFixture();
@@ -148,7 +229,7 @@ isolatedTest("registered secret execution preserves classified node failures and
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
     for (const [status, code] of [
-      ["node_unreachable", "NODE_UNREACHABLE"],
+      ["node_unreachable", "NODE_NOT_RESPONDING"],
       ["read_failed", "SECRET_READ_FAILED"],
       ["corrupt_envelope", "SECRET_READ_FAILED"],
       ["decrypt_failed", "SECRET_DECRYPT_FAILED"],
@@ -166,6 +247,16 @@ isolatedTest("registered secret execution preserves classified node failures and
     expect(absent.status).toBe("setup_required");
     if (absent.status !== "setup_required") throw new Error("expected setup");
     expect(absent.setup.url).toContain("HERMETIC_DELEGATION_CANARY");
+
+    readSecret.mockImplementation(async () => {
+      throw Object.assign(new Error("private node detail"), { code: "NODE_NOT_RESPONDING" });
+    });
+    const notResponding = await invokeSecret(fixture.profile);
+    expect(notResponding).toMatchObject({
+      status: "error",
+      error: { code: "NODE_NOT_RESPONDING", retryable: true },
+    });
+    expect(JSON.stringify(notResponding)).not.toContain("private node detail");
 
     readSecret.mockImplementation(async () => {
       throw new Error("private node detail");
