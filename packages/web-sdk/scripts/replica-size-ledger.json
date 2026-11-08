@@ -2704,5 +2704,17 @@
     "worker": { "delta": 0, "ceiling": 777125 },
     "replicaWorker": { "delta": 0, "ceiling": 771018 },
     "reason": "After the canonical Services-helper trim, both pinned CI lanes agree on the remaining root and first-import bytes. Admit those four measured asset sizes only, with zero additional headroom; activation stays at its existing ceiling and both worker/gated caps remain unchanged. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . These bounded investigations do not attribute all growth to generic libraries or prove irreducibility. Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Historical replica-owned accounting entries are unchanged."
+  },
+  "tc2481ColdDeviceRefusal": {
+    "label": "TC-2481 cold-device routing and typed vault errors (PR #873)",
+    "ruling": "Naomi bf1e8a74 authorizes only the measured root bytes after a bounded source investigation, with zero additional headroom. PostgreSQL CI at source 772a1cf788442a9e62892601c3cd370a50ed48b7 measured 1491713/1432069 B. Bun 1.3.14; rustc 1.99.0. No other bucket changes.",
+    "base": "2c084d3cd931c3e88ac2f87a433fa82fa0c531dc",
+    "sourceCommits": ["772a1cf788442a9e62892601c3cd370a50ed48b7"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42466013006",
+      "jobs": ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42466013006/job/128685588492"]
+    },
+    "root": { "delta": { "index.mjs": 128, "index.cjs": 116 }, "ceiling": { "index.mjs": 1491713, "index.cjs": 1432069 } },
+    "reason": "The shared cold-routing refusal and typed vault delete/list propagation add code but no new runtime dependency. The existing get/put normalization pattern is retained; no correct bounded dependency or control-flow removal was established. Admit only the measured root bytes; the preceding first-import, activation, worker, gated and owned-accounting limits remain unchanged. Recovery is tracked at https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481"
   }
 }

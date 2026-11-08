@@ -435,6 +435,7 @@ export type Ledger = {
   tc2380Q2OneClick?: Tc2380Q2OneClick;
   tc2481RegistryFreshness?: Tc2481RegistryFreshness;
   tc2481WebRouting?: Tc2481WebRouting;
+  tc2481ColdDeviceRefusal?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1038,6 +1039,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2380Q2OneClick !== undefined) pins.push({ row: "tc2380Q2OneClick", pin: root.tc2380Q2OneClick.sourceCommits.at(-1)! });
   if (root.tc2481RegistryFreshness !== undefined) pins.push({ row: "tc2481RegistryFreshness", pin: root.tc2481RegistryFreshness.sourceCommits.at(-1)! });
   if (root.tc2481WebRouting !== undefined) pins.push({ row: "tc2481WebRouting", pin: root.tc2481WebRouting.sourceCommits.at(-1)! });
+  if (root.tc2481ColdDeviceRefusal !== undefined) pins.push({ row: "tc2481ColdDeviceRefusal", pin: root.tc2481ColdDeviceRefusal.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1117,6 +1119,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2380Q2OneClick", root.tc2380Q2OneClick?.root.ceiling],
     ["tc2481RegistryFreshness", root.tc2481RegistryFreshness?.root.ceiling],
     ["tc2481WebRouting", root.tc2481WebRouting?.root.ceiling],
+    ["tc2481ColdDeviceRefusal", root.tc2481ColdDeviceRefusal?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2777,6 +2780,19 @@ export const approvedTc2481WebRouting: Tc2481WebRouting = {
   reason: "After the canonical Services-helper trim, both pinned CI lanes agree on the remaining root and first-import bytes. Admit those four measured asset sizes only, with zero additional headroom; activation stays at its existing ceiling and both worker/gated caps remain unchanged. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . These bounded investigations do not attribute all growth to generic libraries or prove irreducibility. Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Historical replica-owned accounting entries are unchanged.",
 };
 
+export const approvedTc2481ColdDeviceRefusal: LogoutRatchet = {
+  label: "TC-2481 cold-device routing and typed vault errors (PR #873)",
+  ruling: "Naomi bf1e8a74 authorizes only the measured root bytes after a bounded source investigation, with zero additional headroom. PostgreSQL CI at source 772a1cf788442a9e62892601c3cd370a50ed48b7 measured 1491713/1432069 B. Bun 1.3.14; rustc 1.99.0. No other bucket changes.",
+  base: "2c084d3cd931c3e88ac2f87a433fa82fa0c531dc",
+  sourceCommits: ["772a1cf788442a9e62892601c3cd370a50ed48b7"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42466013006",
+    jobs: ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42466013006/job/128685588492"],
+  },
+  root: { delta: { "index.mjs": 128, "index.cjs": 116 }, ceiling: { "index.mjs": 1491713, "index.cjs": 1432069 } },
+  reason: "The shared cold-routing refusal and typed vault delete/list propagation add code but no new runtime dependency. The existing get/put normalization pattern is retained; no correct bounded dependency or control-flow removal was established. Admit only the measured root bytes; the preceding first-import, activation, worker, gated and owned-accounting limits remain unchanged. Recovery is tracked at https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -2902,6 +2918,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2380Q2OneClick: approvedTc2380Q2OneClick,
   tc2481RegistryFreshness: approvedTc2481RegistryFreshness,
   tc2481WebRouting: approvedTc2481WebRouting,
+  tc2481ColdDeviceRefusal: approvedTc2481ColdDeviceRefusal,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3230,6 +3247,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         entries.length !== 1 || !isTc2481ZeroRootEntry(entries[0])) {
       throw new Error("Only Naomi's exact final TC-2481 root and first-import ratchet with its zero owned-charge entry is approved.");
     }
+  }
+  if (value.tc2481ColdDeviceRefusal !== undefined &&
+      (!value.tc2481WebRouting || JSON.stringify(value.tc2481ColdDeviceRefusal) !== JSON.stringify(approvedTc2481ColdDeviceRefusal))) {
+    throw new Error("Only Naomi's exact TC-2481 cold-device root-only ratchet is approved.");
   }
 }
 
@@ -3644,6 +3665,13 @@ export function validateTc2481WebRoutingTransition(base?: Tc2481WebRouting, curr
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2481WebRouting) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The final TC-2481 Web routing ratchet may be introduced once and cannot change later.");
+  }
+}
+
+export function validateTc2481ColdDeviceRefusalTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2481ColdDeviceRefusal) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2481 cold-device root-only ratchet may be introduced once and cannot change later.");
   }
 }
 

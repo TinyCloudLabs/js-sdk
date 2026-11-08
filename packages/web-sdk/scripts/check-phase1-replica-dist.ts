@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
@@ -37,6 +37,7 @@ import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size
 import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
 import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
+import { validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -568,6 +569,13 @@ if (prBaseSha) {
     console.error("The final TC-2481 Web routing ratchet requires the approved worker row and its final measured source ancestor.");
     failed = true;
   }
+  validateTc2481ColdDeviceRefusalTransition(baseLedger.tc2481ColdDeviceRefusal, ledger.tc2481ColdDeviceRefusal);
+  const coldDeviceRefusal = ledger.tc2481ColdDeviceRefusal;
+  if (coldDeviceRefusal !== undefined && baseLedger.tc2481ColdDeviceRefusal === undefined &&
+      (baseLedger.tc2481WebRouting === undefined || !hasAncestor(repoRoot, coldDeviceRefusal.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 cold-device root-only ratchet requires the merged Web routing row and its measured source ancestor.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -1010,20 +1018,39 @@ if (prBaseSha) {
   console.log("Replica size budget: no pull-request merge base; reporting only.");
 }
 
+async function runWebSdkTests(report: string) {
+  const stdoutFile = await open(`${report}.stdout.log`, "wx", 0o600);
+  try {
+    const stderrFile = await open(`${report}.stderr.log`, "wx", 0o600);
+    try {
+      // File-backed stdio retains the full result without spawnSync's output buffer.
+      const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
+        cwd: resolve(import.meta.dir, "../../.."),
+        stdio: ["ignore", stdoutFile.fd, stderrFile.fd],
+      });
+      const [stdout, stderr] = await Promise.all([
+        readFile(`${report}.stdout.log`, "utf8"),
+        readFile(`${report}.stderr.log`, "utf8"),
+      ]);
+      return { status: test.status, signal: test.signal, error: test.error, stdout, stderr };
+    } finally {
+      await stderrFile.close();
+    }
+  } finally {
+    await stdoutFile.close();
+  }
+}
+
 // Keep structural/size inspection independent of the web test suite.
 if (process.argv.includes("--dist-only")) process.exit(failed ? 1 : 0);
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
 const report = join(reportDir, "web-sdk.xml");
 try {
   // Bun's file workers share global test shims; keep the suite in one worker.
-  const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
-    cwd: resolve(import.meta.dir, "../../.."),
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  if (test.error) throw test.error;
+  const test = await runWebSdkTests(report);
   process.stdout.write(test.stdout);
   process.stderr.write(test.stderr);
+  if (test.error) throw test.error;
   const exitFailure = webSdkTestExitFailure(test.status, test.signal);
   if (exitFailure) {
     console.error(`${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);

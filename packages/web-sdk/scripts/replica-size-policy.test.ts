@@ -57,6 +57,7 @@ import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } f
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
+import { approvedTc2481ColdDeviceRefusal, validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 
@@ -4599,7 +4600,10 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
   });
 });
 
+const tc2481WebRoutingLedger: Ledger = { ...current, tc2481ColdDeviceRefusal: undefined };
+
 describe("TC-2481 Web routing exact pinned admission", () => {
+  const current = tc2481WebRoutingLedger;
   const routing = () => structuredClone(current.tc2481WebRouting!);
 
   it("admits the measured root and first-import deltas through the newest root row", () => {
@@ -4708,5 +4712,56 @@ describe("TC-2481 Web routing exact pinned admission", () => {
     const duplicate = copy(current);
     duplicate.entries.push(entry);
     expect(() => validateLedger(duplicate)).toThrow();
+  });
+});
+
+describe("TC-2481 cold-device root-only admission", () => {
+  it("selects the later measured root admission without changing the preceding row", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(rootCeilingFor(current, format)).toEqual({
+        row: "tc2481ColdDeviceRefusal",
+        ceiling: approvedTc2481ColdDeviceRefusal.root.ceiling[format],
+      });
+      expect(rootCeilingFor(tc2481WebRoutingLedger, format)).toEqual({
+        row: "tc2481WebRouting",
+        ceiling: current.tc2481WebRouting!.root.ceiling[format],
+      });
+    }
+  });
+
+  it("rejects even one extra root byte and any additional size bucket", () => {
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      const changed = copy(current);
+      changed.tc2481ColdDeviceRefusal!.root.ceiling[format]++;
+      expect(() => validateLedger(changed)).toThrow();
+    }
+    for (const field of ["firstImport", "activation", "worker", "replicaWorker"]) {
+      const changed = copy(current);
+      Object.assign(changed.tc2481ColdDeviceRefusal!, { [field]: { delta: 1, ceiling: 1 } });
+      expect(() => validateLedger(changed)).toThrow();
+    }
+  });
+
+  it("rejects changed provenance or removal of the preceding approved admission", () => {
+    const source = copy(current);
+    source.tc2481ColdDeviceRefusal!.sourceCommits[0] = "0".repeat(40);
+    expect(() => validateLedger(source)).toThrow();
+    const ci = copy(current);
+    ci.tc2481ColdDeviceRefusal!.canonicalCI.jobs = [];
+    expect(() => validateLedger(ci)).toThrow();
+    const previous = copy(current);
+    delete previous.tc2481WebRouting;
+    expect(() => validateLedger(previous)).toThrow();
+  });
+
+  it("allows one exact introduction and rejects later mutation or removal", () => {
+    const approved = structuredClone(approvedTc2481ColdDeviceRefusal);
+    expect(() => validateTc2481ColdDeviceRefusalTransition(undefined, approved)).not.toThrow();
+    expect(() => validateTc2481ColdDeviceRefusalTransition(approved, approved)).not.toThrow();
+    const changed = structuredClone(approved);
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2481ColdDeviceRefusalTransition(approved, changed)).toThrow();
+    expect(() => validateTc2481ColdDeviceRefusalTransition(approved, undefined)).toThrow();
   });
 });

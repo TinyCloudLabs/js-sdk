@@ -64,7 +64,9 @@ const scheduler: ReplicationScheduler = {
 
 const RESTORE_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
 
-async function replicationRestorableSession() {
+async function replicationRestorableSession(
+  kvAbilities: Record<string, string[]> = { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+) {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(RESTORE_PRIVATE_KEY);
   const manager = wasm.createSessionManager();
@@ -76,7 +78,7 @@ async function replicationRestorableSession() {
   const expiresAt = new Date(now.getTime() + 4 * 60_000);
   const verificationMethod = manager.getDID("default");
   const prepared = wasm.prepareSession({
-    abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    abilities: { kv: kvAbilities },
     address,
     chainId,
     domain: "replication.test",
@@ -425,6 +427,61 @@ describe("node replication integration", () => {
       expect(opened).toBe(10);
       expect(delegatePosts).toBe(0);
     } finally {
+      globalThis.fetch = originalFetch;
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  });
+  test("replica hydration does not authorize cold network reads writes or grant activation", async () => {
+    const { proof } = await replicationRestorableSession({
+      "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/sync"],
+    });
+    const profileDir = await mkdtemp(join(tmpdir(), "tc2481-cold-replica-"));
+    const gate = await getNodeReplicationLoaders().gate();
+    const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
+    const host = "https://cold-replica.storage.test";
+    const registry = "https://cold-replica.registry.test";
+    const node = new TinyCloudNode({
+      host,
+      tinycloudRegistryUrl: registry,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      wasmBindings: new NodeWasmBindings(),
+      replication: { enabled: true, prefixes: ["notes/"], storage: harness().storage, mode: "foreground", profileDir },
+    });
+    const originalFetch = globalThis.fetch;
+    const attempts: Array<{ origin: string; pathname: string; method: string }> = [];
+    let dataCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+      attempts.push({ origin: url.origin, pathname: url.pathname, method });
+      if (url.origin === registry) return new Response("unavailable", { status: 503 });
+      if (url.origin === host && url.pathname === "/info" && method === "GET") {
+        return new Response("offline", { status: 500 });
+      }
+      dataCalls++;
+      throw new Error("Cold network data must not be attempted");
+    }) as typeof fetch;
+    try {
+      await node.restoreSession({ ...proof, replicaStamp, tinycloudHosts: [host] });
+      expect(node.restorableSession?.delegationCid).toBe(proof.delegationCid);
+      expect(attempts.filter(({ origin }) => origin === registry)).toEqual([]);
+      const write = await node.kv.put("outside/value", "TEST");
+      expect(write.ok).toBe(false);
+      if (!write.ok) expect(write.error.code).toBe("registry_unavailable");
+      const secret = await node.secretsForSpace(proof.spaceId).get("outside/secret");
+      expect(secret.ok).toBe(false);
+      if (!secret.ok) expect(secret.error.code).toBe("registry_unavailable");
+      const delegate = new NodeWasmBindings().createSessionManager().getDID("default").split("#")[0]!;
+      await expect(node.delegateTo(delegate, [{
+        service: "tinycloud.kv", space: proof.spaceId, path: "outside/", actions: ["tinycloud.kv/get"],
+      }], { expiry: 60_000 })).rejects.toMatchObject({ code: "registry_unavailable" });
+      expect(attempts.some(({ origin }) => origin === registry)).toBe(true);
+      expect(dataCalls).toBe(0);
+    } finally {
+      await node.replication?.close();
       globalThis.fetch = originalFetch;
       await rm(profileDir, { recursive: true, force: true });
     }
