@@ -522,7 +522,7 @@ export async function loadManifestPermissions(
   );
 }
 
-const DEVICE_MANIFEST_NEXT = "Use browser or --paste login for anything else.";
+const DEVICE_MANIFEST_NEXT = "Use browser or --paste login for this manifest.";
 
 /** An app manifest's permissions, each as it will be requested (see `appManifestEntry`). */
 function appManifestEntries(manifest: Record<string, unknown>): PermissionEntry[] {

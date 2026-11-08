@@ -51,15 +51,16 @@ export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEn
 const DEVICE_DECRYPT_ALLOWED = "tinycloud.encryption/decrypt on the default network (space \"default\", path \"\")";
 
 /**
- * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what --device allows, what `subject` ("this manifest", "this request")
- * asked for instead, and `next`, where to go for anything else. Request text is escaped and clipped.
+ * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what was refused, what --device allows, and `next` ("Use … for this
+ * manifest."). `subject` ("this manifest", "this request") names who asked for the secrets space. Request text is
+ * escaped and clipped.
  */
 export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subject: string, next: string): string {
+  const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
   if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}. ${next}`;
+    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
   }
-  const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ");
-  return `--device can ask for only one encryption permission: ${DEVICE_DECRYPT_ALLOWED}. ` +
-    `${subject[0]!.toUpperCase()}${subject.slice(1)} asks for ${safeClipped(refused.service)} ${actions || "(no actions)"} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with limits" : ""}. ` +
-    `The secrets space isn't available either. ${next}`;
+  const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
+  return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"` +
+    `${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
 }

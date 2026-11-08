@@ -563,8 +563,8 @@ describe("loadManifestPermissions", () => {
     };
     const source = manifestSource({ app_id: "xyz.tinycloud.agent", space: "default", permissions: [{ service: "tinycloud.encryption", path: "share/", actions: ["decrypt"] }] });
     const error = await loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true }).catch((caught: Error) => caught);
-    expect((error as Error).message).toContain("tinycloud.encryption/decrypt on the default network (space \"default\", path \"\")");
-    expect((error as Error).message).toContain("asks for tinycloud.encryption tinycloud.encryption/decrypt on space \"default\", path \"share/\"");
+    expect((error as Error).message).toContain("can't ask for tinycloud.encryption/decrypt on space \"default\", path \"share/\".");
+    expect((error as Error).message).toContain("The only encryption permission --device can ask for is tinycloud.encryption/decrypt on the default network (space \"default\", path \"\").");
   });
 
   test("outside --device an unprefixed app-manifest decrypt resolves to the owner's default network, not a path under the app", async () => {
