@@ -669,10 +669,11 @@ export class RemoteTenantStore {
             : tcAppsApprovalReason(pending.permissions) ??
               "Approve the exact capabilities requested by the TinyCloud MCP operation.",
           // Owner DIDs come from the verified OpenKey access token of the MCP
-          // client that created this link, never from the link itself.
+          // client that created this link, never from the link itself. The
+          // callback refuses a signer outside them, so the approver isn't asked to check.
           ...(pending.ownerDids.length === 0
             ? []
-            : [`Requested by TinyCloud account ${pending.ownerDids.join(", ")}; approve only if that is you.`]),
+            : [`Requested by TinyCloud account ${pending.ownerDids.join(", ")}.`]),
         ].join(" "),
       })).toString("base64url"),
       expiry: this.#config.delegationExpiry,

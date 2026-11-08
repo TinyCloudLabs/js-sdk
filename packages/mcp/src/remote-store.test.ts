@@ -147,6 +147,8 @@ test("first operations and expired sessions receive account-bound reconnect link
     const permissions = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString());
     expect(permissions.reason).toContain(requester);
     expect(permissions.reason).not.toContain(foreignOwner);
+    // TC-2526: the refusal below enforces the owner, so the link doesn't ask the approver to.
+    expect(permissions.reason).not.toMatch(/approve only if/i);
     expect(permissions.permissions).toEqual([
       { service: "tinycloud.kv", space: "account", path: "spaces/", actions: BOOTSTRAP_ABILITIES.kv["spaces/"] },
       { service: "tinycloud.kv", space: "account", path: "applications/", actions: BOOTSTRAP_ABILITIES.kv["applications/"] },
@@ -290,6 +292,8 @@ test("delegation approvals from another owner are refused before anything is sto
   const redirect = new URL(await store.approvalRedirect(state));
   const reason = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString("utf8")).reason;
   expect(reason).toContain(requester);
+  // TC-2526: the refusal below enforces the owner, so the link doesn't ask the approver to.
+  expect(reason).not.toMatch(/approve only if/i);
 
   const abilities = { kv: { "agents/demo/profile": ["tinycloud.kv/get"] } };
   const foreignApproval = await openKeyCallbackBody({
