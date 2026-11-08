@@ -147,7 +147,7 @@ async function attachLogs(reportId: string, tokenStdin: boolean, dependencies: B
   }
   const receipt = await response.json().catch(() => null) as { redactions?: Record<string, number> } | null;
   if (!receipt) {
-    output(`Attached your CLI log to report ${reportId}. The server's hidden-value count is unavailable.\n`);
+    output(`Attached your CLI log to report ${reportId}. The server didn't say how many more values it hid.\n`);
     return;
   }
   const serverCount = Object.values(receipt.redactions ?? {}).reduce((sum, value) => sum + (Number.isFinite(value) && value > 0 ? value : 0), 0);
