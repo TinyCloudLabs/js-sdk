@@ -139,6 +139,58 @@ describe("signed resource routing", () => {
     });
   });
 
+  test.each(["get", "put", "delete", "list"] as const)(
+    "preserves settings unavailability through the public secrets %s API",
+    async (action) => {
+      const failure = Object.assign(new Error("Private registry detail must remain typed"), {
+        code: "registry_unavailable",
+        meta: { reason: "no-saved-settings" },
+      });
+      const unusedCrypto = (): never => { throw new Error("Registry refusal must precede crypto and data transport"); };
+      let routeChecks = 0;
+      let dataRequests = 0;
+      const refuseRoute = async () => { routeChecks++; throw failure; };
+      const ctx = new ServiceContext({
+        hosts: [box.url],
+        invoke: () => ({ Authorization: token(`tinycloud.kv/${action === "delete" ? "del" : action}`) }),
+        fetch: createResourceRoutingFetch(async () => {
+          dataRequests++;
+          throw new Error("Unavailable settings must not reach a data server");
+        }, {
+          resolveResource: refuseRoute,
+          bindAudience: async (authorization) => authorization,
+        }),
+      });
+      ctx.setSession({ spaceId: space, delegationCid: "test", delegationHeader: { Authorization: "test" }, verificationMethod: "did:key:session", jwk: {} });
+      const kv = new KVService();
+      kv.initialize(ctx);
+      const encryption = new EncryptionService({
+        crypto: { sha256: unusedCrypto, randomBytes: unusedCrypto, x25519FromSeed: unusedCrypto, x25519Dh: unusedCrypto, authEncrypt: unusedCrypto, authDecrypt: unusedCrypto, sealToNetworkKey: unusedCrypto, openWithReceiverKey: unusedCrypto, verifyNodeSignature: unusedCrypto },
+        signer: { signDecryptInvocation: async () => unusedCrypto() },
+        transport: { postDecrypt: async () => unusedCrypto() },
+        node: { fetchByNetworkId: refuseRoute },
+      });
+      const vault = new DataVaultService({
+        spaceId: space,
+        crypto: { encrypt: unusedCrypto, decrypt: unusedCrypto, deriveKey: unusedCrypto, x25519FromSeed: unusedCrypto, x25519Dh: unusedCrypto, randomBytes: unusedCrypto, sha256: unusedCrypto },
+        encryption: { networkId: "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default", service: encryption },
+        tc: { kv, publicKV: kv, ensurePublicSpace: async () => unusedCrypto(), readPublicSpace: async () => unusedCrypto(), makePublicSpaceId: unusedCrypto, did: "did:key:test", address: "", chainId: 1, hosts: [box.url] },
+      });
+      vault.initialize(ctx);
+      const secrets = new SecretsService(vault);
+      const result = action === "get" ? await secrets.get("DEMO", { source: "network" })
+        : action === "put" ? await secrets.put("DEMO", "TEST-ONLY-NOT-A-REAL-SECRET")
+        : action === "delete" ? await secrets.delete("DEMO")
+        : await secrets.list({ source: "network" });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "registry_unavailable", meta: { reason: "no-saved-settings" } },
+      });
+      expect(routeChecks).toBe(1);
+      expect(dataRequests).toBe(0);
+    },
+  );
+
   test("live identity surfaces must agree with the signed destination", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1", port: 0,
