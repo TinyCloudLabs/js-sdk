@@ -202,6 +202,7 @@
       "command": "apps install <app_id>",
       "status": "excluded",
       "reason": "Local installer: verifies pinned Share bytes, runs pinned DDL, writes knowledge files via SDK KV/SQL; not a shared operation."
-    }
+    },
+    { "command": "bug-report", "status": "excluded", "reason": "Uploads the locally redacted CLI log to bug-report intake; not a TinyCloud storage operation." }
   ]
 }
