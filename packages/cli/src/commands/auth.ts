@@ -1389,7 +1389,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           requested,
           parsed.requestedExpiry,
           applications!.space ?? APPS_AGENT_SPACE,
-          profile.authMethod === "openkey" ? OPENKEY_AGENT_MAX_LIFETIME_MS : undefined,
+          profile.authMethod === "openkey" ? parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs : undefined,
         );
         process.stderr.write(`\n${scope.text}\n\n`);
         const resolvedRequest = { ...parsed, requested };
@@ -1399,15 +1399,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           assertOpenKeyAgentRequest(requested);
           // The owner approves each agent request in OpenKey, requested fresh for this command:
           // existing runtime or persisted authority and --yes do not skip it. The approval lasts the
-          // request's lifetime, capped at the apps-agent default, and the grant lasts as long as it.
+          // request's lifetime (the apps-agent default when it names none), and the grant lasts as long
+          // as it. There is no upper cap: revocation, not expiry, cuts an agent off early.
           const approval = await acquireOpenKeyApproval({
             ctx,
             profile,
             requested,
-            expiryOption: Math.min(
-              parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
-              OPENKEY_AGENT_MAX_LIFETIME_MS,
-            ),
+            expiryOption: parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
             commandIntent: approvalCommandIntent(parsed),
@@ -2155,9 +2153,6 @@ export async function ensureDelegationAuthority(params: {
     });
   }
 }
-
-/** OpenKey lifetime cap for an agent grant: the apps-agent default. */
-const OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
 
 /** An agent request is approved in OpenKey only if it covers one space and no raw authority. */
 function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {

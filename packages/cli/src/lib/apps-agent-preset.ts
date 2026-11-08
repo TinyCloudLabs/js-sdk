@@ -477,8 +477,8 @@ export function describeGrantScope(
   requested: readonly PermissionEntry[],
   requestedExpiry: string | number | undefined,
   applicationsSpace: string,
-  /** Longest lifetime the grant can actually have; the notice states the capped duration. */
-  maxLifetimeMs?: number,
+  /** Lifetime the grant gets when the request names none; the SDK session default when not given. */
+  defaultLifetimeMs?: number,
 ): GrantScope {
   const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
   if (preset !== undefined) {
@@ -503,9 +503,9 @@ export function describeGrantScope(
     lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
-  const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes]
-    .filter((ms): ms is number => ms !== undefined)
-    .map((ms) => Math.min(ms, maxLifetimeMs ?? Number.POSITIVE_INFINITY));
+  const requestedLifetime = requestedExpiry === undefined && defaultLifetimeMs !== undefined ? defaultLifetimeMs : lifetimeMs(requestedExpiry);
+  const durations = [requestedLifetime, ...entryLifetimes]
+    .filter((ms): ms is number => ms !== undefined);
   const longest = Math.max(...durations);
   lines.push(
     durations.length === 0 || !Number.isFinite(longest)

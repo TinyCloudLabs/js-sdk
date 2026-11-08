@@ -136,7 +136,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
         resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt, relay: entry.relay });
     }
     if (typeof body.ackId !== "string" || !body.ackId) return new Response(null, { status: 400 });
-    await observeDurableCommand(entry, body.ackId);
+    if (entry.preparedRequestId !== undefined) await observeDurableCommand(entry, body.ackId);
     if (crashBoundary === "before-ack") {
       crashBoundary = undefined; activeGrant!.kill("SIGKILL");
       return new Response(null, { status: 503 });
@@ -186,14 +186,18 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     return abilities;
   }
 
-  /** Runs the real CLI and answers its immutable request using the synthetic owner signer. */
+  /**
+   * Runs the real CLI and answers its immutable request using the synthetic owner signer. `args` runs another
+   * owner command than `auth grant <requestFile>` (one whose OpenKey approval is not an agent grant).
+   */
   async function grantWithOpenKey(
     requestFile: string,
     approve: (permissions: PermissionEntry[]) => { permissions: PermissionEntry[]; signer: PrivateKeySigner },
+    args?: string[],
   ) {
-    const preparedRequest = JSON.parse(await readFile(requestFile, "utf8"));
+    const preparedRequest = args === undefined ? JSON.parse(await readFile(requestFile, "utf8")) : {};
     let approvalCallbacks = 0;
-    const { argv, env } = cliArgs("owner", ["auth", "grant", requestFile, "--yes"]);
+    const { argv, env } = cliArgs("owner", args ?? ["auth", "grant", requestFile, "--yes"]);
     const child = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     activeGrant = child;
     const stdoutText = new Response(child.stdout).text();
@@ -469,6 +473,37 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     expect(grant.prompted).toBe(true);
     expect(hoursUntil(grant.expiry)).toBeGreaterThan(6 * 24 - 0.1);
     expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(6 * 24);
+  });
+
+  test("a 30 d request gets a 30 d grant (no 7-day cap); once the owner revokes it the node refuses the agent", async () => {
+    const req = await agentRequest("agent30d", ["--cap", "tinycloud.kv:applications:demo/:get,list", "--expiry", "30d"]);
+    const result = await grantWithOpenKey(req, (permissions) => ({ permissions, signer: ownerSigner }));
+    expect(result.exitCode).toBe(0);
+    expect(result.grantLifetimeSeconds).toBe(30 * 86400);
+    const grant = JSON.parse(result.stdout) as { expiry: string; delegationCid: string };
+    expect(hoursUntil(grant.expiry)).toBeGreaterThan(30 * 24 - 0.1);
+    expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(30 * 24);
+
+    const grantFile = join(root, "agent30d-grant.json");
+    await writeFile(grantFile, result.stdout);
+    expect((await cli("agent30d", ["auth", "import", grantFile])).exitCode).toBe(0);
+    const before = await cli("agent30d", ["kv", "get", "--space", appSpace, "demo/knowledge/a.md"]);
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout).toContain("hello-tc1422");
+
+    // Revocation, not expiry, cuts the agent off: the OpenKey owner revokes the grant from the CLI, approving the
+    // one-use revoke authority in (the fixture) OpenKey, and the node records the revocation.
+    const revoked = await grantWithOpenKey("", (permissions) => ({ permissions, signer: ownerSigner }),
+      ["delegation", "revoke", grant.delegationCid]);
+    expect(revoked.approvalCallbacks).toBe(1);
+    expect(revoked.exitCode).toBe(0);
+    expect(JSON.parse(revoked.stdout)).toMatchObject({ cid: grant.delegationCid, revoked: true });
+
+    const after = await cli("agent30d", ["kv", "get", "--space", appSpace, "demo/knowledge/a.md"]);
+    // The node's 401 names the revoked grant (mapped to GRANT_REVOKED); nothing is read.
+    expect(after.exitCode).not.toBe(0);
+    expect(JSON.parse(after.stderr).error.code).toBe("GRANT_REVOKED");
+    expect(after.stdout).not.toContain("hello-tc1422");
   });
 
   test("an approval that unchecks an ability is refused with OPENKEY_APPROVAL_NARROWER and emits no grant", async () => {

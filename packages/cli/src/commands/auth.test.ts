@@ -2497,13 +2497,19 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(grantExpiry).toBeGreaterThan(2 * DAY_MS - 60_000);
   });
 
-  test("the approval requested from OpenKey for an agent is capped at 7 days", async () => {
+  test.each([
+    ["30d", "2592000s"],
+    ["365d", "31536000s"],
+    [undefined, "604800s"],
+  ])("an agent request for %s asks OpenKey for %s: the request's own lifetime, no 7-day cap; 7 days only when it names none", async (requested, asked) => {
     openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
-    const source = await writeAgentRequest("openkey-agent-capped.json", "30d");
+    const source = await writeAgentRequest(`openkey-agent-lifetime-${requested ?? "default"}.json`, requested);
 
-    await runAuthCommand(["auth", "grant", source, "--yes"]);
+    const { stderr } = await grantWith([source], { stdin: false, stdout: false, stderr: false });
 
-    expect(recorded.startAuthFlows[0]?.options.expiry).toBe("604800s");
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows[0]?.options.expiry).toBe(asked);
+    expect(stderr).toContain(requested === undefined ? "It lasts up to 7 days" : `It lasts up to ${Number.parseInt(requested, 10)} days`);
   });
 
   test("an approval from another owner is refused and no grant is stored", async () => {
