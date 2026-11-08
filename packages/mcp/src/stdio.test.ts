@@ -1,8 +1,10 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertPrivateTestEnvironment } from "../../operations/test-support/private-home.mjs";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -13,6 +15,23 @@ const tinycloudCliPath = join(packageDirectory, "../cli/dist/index.js");
 const nodeBinary = process.env.NODE_BINARY ?? "node";
 const homes: string[] = [];
 
+function privateClientEnvironment(home: string, nodeOrigin?: string) {
+  const bootstrap = new URL("../../operations/test-support/test-bootstrap.mjs", import.meta.url).href;
+  const registryPreload = nodeOrigin
+    ? ` --import=${new URL("./test-support/registry-fixture.mjs", import.meta.url).href}`
+    : "";
+  const environment = {
+    ...process.env,
+    HOME: home,
+    TC_HOME: home,
+    USERPROFILE: home,
+    TC_TEST_MCP_NODE_ORIGIN: nodeOrigin ?? "",
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${bootstrap}${registryPreload}`.trim(),
+  };
+  assertPrivateTestEnvironment(environment, home);
+  return environment;
+}
+
 afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
@@ -22,7 +41,7 @@ test("official v2 client enforces operation schemas and owner opt-in over stdio"
   const transport = new StdioClientTransport({
     command: nodeBinary,
     args: [cliPath, "--profile", "default"],
-    env: { ...process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stderr: "pipe",
   });
   const client = new Client({ name: "tinycloud-mcp-i4-test", version: "0.0.0" });
@@ -171,7 +190,7 @@ test("an explicitly pinned missing profile never falls back to config.defaultPro
   const transport = new StdioClientTransport({
     command: nodeBinary,
     args: [cliPath, "--profile", "missing"],
-    env: { ...process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
   });
   const client = new Client({ name: "tinycloud-mcp-pinned-profile-test", version: "0.0.0" });
   try {
@@ -348,6 +367,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     await writeFile(freshProfilePath, JSON.stringify({
       ...freshProfileConfig,
       autoDiscoverLocalNode: false,
+      tinycloudRegistryUrl: fixture.hermetic.host,
     }, null, 2));
     stage = "create bootstrap account request";
     const accountRequest = await runTinyCloudCli(home, [
@@ -389,7 +409,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     ], accountGrant)).toMatchObject({ imported: true, activated: true });
 
     stage = "retry account spaces";
-    retry = await connectClient(home, ["--profile", freshProfile]);
+    retry = await connectClient(home, ["--profile", freshProfile], fixture.hermetic.host);
     expect(contentOf(await timedTool(retry.client, {
       name: "tinycloud_account_spaces_list",
       arguments: {},
@@ -425,7 +445,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     });
 
     stage = "import KV get grant";
-    importer = await connectClient(home, ["--profile", freshProfile]);
+    importer = await connectClient(home, ["--profile", freshProfile], fixture.hermetic.host);
     expect(contentOf(await timedTool(importer.client, {
       name: "tinycloud_auth_import",
       arguments: kvGrant,
@@ -434,7 +454,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     importer = undefined;
 
     stage = "retry KV get";
-    retry = await connectClient(home, ["--profile", freshProfile]);
+    retry = await connectClient(home, ["--profile", freshProfile], fixture.hermetic.host);
     expect(contentOf(await timedTool(retry.client, {
       name: "tinycloud_kv_get",
       arguments: { space: "applications", key: "agents/demo/profile", representation: "json" },
@@ -1005,7 +1025,7 @@ async function runTinyCloudCliExit(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn({
     cmd: [nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args],
-    env: { ...globalThis.process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -1027,11 +1047,11 @@ interface ConnectedClient {
   readonly stderr: () => string;
 }
 
-async function connectClient(home: string, args: readonly string[]): Promise<ConnectedClient> {
+async function connectClient(home: string, args: readonly string[], nodeOrigin?: string): Promise<ConnectedClient> {
   const transport = new StdioClientTransport({
     command: nodeBinary,
     args: [cliPath, ...args],
-    env: { ...process.env, TC_HOME: home },
+    env: privateClientEnvironment(home, nodeOrigin),
     stderr: "pipe",
   });
   const client = new Client({ name: "tinycloud-mcp-hermetic-test", version: "0.0.0" });
@@ -1048,7 +1068,7 @@ async function runOwnerGrant(
 ): Promise<Record<string, any>> {
   const process = Bun.spawn({
     cmd: [nodeBinary, tinycloudCliPath, "--profile", profile, "--json", "--quiet", "auth", "grant", "--stdin", "--yes"],
-    env: { ...globalThis.process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -1071,7 +1091,7 @@ async function runTinyCloudCli(
 ): Promise<Record<string, any>> {
   const process = Bun.spawn({
     cmd: [nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args],
-    env: { ...globalThis.process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stdin: input === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",

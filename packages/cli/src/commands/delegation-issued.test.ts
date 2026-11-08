@@ -153,7 +153,6 @@ mock.module("./auth.js", () => ({
     authorityRequests.push(params);
     return undefined;
   },
-  requirePermissionConsent: async () => {},
   finishProfileLogout: async () => 0,
   prepareProfileRemoteLogout: async () => undefined,
 }));

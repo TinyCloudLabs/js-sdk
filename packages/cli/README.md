@@ -59,6 +59,24 @@ value when explicitly requested; MCP hosts control their own transcript
 retention. Owner authority is an explicit posture choice, not an automatic
 fallback for delegated execution.
 
+## Inspect signed registry placement
+
+```bash
+tinycloud --profile agent registry show
+tinycloud --profile agent registry show did:pkh:eip155:1:0x...
+tinycloud --json --profile agent registry show
+```
+
+`registry show [did]` verifies the local signed cache and reports owner, sequence, fetch age, full space placement, node hostnames, read-write/read-only modes and encryption destination. Without a DID it uses the selected profile's owner, not its agent/session key. It performs no sign-in, grant activation, registry request or profile write.
+
+The independently readable plain file is `~/.tinycloud/profiles/<profile>/registry-cache.json` (`0600`, directory `0700`). Each entry contains untouched signed response text plus separate fetch/owner/sequence metadata. CLI and canonical Operations runtimes share the profile lock and atomic writer. Every cached read reverifies the response; only a strictly higher sequence replaces it.
+
+Every routing decision awaits a bounded registry refresh; concurrent checks coalesce. If that check fails with a transport error, timeout, or HTTP502/503/504, a verified cache younger than one hour may supply the signed route. Older caches, HTTP500 and other warm HTTP failures, invalid responses, rollback, and wrong-role placement fail closed. An authoritative HTTP4xx or fresh owner/route removal immediately denies access and deletes the cached response while retaining the independent sequence highwater; a later outage cannot resurrect that route or select a default node.
+
+Fallback warnings remain on stderr, never secret/raw stdout. JSON warnings use code `REGISTRY_UNAVAILABLE` with reason `using_cached_settings` for a verified warm fallback, or `using_default_node` for the unchanged cold HTTP5xx/transport/timeout compatibility path when no cache or remembered registration exists. Repeated decisions emit each selected fallback warning once per command, including when a later output step fails. SDK callbacks retain the human explanation as argument one and may receive the corresponding semantic reason as optional argument two. This client policy does not change node-side online admission.
+
+Details: TC-2481
+
 ## Quick Start
 
 ```bash

@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
@@ -7,9 +8,11 @@ import {
   CaveatedDelegationUnsupportedError,
   canonicalizeEncryptionJson,
   authorizationVerdictOf,
+  REGISTRY_NOT_FOUND_BODY,
   type EncodedShareData,
   type ISessionManager,
   type IWasmBindings,
+  type WasmRecapEntry,
 } from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
 import { ed25519 } from "@noble/curves/ed25519";
@@ -24,6 +27,21 @@ import { deserializeDelegation, serializeDelegation } from "./delegation";
 const originalFetch = globalThis.fetch;
 const OWNER = "0xD559CCd9EB87c530A9a349262669386dE93cf412";
 const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
+const HOST = "https://node.example";
+
+function registryResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (url.origin !== HOST || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return;
+  expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+}
+
+interface SharingSessionConfig {
+  spaceId: string;
+  abilities?: Record<string, Record<string, string[]>>;
+  rawAbilities?: Record<string, string[]>;
+}
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -36,12 +54,24 @@ function makeFakeSessionManager(): ISessionManager {
 }
 
 function makeWasmBindings(): IWasmBindings {
+  const recaps = new Map<string, WasmRecapEntry[]>();
   return {
     createSessionManager: makeFakeSessionManager,
-    prepareSession: mock((config: unknown) => ({
-      ...(config as object),
-      siwe: "share-siwe",
-    })),
+    prepareSession: mock((config: SharingSessionConfig) => {
+      const siwe = `share-siwe-${recaps.size}`;
+      recaps.set(siwe, [
+        ...Object.entries(config.abilities ?? {}).flatMap(([service, paths]) =>
+          Object.entries(paths).map(([path, actions]) => ({ service, space: config.spaceId, path, actions }))),
+        ...Object.entries(config.rawAbilities ?? {}).map(([path, actions]) =>
+          ({ service: "encryption", space: "encryption", path, actions })),
+      ]);
+      return { ...config, siwe };
+    }),
+    parseRecapFromSiwe: mock((siwe: string) => {
+      const recap = recaps.get(siwe);
+      if (!recap) throw new Error(`Unknown sharing fixture SIWE: ${siwe}`);
+      return recap;
+    }),
     completeSessionSetup: mock((config: unknown) => ({
       ...(config as object),
       delegationCid: "share-delegation-cid",
@@ -59,15 +89,20 @@ afterEach(() => {
 describe("TinyCloudNode sharing", () => {
   test("root sharing delegates SQL actions under the SQL service", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
 
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: {
         signMessage: mock(async () => "signature"),
       } as any,
@@ -97,22 +132,24 @@ describe("TinyCloudNode sharing", () => {
 
   test("projects KV and explicit encryption decrypt resources into a child delegation", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    const activationFetch = mock(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Response.json({ activated: ["share-delegation-cid"], skipped: [] }));
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => registryResponse(input, init) ?? activationFetch(input, init),
+      { preconnect: originalFetch.preconnect },
+    );
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
     (node as any)._address = OWNER;
     (node as any)._chainId = 1;
+    const network = `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER.toLowerCase()}:default`;
     const resources = [
       { service: "kv", space: SPACE, path: "docs", actions: ["tinycloud.kv/get"] },
-      { service: "encryption", space: "encryption", path: "urn:tinycloud:encryption:network-1", actions: ["tinycloud.encryption/decrypt"] },
+      { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
     ];
     const delegation = await node.createSubDelegation(
       {
@@ -131,21 +168,26 @@ describe("TinyCloudNode sharing", () => {
     );
     const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
     expect(prepared.abilities).toEqual({ kv: { docs: ["tinycloud.kv/get"] } });
-    expect(prepared.rawAbilities).toEqual({ "urn:tinycloud:encryption:network-1": ["tinycloud.encryption/decrypt"] });
+    expect(prepared.rawAbilities).toEqual({ [network]: ["tinycloud.encryption/decrypt"] });
     expect(delegation.resources).toEqual(resources);
-    expect((globalThis.fetch as any).mock.calls[0][0]).toBe("https://node.example/delegate");
+    expect(activationFetch.mock.calls[0]?.[0]).toBe("https://node.example/delegate");
   });
 
   test("TC-531: a sub-delegation defaults to its parent's expiry, the longest it may last", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ activated: ["share-delegation-cid"], skipped: [] }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -454,18 +496,23 @@ describe("TinyCloudNode sharing", () => {
 
   test("public owner delegation is wallet-rooted, caller-targeted, expiring, and returns raw receipt identities", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        cid: "commit-event-cid",
-        activated: ["tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications"],
-        skipped: [],
-      }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          cid: "commit-event-cid",
+          activated: ["tinycloud:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412:applications"],
+          skipped: [],
+        }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -500,14 +547,19 @@ describe("TinyCloudNode sharing", () => {
 
   test("public owner delegation signs exact KV and owner-network decrypt resources in one wallet-rooted grant", async () => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
-      text: async () => "",
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ cid: "commit-event-cid", activated: ["share-delegation-cid"], skipped: [] }),
+        text: async () => "",
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });
@@ -596,15 +648,20 @@ describe("TinyCloudNode sharing", () => {
     [503, "activation unavailable"],
   ])("public owner delegation fails closed when /delegate returns %i", async (status, error) => {
     const wasmBindings = makeWasmBindings();
-    globalThis.fetch = mock(async () => ({
-      ok: false,
-      status,
-      statusText: error,
-      json: async () => ({}),
-      text: async () => error,
-    })) as unknown as typeof fetch;
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
+      return {
+        ok: false,
+        status,
+        statusText: error,
+        json: async () => ({}),
+        text: async () => error,
+      };
+    }) as unknown as typeof fetch;
     const node = new TinyCloudNode({
       host: "https://node.example",
+      tinycloudRegistryUrl: HOST,
       signer: { signMessage: mock(async () => "signature") } as any,
       wasmBindings,
     });

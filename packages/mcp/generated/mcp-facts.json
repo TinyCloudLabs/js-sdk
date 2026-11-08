@@ -364,6 +364,22 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud.registry.show",
+      "surfaces": [],
+      "operationId": "tinycloud.registry.show",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key",
+        "unauthenticated"
+      ],
+      "sensitiveOutput": false
+    },
+    {
       "name": "tinycloud_secrets_get",
       "surfaces": [
         "local",

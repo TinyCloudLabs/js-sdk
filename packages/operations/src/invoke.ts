@@ -301,7 +301,7 @@ async function retryWithLocalAuthority(
   }
 }
 
-/** Diagnostics from building the runtime belong to the invocation's result. */
+/** Runtime diagnostics, including route selection during execution, belong to the result. */
 function withRuntimeWarnings(
   result: OperationResult<unknown>,
   prepared: Exclude<PreparedInvocation, { status: "error" }>,
@@ -435,11 +435,15 @@ async function prepareInvocation(
       : await resolveRuntime(target, definition.runtime);
   if (!runtimeResolution.ok) {
     // Runtime-preparation errors share the execution errors' detail allowlist.
-    return { status: "error", result: errorResult(
+    const result = errorResult(
       operation,
       runtimeResolution.context,
       redactOperationError(definition, runtimeResolution.error),
-    ) };
+    );
+    return { status: "error", result: {
+      ...result,
+      ...(runtimeResolution.warnings === undefined ? {} : { warnings: runtimeResolution.warnings }),
+    } };
   }
   if (requiresRuntime(definition.runtime)) {
     const actualPosture = runtimeResolution.context.summary.posture;

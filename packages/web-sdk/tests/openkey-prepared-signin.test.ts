@@ -1,12 +1,20 @@
 import "./support/browserGlobalsShim";
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 import { privateKeyToAccount } from "viem/accounts";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 const address = "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
 const signer = privateKeyToAccount(`0x${"1".padStart(64, "0")}`);
 const open = mock(() => ({}));
 let priorWindow: typeof globalThis.window | undefined;
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
 beforeEach(() => {
   priorWindow = globalThis.window;
   globalThis.window = {
@@ -53,6 +61,7 @@ function client(approval?: (request: { siwe: string }) => Promise<unknown>) {
       provider,
       openkey: { client: openkey },
       tinycloudHosts: ["https://node.example.test"],
+      tinycloudRegistryUrl: registry.url.origin,
       autoDiscoverLocalNode: false,
       persistSession: false,
       autoCreateSpace: false,
@@ -92,7 +101,8 @@ async function signedResult(request: { siwe: string }) {
 async function withNodeFetch<T>(run: () => Promise<T>): Promise<T> {
   const original = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.startsWith(`${registry.url.origin}/`)) return original(input, init);
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
         status: 200, headers: { "content-type": "application/json" },

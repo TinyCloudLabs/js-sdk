@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,6 +6,7 @@ import { join } from "node:path";
 
 import { serializeDelegation } from "@tinycloud/node-sdk";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-node.mjs";
+import { resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import { ApprovalStageError, RemoteTenantStore } from "./remote-store.js";
 import { REQUESTER_KEY, openKeyCallbackBody, ownerDid } from "./test-support/openkey-callback.js";
@@ -18,8 +20,12 @@ const directories: string[] = [];
 const apps: HostedMcpApp[] = [];
 
 afterEach(async () => {
-  await Promise.all(apps.splice(0).map((app) => app.close()));
-  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  try {
+    await Promise.all(apps.splice(0).map((app) => app.close()));
+    await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  } finally {
+    resetMcpRegistryFixture();
+  }
 });
 
 test("serves hosted landing in HTML and Markdown with discovery links", async () => {
