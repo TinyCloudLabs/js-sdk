@@ -66,6 +66,7 @@ const RESTORE_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b
 
 async function replicationRestorableSession(
   kvAbilities: Record<string, string[]> = { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+  includeDecryption = false,
 ) {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(RESTORE_PRIVATE_KEY);
@@ -79,6 +80,11 @@ async function replicationRestorableSession(
   const verificationMethod = manager.getDID("default");
   const prepared = wasm.prepareSession({
     abilities: { kv: kvAbilities },
+    ...(includeDecryption ? {
+      rawAbilities: {
+        [`urn:tinycloud:encryption:${pkhDid(address, chainId)}:default`]: ["tinycloud.encryption/decrypt"],
+      },
+    } : {}),
     address,
     chainId,
     domain: "replication.test",
@@ -434,7 +440,7 @@ describe("node replication integration", () => {
   test("replica hydration does not authorize cold network reads writes or grant activation", async () => {
     const { proof } = await replicationRestorableSession({
       "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/sync"],
-    });
+    }, true);
     const profileDir = await mkdtemp(join(tmpdir(), "tc2481-cold-replica-"));
     const gate = await getNodeReplicationLoaders().gate();
     const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(proof.address, proof.chainId), {
@@ -471,7 +477,7 @@ describe("node replication integration", () => {
       const write = await node.kv.put("outside/value", "TEST");
       expect(write.ok).toBe(false);
       if (!write.ok) expect(write.error.code).toBe("registry_unavailable");
-      const secret = await node.secretsForSpace(proof.spaceId).get("outside/secret");
+      const secret = await node.secretsForSpace(proof.spaceId).get("TC2481_COLD_READ");
       expect(secret.ok).toBe(false);
       if (!secret.ok) expect(secret.error.code).toBe("registry_unavailable");
       const delegate = new NodeWasmBindings().createSessionManager().getDID("default").split("#")[0]!;
