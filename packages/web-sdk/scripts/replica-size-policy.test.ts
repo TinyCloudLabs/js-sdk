@@ -56,6 +56,7 @@ import { approvedTc2072LocationGuardRatchet, validateTc2072LocationGuardRatchetT
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
+import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 
@@ -2944,6 +2945,7 @@ delete tc2043Ledger.tc2379SignOutFence;
 delete tc2043Ledger.tc2380SpaceHosting;
 delete tc2043Ledger.tc2380Q2OneClick;
 delete tc2043Ledger.tc2481RegistryFreshness;
+delete tc2043Ledger.tc2481WebRouting;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4594,5 +4596,117 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2380SpaceHostingTransition(undefined, changed)).toThrow("TC-2380");
     expect(() => validateTc2380SpaceHostingTransition(row(), undefined)).toThrow("TC-2380");
+  });
+});
+
+describe("TC-2481 Web routing exact pinned admission", () => {
+  const routing = () => structuredClone(current.tc2481WebRouting!);
+
+  it("admits the measured root and first-import deltas through the newest root row", () => {
+    expect(current.tc2481WebRouting).toBeDefined();
+    expect(() => validateLedger(current)).not.toThrow();
+    const row = routing();
+    const previous = current.tc2481RegistryFreshness!;
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row.root.ceiling[format]).toBe(previous.root.ceiling[format] + row.root.delta[format]);
+      expect(rootCeilingFor(current, format)).toEqual({ row: "tc2481WebRouting", ceiling: row.root.ceiling[format] });
+    }
+    for (const format of ["replica.mjs", "replica.cjs"] as const) {
+      expect(row.firstImport.ceiling[format]).toBe(previous.firstImport.ceiling[format] + row.firstImport.delta[format]);
+    }
+  });
+
+  it("keeps activation and both workers at the preceding approved ceilings", () => {
+    const row = routing();
+    const previous = current.tc2481RegistryFreshness!;
+    expect(row.activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: previous.activation.ceiling });
+    expect(row.worker).toEqual({ delta: 0, ceiling: previous.worker.ceiling });
+    expect(row.replicaWorker).toEqual({ delta: 0, ceiling: previous.replicaWorker.ceiling });
+    const activation = copy(current);
+    activation.tc2481WebRouting!.activation.ceiling["activation.mjs"]++;
+    expect(() => validateLedger(activation)).toThrow();
+    const kvWorker = copy(current);
+    kvWorker.tc2481WebRouting!.worker.ceiling++;
+    expect(() => validateLedger(kvWorker)).toThrow();
+    const replicaWorker = copy(current);
+    replicaWorker.tc2481WebRouting!.replicaWorker.ceiling++;
+    expect(() => validateLedger(replicaWorker)).toThrow();
+  });
+
+  it("refuses an extra byte in every newly admitted format", () => {
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      const changed = copy(current);
+      changed.tc2481WebRouting!.root.ceiling[format]++;
+      expect(() => validateLedger(changed)).toThrow();
+    }
+    for (const format of ["replica.mjs", "replica.cjs"] as const) {
+      const changed = copy(current);
+      changed.tc2481WebRouting!.firstImport.ceiling[format]++;
+      expect(() => validateLedger(changed)).toThrow();
+    }
+  });
+
+  it("refuses changed source or CI provenance and missing investigation or payback evidence", () => {
+    const source = copy(current);
+    source.tc2481WebRouting!.sourceCommits[0] = "0".repeat(40);
+    expect(() => validateLedger(source)).toThrow();
+    const ci = copy(current);
+    ci.tc2481WebRouting!.canonicalCI.jobs.pop();
+    expect(() => validateLedger(ci)).toThrow();
+    for (const evidence of [
+      "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
+      "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
+      "https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security",
+    ]) {
+      const changed = copy(current);
+      changed.tc2481WebRouting!.reason = changed.tc2481WebRouting!.reason.replace(evidence, "");
+      expect(() => validateLedger(changed)).toThrow();
+    }
+  });
+
+  it("requires the existing worker admission and refuses changing historical rows", () => {
+    const missing = copy(current);
+    delete missing.tc2481RegistryFreshness;
+    expect(() => validateLedger(missing)).toThrow();
+    const workerHistory = copy(current);
+    workerHistory.tc2481RegistryFreshness!.worker.ceiling++;
+    expect(() => validateLedger(workerHistory)).toThrow();
+    const rootHistory = copy(current);
+    rootHistory.tc2380Q2OneClick!.root.ceiling["index.cjs"]++;
+    expect(() => validateLedger(rootHistory)).toThrow();
+  });
+
+  it("may be introduced once and cannot change or disappear after it reaches the base", () => {
+    const row = routing();
+    expect(() => validateTc2481WebRoutingTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2481WebRoutingTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2481WebRoutingTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2481WebRoutingTransition(row, changed)).toThrow();
+    expect(() => validateTc2481WebRoutingTransition(row, undefined)).toThrow();
+  });
+
+  it("permits the zero owned charge only for this PR, ticket, evidence and exact observed root growth", () => {
+    const entry = structuredClone(current.entries.find((candidate) => candidate.pr === "#872")!);
+    const observed = routing().root.delta;
+    expect(() => validateTc2481WebRootEntry(entry, observed)).not.toThrow();
+    for (const changed of [
+      { ...entry, pr: "#873" }, { ...entry, ticket: "TC-UNKNOWN" }, { ...entry, note: "" },
+      { ...entry, "index.mjs": 1 }, { ...entry, "index.cjs": 1 },
+    ]) {
+      expect(() => validateTc2481WebRootEntry(changed, observed)).toThrow();
+    }
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      for (const adjustment of [-1, 1]) {
+        expect(() => validateTc2481WebRootEntry(entry, { ...observed, [format]: observed[format] + adjustment })).toThrow();
+      }
+    }
+    const missing = copy(current);
+    missing.entries = missing.entries.filter((candidate) => candidate.pr !== "#872");
+    expect(() => validateLedger(missing)).toThrow();
+    const duplicate = copy(current);
+    duplicate.entries.push(entry);
+    expect(() => validateLedger(duplicate)).toThrow();
   });
 });
