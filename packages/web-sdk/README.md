@@ -76,6 +76,24 @@ await tc.signIn();
 There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
+### Runtime permission grants with OpenKey
+
+`requestPermissions()` (and the panel's "allow" buttons) sign each runtime grant's SIWE as a byte-exact message through
+`config.openkey.client.signMessage`, with the `keyId` of the connected OpenKey account. If the client is not connected (a
+restored session, or a sign-in through `authorizeTinyCloud`), the SDK connects it first with `client.connect()`, in the
+configured `mode`, and signs with the key that call returns. The SDK never sends `signMessage` without a `keyId`.
+
+When no single key can be named, `requestPermissions()` rejects with `OpenKeySigningKeyError` before any sign request:
+
+| `code`                  | Meaning                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------- |
+| `OPENKEY_KEY_MISSING`   | The client is not connected and has no `connect()`, or `connect()` answered without a `keyId`. |
+| `OPENKEY_KEY_AMBIGUOUS` | The connected key's address is not the signed-in account's, or it reports no address.          |
+
+Fix either by connecting the configured client as the signed-in account (`await openkey.connect()`), or sign runtime grants with
+`tc.setRuntimePermissionSigner(...)`. A user closing the connect dialog rejects with OpenKey's own error. A client without
+`lastAuth` is connected before every grant.
+
 ## Signed registry cache
 
 The browser client stores exact owner-signed v2 registry responses beside its identity pins, under `tinycloud.registryCache.v2:<ownerKey>`. Fetch time, invalidation revision and sequence metadata are outside the signed response. Every routing decision awaits a bounded, coalesced refresh and verifies cached responses again. Only a higher verified sequence replaces signed bytes; equal-sequence renewal requires identical canonical signed meaning, not identical HTTP formatting.

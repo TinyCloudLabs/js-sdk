@@ -124,6 +124,7 @@ import {
 import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
+import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
 import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
@@ -144,10 +145,10 @@ export interface RuntimePermissionSigner {
   signMessage(message: string): Promise<string>;
 }
 
-/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. */
-interface OpenKeyMessageSigner {
+/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`. */
+interface OpenKeyMessageSigner extends OpenKeyConnection {
   signMessage?: (
-    request: { message: string; keyId?: string },
+    request: { message: string; keyId: string },
     opts?: { mode?: "iframe" | "popup" | "redirect" },
   ) => Promise<{ signature: string }>;
 }
@@ -467,8 +468,6 @@ export class TinyCloudWeb {
   private signOutCount = 0;
   /** The signer set with `setRuntimePermissionSigner`, with the session it was set for. */
   private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number };
-  /** Set when this instance's session was established through the configured OpenKey client; bound to that session like `runtimeSigner`. */
-  private openkeySession?: { readonly address: string; readonly signOuts: number };
   private signOutInFlight = 0;
   private persistedRestoreBlocked = false;
   private signOutCleanupFailed = false;
@@ -937,7 +936,6 @@ export class TinyCloudWeb {
     const signOuts = this.signOutCount;
     // A restore may bring back a different account: a runtime permission signer set for the current one is cleared.
     this.runtimeSigner = undefined;
-    this.openkeySession = undefined;
     const assertNotSignedOut = (): void => {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
         throw new Error("Session restore was cancelled by sign-out.");
@@ -1260,7 +1258,6 @@ export class TinyCloudWeb {
     assertNotSignedOut();
     // A new sign-in is a new session: a runtime permission signer set for an earlier one does not carry over.
     this.runtimeSigner = undefined;
-    this.openkeySession = undefined;
     if (this.config.openkey && options) {
       throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
     }
@@ -1320,8 +1317,6 @@ export class TinyCloudWeb {
     this.uiClient.armPrefetch(this);
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
-    // Signed in through the OpenKey client: the client holds this session's key, so a later runtime grant may sign through it.
-    if (this.config.openkey) this.openkeySession = { address: session.address, signOuts };
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
     return {
@@ -1351,7 +1346,6 @@ export class TinyCloudWeb {
     closeActiveModal();
     this.runtimeSigner = undefined;
     this.spaceHostingInFlight = undefined;
-    this.openkeySession = undefined;
     this.invalidatePreparedSignIn();
     this.signOutInFlight++;
     this.persistedRestoreBlocked = true;
@@ -1783,9 +1777,10 @@ export class TinyCloudWeb {
 
   /**
    * Signs the SIWE of a runtime permission grant. Precedence: the signer set with `setRuntimePermissionSigner`, then
-   * the OpenKey client the session was established with (its byte-exact `signMessage`; an OpenKey session's wallet
-   * provider does not implement `personal_sign`), then undefined: the connected wallet signs. Only
-   * `requestPermissions` calls this; sign-in and session setup never do.
+   * the configured OpenKey client's byte-exact `signMessage` (an OpenKey session's wallet provider does not implement
+   * `personal_sign`), signing with the keyId of the connected account after connecting the client first when it is not
+   * connected; a missing or ambiguous key throws `OpenKeySigningKeyError`. Without an OpenKey client or a session account,
+   * undefined: the connected wallet signs. Only `requestPermissions` calls this; sign-in and session setup never do.
    */
   private runtimeMessageSigner(): ((siwe: string) => Promise<string>) | undefined {
     const bound = this.runtimeSigner;
@@ -1803,43 +1798,21 @@ export class TinyCloudWeb {
     const openkey = this.config?.openkey;
     const client = openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
     if (openkey === undefined || typeof client?.signMessage !== "function") return undefined;
-    // TC-2281: an OpenKey client that was never connected would open a sign popup that hangs ("Please connect first to sign messages").
-    // Refuse that before any popup: with no signer the node then throws its own clear "requires wallet mode with a signer" error.
-    if (!this.openkeyClientMaySign(client)) return undefined;
-    return async (siwe) => (await client.signMessage!({ message: siwe }, { mode: openkey.mode ?? "popup" })).signature;
-  }
-
-  /**
-   * Whether the OpenKey client may sign a runtime grant: always, unless there is POSITIVE evidence that it is not connected. It may sign when
-   * this instance's session was established through it (and is still the live session), or when its in-memory `lastAuth` is set (`connect()` ran
-   * on this client, for example because the app connected it after a restore), or when it exposes no `lastAuth` at all (a client shape this SDK
-   * does not know: today's behaviour, fail open). `lastAuth` is read here because nothing public says it: `@openkey/sdk` 0.12.2 declares
-   * `lastAuth = null`, sets it in `connect()` and clears it in `signOut()`; 0.9.0 declares it and sets it in `connect()` but has no `signOut`.
-   * `getSessionToken()` always answers null in 0.12.2 and `isConnected()` reads the OpenKey cookie, which can be true when `connect()` never ran
-   * on this page. web-sdk documents `@openkey/sdk` >= 0.12.2, so 0.12.2 is the lowest version this was checked against. The clean fix is
-   * `signMessage()` rejecting when not connected, in `@openkey/sdk`. Trade-off: an app that connects through a DIFFERENT OpenKey instance than
-   * `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or
-   * `setRuntimePermissionSigner`.
-   */
-  private openkeyClientMaySign(client: object): boolean {
-    const established = this.openkeySession;
-    if (established !== undefined) {
-      const current = this._node?.address;
-      if (
-        established.signOuts === this.signOutCount &&
-        this.signOutInFlight === 0 &&
-        current !== undefined &&
-        current.toLowerCase() === established.address.toLowerCase()
-      ) return true;
-      // The session it was established for has ended or been replaced.
-      this.openkeySession = undefined;
-    }
-    try {
-      if (!("lastAuth" in client)) return true;
-      return (client as { readonly lastAuth?: unknown }).lastAuth != null;
-    } catch {
-      return true;
-    }
+    // TC-2281: OpenKey opens a sign dialog with no key when `signMessage` carries no keyId, and the dialog dead-ends on "Please connect
+    // first to sign messages." So every request names the keyId of the connected account, and a client that is not connected is
+    // connected first. No key, or a key that is not the session's account, is an OpenKeySigningKeyError: never a request without a keyId.
+    const account = this._node?.address;
+    if (account === undefined) return undefined;
+    const signOuts = this.signOutCount;
+    const mode = openkey.mode ?? "popup";
+    return async (siwe) => {
+      const keyId = await resolveOpenKeySigningKey(client, account, mode);
+      // The connect dialog can outlive the session it was opened for.
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 || this._node?.address !== account) {
+        throw new Error("Permission request cancelled because the signed session changed or signed out.");
+      }
+      return (await client.signMessage!({ message: siwe, keyId }, { mode })).signature;
+    };
   }
 
   /**

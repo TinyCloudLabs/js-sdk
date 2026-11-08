@@ -15,6 +15,10 @@ export {
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
 export {
+  OpenKeySigningKeyError,
+  type OpenKeySigningKeyErrorCode,
+} from "./openkey-signing-key";
+export {
   establishManageKeySession,
   type EstablishManageKeySessionOptions,
   type EstablishManageKeySessionResult,
