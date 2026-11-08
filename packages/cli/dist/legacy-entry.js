@@ -19483,6 +19483,7 @@ import {
   createHmac,
   randomBytes as randomBytes4
 } from "crypto";
+import { publicJwk } from "@tinycloud/sdk-core";
 function resolveDeviceApiHost(profile) {
   return process.env.TC_OPENKEY_HOST ?? profile?.openkeyHost;
 }
@@ -19567,12 +19568,15 @@ function deviceAuthRateLimit(response) {
   );
 }
 function publicSessionJwk(value4) {
-  const publicJwk = publicJwkForDelegation(value4);
-  const record3 = publicJwk;
-  if (record3.kty !== "OKP" || record3.crv !== "Ed25519" || typeof record3.x !== "string") {
+  let jwk = {};
+  try {
+    jwk = publicJwk(value4);
+  } catch {
+  }
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
     throw new Error("CLI session key is not a public Ed25519 JWK");
   }
-  return publicJwk;
+  return jwk;
 }
 function publicRelayJwk(value4) {
   if (!value4 || typeof value4 !== "object" || Array.isArray(value4)) throw invalidResponse("OpenKey returned an invalid relay key");
@@ -19720,7 +19724,7 @@ async function acquireDeviceDelegation(input) {
   const relayKey = createECDH("prime256v1");
   relayKey.generateKeys();
   const relayPublicJwk = relayPublicJwkOf(relayKey);
-  const publicJwk = publicSessionJwk(input.jwk);
+  const publicJwk4 = publicSessionJwk(input.jwk);
   let startResponse;
   try {
     startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
@@ -19734,7 +19738,7 @@ async function acquireDeviceDelegation(input) {
         codeChallenge: digest(codeVerifier),
         relayPublicJwk,
         sessionDid: input.sessionDid,
-        publicJwk,
+        publicJwk: publicJwk4,
         permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
         nodeOrigin,
         shareOrigin,
@@ -19823,7 +19827,7 @@ async function acquireDeviceDelegation(input) {
         sessionDid: input.sessionDid,
         nodeOrigin,
         shareOrigin,
-        publicJwk,
+        publicJwk: publicJwk4,
         key: input.jwk,
         requested: input.permissions,
         expiry,
@@ -20642,16 +20646,8 @@ var init_approval_request = __esm({
 });
 
 // src/auth/browser-auth.ts
+import { publicJwk as publicJwk2 } from "@tinycloud/sdk-core";
 import { createInterface as createInterface2 } from "readline";
-function publicJwkForDelegation(jwk) {
-  const publicJwk = {};
-  for (const [key, value4] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value4;
-    }
-  }
-  return publicJwk;
-}
 async function startAuthFlow(did, options = {}) {
   assertNoCaveatLimits(options.permissions);
   if (options.paste) {
@@ -20668,7 +20664,7 @@ function buildAuthUrl(did, options = {}) {
   }
   if (options.jwk) {
     const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk))
+      JSON.stringify(publicJwk2(options.jwk))
     ).toString("base64url");
     params.set("jwk", jwkB64);
   }
@@ -20743,7 +20739,7 @@ function validateDelegationCallbackPayload(value4) {
 function assertBoundToKey(parsed, did, localJwk) {
   const delegation = parsed;
   const jwk = delegation?.jwk;
-  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
+  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || "d" in jwk) {
     throw new Error("Delegation is bound to a different CLI key.");
   }
 }
@@ -20752,7 +20748,7 @@ async function delegationFromInput(input, did, options) {
   let parsed;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
-    const localJwk = publicJwkForDelegation(options.jwk);
+    const localJwk = publicJwk2(options.jwk);
     const saved = options.profileName === void 0 ? void 0 : await pendingDelegationFor(options.profileName, trimmed);
     if (saved !== void 0) {
       try {
@@ -20838,7 +20834,6 @@ Open this URL in a browser to authenticate:
 function loginCancelled() {
   return new CLIError("CANCELLED", "Interrupted: tc auth login stopped before approval. No session was saved.", ExitCode.CANCELLED);
 }
-var PRIVATE_JWK_FIELDS;
 var init_browser_auth = __esm({
   "src/auth/browser-auth.ts"() {
     "use strict";
@@ -20848,16 +20843,6 @@ var init_browser_auth = __esm({
     init_approval_request();
     init_profiles();
     init_pending_code();
-    PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
-      "d",
-      "p",
-      "q",
-      "dp",
-      "dq",
-      "qi",
-      "oth",
-      "k"
-    ]);
   }
 });
 
@@ -36366,12 +36351,12 @@ function previousSignInNotice(session, profile) {
 // src/auth/prepared-openkey.ts
 init_constants();
 init_errors();
-init_browser_auth();
 init_owner_did();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 import { createInterface as createInterface3 } from "readline";
 import open14 from "open";
+import { publicJwk as publicJwk3 } from "@tinycloud/sdk-core";
 var MAX_BODY_BYTES2 = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
 function invalid3(code5, message) {
@@ -36552,13 +36537,13 @@ async function startPreparedOpenKeyHandoff(options) {
     state2.fill(0);
   };
   try {
-    const publicJwk = publicJwkForDelegation(options.prepared.jwk);
+    const sessionJwk = publicJwk3(options.prepared.jwk);
     const payload = {
       transportVersion: 2,
       request: {
         protocolVersion: 1,
         siwe: options.prepared.siwe,
-        jwk: publicJwk,
+        jwk: sessionJwk,
         host: options.prepared.host,
         sessionDid: options.prepared.verificationMethod,
         ...options.prepared.keyId ? { keyId: options.prepared.keyId } : {},
