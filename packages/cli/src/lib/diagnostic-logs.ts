@@ -45,7 +45,7 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
   };
   replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "[ANSI_REMOVED]");
   replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
-  replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^/\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
+  replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
   replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
   replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
   replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
