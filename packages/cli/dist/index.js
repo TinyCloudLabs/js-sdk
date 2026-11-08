@@ -1920,6 +1920,7 @@ var init_hmac = __esm({
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
+    init_safe_text();
   }
 });
 

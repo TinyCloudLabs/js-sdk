@@ -2719,10 +2719,28 @@ function isSharePublishingPrefixDecrypt(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+function deviceRefusal(entries) {
+  for (const entry of entries) {
+    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
+  }
+  return void 0;
+}
+function deviceRefusalMessage(refused, subject, next) {
+  const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
+  if (refused === "secrets") {
+    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
+  }
+  const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
+  return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
+}
+var DEVICE_DECRYPT_ALLOWED;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
+    init_safe_text();
+    DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
   }
 });
 
@@ -3089,36 +3107,22 @@ async function loadManifestPermissions(source, profile, options = {}) {
     manifest.permissions = manifest.permissions.filter((entry) => !(entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"));
   }
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
-  if (options.device && typeof manifest.app_id === "string" && (manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") || Array.isArray(manifest.permissions) && manifest.permissions.some((entry) => entry !== null && typeof entry === "object" && isDeviceRefusedEncryption(entry, manifest)))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+  if (options.device && typeof manifest.app_id === "string") {
+    const refused = manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") ? "secrets" : deviceRefusal(appManifestEntries(manifest));
+    if (refused !== void 0) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+    }
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
-    if (options.device && resolved.resources.some((entry) => entry.service === "tinycloud.encryption" && !isDeviceDefaultDecrypt(entry) || entry.space === "secrets" || entry.space?.endsWith(":secrets"))) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    const refused = options.device ? deviceRefusal(resolved.resources) : void 0;
+    if (refused !== void 0) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
   if (typeof manifest.app_id === "string") {
-    const permissions = (manifest.permissions ?? []).filter((entry) => entry !== null && typeof entry === "object").map((entry) => {
-      const service = normalizeService(String(entry.service ?? ""));
-      const path = String(entry.path ?? "");
-      const actions = expandActionShortNames(
-        service,
-        Array.isArray(entry.actions) ? entry.actions.map(String) : []
-      );
-      if (isRawEncryptionPermission({ service, path })) {
-        return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
-      }
-      const resolvedPath = entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id);
-      return {
-        service,
-        space: String(manifest.space ?? "applications"),
-        path: resolvedPath,
-        actions,
-        ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
-      };
-    });
+    const permissions = appManifestEntries(manifest);
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
     return resolvePermissionSpaces(permissions, profile, options);
   }
@@ -3128,18 +3132,25 @@ async function loadManifestPermissions(source, profile, options = {}) {
     ExitCode.USAGE_ERROR
   );
 }
-function isDeviceRefusedEncryption(entry, manifest) {
+function appManifestEntries(manifest) {
+  return (manifest.permissions ?? []).filter((entry) => entry !== null && typeof entry === "object").map((entry) => appManifestEntry(entry, manifest));
+}
+function appManifestEntry(entry, manifest) {
   const service = normalizeService(String(entry.service ?? ""));
-  if (service !== "tinycloud.encryption") return false;
-  const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
   const path = String(entry.path ?? "");
-  return !isDeviceDefaultDecrypt({
+  const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
+  if (isRawEncryptionPermission({ service, path })) {
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+  }
+  const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
+  const ownSpace = encryption && typeof entry.space === "string" ? entry.space : void 0;
+  return {
     service,
-    space: String(manifest.space ?? "applications"),
-    path: entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id),
+    space: ownSpace ?? String(manifest.space ?? "applications"),
+    path: encryption || entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id),
     actions,
     ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
-  });
+  };
 }
 async function secretPermissionsFromAppManifest(manifest, profile, requestedOwner) {
   if (manifest.secrets === void 0) {
@@ -3318,6 +3329,7 @@ function serviceFromActions(actions) {
   const first = actions[0] ?? "tinycloud.unknown/read";
   return first.includes("/") ? first.slice(0, first.indexOf("/")) : "tinycloud.unknown";
 }
+var DEVICE_MANIFEST_NEXT;
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
@@ -3332,6 +3344,7 @@ var init_permissions = __esm({
     init_caveat_refusal();
     init_publishing_manifest();
     init_types();
+    DEVICE_MANIFEST_NEXT = "Use browser or --paste login for this manifest.";
   }
 });
 
@@ -19426,10 +19439,11 @@ function writeApprovalPrompt(prompt) {
 async function acquireDeviceDelegation(input) {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission2) => permission2.service === "tinycloud.encryption" && !isDeviceDefaultDecrypt(permission2) || permission2.space === "secrets" || permission2.space?.startsWith("tinycloud:") && permission2.space.endsWith(":secrets"))) {
+  const refused = deviceRefusal(input.permissions);
+  if (refused !== void 0) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network. Use another OpenKey approval method for this manifest.",
+      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR
     );
   }
