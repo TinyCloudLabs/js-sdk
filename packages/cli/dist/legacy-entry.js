@@ -6048,7 +6048,7 @@ function replicaErrorFromService(error, context2, request) {
   if (status !== void 0) {
     return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
   }
-  if (error.code === "NETWORK_ERROR" || error.code === "NODE_NOT_RESPONDING" || /TIMEOUT|ABORT/.test(error.code)) {
+  if (error.code === "registry_unavailable" && reason === "no-saved-settings" || error.code === "NETWORK_ERROR" || error.code === "NODE_NOT_RESPONDING" || /TIMEOUT|ABORT/.test(error.code)) {
     return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context2}: ${error.message}`, detail);
   }
   return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
