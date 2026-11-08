@@ -330,8 +330,8 @@ for (const prepared of [true, false]) {
       await web.signIn();
       expect(sent).toHaveLength(1);
       const jwk = sent[0]!;
-      expect(Object.keys(jwk).sort()).toEqual(["crv", "kty", "x"]);
-      expect(jwk).toMatchObject({ kty: "OKP", crv: "Ed25519", x: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+      expect(Object.keys(jwk).sort()).toEqual(["crv", "kid", "kty", "x"]);
+      expect(jwk).toMatchObject({ kty: "OKP", crv: "Ed25519", x: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), kid: expect.any(String) });
       for (const member of PRIVATE_JWK_MEMBERS) expect(jwk).not.toHaveProperty(member);
     });
   });

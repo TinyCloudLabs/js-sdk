@@ -12,9 +12,11 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
 const PRIVATE_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
 
-function expectPublicEd25519(jwk: unknown, x: unknown): void {
-  expect(jwk).toEqual({ kty: "OKP", crv: "Ed25519", x });
-  for (const member of PRIVATE_MEMBERS) expect(jwk).not.toHaveProperty(member);
+/** `sent` is exactly the public part of the local session key: kty, crv, x and its kid. */
+function expectPublicEd25519(sent: unknown, local: Record<string, unknown>): void {
+  expect(typeof local.d).toBe("string");
+  expect(sent).toEqual({ kty: "OKP", crv: "Ed25519", x: local.x, kid: local.kid });
+  for (const member of PRIVATE_MEMBERS) expect(sent).not.toHaveProperty(member);
 }
 
 let originalFetch: typeof globalThis.fetch;
@@ -82,19 +84,18 @@ test("signInWithOpenKey sends OpenKey only the public session key and keeps the 
 
   expect(openkey.requests).toHaveLength(1);
   const local = auth.tinyCloudSession!.jwk;
-  expect(typeof local.d).toBe("string");
-  expectPublicEd25519(openkey.requests[0]!.jwk, local.x);
+  expectPublicEd25519(openkey.requests[0]!.jwk, local);
 });
 
 test("a prepared OpenKey sign-in request carries only the public session key", async () => {
   const auth = authorization();
   const pending = await auth.prepareOpenKeySignIn();
-  expectPublicEd25519(pending.request.jwk, pending.jwk.x);
+  expectPublicEd25519(pending.request.jwk, pending.jwk);
 
   const openkey = recordingOpenKey();
   const authorize = wireOpenKeyAuthorize(openkey);
   await auth.completeOpenKeySignIn(pending, authorize(pending.request));
-  expectPublicEd25519(openkey.requests[0]!.jwk, pending.jwk.x);
+  expectPublicEd25519(openkey.requests[0]!.jwk, pending.jwk);
   expect(auth.tinyCloudSession!.verificationMethod).toBe(pending.prepared.verificationMethod);
 });
 
@@ -109,5 +110,5 @@ test("the OpenKey bridge strips private members from a caller-built request", as
     jwk: privateJwk,
     verificationMethod: manager.getDID("default"),
   }).catch(() => undefined);
-  expectPublicEd25519(openkey.requests[0]!.jwk, privateJwk.x);
+  expectPublicEd25519(openkey.requests[0]!.jwk, privateJwk);
 });

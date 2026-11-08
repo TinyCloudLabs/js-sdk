@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 
 import { publicJwk } from "./jwk";
 
-test("publicJwk keeps only the public members of each asymmetric key type", () => {
+test("publicJwk keeps only the public members of each asymmetric key type, plus kid", () => {
   expect(publicJwk({ kid: "session", kty: "OKP", crv: "Ed25519", x: "pub", d: "priv", alg: "EdDSA" }))
-    .toEqual({ kty: "OKP", crv: "Ed25519", x: "pub" });
+    .toEqual({ kid: "session", kty: "OKP", crv: "Ed25519", x: "pub" });
   expect(publicJwk({ kty: "EC", crv: "P-256", x: "px", y: "py", d: "priv", use: "sig" }))
     .toEqual({ kty: "EC", crv: "P-256", x: "px", y: "py" });
   expect(publicJwk({ kty: "RSA", n: "mod", e: "AQAB", d: "a", p: "b", q: "c", dp: "d", dq: "e", qi: "f", oth: [] }))

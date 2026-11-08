@@ -181,7 +181,7 @@ test("the handoff fragment carries exactly the public members of a real session 
     const envelope = JSON.parse(Buffer.from(new URL(flow.url).hash.slice("#tv2=".length), "base64url").toString("utf8")) as {
       request: { jwk: Record<string, unknown> };
     };
-    expect(envelope.request.jwk).toEqual({ kty: "OKP", crv: "Ed25519", x: sessionJwk.x });
+    expect(envelope.request.jwk).toEqual({ kty: "OKP", crv: "Ed25519", x: sessionJwk.x, kid: sessionJwk.kid });
     for (const member of ["d", "p", "q", "dp", "dq", "qi", "k", "oth"]) expect(envelope.request.jwk).not.toHaveProperty(member);
   } finally {
     await flow.complete(false);

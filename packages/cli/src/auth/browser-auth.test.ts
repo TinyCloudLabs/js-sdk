@@ -49,6 +49,7 @@ describe("browser auth delegation URLs", () => {
     });
 
     expect(decodedJwkFromUrl(url)).toEqual({
+      kid: "cli",
       kty: "OKP",
       crv: "Ed25519",
       x: "public-key",

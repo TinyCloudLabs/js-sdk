@@ -8,8 +8,9 @@ const PUBLIC_MEMBERS: Readonly<Record<string, readonly string[]>> = {
 const hasOwn = (value: object, key: string): boolean => Object.prototype.hasOwnProperty.call(value, key);
 
 /**
- * The public key of `jwk`: only the standard public members of its key type are copied, so private members and
- * anything else (`kid`, `alg`, unknown fields) are dropped. Use it for every JWK that leaves the device.
+ * The public key of `jwk`: only the standard public members of its key type, plus `kid` when it is a string, are
+ * copied, so private members and anything else (`alg`, `use`, unknown fields) are dropped. Use it for every JWK that
+ * leaves the device.
  *
  * Throws for a key type without a public form (`oct`, unknown) or a missing public member.
  */
@@ -31,5 +32,6 @@ export function publicJwk(jwk: unknown): Record<string, string> {
     }
     result[member] = value;
   }
+  if (hasOwn(source, "kid") && typeof source.kid === "string") result.kid = source.kid;
   return result;
 }
