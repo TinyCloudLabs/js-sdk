@@ -2526,6 +2526,9 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     ["2d", 1.5 * 3_600_000, "OpenKey granted this for 1 hour (you asked for 2 days)."],
     ["2h", 90_000, "OpenKey granted this for 1 minute (you asked for 2 hours)."],
     ["2h", 59_000, "OpenKey granted this for less than a minute (you asked for 2 hours)."],
+    ["36h", DAY_MS, "OpenKey granted this for 1 day (you asked for 36 hours)."],
+    ["348h", 14 * DAY_MS, "OpenKey granted this for 14 days (you asked for 348 hours)."],
+    ["150m", 2 * 3_600_000, "OpenKey granted this for 2 hours (you asked for 150 minutes)."],
   ])("a %s request OpenKey signs for %d ms says so, rounded down so it never claims more than was signed", async (requested, signedMs, line) => {
     openKeyDelegation = signedFor(signedMs);
     const { stderr } = await grantWith([await writeAgentRequest(`openkey-agent-short-${signedMs}.json`, requested)], { stdin: false, stdout: false, stderr: false });

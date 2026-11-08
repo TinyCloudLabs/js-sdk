@@ -518,6 +518,10 @@ describe("shorterGrantNotice: the granted lifetime rounded down, and only when i
     [90_000, HOUR, "OpenKey granted this for 1 minute (you asked for 1 hour)."],
     [150_000, HOUR, "OpenKey granted this for 2 minutes (you asked for 1 hour)."],
     [59_000, HOUR, "OpenKey granted this for less than a minute (you asked for 1 hour)."],
+    // The asked side is shown exactly, in the largest unit it is whole in, never floored to the granted figure.
+    [DAY, 36 * HOUR, "OpenKey granted this for 1 day (you asked for 36 hours)."],
+    [14 * DAY, 348 * HOUR, "OpenKey granted this for 14 days (you asked for 348 hours)."],
+    [2 * HOUR, 150 * 60_000, "OpenKey granted this for 2 hours (you asked for 150 minutes)."],
   ])("%d ms signed of %d ms asked: %s", (granted, asked, line) => {
     expect(shorterGrantNotice(granted, asked)).toBe(line);
   });

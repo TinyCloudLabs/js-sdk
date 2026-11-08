@@ -182,13 +182,28 @@ function phraseUnit(ms: number): { ms: number; name: string } {
 }
 
 /**
+ * A requested lifetime, never rounded: in the largest unit it is a whole number of (days, hours, minutes), else
+ * seconds. `36h` reads "36 hours", `150m` "150 minutes", `90d` "90 days".
+ */
+function askedLifetimePhrase(ms: number): string {
+  const [unit, name] = ms % DAY_MS === 0
+    ? [DAY_MS, "day"]
+    : ms % 3_600_000 === 0 ? [3_600_000, "hour"] : ms % 60_000 === 0 ? [60_000, "minute"] : [1_000, "second"];
+  const count = Math.ceil(ms / unit);
+  return `${count} ${name}${count === 1 ? "" : "s"}`;
+}
+
+/**
  * The line saying OpenKey signed a shorter lifetime than was asked, or undefined when it did not fall short by at
- * least one whole unit of the granted phrase (89.5 of 90 days says nothing). The granted value is rounded down.
+ * least one whole unit of the granted phrase (89.5 of 90 days says nothing). The granted value is rounded down; the
+ * asked one is shown exactly. Two identical phrases never print.
  */
 export function shorterGrantNotice(grantedMs: number, askedMs: number): string | undefined {
   const unit = phraseUnit(grantedMs).ms;
   if (Math.ceil(grantedMs / unit) >= askedMs / unit) return undefined;
-  return `OpenKey granted this for ${grantedLifetimePhrase(grantedMs)} (you asked for ${grantedLifetimePhrase(askedMs)}).`;
+  const granted = grantedLifetimePhrase(grantedMs);
+  const asked = askedLifetimePhrase(askedMs);
+  return granted === asked ? undefined : `OpenKey granted this for ${granted} (you asked for ${asked}).`;
 }
 
 function revokeSentence(lifetimeMs: number): string {
