@@ -43,6 +43,8 @@
     "tc-2526-mcp-approval-reason",
     "tc-2527-grant-no-terminal-question-openkey",
     "tc-2531-no-local-key-confirmation",
+    "tc-2533-apps-agent-no-app-limit",
+    "tc-2534-device-default-decrypt",
     "tc2380-q2",
     "tidy-names-openkey-grant"
   ]

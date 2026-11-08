@@ -18016,9 +18016,6 @@ function resolveAppsAgentRequest(options) {
   for (const appId of appIds) {
     if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
   }
-  if (appIds.length > APPS_AGENT_MAX_APPS) {
-    throw usage(`--app can be repeated at most ${APPS_AGENT_MAX_APPS} times; for more apps, ask for read-only access to the whole space (leave --app off).`);
-  }
   if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) {
     throw usage("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
   }
@@ -18051,7 +18048,7 @@ function matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) {
     if (slash < 1 || !isAppId(appId)) return void 0;
     if (!appIds.includes(appId)) appIds.push(appId);
   }
-  if (appIds.length > APPS_AGENT_MAX_APPS || appIds.length > 0 && kvPaths.includes("")) return void 0;
+  if (appIds.length > 0 && kvPaths.includes("")) return void 0;
   for (const mode of ["read", "write"]) {
     if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) continue;
     const expected = appsAgentPermissions(mode, appIds);
@@ -18161,7 +18158,7 @@ function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLi
   );
   return { text: lines.join("\n"), entries: requested, extras };
 }
-var APPS_AGENT_PRESET, APPS_AGENT_SPACE, APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY, APPS_AGENT_MAX_APPS, DAY_MS2, APPS_AGENT_WRITE_FOLDERS, APPS_AGENT_VARIANTS, APPS_AGENT_SCHEMA_DATABASES, SCHEMA_ACTION, ACTION_WORDS, STRUCTURE_ACTIONS, APP_ID, APP_ID_RULE, RAW_ENCRYPTION_SPACE, DID_SHAPE;
+var APPS_AGENT_PRESET, APPS_AGENT_SPACE, APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY, DAY_MS2, APPS_AGENT_WRITE_FOLDERS, APPS_AGENT_VARIANTS, APPS_AGENT_SCHEMA_DATABASES, SCHEMA_ACTION, ACTION_WORDS, STRUCTURE_ACTIONS, APP_ID, APP_ID_RULE, RAW_ENCRYPTION_SPACE, DID_SHAPE;
 var init_apps_agent_preset = __esm({
   "src/lib/apps-agent-preset.ts"() {
     "use strict";
@@ -18174,7 +18171,6 @@ var init_apps_agent_preset = __esm({
     APPS_AGENT_SPACE = "applications";
     APPS_AGENT_EXPIRY_DAYS = 7;
     APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
-    APPS_AGENT_MAX_APPS = 5;
     DAY_MS2 = 864e5;
     APPS_AGENT_WRITE_FOLDERS = ["knowledge/", "prefs/"];
     APPS_AGENT_VARIANTS = {
@@ -37636,7 +37632,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
   ).option(
     "--app <app_id>",
-    `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
+    `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeatable`,
     (value4, previous) => [...previous, value4],
     []
   ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)").action(async (options2, cmd) => {
@@ -41607,7 +41603,7 @@ function missingGrantHint(profile, appId) {
   const lines = appId === void 0 ? [
     `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (read-only, all installed apps)`,
     `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
-    "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for up to 5)."
+    "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for more apps)."
   ] : [
     `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and tables of ${appId})`,
     `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${appId}/knowledge/:get,list --emit req.json   (only ${appId}'s knowledge)`,
