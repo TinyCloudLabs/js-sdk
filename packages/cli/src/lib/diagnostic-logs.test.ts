@@ -19,7 +19,7 @@ test("diagnostic logs redact sensitive values before writing owner-only files", 
     args: ["--profile", "private-profile", "--token", "secret-token-value"],
     exitCode: 1,
     errorCode: "AUTH_REQUIRED",
-    errorMessage: `failed for profile "private-profile" for did:key:z6MkExample alice@example.test /home/alice/.tinycloud/profile.json Bearer ${"A".repeat(43)}`,
+    errorMessage: `failed for profile "private-profile" for did:key:z6MkExample alice@example.test /home/alice/.tinycloud/profile.json Bearer ${"A".repeat(43)} \u001b[31mcolored\u001b[0m`,
     cliVersion: "1.2.3",
     nodeVersion: "v20.0.0",
     durationMs: 4,
@@ -30,6 +30,7 @@ test("diagnostic logs redact sensitive values before writing owner-only files", 
   for (const secret of ["private-profile", "secret-token-value", "did:key:z6MkExample", "alice@example.test", "/home/alice/", "A".repeat(43), "abcdef1234567890"]) {
     expect(content).not.toContain(secret);
   }
+  expect(content).not.toContain("\u001b[");
   const details = await stat(join(root, "cli-diagnostics.jsonl"));
   expect(details.mode & 0o777).toBe(0o600);
 });

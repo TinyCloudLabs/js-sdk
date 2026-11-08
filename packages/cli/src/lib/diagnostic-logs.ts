@@ -43,6 +43,8 @@ export function redactDiagnosticText(input: string): { text: string; count: numb
       return typeof replacement === "string" ? replacement : replacement(...matches);
     });
   };
+  replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "[ANSI_REMOVED]");
+  replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
   replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
   replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
   replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
@@ -66,7 +68,7 @@ function redactText(input: string): string {
 
 function redactArgs(args: readonly string[]): string[] {
   const redacted: string[] = [];
-  const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
+  const booleanFlags = new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-cli-logs"]);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
     if (!arg.startsWith("-")) continue;

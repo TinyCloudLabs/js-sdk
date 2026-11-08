@@ -63,7 +63,7 @@ program
   .option("--replication", "Enable read-through replication for this invocation")
   .option("--no-replication", "Disable read-through replication for this invocation")
   .option("--replication-debug", "Write replication diagnostics to stderr")
-  .option("--no-diagnostic-logs", "Disable local diagnostic logging for this command");
+  .option("--no-cli-logs", "Disable local CLI log collection for this command");
 
 
 program.hook("preAction", async (thisCommand) => {
@@ -83,7 +83,7 @@ program.hook("preAction", async (thisCommand) => {
   setDiagnosticCommandContext({
     command: fullCommand,
     args: process.argv.slice(2),
-    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || opts.diagnosticLogs === false,
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || opts.cliLogs === false,
     cliVersion: version,
   });
   commandStartedAt = Date.now();
@@ -113,7 +113,7 @@ program.hook("postAction", async (thisCommand) => {
   if (thisCommand.name() === "bug-report") return;
   await appendDiagnosticLog({
     root: CONFIG_DIR,
-    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || thisCommand.optsWithGlobals().diagnosticLogs === false,
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || thisCommand.optsWithGlobals().cliLogs === false,
     entry: {
       command: fullCommandName(thisCommand),
       args: process.argv.slice(2),
@@ -186,7 +186,7 @@ const commandToken = firstCommandToken(argv);
 setDiagnosticCommandContext({
   command: commandToken ?? "unknown",
   args: argv,
-  disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
+  disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-cli-logs"),
   cliVersion: version,
 });
 if (argv[0] === "courier") {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Command } from "commander";
 import { appendDiagnosticLog, diagnosticLogPath } from "../lib/diagnostic-logs.js";
-import { registerBugReportCommand } from "./bug-report.js";
+import { confirmUpload, registerBugReportCommand } from "./bug-report.js";
 
 const REPORT_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const TOKEN = "A".repeat(43);
@@ -65,12 +65,24 @@ describe("tc bug-report --attach", () => {
     try {
       await program.parseAsync(["node", "tc", "bug-report", "--attach", REPORT_ID], { from: "node" });
       expect(requests).toBe(0);
-      expect(summaries[0]).toContain("anonymized CLI diagnostics");
+      expect(summaries[0]).toContain("sensitive values removed where found");
       expect(output.join("")).toContain("No attachment sent.");
     } finally {
       server.stop(true);
     }
   });
+  test("the owner can view the redacted CLI log before declining", async () => {
+    const shown: string[] = [];
+    const answers = ["v", "n"];
+    const accepted = await confirmUpload("Report summary", "safe CLI log line", {
+      write: (text) => shown.push(text),
+      question: async () => answers.shift() ?? "",
+    });
+    expect(accepted).toBe(false);
+    expect(shown.join("")).toContain("--- CLI log ---\nsafe CLI log line\n--- end CLI log ---");
+    expect(shown.join("")).toContain("sensitive values removed where found");
+  });
+
 
   test("an approved attachment posts only redacted log text with the bearer token", async () => {
     await recordPrivateDiagnostic();
@@ -108,8 +120,8 @@ describe("tc bug-report --attach", () => {
       expect(payload.content).not.toContain("did:key:z6Mkabc123");
       expect(payload.content).not.toContain("/home/sam");
       expect(payload.content).not.toContain(TOKEN);
-      expect(summaries[0]).toContain("local redactions");
-      expect(output.join("")).toContain("server redactions: 2");
+      expect(summaries[0]).toContain("local removals");
+      expect(output.join("")).toContain("removed by server: 2");
     } finally {
       server.stop(true);
     }
@@ -144,7 +156,7 @@ describe("tc bug-report --attach", () => {
       server.stop(true);
     }
   });
-  test("intake_busy stays pending for a later owner retry, without automatic resend", async () => {
+  test("intake_busy stays available locally for a later owner retry, without automatic resend", async () => {
     await recordPrivateDiagnostic();
     let requests = 0;
     const server = Bun.serve({
@@ -166,7 +178,7 @@ describe("tc bug-report --attach", () => {
       await expect(program.parseAsync(["node", "tc", "bug-report", "--attach", REPORT_ID], { from: "node" }))
         .rejects.toMatchObject({
           code: "BUG_REPORT_intake_busy",
-          message: expect.stringContaining("Your local logs remain available"),
+          message: expect.stringContaining("CLI log remains available locally"),
         });
       expect(requests).toBe(1);
     } finally {
