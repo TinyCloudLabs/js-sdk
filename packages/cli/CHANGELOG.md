@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.14
+
+### Patch Changes
+
+- 5f221d2: Clearer bug-report attach wording.
+
+  Details: TC-2515
+
 ## 1.7.0-beta.13
 
 ### Minor Changes
