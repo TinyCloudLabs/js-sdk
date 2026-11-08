@@ -192,8 +192,8 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
    */
   async function grantWithOpenKey(
     requestFile: string,
-    approve: (permissions: PermissionEntry[], grantLifetimeSeconds: number) =>
-      { permissions: PermissionEntry[]; signer: PrivateKeySigner; lifetimeSeconds?: number },
+    /** `lifetimeSeconds`: the owner picks a shorter lifetime than the request's maximum. */
+    approve: (permissions: PermissionEntry[]) => { permissions: PermissionEntry[]; signer: PrivateKeySigner; lifetimeSeconds?: number },
     args?: string[],
   ) {
     const preparedRequest = args === undefined ? JSON.parse(await readFile(requestFile, "utf8")) : {};
@@ -227,7 +227,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
         entry.agentTargetDid = preparedRequest.sessionDid;
         approvalCallbacks++;
         const requested = opened.request.permissions as PermissionEntry[];
-        const { permissions, signer, lifetimeSeconds } = approve(requested, opened.request.grantLifetimeSeconds);
+        const { permissions, signer, lifetimeSeconds } = approve(requested);
         const address = await signer.getAddress();
         const ownerDid = "did:pkh:eip155:1:" + address;
         const spaceName = (requested.find((p) => p.space)?.space ?? "applications").split(":").at(-1)!;
@@ -484,6 +484,8 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     const grant = JSON.parse(result.stdout) as { expiry: string; delegationCid: string };
     expect(hoursUntil(grant.expiry)).toBeGreaterThan(30 * 24 - 0.1);
     expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(30 * 24);
+    // A full approval says nothing about a shorter lifetime.
+    expect(result.stderr).not.toContain("OpenKey granted this for");
 
     const grantFile = join(root, "agent30d-grant.json");
     await writeFile(grantFile, result.stdout);
@@ -507,19 +509,16 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     expect(after.stdout).not.toContain("hello-tc1422");
   });
 
-  test("a 90 d request that OpenKey signs for 30 d gets a 30 d grant, and the owner is told it was shortened", async () => {
-    // As OpenKey does today: /api/delegate clamps the link's expiry with Math.min(MAX_DELEGATION_EXPIRY_MS = 30 d, ...)
-    // (openkey apps/api/src/routes/delegate.ts:357,422 at 1acd8c8); the approval page asks for grantLifetimeSeconds.
-    const OPENKEY_MAX_S = 30 * 86400;
+  test("a 90 d request the owner approves for 14 d gets a 14 d grant, and the owner is told it is shorter", async () => {
+    // On the signed approval-request path OpenKey preselects the requested maximum and the owner may pick less.
     const req = await agentRequest("agent90d", ["--cap", "tinycloud.kv:applications:demo/:get,list", "--expiry", "90d"]);
-    const result = await grantWithOpenKey(req, (permissions, asked) =>
-      ({ permissions, signer: ownerSigner, lifetimeSeconds: Math.min(asked, OPENKEY_MAX_S) }));
+    const result = await grantWithOpenKey(req, (permissions) => ({ permissions, signer: ownerSigner, lifetimeSeconds: 14 * 86400 }));
     expect(result.exitCode).toBe(0);
     expect(result.grantLifetimeSeconds).toBe(90 * 86400);
     const grant = JSON.parse(result.stdout) as { expiry: string };
-    expect(hoursUntil(grant.expiry)).toBeGreaterThan(30 * 24 - 0.1);
-    expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(30 * 24);
-    expect(result.stderr).toContain("OpenKey granted this for 30 days (you asked for 90 days).");
+    expect(hoursUntil(grant.expiry)).toBeGreaterThan(14 * 24 - 0.1);
+    expect(hoursUntil(grant.expiry)).toBeLessThanOrEqual(14 * 24);
+    expect(result.stderr).toContain("OpenKey granted this for 14 days (you asked for 90 days).");
   });
 
   test("an approval that unchecks an ability is refused with OPENKEY_APPROVAL_NARROWER and emits no grant", async () => {

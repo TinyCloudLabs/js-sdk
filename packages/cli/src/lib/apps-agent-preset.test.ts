@@ -9,6 +9,7 @@ import {
   describeAction,
   describeGrantScope,
   matchAppsAgentRequest,
+  lifetimePhrase,
   resolveAppsAgentRequest,
 } from "./apps-agent-preset.js";
 
@@ -484,6 +485,20 @@ describe("describeAction wording", () => {
     for (const action of ["tinycloud.delegation/create", "tinycloud.delegation/revoke", "tinycloud.delegation/*", "tinycloud.kv/*", "tinycloud.sql/*"]) {
       expect(describeAction(action)).not.toContain("unrecognised");
     }
+  });
+});
+
+describe("lifetimePhrase: days in the singular for one, hours under a day, never 0 days", () => {
+  const HOUR = 3_600_000;
+  test.each([
+    [24 * HOUR, "1 day"],
+    [14 * 24 * HOUR, "14 days"],
+    [90 * 24 * HOUR, "90 days"],
+    [12 * HOUR, "12 hours"],
+    [HOUR, "1 hour"],
+    [90_000, "1 hour"],
+  ])("%d ms reads %s", (ms, phrase) => {
+    expect(lifetimePhrase(ms)).toBe(phrase);
   });
 });
 
