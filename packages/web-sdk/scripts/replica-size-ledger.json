@@ -2716,5 +2716,24 @@
     },
     "root": { "delta": { "index.mjs": 128, "index.cjs": 116 }, "ceiling": { "index.mjs": 1491713, "index.cjs": 1432069 } },
     "reason": "The shared cold-routing refusal and typed vault delete/list propagation add code but no new runtime dependency. The existing get/put normalization pattern is retained; no correct bounded dependency or control-flow removal was established. Admit only the measured root bytes; the preceding first-import, activation, worker, gated and owned-accounting limits remain unchanged. Recovery is tracked at https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481"
+  },
+  "tc2481OfflineReplicaTransport": {
+    "label": "TC-2481 offline replica transport worker admission (PR #873)",
+    "ruling": "Naomi 8e3df7f3 authorizes only canonical worker 777149 B (+24) and legacy worker 771051 B (+33), with zero headroom. Both pinned SQLite and PostgreSQL jobs at 11f3b8a710846b33a1d4ef746a3690f8c3015050 agree. Bun 1.3.14; rustc 1.99.0. No other cap changes.",
+    "base": "e21f45ddb24cbf8d80a959ff43f504a475b4508e",
+    "sourceCommits": ["11f3b8a710846b33a1d4ef746a3690f8c3015050"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530086",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530258"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 0, "index.cjs": 0 }, "ceiling": { "index.mjs": 1491713, "index.cjs": 1432069 } },
+    "firstImport": { "delta": { "replica.mjs": 0, "replica.cjs": 0 }, "ceiling": { "replica.mjs": 53131, "replica.cjs": 68370 } },
+    "activation": { "delta": { "activation.mjs": 0, "activation.cjs": 0 }, "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 } },
+    "worker": { "delta": 24, "ceiling": 777149 },
+    "replicaWorker": { "delta": 33, "ceiling": 771051 },
+    "reason": "The approved narrow registry_unavailable-to-offline mapping in replica transport.ts is reached through kvSyncTransport from kv-storage/wasmDeps.ts and worker.ts. Canonical worker SHA-256 is 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115 in both pinned jobs. Root, initial, activation and gated caps are carried unchanged, not new measurements or new admissions. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481"
   }
 }

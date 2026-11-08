@@ -38,6 +38,7 @@ import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-siz
 import { validateTc2481RegistryFreshnessTransition } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
 import { validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
+import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -574,6 +575,15 @@ if (prBaseSha) {
   if (coldDeviceRefusal !== undefined && baseLedger.tc2481ColdDeviceRefusal === undefined &&
       (baseLedger.tc2481WebRouting === undefined || !hasAncestor(repoRoot, coldDeviceRefusal.sourceCommits.at(-1)!))) {
     console.error("The TC-2481 cold-device root-only ratchet requires the merged Web routing row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2481OfflineReplicaTransportTransition(baseLedger.tc2481OfflineReplicaTransport, ledger.tc2481OfflineReplicaTransport);
+  const offlineReplicaTransport = ledger.tc2481OfflineReplicaTransport;
+  // Both admissions are introduced by this PR; the current cold-root row is
+  // already strictly validated, while the measured worker source must exist.
+  if (offlineReplicaTransport !== undefined && baseLedger.tc2481OfflineReplicaTransport === undefined &&
+      (ledger.tc2481ColdDeviceRefusal === undefined || !hasAncestor(repoRoot, offlineReplicaTransport.sourceCommits.at(-1)!))) {
+    console.error("The TC-2481 offline replica worker ratchet requires the approved cold-root row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

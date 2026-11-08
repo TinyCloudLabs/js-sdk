@@ -58,6 +58,7 @@ import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, a
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
 import { approvedTc2481ColdDeviceRefusal, validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy";
+import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 
@@ -2947,6 +2948,8 @@ delete tc2043Ledger.tc2380SpaceHosting;
 delete tc2043Ledger.tc2380Q2OneClick;
 delete tc2043Ledger.tc2481RegistryFreshness;
 delete tc2043Ledger.tc2481WebRouting;
+delete tc2043Ledger.tc2481ColdDeviceRefusal;
+delete tc2043Ledger.tc2481OfflineReplicaTransport;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4600,7 +4603,7 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
   });
 });
 
-const tc2481WebRoutingLedger: Ledger = { ...current, tc2481ColdDeviceRefusal: undefined };
+const tc2481WebRoutingLedger: Ledger = { ...current, tc2481ColdDeviceRefusal: undefined, tc2481OfflineReplicaTransport: undefined };
 
 describe("TC-2481 Web routing exact pinned admission", () => {
   const current = tc2481WebRoutingLedger;
@@ -4715,7 +4718,10 @@ describe("TC-2481 Web routing exact pinned admission", () => {
   });
 });
 
+const tc2481ColdDeviceRefusalLedger: Ledger = { ...current, tc2481OfflineReplicaTransport: undefined };
+
 describe("TC-2481 cold-device root-only admission", () => {
+  const current = tc2481ColdDeviceRefusalLedger;
   it("selects the later measured root admission without changing the preceding row", () => {
     expect(() => validateLedger(current)).not.toThrow();
     for (const format of ["index.mjs", "index.cjs"] as const) {
@@ -4763,5 +4769,86 @@ describe("TC-2481 cold-device root-only admission", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2481ColdDeviceRefusalTransition(approved, changed)).toThrow();
     expect(() => validateTc2481ColdDeviceRefusalTransition(approved, undefined)).toThrow();
+  });
+});
+
+const offlineReplicaTransportAdmission = (): NonNullable<Ledger["tc2481RegistryFreshness"]> => ({
+  label: "TC-2481 offline replica transport worker admission (PR #873)",
+  ruling: "Naomi 8e3df7f3 authorizes only canonical worker 777149 B (+24) and legacy worker 771051 B (+33), with zero headroom. Both pinned SQLite and PostgreSQL jobs at 11f3b8a710846b33a1d4ef746a3690f8c3015050 agree. Bun 1.3.14; rustc 1.99.0. No other cap changes.",
+  base: "e21f45ddb24cbf8d80a959ff43f504a475b4508e",
+  sourceCommits: ["11f3b8a710846b33a1d4ef746a3690f8c3015050"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530086",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530258",
+    ],
+  },
+  root: { delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: { "index.mjs": 1491713, "index.cjs": 1432069 } },
+  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 53131, "replica.cjs": 68370 } },
+  activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
+  worker: { delta: 24, ceiling: 777149 },
+  replicaWorker: { delta: 33, ceiling: 771051 },
+  reason: "The approved narrow registry_unavailable-to-offline mapping in replica transport.ts is reached through kvSyncTransport from kv-storage/wasmDeps.ts and worker.ts. Canonical worker SHA-256 is 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115 in both pinned jobs. Root, initial, activation and gated caps are carried unchanged, not new measurements or new admissions. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
+});
+
+describe("TC-2481 offline replica transport worker-only admission", () => {
+  const admitted = () => Object.assign(copy(current), {
+    tc2481OfflineReplicaTransport: offlineReplicaTransportAdmission(),
+  });
+
+  it("admits the reviewed workers while selecting only the carried root ceilings", () => {
+    const ledger = admitted();
+    expect(() => validateLedger(ledger)).not.toThrow();
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(rootCeilingFor(ledger, format)).toEqual({
+        row: "tc2481OfflineReplicaTransport",
+        ceiling: current.tc2481ColdDeviceRefusal!.root.ceiling[format],
+      });
+    }
+  });
+
+  it("refuses an extra byte in either worker even when the delta is arithmetically consistent", () => {
+    for (const field of ["worker", "replicaWorker"] as const) {
+      const ledger = admitted();
+      ledger.tc2481OfflineReplicaTransport[field].delta++;
+      ledger.tc2481OfflineReplicaTransport[field].ceiling++;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+  });
+
+  it("does not admit growth in root, initial or activation buckets", () => {
+    for (const field of ["root", "firstImport", "activation"] as const) {
+      const ledger = admitted();
+      const bucket = ledger.tc2481OfflineReplicaTransport[field];
+      for (const format of Object.keys(bucket.ceiling)) {
+        Object.assign(bucket.delta, { [format]: 1 });
+        Object.assign(bucket.ceiling, { [format]: Reflect.get(bucket.ceiling, format) + 1 });
+      }
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+  });
+
+  it("requires the reviewed source, both CI jobs and the preceding cold-root admission", () => {
+    const source = admitted();
+    source.tc2481OfflineReplicaTransport.sourceCommits[0] = "0".repeat(40);
+    expect(() => validateLedger(source)).toThrow();
+    const ci = admitted();
+    ci.tc2481OfflineReplicaTransport.canonicalCI.jobs.pop();
+    expect(() => validateLedger(ci)).toThrow();
+    const previous = admitted();
+    delete previous.tc2481ColdDeviceRefusal;
+    expect(() => validateLedger(previous)).toThrow();
+  });
+
+  it("allows one introduction and refuses mutation or removal after admission", () => {
+    const row = offlineReplicaTransportAdmission();
+    expect(() => validateTc2481OfflineReplicaTransportTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2481OfflineReplicaTransportTransition(row, row)).not.toThrow();
+    const changed = offlineReplicaTransportAdmission();
+    changed.worker.ceiling++;
+    changed.worker.delta++;
+    expect(() => validateTc2481OfflineReplicaTransportTransition(row, changed)).toThrow();
+    expect(() => validateTc2481OfflineReplicaTransportTransition(row, undefined)).toThrow();
   });
 });

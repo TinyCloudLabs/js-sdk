@@ -4,6 +4,9 @@ import type { SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core"
 import type { IWasmBindings, ISigner, TinyCloudSession } from "@tinycloud/sdk-core";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.hosting-cancel.test";
 afterEach(() => jest.useRealTimers());
 
 const context: SpaceCreationContext = {
@@ -104,6 +107,7 @@ test("sign-out during host signing prevents the delegation POST and hosting reco
     }),
   } as unknown as IWasmBindings;
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings,
     domain: "example.com",
@@ -114,7 +118,9 @@ test("sign-out during host signing prevents the delegation POST and hosting reco
     },
   });
   auth.setRestoredTinyCloudSession(restoredSession);
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.includes("/peer/generate/")) return new Response("peer-id");
     if (url.endsWith("/delegate")) {
@@ -125,7 +131,7 @@ test("sign-out during host signing prevents the delegation POST and hosting reco
   };
   try {
     const pending = auth.ensurePrimarySpaceHosted("not-hosted", controller.signal);
-    await signingStarted.promise;
+    await Promise.race([signingStarted.promise, pending]);
     controller.abort(new Error("signed out"));
     signature.resolve("0xhost-signature");
     await expect(pending).rejects.toThrow("signed out");
@@ -152,6 +158,7 @@ test("replacing the restored session during confirmation rejects without signing
     spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000002:default",
   };
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer: {
       getAddress: async () => restoredSession.address,
       getChainId: async () => restoredSession.chainId,
@@ -185,6 +192,8 @@ test("replacing the restored session during confirmation rejects without signing
   });
   auth.setRestoredTinyCloudSession(restoredSession);
   globalThis.fetch = async (input, init) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.includes("/peer/generate/")) return new Response("peer-id");
     if (url.endsWith("/delegate") && init?.method === "POST") {
@@ -195,7 +204,7 @@ test("replacing the restored session during confirmation rejects without signing
   };
   try {
     const pending = auth.ensurePrimarySpaceHosted("not-hosted");
-    await confirmationStarted.promise;
+    await Promise.race([confirmationStarted.promise, pending]);
     auth.setRestoredTinyCloudSession(nextSession);
     approval.resolve(true);
 

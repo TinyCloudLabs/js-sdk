@@ -436,6 +436,7 @@ export type Ledger = {
   tc2481RegistryFreshness?: Tc2481RegistryFreshness;
   tc2481WebRouting?: Tc2481WebRouting;
   tc2481ColdDeviceRefusal?: LogoutRatchet;
+  tc2481OfflineReplicaTransport?: Tc2481RegistryFreshness;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1040,6 +1041,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2481RegistryFreshness !== undefined) pins.push({ row: "tc2481RegistryFreshness", pin: root.tc2481RegistryFreshness.sourceCommits.at(-1)! });
   if (root.tc2481WebRouting !== undefined) pins.push({ row: "tc2481WebRouting", pin: root.tc2481WebRouting.sourceCommits.at(-1)! });
   if (root.tc2481ColdDeviceRefusal !== undefined) pins.push({ row: "tc2481ColdDeviceRefusal", pin: root.tc2481ColdDeviceRefusal.sourceCommits.at(-1)! });
+  if (root.tc2481OfflineReplicaTransport !== undefined) pins.push({ row: "tc2481OfflineReplicaTransport", pin: root.tc2481OfflineReplicaTransport.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1120,6 +1122,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2481RegistryFreshness", root.tc2481RegistryFreshness?.root.ceiling],
     ["tc2481WebRouting", root.tc2481WebRouting?.root.ceiling],
     ["tc2481ColdDeviceRefusal", root.tc2481ColdDeviceRefusal?.root.ceiling],
+    ["tc2481OfflineReplicaTransport", root.tc2481OfflineReplicaTransport?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2793,6 +2796,26 @@ export const approvedTc2481ColdDeviceRefusal: LogoutRatchet = {
   reason: "The shared cold-routing refusal and typed vault delete/list propagation add code but no new runtime dependency. The existing get/put normalization pattern is retained; no correct bounded dependency or control-flow removal was established. Admit only the measured root bytes; the preceding first-import, activation, worker, gated and owned-accounting limits remain unchanged. Recovery is tracked at https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
 };
 
+export const approvedTc2481OfflineReplicaTransport: Tc2481RegistryFreshness = {
+  label: "TC-2481 offline replica transport worker admission (PR #873)",
+  ruling: "Naomi 8e3df7f3 authorizes only canonical worker 777149 B (+24) and legacy worker 771051 B (+33), with zero headroom. Both pinned SQLite and PostgreSQL jobs at 11f3b8a710846b33a1d4ef746a3690f8c3015050 agree. Bun 1.3.14; rustc 1.99.0. No other cap changes.",
+  base: "e21f45ddb24cbf8d80a959ff43f504a475b4508e",
+  sourceCommits: ["11f3b8a710846b33a1d4ef746a3690f8c3015050"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530086",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42498701097/job/128786530258",
+    ],
+  },
+  root: { delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: { "index.mjs": 1491713, "index.cjs": 1432069 } },
+  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 53131, "replica.cjs": 68370 } },
+  activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
+  worker: { delta: 24, ceiling: 777149 },
+  replicaWorker: { delta: 33, ceiling: 771051 },
+  reason: "The approved narrow registry_unavailable-to-offline mapping in replica transport.ts is reached through kvSyncTransport from kv-storage/wasmDeps.ts and worker.ts. Canonical worker SHA-256 is 6da43e021c38d2db80211da795c171778f6d7d97f0b8725fde79852e4e1de115 in both pinned jobs. Root, initial, activation and gated caps are carried unchanged, not new measurements or new admissions. Recovery: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Details: TC-2481",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -2919,6 +2942,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2481RegistryFreshness: approvedTc2481RegistryFreshness,
   tc2481WebRouting: approvedTc2481WebRouting,
   tc2481ColdDeviceRefusal: approvedTc2481ColdDeviceRefusal,
+  tc2481OfflineReplicaTransport: approvedTc2481OfflineReplicaTransport,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3251,6 +3275,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2481ColdDeviceRefusal !== undefined &&
       (!value.tc2481WebRouting || JSON.stringify(value.tc2481ColdDeviceRefusal) !== JSON.stringify(approvedTc2481ColdDeviceRefusal))) {
     throw new Error("Only Naomi's exact TC-2481 cold-device root-only ratchet is approved.");
+  }
+  if (value.tc2481OfflineReplicaTransport !== undefined &&
+      (!value.tc2481ColdDeviceRefusal || JSON.stringify(value.tc2481OfflineReplicaTransport) !== JSON.stringify(approvedTc2481OfflineReplicaTransport))) {
+    throw new Error("Only Naomi's exact TC-2481 offline replica worker-only ratchet is approved.");
   }
 }
 
@@ -3672,6 +3700,13 @@ export function validateTc2481ColdDeviceRefusalTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2481ColdDeviceRefusal) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2481 cold-device root-only ratchet may be introduced once and cannot change later.");
+  }
+}
+
+export function validateTc2481OfflineReplicaTransportTransition(base?: Tc2481RegistryFreshness, current?: Tc2481RegistryFreshness): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2481OfflineReplicaTransport) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2481 offline replica worker-only ratchet may be introduced once and cannot change later.");
   }
 }
 
