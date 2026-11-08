@@ -2377,6 +2377,41 @@ function setTTY(stream: NodeJS.ReadStream | NodeJS.WriteStream, isTTY: boolean):
   };
 }
 
+/**
+ * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) waiting on
+ * stdin, and stdout/stderr captured. Returns what was written to stderr and whether anything
+ * started reading stdin.
+ */
+async function grantWith(
+  args: string[],
+  terminal: { stdin: boolean; stdout: boolean; stderr: boolean },
+  answer?: string,
+): Promise<{ stderr: string; stdinRead: boolean }> {
+  const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+  const input = Object.assign(Readable.from(answer === undefined ? [] : [answer]), { setRawMode: () => input });
+  Object.defineProperty(process, "stdin", { configurable: true, value: input });
+  const restore = [
+    setTTY(process.stdin, terminal.stdin),
+    setTTY(process.stdout, terminal.stdout),
+    setTTY(process.stderr, terminal.stderr),
+  ];
+  const stderr: string[] = [];
+  const stderrSpy = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    stderr.push(String(chunk));
+    return true;
+  }) as never);
+  const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((() => true) as never);
+  try {
+    await runAuthCommand(["auth", "grant", ...args]);
+  } finally {
+    stderrSpy.mockRestore();
+    stdoutSpy.mockRestore();
+    for (const undo of restore) undo();
+    if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
+  }
+  return { stderr: stderr.join(""), stdinRead: input.readableFlowing !== null };
+}
+
 describe("auth grant for an OpenKey owner gets a fresh owner approval per agent request (TC-1422)", () => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   const sessionDid = "did:key:z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51#z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51";
@@ -2519,9 +2554,48 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(recorded.grantedRequests).toEqual([]);
     expect(recorded.localGrantArtifacts).toEqual([]);
   });
+
+  describe("an entry beyond the apps-agent preset goes straight to the OpenKey approval, with no terminal question", () => {
+    const applications = `tinycloud:${primaryOwner.slice("did:".length)}:applications`;
+
+    async function writeBeyondPresetAgentRequest(): Promise<string> {
+      const source = join(tempDir, "openkey-agent-beyond-preset.json");
+      await writeFile(source, JSON.stringify(makeStoredImportRequest({
+        posture: "delegate-session",
+        operatorType: "agent",
+        sessionDid,
+        requested: [{ service: "tinycloud.kv", space: applications, path: "xyz.example.app/", actions: ["tinycloud.kv/del"] }],
+      })), "utf8");
+      return source;
+    }
+
+    test.each([
+      ["a terminal attached", { stdin: true, stdout: true, stderr: true }, false],
+      ["stdout redirected to a file", { stdin: true, stdout: false, stderr: true }, false],
+      ["no terminal and no --yes", { stdin: false, stdout: false, stderr: false }, true],
+    ])("%s: the list is printed, nothing is asked or read from stdin, and the owner's OpenKey approval signs it", async (_name, terminal, noPopup) => {
+      openKeyDelegation = {
+        ...approvalBy(primaryOwner, 2 * DAY_MS),
+        spaceId: applications,
+        verifiedPath: "xyz.example.app/",
+        verifiedActions: ["tinycloud.kv/del"],
+      };
+      const source = await writeBeyondPresetAgentRequest();
+
+      const { stderr, stdinRead } = await grantWith([source], terminal, "n\n");
+
+      expect(stderr).toContain("MORE than the apps-agent preset");
+      expect(stderr).not.toContain("[y/N]");
+      expect(stdinRead).toBe(false);
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows).toEqual([expect.objectContaining({ did: sessionDid })]);
+      expect(recorded.startAuthFlows[0]?.options.noPopup).toBe(noPopup);
+      expect(recorded.grantedRequests).toHaveLength(1);
+    });
+  });
 });
 
-describe("auth grant asks the owner about entries beyond the preset on the terminal, wherever stdout goes", () => {
+describe("auth grant on a local-key profile asks the owner about entries beyond the preset on the terminal, wherever stdout goes", () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -2545,41 +2619,6 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
       requested: [{ service: "tinycloud.kv", space: "applications", path: "xyz.example.app/", actions: ["tinycloud.kv/del"] }],
     }), "utf8");
     return source;
-  }
-
-  /**
-   * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) waiting on
-   * stdin, and stdout/stderr captured. Returns what was written to stderr and whether anything
-   * started reading stdin.
-   */
-  async function grantWith(
-    args: string[],
-    terminal: { stdin: boolean; stdout: boolean; stderr: boolean },
-    answer?: string,
-  ): Promise<{ stderr: string; stdinRead: boolean }> {
-    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
-    const input = Object.assign(Readable.from(answer === undefined ? [] : [answer]), { setRawMode: () => input });
-    Object.defineProperty(process, "stdin", { configurable: true, value: input });
-    const restore = [
-      setTTY(process.stdin, terminal.stdin),
-      setTTY(process.stdout, terminal.stdout),
-      setTTY(process.stderr, terminal.stderr),
-    ];
-    const stderr: string[] = [];
-    const stderrSpy = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
-      stderr.push(String(chunk));
-      return true;
-    }) as never);
-    const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((() => true) as never);
-    try {
-      await runAuthCommand(["auth", "grant", ...args]);
-    } finally {
-      stderrSpy.mockRestore();
-      stdoutSpy.mockRestore();
-      for (const undo of restore) undo();
-      if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
-    }
-    return { stderr: stderr.join(""), stdinRead: input.readableFlowing !== null };
   }
 
   test("stdout redirected to a file still gets the question on the terminal, and a yes signs", async () => {

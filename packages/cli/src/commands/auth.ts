@@ -1402,12 +1402,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           profile.authMethod === "openkey" ? OPENKEY_AGENT_MAX_LIFETIME_MS : undefined,
         );
         process.stderr.write(`\n${scope.text}\n\n`);
-        // The request file comes from the agent: anything the apps-agent preset could never grant
-        // is signed only after an explicit --yes or an interactive confirmation of the list above.
+        // The request file comes from the agent. On an OpenKey profile the owner approves this exact
+        // list on the OpenKey screen right after, which the agent cannot draw on, so nothing is asked here.
+        // On a local-key profile nothing else shows the owner the list: anything the apps-agent preset
+        // could never grant is signed only after an explicit --yes or an interactive confirmation.
         // The question is written to stderr and answered on stdin, so those two must be a terminal;
         // stdout may be a file (scripts capture the grant artifact there) without losing the prompt.
         let confirmedExtras = false;
-        if (scope.extras.length > 0 && options.yes !== true) {
+        if (profile.authMethod !== "openkey" && scope.extras.length > 0 && options.yes !== true) {
           if (!process.stdin.isTTY || !process.stderr.isTTY) {
             throw new CLIError(
               "CONFIRMATION_REQUIRED",
