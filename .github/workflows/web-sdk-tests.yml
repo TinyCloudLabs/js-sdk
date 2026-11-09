@@ -103,7 +103,7 @@ jobs:
 
       - name: Install wasm-pack
         if: steps.gate.outputs.run == 'true'
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Install locked dependencies
         if: steps.gate.outputs.run == 'true'
