@@ -1,4 +1,4 @@
-import { chmod, lstat, readdir, rm } from "node:fs/promises";
+import { chmod, lstat, readdir, rm, stat } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { join } from "node:path";
 import {
@@ -34,6 +34,29 @@ import {
 } from "./storage.js";
 import { resolveProfilePosture, type GlobalConfig, type ProfileConfig, type CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
+
+
+async function secureProfileTree(directory: string): Promise<void> {
+  const info = await stat(directory);
+  if (!info.isDirectory()) {
+    throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+  }
+  if ((info.mode & 0o777) !== PRIVATE_DIR_MODE) {
+    await chmod(directory, PRIVATE_DIR_MODE);
+  }
+
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await secureProfileTree(path);
+    } else if (entry.isFile()) {
+      const fileInfo = await lstat(path);
+      if (fileInfo.isFile() && (fileInfo.mode & 0o777) !== 0o600) {
+        await chmod(path, 0o600);
+      }
+    }
+  }
+}
 
 export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
@@ -112,8 +135,11 @@ export class ProfileManager {
    * Throws CLIError if the profile doesn't exist.
    */
   static async getProfile(name: string): Promise<ProfileConfig> {
-    const profile = await withPinnedProfileDirectory(name, (directory) =>
-      directory ? readJson<ProfileConfig>(join(directory, "profile.json")) : Promise.resolve(null));
+    const profile = await withPinnedProfileDirectory(name, async (directory) => {
+      if (!directory) return null;
+      await secureProfileTree(directory);
+      return readJson<ProfileConfig>(join(directory, "profile.json"));
+    });
     if (!profile) {
       throw new CLIError(
         "PROFILE_NOT_FOUND",

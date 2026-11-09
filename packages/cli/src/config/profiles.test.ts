@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,6 +25,41 @@ describe("ProfileManager.getProfile", () => {
       code: "PROFILE_NOT_FOUND",
     });
   });
+});
+
+test("loading a legacy profile restricts its directory tree and files", async () => {
+  const profileDir = join(PROFILES_DIR, "legacy");
+  const cacheDir = join(profileDir, "cache");
+  await mkdir(cacheDir, { recursive: true, mode: 0o755 });
+  await writeFile(join(profileDir, "profile.json"), JSON.stringify({
+    name: "legacy",
+    host: "https://node.tinycloud.test",
+    chainId: 1,
+    spaceName: "default",
+    did: "did:key:legacy",
+    createdAt: "2026-10-01T00:00:00.000Z",
+  }), { mode: 0o644 });
+  for (const file of ["key.json", "config.json"]) {
+    await writeFile(join(profileDir, file), "{}", { mode: 0o644 });
+  }
+  await writeFile(join(cacheDir, "state.json"), "{}", { mode: 0o644 });
+  await chmod(profileDir, 0o755);
+  await chmod(cacheDir, 0o755);
+
+  expect((await ProfileManager.getProfile("legacy")).name).toBe("legacy");
+
+  const paths = [
+    profileDir,
+    join(profileDir, "profile.json"),
+    join(profileDir, "key.json"),
+    join(profileDir, "config.json"),
+    cacheDir,
+    join(cacheDir, "state.json"),
+  ];
+  const modes = async () => Promise.all(paths.map(async (path) => (await stat(path)).mode & 0o777));
+  expect(await modes()).toEqual([0o700, 0o600, 0o600, 0o600, 0o700, 0o600]);
+  await ProfileManager.getProfile("legacy");
+  expect(await modes()).toEqual([0o700, 0o600, 0o600, 0o600, 0o700, 0o600]);
 });
 
 test("profile reads and writes stay on the locked inode after a real-directory swap", async () => {
