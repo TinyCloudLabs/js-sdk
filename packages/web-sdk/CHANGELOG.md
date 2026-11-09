@@ -155,6 +155,18 @@
 - Updated dependencies [5817c2b]
   - @tinycloud/node-sdk@3.11.1-beta.0
 
+## 3.11.1
+
+### Patch Changes
+
+- Sign-in requests to OpenKey now include only the standard public members of the session key.
+
+  Details: TC-2582
+
+- Updated dependencies
+  - @tinycloud/sdk-core@3.11.1
+  - @tinycloud/node-sdk@3.11.1
+
 ## 3.11.0
 
 ### Minor Changes
