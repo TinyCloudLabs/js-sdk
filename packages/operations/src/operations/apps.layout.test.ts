@@ -214,6 +214,25 @@ describe("personal apps records", () => {
       expect((await write(withGrants(context, [discoveryGrant]), create)).output.ops[0]?.outcome).toBe("ok");
     });
   });
+  test("with a readable app list, a whole new app in one batch is accepted in order and refused when its first record comes before its entry", async () => {
+    // The node reports a grant one action at a time; both shapes must count as a readable app list.
+    const perAction = discoveryGrant.actions.map((action) => ({ ...discoveryGrant, actions: [action] }));
+    for (const granted of [[discoveryGrant], perAction]) {
+      await fixture(async (kv, context) => {
+        const ordered = await write(withGrants(context, granted), createBooks);
+        expect(ordered.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok", "ok", "ok"]);
+        expect(kv.values.has(record)).toBe(true);
+      });
+      await fixture(async (kv, context) => {
+        const [catalog, kind, discovery, firstRecord] = createBooks;
+        const early = await write(withGrants(context, granted), [catalog!, kind!, firstRecord!, discovery!]);
+        expect(early.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok", "INVALID", "ok"]);
+        expect(early.output.ops[2]?.warnings?.[0]).toContain("discovery entry");
+        expect(kv.values.has(record)).toBe(false);
+        expect(kv.values.has(`${DISCOVERY}books/entry`)).toBe(true);
+      });
+    }
+  });
   test("keys under the older agent-data folder are refused by read, write and query before any storage or SQL is touched", async () => {
     await fixture(async (kv, context) => {
       const older = `${OLDER_ROOT}todos/todo/open/2026-11-03-buy-milk`;
