@@ -538,8 +538,8 @@ export function createShareAuthorityAdapters(input: {
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
   /** The CLI revokes every root; it never leaves one live. */
   readonly revokePolicyRoot?: (request: SharePolicyRootRevocation) => Promise<void>;
-  /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
-  readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
+  /** Receive-only sharing service for an in-process deployment or tests. */
+  readonly nativeSharing?: () => TinyCloudNode["sharing"];
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -657,6 +657,8 @@ export function createShareAuthorityAdapters(input: {
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
         sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport,
       });
     } catch (error) {
       // The Node answers this only for a root it already holds a signed revocation for (a retry signs a new `revokedAt`).
@@ -1145,15 +1147,14 @@ export function createShareAuthorityAdapters(input: {
         registrySequenceStore: createProfileRegistrySequenceStore(selectedProfile),
         tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl,
       };
-      sharing = (host: string | undefined) => new TinyCloudNode({
-        ...registry, ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false,
+      sharing = () => new TinyCloudNode({
+        ...registry, newUserHost: null, autoDiscoverLocalNode: false,
         onRegistryFallback: recordRegistryFallbackWarning,
       }).sharing;
     }
     const token = parseNativeShareUrl(link);
-    const decoded = sharing(undefined).decodeLink(token) as { readonly host?: unknown };
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const share = sharing();
+    const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get<Uint8Array>("", { binary: true }) : undefined;
     // The owner Node answers a revoked link's read with `401 - delegation-revoked: <cid>`.
     const failure = !received.ok ? received.error : value !== undefined && !value.ok ? value.error : undefined;

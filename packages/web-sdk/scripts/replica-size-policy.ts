@@ -439,6 +439,7 @@ export type Ledger = {
   tc2481OfflineReplicaTransport?: Tc2481RegistryFreshness;
   tc2582PublicSessionKey?: LogoutRatchet;
   tc2281OpenKeyConnectedKeyId?: LogoutRatchet;
+  tc2594ResourceTransport?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1046,6 +1047,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2481OfflineReplicaTransport !== undefined) pins.push({ row: "tc2481OfflineReplicaTransport", pin: root.tc2481OfflineReplicaTransport.sourceCommits.at(-1)! });
   if (root.tc2582PublicSessionKey !== undefined) pins.push({ row: "tc2582PublicSessionKey", pin: root.tc2582PublicSessionKey.sourceCommits.at(-1)! });
   if (root.tc2281OpenKeyConnectedKeyId !== undefined) pins.push({ row: "tc2281OpenKeyConnectedKeyId", pin: root.tc2281OpenKeyConnectedKeyId.sourceCommits.at(-1)! });
+  if (root.tc2594ResourceTransport !== undefined) pins.push({ row: "tc2594ResourceTransport", pin: root.tc2594ResourceTransport.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1129,6 +1131,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2481OfflineReplicaTransport", root.tc2481OfflineReplicaTransport?.root.ceiling],
     ["tc2582PublicSessionKey", root.tc2582PublicSessionKey?.root.ceiling],
     ["tc2281OpenKeyConnectedKeyId", root.tc2281OpenKeyConnectedKeyId?.root.ceiling],
+    ["tc2594ResourceTransport", root.tc2594ResourceTransport?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2864,6 +2867,26 @@ export const approvedTc2281OpenKeyConnectedKeyId: LogoutRatchet = {
   reason: "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first (in popup mode the grant then rejects OPENKEY_CONNECTED_RETRY so the sign popup opens from a fresh click), and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,124 B and index.cjs 1,432,497 B, +260 / +253 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281",
 };
 
+/**
+ * Naomi, TC-2594, 2026-11-09: exact root-only admission after both final-runtime measurements.
+ * Other buckets, historical entries and cumulative allowances remain unchanged.
+ */
+export const approvedTc2594ResourceTransport: LogoutRatchet = {
+  label: "TC-2594 registry-routed control transports and verified share parents, root admission (PR #891)",
+  ruling: "Naomi, TC-2594, 2026-11-09: exact root-only ratchet above tc2281OpenKeyConnectedKeyId, zero headroom. SQLite and PostgreSQL in run 42605095036 at c5dfe40c3f137ecbbd5faa5cbc6c0c93ecd3927f agree. Bun 1.3.14; rustc 1.99.0. Lower the earlier unmerged row by 163 / 230 bytes after the coherent review follow-up. No non-root cap, owned-budget entry or cumulative allowance change.",
+  base: "074317b3b4c2034b3bba5186cebb8ae95a72dd01",
+  sourceCommits: ["c5dfe40c3f137ecbbd5faa5cbc6c0c93ecd3927f"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036/job/129118924270",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036/job/129118924478",
+    ],
+  },
+  root: { delta: { "index.mjs": 3005, "index.cjs": 4175 }, ceiling: { "index.mjs": 1495129, "index.cjs": 1436672 } },
+  reason: "TC-2594: registry-routed policy, identity, delegation and sharing transports; client-side CACAO verification of received and portable parents. Both canonical backends measured index.mjs 1,495,129 B and index.cjs 1,436,672 B, +3005 / +4175 over TC-2281. The coherent review follow-up binds operations to their initiating authority and preserves routed outcomes. Public-parent verification cannot reuse the private-key persisted-session WASM verifier; the single-chunk contract prevents a lazy-import saving. Admit only these root sizes; no owned-budget entry, cumulative allowance, first-import, activation, worker or gated cap changes.",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -2993,6 +3016,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2481OfflineReplicaTransport: approvedTc2481OfflineReplicaTransport,
   tc2582PublicSessionKey: approvedTc2582PublicSessionKey,
   tc2281OpenKeyConnectedKeyId: approvedTc2281OpenKeyConnectedKeyId,
+  tc2594ResourceTransport: approvedTc2594ResourceTransport,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3345,6 +3369,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2281OpenKeyConnectedKeyId !== undefined &&
       (!value.tc2582PublicSessionKey || JSON.stringify(value.tc2281OpenKeyConnectedKeyId) !== JSON.stringify(approvedTc2281OpenKeyConnectedKeyId))) {
     throw new Error("Only Naomi's exact TC-2281 root-only ratchet is approved.");
+  }
+  if (value.tc2594ResourceTransport !== undefined &&
+      (!value.tc2281OpenKeyConnectedKeyId || JSON.stringify(value.tc2594ResourceTransport) !== JSON.stringify(approvedTc2594ResourceTransport))) {
+    throw new Error("Only Naomi's exact TC-2594 root-only ratchet is approved.");
   }
 }
 
@@ -3789,6 +3817,14 @@ export function validateTc2281OpenKeyConnectedKeyIdTransition(base?: LogoutRatch
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2281OpenKeyConnectedKeyId) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2281 root ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2594 root admission is introduced once and immutable afterwards. */
+export function validateTc2594ResourceTransportTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2594ResourceTransport) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2594 root ratchet may be introduced once and cannot change later.");
   }
 }
 

@@ -1,5 +1,26 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.8
+
+### Patch Changes
+
+- c070c4b: Policy, delegation, sharing and identity calls from Node and Web SDK objects now use the same storage-server routing as data calls. When only some writes in a multi-space operation succeed, the result now reports each one instead of a generic network error. Core objects you create directly keep using the host you pass in.
+
+  Details: TC-2594
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+  - @tinycloud/replica@0.4.5-beta.3
+
+## 3.12.0-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/replica@0.4.5-beta.2
+- @tinycloud/sdk-core@3.12.0-beta.7
+
 ## 3.12.0-beta.6
 
 ### Minor Changes
@@ -16,9 +37,7 @@
 
 ### Patch Changes
 
-- 2139b24: Send only the public session key to OpenKey during sign-in.
-
-  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+- 2139b24: Sign-in requests to OpenKey now include only the standard public members of the session key.
 
   Details: TC-2582
 
@@ -135,6 +154,18 @@
 
 - Updated dependencies [5817c2b]
   - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 3.11.1
+
+### Patch Changes
+
+- Sign-in requests to OpenKey now include only the standard public members of the session key.
+
+  Details: TC-2582
+
+- Updated dependencies
+  - @tinycloud/sdk-core@3.11.1
+  - @tinycloud/node-sdk@3.11.1
 
 ## 3.11.0
 

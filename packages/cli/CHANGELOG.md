@@ -1,5 +1,59 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.23
+
+### Patch Changes
+
+- 4ce857f: `tc share receive` now finds the shared space's storage server the same way other commands do.
+
+  Details: TC-2594
+
+## 1.7.0-beta.22
+
+### Patch Changes
+
+- Updated dependencies [e7a370e]
+  - @tinycloud/operations@0.9.0-beta.12
+
+## 1.7.0-beta.21
+
+### Patch Changes
+
+- c070c4b: Policy, delegation, sharing and identity calls from Node and Web SDK objects now use the same storage-server routing as data calls. When only some writes in a multi-space operation succeed, the result now reports each one instead of a generic network error. Core objects you create directly keep using the host you pass in.
+
+  Details: TC-2594
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-services@3.12.0-beta.8
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+  - @tinycloud/operations@0.9.0-beta.11
+
+## 1.7.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [18288bf]
+  - @tinycloud/sdk-services@3.12.0-beta.7
+  - @tinycloud/node-sdk@3.12.0-beta.7
+  - @tinycloud/operations@0.9.0-beta.10
+  - @tinycloud/sdk-core@3.12.0-beta.7
+
+## 1.7.0-beta.19
+
+### Patch Changes
+
+- c8a7c9b: Exit-code change for scripts: `tinycloud share` now exits 2 (invalid input) instead of 8 for `UNSAFE_FILENAME`, `UNSAFE_PATH` and `OUTPUT_EXISTS`. These refusals cannot change when the same command is retried, and exit 8 stays reserved for pending states (a pending owner approval, `secrets wait`). Scripts that treated 8 from `share` as "retry later" should now treat these three codes as input errors. Nothing is written to stdout for them; the error JSON goes to stderr.
+
+  Details: TC-2609
+
+## 1.7.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [3319ede]
+  - @tinycloud/operations@0.9.0-beta.9
+
 ## 1.7.0-beta.17
 
 ### Patch Changes
@@ -23,9 +77,7 @@
 
 ### Patch Changes
 
-- 2139b24: Send only the public session key to OpenKey during sign-in.
-
-  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+- 2139b24: Sign-in requests to OpenKey now include only the standard public members of the session key.
 
   Details: TC-2582
 

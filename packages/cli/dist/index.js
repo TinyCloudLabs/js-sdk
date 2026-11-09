@@ -31131,7 +31131,7 @@ function shareFilename(value) {
     throw new CLIError(
       "UNSAFE_FILENAME",
       hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
-      8
+      2
     );
   }
 }
@@ -31952,7 +31952,9 @@ function createShareAuthorityAdapters(input = {}) {
         issuerDid: node.credentialHolderDid,
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
-        sign: (digest) => node.signSessionBytes(digest)
+        sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport
       });
     } catch (error) {
       if (!(error instanceof Error && "status" in error && error.status === 409 && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
@@ -32382,17 +32384,16 @@ function createShareAuthorityAdapters(input = {}) {
         registrySequenceStore: createProfileRegistrySequenceStore2(selectedProfile2),
         tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl
       };
-      sharing = (host) => new TinyCloudNode2({
+      sharing = () => new TinyCloudNode2({
         ...registry,
-        ...host === void 0 ? {} : { host },
+        newUserHost: null,
         autoDiscoverLocalNode: false,
         onRegistryFallback: recordRegistryFallbackWarning
       }).sharing;
     }
     const token = parseNativeShareUrl(link4);
-    const decoded = sharing(void 0).decodeLink(token);
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin2(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const share = sharing();
+    const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
     const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
@@ -33500,7 +33501,7 @@ function problemError(problems) {
   return new CLIError(
     first.code,
     `folder has ${problems.length} ${noun}: ${listed}${more}`,
-    first.code === "UNSAFE_PATH" ? 8 : 2,
+    2,
     { hint: first.code === "UNSAFE_PATH" ? "Rename these files to plain names without control, invisible or direction-changing characters." : "Symbolic links and special files are never followed or read; copy the real files into the folder." }
   );
 }
@@ -33573,7 +33574,7 @@ function htmlFolderError(error) {
   return new CLIError(
     pathProblem ? "UNSAFE_PATH" : "INVALID_ARGUMENT",
     `folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file}${reference})`}`,
-    pathProblem ? 8 : 2
+    2
   );
 }
 async function jsdomParser() {
@@ -33792,8 +33793,8 @@ function shareCliError(error, operation = "publish") {
   const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
   const known = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 2 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 2 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
     AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },

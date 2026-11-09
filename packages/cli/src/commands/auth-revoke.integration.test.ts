@@ -193,6 +193,7 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
   let state = mode;
   let localPaths: { session: string; db: string } | undefined;
   let unknownPath: string | undefined;
+  const nodeDid = "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq";
   const node = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -254,7 +255,8 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
       }
       if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       if (path === "/healthz") return new Response("ok");
-      if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+      if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [], nodeId: nodeDid });
+      if (path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
       return new Response("not found", { status: 404 });
     },
   });

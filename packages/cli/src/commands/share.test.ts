@@ -935,7 +935,7 @@ describe("safe Share output", () => {
     for (const name of ["a\u0001.md", "a\u200b.md", "a\u202e.md", "a\u2028.md"]) {
       let caught: unknown;
       try { safeFilename(name); } catch (error) { caught = error; }
-      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 8, message: "filename contains control or invisible characters" });
+      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 2, message: "filename contains control or invisible characters" });
     }
   });
 });

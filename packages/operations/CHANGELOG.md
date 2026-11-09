@@ -1,5 +1,43 @@
 # @tinycloud/operations
 
+## 0.9.0-beta.12
+
+### Patch Changes
+
+- e7a370e: The notice on `tinycloud_sql_execute` no longer says that approving `tinycloud.sql/write` grants "full read/write/schema mutation authority". It now says a write grant lets the agent read, insert, update and delete any row in the exact database, that nodes enforcing the schema split (the default) also stop it changing the tables, and that nodes which do not enforce it let it. The tool still accepts only one parameterized INSERT, UPDATE or DELETE. The text appears in the tool description, the required acknowledgement field and the result's `authorityNotice`.
+
+  Details: TC-2454
+
+## 0.9.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-services@3.12.0-beta.8
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+
+## 0.9.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [18288bf]
+  - @tinycloud/sdk-services@3.12.0-beta.7
+  - @tinycloud/node-sdk@3.12.0-beta.7
+  - @tinycloud/sdk-core@3.12.0-beta.7
+
+## 0.9.0-beta.9
+
+### Minor Changes
+
+- 3319ede: The hosted personal-records tools use one layout: the owner's `applications` space, one folder per app (`xyz.tinycloud.tinyapps.<app>/`) with a discovery entry, as the `tc-apps` skill puts a new app. They no longer read or write the older `default`-space folder `xyz.tinycloud.agent-data/`, and `tinycloud_apps_move` (and the `tinycloud.apps.move` operation) is removed. Records already saved in the older folder stay where they are, untouched, and are not shown by the chat tools. A new app now needs one OpenKey request (two for the first new app without the `app` input of `tinycloud_apps_context`), because there is no read-only look at the older app list any more.
+
+  What breaks for callers: `tinycloud.apps.query` has no `layout` input; `tinycloud.apps.context` returns `apps` (app, title, copy) and no longer returns `legacy`, `catalog` or each app's `layout`; keys under `xyz.tinycloud.agent-data/` are refused as invalid personal-record keys; the package no longer exports `TC_APPS_LEGACY_ROOT`, `TC_APPS_LEGACY_DATABASE` or `isTcAppsPermission`. The `tinycloud_apps_context` and `tinycloud_apps_query` tools are no longer annotated destructive (neither deletes a record).
+
+  Same-name apps: if the command-line skill created an older-layout app and a chat app then creates an app with the same name, the skill lists the new app (a discovery entry means the new layout) and not the older records of that name. They are not deleted.
+
+  Details: TC-2416
+
 ## 0.9.0-beta.8
 
 ### Patch Changes

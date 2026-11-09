@@ -625,6 +625,7 @@ test("restored session adopts persisted hosts WITHOUT the wallet flow and a host
   const captured: Array<Record<string, unknown>> = [];
   const signedMessages: string[] = [];
   const requests: string[] = [];
+  const configuredHost = "https://configured.node.test";
   const originalFetch = globalThis.fetch;
   (globalThis as any).__originalFetch = originalFetch;
   globalThis.fetch = async (input: any, init?: any) => {
@@ -644,6 +645,7 @@ test("restored session adopts persisted hosts WITHOUT the wallet flow and a host
 
   const auth = new NodeUserAuthorization({
     tinycloudRegistryUrl: locationRegistry.url.origin,
+    registryNoEntryHosts: [configuredHost],
     signer: createSigner(signedMessages),
     wasmBindings: createWasmBindings(captured),
     signStrategy: { type: "auto-sign" },
@@ -666,8 +668,9 @@ test("restored session adopts persisted hosts WITHOUT the wallet flow and a host
   expect(requests).toContain(
     `${locationRegistry.url.origin}/v2/locations/0x1234567890AbcdEF1234567890aBcdef12345678`,
   );
-  // The host-needing call targeted the persisted host.
-  expect(requests).toContain(`${persistedHosts[0]}/delegate`);
+  // Live transport uses explicit code configuration, never restored host data.
+  expect(requests).toContain(`${configuredHost}/delegate`);
+  expect(requests.some((url) => url.startsWith(persistedHosts[0]!))).toBe(false);
 });
 
 test("restored session with NO persisted hosts lazily resolves via registry/fallback", async () => {

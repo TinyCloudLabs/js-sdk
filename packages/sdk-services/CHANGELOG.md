@@ -1,5 +1,21 @@
 # @tinycloudlabs/sdk-services
 
+## 3.12.0-beta.8
+
+### Patch Changes
+
+- c070c4b: Policy, delegation, sharing and identity calls from Node and Web SDK objects now use the same storage-server routing as data calls. When only some writes in a multi-space operation succeed, the result now reports each one instead of a generic network error. Core objects you create directly keep using the host you pass in.
+
+  Details: TC-2594
+
+## 3.12.0-beta.7
+
+### Patch Changes
+
+- 18288bf: A pending KV write whose request got the node's 503 busy/`unavailable_retryable` answer, which says nothing was applied, now settles as failed instead of ambiguous. A 5xx without that marker, and `request_timeout`, stay ambiguous.
+
+  Details: TC-2606
+
 ## 3.12.0-beta.4
 
 ### Patch Changes

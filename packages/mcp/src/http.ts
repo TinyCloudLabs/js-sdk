@@ -45,6 +45,7 @@ import { MCP_VERSION } from "./version.js";
 const REQUIRED_SCOPE = "tinycloud:mcp";
 const MCP_CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, Mcp-Method, Mcp-Name";
+const MCP_CORS_EXPOSED_HEADERS = "WWW-Authenticate, Mcp-Session-Id, Mcp-Protocol-Version";
 const LOCAL_CLI_PACKAGE = ["@tinycloud", "cli"].join("/");
 const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
 
@@ -627,7 +628,9 @@ function requiredState(url: URL): string {
  * `Authorization: Bearer` header alone (no cookies or other ambient
  * credentials), so the Origin carries no authority. The wildcard origin can
  * never be combined with credentials, so `Access-Control-Allow-Credentials`
- * is not set. Only the bearer challenge header is exposed to scripts, and a
+ * is not set. The bearer challenge and the MCP session and protocol-version
+ * headers are exposed to scripts (a browser client cannot read any other
+ * response header), and a
  * preflight allows a fixed list of the headers MCP clients send; the native
  * service headers are not in it. A request without an Origin header (not a
  * browser cross-origin call) gets no CORS headers. `Vary: Origin` is appended
@@ -639,10 +642,7 @@ function mcpCors(response: Response, request: Request): Response {
   if (request.headers.has("origin")) {
     headers.set("access-control-allow-origin", "*");
     headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
-    // The server is stateless, so only the bearer challenge is exposed. If sessions
-    // are ever enabled, `Mcp-Session-Id` must be added here or browser clients
-    // cannot read it.
-    headers.set("access-control-expose-headers", "WWW-Authenticate");
+    headers.set("access-control-expose-headers", MCP_CORS_EXPOSED_HEADERS);
     if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });

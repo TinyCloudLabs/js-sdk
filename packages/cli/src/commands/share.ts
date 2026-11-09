@@ -278,8 +278,8 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     : undefined;
   const known: Record<string, { code: string; exit: number }> = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 2 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 2 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
     AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },

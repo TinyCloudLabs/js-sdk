@@ -18,7 +18,10 @@ import type {
   ServiceSession,
   InvokeFunction,
   FetchFunction,
+  ResourceTransport,
+  ResourceAccess,
 } from "@tinycloud/sdk-services";
+import { createResourceTransportInvocationFetch, routingFailure, wrapError } from "@tinycloud/sdk-services";
 import type {
   Result,
   DelegationError,
@@ -50,18 +53,12 @@ import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import type { ShareAccessV2, ShareRecipientClientOptions } from "./recipient-types";
+import { spaceIdsEqual, verifiedDelegationRouting } from "./portable";
 
 // ---------------------------------------------------------------------------
 // Local helpers
 // ---------------------------------------------------------------------------
 
-function spaceIdsEqual(left: string, right: string): boolean {
-  const normalizeOwnerAddress = (space: string): string => {
-    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
-    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
-  };
-  return normalizeOwnerAddress(left) === normalizeOwnerAddress(right);
-}
 
 /**
  * Infer the short-form service name (`"kv"`, `"sql"`, etc) that all of the
@@ -347,6 +344,8 @@ export interface SharingServiceConfig {
   invoke: InvokeFunction;
   /** Optional custom fetch implementation */
   fetch?: FetchFunction;
+  /** Resource-specific transport supplied by the owning platform graph. */
+  resourceTransport?: ResourceTransport;
   /** Key provider for cryptographic operations */
   keyProvider: KeyProvider;
   /** Capability key registry for key/delegation management */
@@ -539,9 +538,12 @@ export class SharingService implements ISharingService {
   private sessionExpiry?: Date;
   private onRootDelegationNeeded?: SharingServiceConfig["onRootDelegationNeeded"];
   private assertActiveFn?: SharingServiceConfig["assertActive"];
+  private readonly resourceTransport?: ResourceTransport;
 
   /**
    * Creates a new SharingService instance.
+   * Standalone explicit-host calls do not consult the registry.
+   * Use Node/Web objects for registry routing; received-share paths require a resource transport.
    */
   constructor(config: SharingServiceConfig) {
     this.hosts = config.hosts;
@@ -559,6 +561,7 @@ export class SharingService implements ISharingService {
     this.sessionExpiry = config.sessionExpiry;
     this.onRootDelegationNeeded = config.onRootDelegationNeeded;
     this.assertActiveFn = config.assertActive;
+    this.resourceTransport = config.resourceTransport;
   }
 
   /**
@@ -740,6 +743,7 @@ export class SharingService implements ISharingService {
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
       const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry, params.allowSubDelegation !== false);
+      if ('ok' in delegationResult && !delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const childDelegationActiveError = this.retiredGraphError();
       if (childDelegationActiveError) return { ok: false, error: childDelegationActiveError };
       const parsed = handleDelegationResult(delegationResult);
@@ -773,6 +777,7 @@ export class SharingService implements ISharingService {
           };
         }
       } catch (err) {
+        if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
         // `onRootDelegationNeeded` re-opens the wallet/OpenKey signing surface
         // mid-compose, long after sign-in. An unanswered or cancelled signature
         // is a completely different problem from "you are not authorized", and
@@ -1011,12 +1016,14 @@ export class SharingService implements ISharingService {
         if (childSigningActiveError) return { ok: false, error: childSigningActiveError };
 
         // Register the delegation with the server
-        const registerRes = await this.fetchFn(`${this.host}/delegate`, {
+        const register = (fetchFn: FetchFunction, host: string) => fetchFn(`${host}/delegate`, {
           method: "POST",
-          headers: {
-            Authorization: wasmResult.delegation,
-          },
+          headers: { Authorization: wasmResult.delegation },
+          redirect: "error",
         });
+        const registerRes = this.resourceTransport
+          ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url))
+          : await register(this.fetchFn, this.host);
         const registrationActiveError = this.retiredGraphError();
         if (registrationActiveError) return { ok: false, error: registrationActiveError };
 
@@ -1073,6 +1080,7 @@ export class SharingService implements ISharingService {
           createdAt: new Date(),
         };
       } catch (err) {
+        if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
         return {
           ok: false,
           error: createError(
@@ -1093,6 +1101,7 @@ export class SharingService implements ISharingService {
       };
 
       const delegationResult = await this.createDelegationFn!(delegationParams);
+      if (!delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const delegationCreationActiveError = this.retiredGraphError();
       if (delegationCreationActiveError) return { ok: false, error: delegationCreationActiveError };
 
@@ -1110,6 +1119,21 @@ export class SharingService implements ISharingService {
 
       return delegationResult.data;
     }
+  }
+
+  private async verifiedReceivedShareResource(shareData: EncodedShareData): Promise<{ resource: string; access: ResourceAccess }> {
+    if (!shareData.delegation.authHeader
+      || shareData.delegation.spaceId !== shareData.spaceId
+      || principalDid(shareData.delegation.delegateDID) !== principalDid(shareData.keyDid)
+      || !shareKeyMatchesDid(shareData.key, shareData.keyDid)) {
+      throw new Error("Sharing-link metadata does not match its parent delegation");
+    }
+    const verified = await verifiedDelegationRouting(shareData.delegation.authHeader, shareData.delegation.cid);
+    const resource = verified.resources.find(({ resource }) => spaceIdsEqual(resource, shareData.spaceId));
+    if (!resource || verified.audienceDid !== principalDid(shareData.keyDid)) {
+      throw new Error("Sharing-link metadata does not match its signed parent");
+    }
+    return resource;
   }
 
   /**
@@ -1168,6 +1192,18 @@ export class SharingService implements ISharingService {
         ),
       };
     }
+    const resourceTransport = this.resourceTransport;
+    if (!resourceTransport) return {
+      ok: false,
+      error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
+    };
+    if (!autoSubdelegate || !useSessionKey || !this.session) {
+      try {
+        await this.verifiedReceivedShareResource(shareData);
+      } catch {
+        return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "Sharing-link metadata does not match its parent delegation") };
+      }
+    }
 
     // Step 2: Create KeyInfo and ingest into registry
     const keyInfo: KeyInfo = {
@@ -1178,7 +1214,6 @@ export class SharingService implements ISharingService {
       priority: 2, // Ingested keys have lowest priority
     };
 
-    this.registry.ingestKey(keyInfo, shareData.delegation, ingestOptions);
 
     // The delegation and key to use for operations
     let activeDelegation = shareData.delegation;
@@ -1199,14 +1234,14 @@ export class SharingService implements ISharingService {
         priority: 0,
       };
     }
+    this.registry.ingestKey(keyInfo, shareData.delegation, ingestOptions);
 
     // Step 4: Create pre-configured KV service for the shared path
     // Construct session from share data - no need for existing session
-    // Use the authHeader if available, otherwise fall back to constructing from CID
     const portableAuthorization = (activeDelegation as Delegation & {
       delegationHeader?: { Authorization?: string };
     }).delegationHeader?.Authorization;
-    const authHeader = portableAuthorization ?? activeDelegation.authHeader ?? `Bearer ${activeDelegation.cid}`;
+    const authHeader = portableAuthorization ?? activeDelegation.authHeader!;
     const activeSession = activeKey.type === "session" && this.session
       ? this.session
       : undefined;
@@ -1222,7 +1257,7 @@ export class SharingService implements ISharingService {
       hosts: [shareData.host],
       session: shareSession,
       invoke: this.invoke,
-      fetch: this.fetchFn,
+      fetch: createResourceTransportInvocationFetch(resourceTransport, shareSession),
       pathPrefix: shareData.path,
     });
 
@@ -1239,12 +1274,13 @@ export class SharingService implements ISharingService {
 
   async receiveV2(
     link: string,
-    options: Omit<ShareRecipientClientOptions, "trustedOrigins" | "fetch" | "invoke" | "createKVService"> = {},
+    options: Omit<ShareRecipientClientOptions, "trustedOrigins" | "fetch" | "invoke" | "createKVService" | "resourceTransport"> = {},
   ): Promise<ShareAccessV2> {
     const client = new ShareRecipientClient({
       ...options,
       trustedOrigins: this.hosts,
       fetch: this.fetchFn,
+      resourceTransport: this.resourceTransport,
       invoke: this.invoke,
       createKVService: this.createKVService,
     });
@@ -1344,6 +1380,11 @@ export class SharingService implements ISharingService {
         ),
       };
     }
+    const resourceTransport = this.resourceTransport;
+    if (!resourceTransport) return {
+      ok: false,
+      error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
+    };
 
     const path = params.path ?? shareData.path;
     if (!capabilityPathContains(shareData.path, path)) {
@@ -1407,6 +1448,7 @@ export class SharingService implements ISharingService {
     }
 
     try {
+      const parentResource = await this.verifiedReceivedShareResource(shareData);
       const parentSession: ServiceSession = {
         delegationHeader: { Authorization: shareData.delegation.authHeader },
         delegationCid: shareData.delegation.cid,
@@ -1449,7 +1491,12 @@ export class SharingService implements ISharingService {
         headers: { Authorization: result.delegation },
         redirect: "error" as const,
       };
-      const registration = await this.fetchFn(new URL("/delegate", trustedHost).toString(), registrationInit);
+      let registeredHost: string | undefined;
+      const registration = await resourceTransport([parentResource], async (target) => {
+        const response = await target.fetch(`${target.url}/delegate`, registrationInit);
+        if (response.ok) registeredHost ??= target.url;
+        return response;
+      });
       const registrationActiveError = this.retiredGraphError();
       if (registrationActiveError) return { ok: false, error: registrationActiveError };
       if (!registration.ok) {
@@ -1475,7 +1522,7 @@ export class SharingService implements ISharingService {
             delegationHeader: { Authorization: result.delegation },
             ownerAddress: owner.address,
             chainId: owner.chainId,
-            host: trustedHost,
+            host: registeredHost!,
             resources: result.resources,
             disableSubDelegation: true,
           },
@@ -1483,12 +1530,15 @@ export class SharingService implements ISharingService {
             parentCid: shareData.delegation.cid,
             spaceId: shareData.spaceId,
             path: primary.path,
-            host: trustedHost,
+            host: registeredHost!,
             expiresAt: verifiedChild.expiresAt,
           },
         },
       };
     } catch (err) {
+      if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
+      const retired = this.retiredGraphError();
+      if (retired) return { ok: false, error: retired };
       return {
         ok: false,
         error: createError(

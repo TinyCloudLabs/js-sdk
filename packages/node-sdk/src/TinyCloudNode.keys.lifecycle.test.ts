@@ -1,10 +1,11 @@
 import { expect, mock, test } from "bun:test";
+import { makePkhSpaceId, pkhDid } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
-import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+import { signedLocationRecordForTest, signedRegistryResponseForTest } from "./test-support/restored-policy-node";
 
 const REGISTRY_ORIGIN = "https://registry.keys-lifecycle.test";
 
@@ -25,18 +26,35 @@ test("keys exposes only named-key operations and is safe to await", async () => 
 test("named-key calls use the restored host after sign-in", async () => {
   const originalFetch = globalThis.fetch;
   const seen: string[] = [];
+  const proof = await signedRestorableSession();
+  const ownerDid = pkhDid(proof.address, proof.chainId);
+  const nodeDid = proof.verificationMethod.split("#", 1)[0]!;
+  const route = (host: string, sequence: number) => signedLocationRecordForTest({
+    ownerDid, ownerPrivateKey: PROOF_PRIVATE_KEY, host, nodeDid,
+    spaces: [
+      proof.spaceId,
+      makePkhSpaceId(proof.address, proof.chainId, "secrets"),
+      makePkhSpaceId(proof.address, proof.chainId, "public"),
+    ],
+    sequence,
+  });
+  let record = await route("https://one.example", 1);
   globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     seen.push(url);
-    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    const metadata = signedRegistryResponseForTest(input, init, REGISTRY_ORIGIN, record);
     if (metadata) return metadata;
     if (url === "https://one.example/delegate" && init?.method === "POST") {
       return new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 });
     }
     if (url === "https://one.example/info" || url === "https://two.example/info") {
       return new Response(JSON.stringify({
-        nodeId: "did:key:z6MkNode", features: ["encryption-named-keys-v1"],
+        nodeId: nodeDid, features: ["encryption-named-keys-v1"],
       }), { status: 200 });
+    }
+    if (url === "https://one.example/.well-known/tinycloud/node-keys" ||
+        url === "https://two.example/.well-known/tinycloud/node-keys") {
+      return Response.json({ nodeDid });
     }
     if (url.startsWith("https://one.example/encryption/networks/") ||
         url.startsWith("https://two.example/encryption/networks/")) {
@@ -66,7 +84,7 @@ test("named-key calls use the restored host after sign-in", async () => {
     await node.keys.describeKey("qa/test");
     expect(seen.some((url) => url.startsWith("https://one.example/encryption/networks/"))).toBe(true);
 
-    const proof = await signedRestorableSession();
+    record = await route("https://two.example", 2);
     await node.restoreSession({ ...proof, tinycloudHosts: ["https://two.example"] });
     seen.length = 0;
     await node.keys.describeKey("qa/test");

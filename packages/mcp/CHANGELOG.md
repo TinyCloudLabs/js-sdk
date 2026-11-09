@@ -1,5 +1,52 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [e7a370e]
+  - @tinycloud/operations@0.9.0-beta.12
+
+## 0.10.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/node-sdk@3.12.0-beta.8
+  - @tinycloud/operations@0.9.0-beta.11
+
+## 0.10.0-beta.14
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/operations@0.9.0-beta.10
+
+## 0.10.0-beta.13
+
+### Patch Changes
+
+- ce43b59: The hosted MCP endpoint now lets browser clients read the `Mcp-Session-Id` and `Mcp-Protocol-Version` response headers, as well as `WWW-Authenticate` (`Access-Control-Expose-Headers`). Before, only `WWW-Authenticate` was exposed, so a browser MCP client could not read either header even though a preflight already allows them in requests. Today's stateless server does not set them on responses, so current clients see no change.
+
+  Details: TC-2461
+
+## 0.10.0-beta.12
+
+### Minor Changes
+
+- 3319ede: The hosted personal-records tools use one layout: the owner's `applications` space, one folder per app (`xyz.tinycloud.tinyapps.<app>/`) with a discovery entry, as the `tc-apps` skill puts a new app. They no longer read or write the older `default`-space folder `xyz.tinycloud.agent-data/`, and `tinycloud_apps_move` (and the `tinycloud.apps.move` operation) is removed. Records already saved in the older folder stay where they are, untouched, and are not shown by the chat tools. A new app now needs one OpenKey request (two for the first new app without the `app` input of `tinycloud_apps_context`), because there is no read-only look at the older app list any more.
+
+  What breaks for callers: `tinycloud.apps.query` has no `layout` input; `tinycloud.apps.context` returns `apps` (app, title, copy) and no longer returns `legacy`, `catalog` or each app's `layout`; keys under `xyz.tinycloud.agent-data/` are refused as invalid personal-record keys; the package no longer exports `TC_APPS_LEGACY_ROOT`, `TC_APPS_LEGACY_DATABASE` or `isTcAppsPermission`. The `tinycloud_apps_context` and `tinycloud_apps_query` tools are no longer annotated destructive (neither deletes a record).
+
+  Same-name apps: if the command-line skill created an older-layout app and a chat app then creates an app with the same name, the skill lists the new app (a discovery entry means the new layout) and not the older records of that name. They are not deleted.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- Updated dependencies [3319ede]
+  - @tinycloud/operations@0.9.0-beta.9
+
 ## 0.10.0-beta.11
 
 ### Patch Changes
@@ -11,9 +58,7 @@
 
 ### Patch Changes
 
-- 2139b24: Send only the public session key to OpenKey during sign-in.
-
-  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+- 2139b24: Sign-in requests to OpenKey now include only the standard public members of the session key.
 
   Details: TC-2582
 
