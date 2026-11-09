@@ -68,7 +68,7 @@
     "@noble/curves": "^1.9.7",
     "@tinycloud/node-sdk": "3.11.0",
     "@tinycloud/replica": "0.4.4",
-    "@tinycloud/sdk-core": "3.11.0",
+    "@tinycloud/sdk-core": "3.11.1",
     "@tinycloud/share-envelope": "1.5.0",
     "@tinycloud/share-sdk": "1.4.4",
     "@tinycloud/web-sdk-wasm": "1.7.7",

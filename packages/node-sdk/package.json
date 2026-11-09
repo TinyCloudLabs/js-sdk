@@ -98,7 +98,7 @@
     "@tinycloud/share-envelope": "1.5.0",
     "@tinycloud/replica": "0.4.4",
     "@tinycloud/sdk-services": "3.11.0",
-    "@tinycloud/sdk-core": "3.11.0",
+    "@tinycloud/sdk-core": "3.11.1",
     "@tinycloud/node-sdk-wasm": "1.7.8",
     "siwe": "^3.0.0"
   },
