@@ -17,8 +17,10 @@ import type {
   ServiceSession,
   FetchFunction,
   InvokeFunction,
+  ResourceTransport,
+  ResourceTransportTarget,
 } from "@tinycloud/sdk-services";
-import { ok, err, serviceError, authorizationVerdictOf } from "@tinycloud/sdk-services";
+import { ok, err, serviceError, authorizationVerdictOf, routingFailure, wrapError } from "@tinycloud/sdk-services";
 import { serviceHttpError } from "../http-error";
 import type {
   SpaceInfo,
@@ -123,6 +125,8 @@ export interface SpaceServiceConfig {
   invoke: InvokeFunction;
   /** Optional custom fetch implementation */
   fetch?: FetchFunction;
+  /** Resource-specific transport supplied by the owning platform graph. */
+  resourceTransport?: ResourceTransport;
   /** Optional capability key registry for delegated space discovery */
   capabilityRegistry?: ICapabilityKeyRegistry;
   /** Factory function to create a space-scoped KV service */
@@ -383,6 +387,7 @@ export class SpaceService implements ISpaceService {
   private session: ServiceSession;
   private invoke: InvokeFunction;
   private fetchFn: FetchFunction;
+  private resourceTransport?: ResourceTransport;
   private capabilityRegistry?: ICapabilityKeyRegistry;
   private createKVServiceFn?: (spaceId: string) => IKVService;
   private createVaultServiceFn?: (spaceId: string) => IDataVaultService;
@@ -404,6 +409,8 @@ export class SpaceService implements ISpaceService {
 
   /**
    * Create a new SpaceService instance.
+   * Standalone calls send to the host you pass and do not consult the registry.
+   * Use Node/Web objects for registry routing.
    *
    * @param config - Service configuration
    */
@@ -412,6 +419,7 @@ export class SpaceService implements ISpaceService {
     this.session = config.session;
     this.invoke = config.invoke;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
+    this.resourceTransport = config.resourceTransport;
     this.capabilityRegistry = config.capabilityRegistry;
     this.createKVServiceFn = config.createKVService;
     this.createVaultServiceFn = config.createVaultService;
@@ -431,6 +439,7 @@ export class SpaceService implements ISpaceService {
     if (config.session) this.session = config.session;
     if (config.invoke) this.invoke = config.invoke;
     if (config.fetch) this.fetchFn = config.fetch;
+    if (config.resourceTransport) this.resourceTransport = config.resourceTransport;
     if (config.capabilityRegistry) this.capabilityRegistry = config.capabilityRegistry;
     if (config.createKVService) this.createKVServiceFn = config.createKVService;
     if (config.createVaultService) this.createVaultServiceFn = config.createVaultService;
@@ -1140,18 +1149,23 @@ export class SpaceService implements ISpaceService {
 
       async revoke(cid: string): Promise<Result<void, ServiceError>> {
         try {
-          const headers = self.invoke(
-            self.session,
-            "delegation",
-            cid,
-            "tinycloud.delegation/revoke"
-          );
-
-          const response = await self.fetchFn(`${self.host}/revoke`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ cid, spaceId }),
-          });
+          const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+            const headers = Object.fromEntries(new Headers(self.invoke(
+              self.session, "delegation", cid, "tinycloud.delegation/revoke",
+            )).entries());
+            if (target) {
+              if (!headers.authorization) throw new Error("Delegation invocation has no authorization");
+              headers.authorization = await target.bindAudience(headers.authorization);
+            }
+            return fetchFn(`${host}/revoke`, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ cid, spaceId }),
+            });
+          };
+          const response = self.resourceTransport
+            ? await self.resourceTransport([{ resource: spaceId, access: "write" }], (target) => send(target.fetch, target.url, target))
+            : await send(self.fetchFn, self.host);
 
           if (!response.ok) {
             return err(await serviceHttpError(
@@ -1161,6 +1175,7 @@ export class SpaceService implements ISpaceService {
 
           return ok(undefined);
         } catch (error) {
+          if (routingFailure(error)) return err(wrapError(SERVICE_NAME, error));
           return err(
             serviceError(
               SpaceErrorCodes.NETWORK_ERROR,

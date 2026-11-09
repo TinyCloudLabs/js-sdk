@@ -1,7 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ServiceSession } from "@tinycloud/sdk-services";
+import type { ResourceTransport, ServiceSession } from "@tinycloud/sdk-services";
 import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
+import { blake3 } from "@noble/hashes/blake3";
+import { CID } from "multiformats/cid";
+import { create as createDigest } from "multiformats/hashes/digest";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
@@ -17,6 +20,27 @@ const SHARE_PUBLIC_KEY = ed25519.getPublicKey(SHARE_PRIVATE_KEY);
 const SHARE_DID = `did:key:${bases.base58btc.encode(Uint8Array.from([0xed, 0x01, ...SHARE_PUBLIC_KEY]))}`;
 const SHARE_X = Buffer.from(SHARE_PUBLIC_KEY).toString("base64url");
 const SHARE_D = Buffer.from(SHARE_PRIVATE_KEY).toString("base64url");
+const PARENT_SEED = new Uint8Array(32).fill(19);
+const PARENT_PUBLIC = ed25519.getPublicKey(PARENT_SEED);
+const PARENT_DID = `did:key:${bases.base58btc.encode(Uint8Array.from([0xed, 0x01, ...PARENT_PUBLIC]))}`;
+const parentHeader = Buffer.from(JSON.stringify({
+  alg: "EdDSA", typ: "JWT", ucv: "0.10.0",
+  jwk: { kty: "OKP", crv: "Ed25519", x: Buffer.from(PARENT_PUBLIC).toString("base64url") },
+})).toString("base64url");
+const parentPayload = Buffer.from(JSON.stringify({
+  iss: PARENT_DID, aud: SHARE_DID, exp: PARENT_EXPIRY.getTime() / 1000, prf: [],
+  att: { [`${SPACE}/kv/`]: { "tinycloud.kv/*": [{}] } },
+})).toString("base64url");
+const parentSigningInput = `${parentHeader}.${parentPayload}`;
+const PARENT_AUTHORIZATION = `${parentSigningInput}.${Buffer.from(ed25519.sign(new TextEncoder().encode(parentSigningInput), PARENT_SEED)).toString("base64url")}`;
+const PARENT_CID = CID.createV1(0x55, createDigest(0x1e, blake3(new TextEncoder().encode(PARENT_AUTHORIZATION)))).toString();
+
+function resourceTransportFor(fetchFn: typeof globalThis.fetch, host = HOST): ResourceTransport {
+  return async (_resources, send) => send({
+    url: host, nodeDid: SHARE_DID, nodeInfo: { nodeId: SHARE_DID }, fetch: fetchFn,
+    bindAudience: async (authorization) => authorization,
+  });
+}
 
 function childToken(params: CreateDelegationWasmParams, actions = Object.values(params.abilities.kv)[0]): string {
   const path = Object.keys(params.abilities.kv)[0];
@@ -24,7 +48,7 @@ function childToken(params: CreateDelegationWasmParams, actions = Object.values(
     iss: SHARE_DID,
     aud: params.delegateDID,
     exp: params.expirationSecs,
-    prf: ["bafy-parent"],
+    prf: [params.session.delegationCid],
     att: {
       [`${params.spaceId}/kv/${path}`]: Object.fromEntries(actions.map((action) => [action, [{}]])),
     },
@@ -39,6 +63,7 @@ function childToken(params: CreateDelegationWasmParams, actions = Object.values(
 function makeService(options: {
   assertActive?: () => void;
   fetch?: typeof globalThis.fetch;
+  routing?: boolean;
 } = {}) {
   const createDelegationWasm = mock((params: CreateDelegationWasmParams) => ({
     delegation: childToken(params),
@@ -57,6 +82,7 @@ function makeService(options: {
     hosts: [HOST],
     invoke: mock(async () => ({ ok: true, data: undefined })) as never,
     fetch,
+    resourceTransport: options.routing === false ? undefined : resourceTransportFor(fetch),
     keyProvider: {} as KeyProvider,
     registry: new CapabilityKeyRegistry(),
     createKVService: mock(() => ({})) as never,
@@ -81,7 +107,7 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
       d: SHARE_D,
     },
     delegation: {
-      cid: "bafy-parent",
+      cid: PARENT_CID,
       delegateDID: SHARE_DID,
       spaceId: SPACE,
       path: "xyz.tinycloud.artifacts/artifacts/listen-import",
@@ -89,7 +115,7 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
       expiry: PARENT_EXPIRY,
       isRevoked: false,
       allowSubDelegation: true,
-      authHeader: "parent.header.signature",
+      authHeader: PARENT_AUTHORIZATION,
       ...overrides,
     },
   });
@@ -149,7 +175,7 @@ describe("SharingService.delegateReceivedShare", () => {
     const params = createDelegationWasm.mock.calls[0][0];
     expect(params.delegateDID).toBe("did:key:z6MkFeedHost");
     expect(params.session).toMatchObject({
-      delegationCid: "bafy-parent",
+      delegationCid: PARENT_CID,
       spaceId: SPACE,
       verificationMethod: `${SHARE_DID}#${SHARE_DID.slice("did:key:".length)}`,
       jwk: { d: SHARE_D },
@@ -166,7 +192,7 @@ describe("SharingService.delegateReceivedShare", () => {
     });
     expect(result.data.delegation).toMatchObject({
       delegateDID: "did:key:z6MkFeedHost",
-      parentCid: "bafy-parent",
+      parentCid: PARENT_CID,
       ownerAddress: OWNER,
       chainId: 1,
       disableSubDelegation: true,
@@ -174,7 +200,7 @@ describe("SharingService.delegateReceivedShare", () => {
     const transported = JSON.stringify(result.data);
     expect(transported).not.toContain("tc1:");
     expect(transported).not.toContain(SHARE_D);
-    expect(transported).not.toContain("parent.header.signature");
+    expect(transported).not.toContain(PARENT_AUTHORIZATION);
   });
 
   test("rejects capability broadening before signing or network access", async () => {
@@ -489,6 +515,7 @@ describe("SharingService.delegateReceivedShare", () => {
       const service = new SharingService({
         hosts: [host],
         invoke: mock(async () => ({ ok: true, data: undefined })) as never,
+        resourceTransport: resourceTransportFor(globalThis.fetch, host),
         keyProvider: {} as KeyProvider,
         registry: new CapabilityKeyRegistry(),
         createKVService: mock(() => ({})) as never,
@@ -592,7 +619,7 @@ describe("SharingService.delegateReceivedShare", () => {
   test("scrubs lower-level errors instead of returning credential-bearing causes", async () => {
     const { service, createDelegationWasm } = makeService();
     createDelegationWasm.mockImplementationOnce(() => {
-      throw new Error(`tc1:secret ${SHARE_D} parent.header.signature`);
+      throw new Error(`tc1:secret ${SHARE_D} ${PARENT_AUTHORIZATION}`);
     });
     const result = await service.delegateReceivedShare(shareLink(service), {
       delegateDID: "did:key:z6MkFeedHost",
@@ -602,7 +629,7 @@ describe("SharingService.delegateReceivedShare", () => {
     expect(result.error.message).toBe("Failed to create or register the child delegation");
     expect(result.error.cause).toBeUndefined();
     expect(JSON.stringify(result.error)).not.toContain(SHARE_D);
-    expect(JSON.stringify(result.error)).not.toContain("parent.header.signature");
+    expect(JSON.stringify(result.error)).not.toContain(PARENT_AUTHORIZATION);
   });
 
   test("receive auto-subdelegates to the current session and uses its key", async () => {
@@ -626,11 +653,13 @@ describe("SharingService.delegateReceivedShare", () => {
       verificationMethod: "did:key:z6MkCurrentSession#z6MkCurrentSession",
       jwk: { kty: "OKP", crv: "Ed25519", x: "current-x", d: "current-private" },
     };
+    const fetch = mock(async () => new Response(null, { status: 200 }));
     const service = new SharingService({
       hosts: [HOST],
       session: currentSession,
       invoke: mock(async () => ({ ok: true, data: undefined })) as never,
-      fetch: mock(async () => new Response(null, { status: 200 })),
+      fetch,
+      resourceTransport: resourceTransportFor(fetch),
       keyProvider: {} as KeyProvider,
       registry: new CapabilityKeyRegistry(),
       createKVService: createKVService as never,
@@ -1054,7 +1083,7 @@ describe("SharingService non-transferable shares", () => {
   });
 
   test("receives a non-transferable share with autoSubdelegate:false", async () => {
-    const { service } = makeGenerateService();
+    const { service } = makeService();
 
     const result = await service.receive(shareLink(service, { allowSubDelegation: false }), {
       autoSubdelegate: false,
@@ -1063,3 +1092,16 @@ describe("SharingService non-transferable shares", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+for (const operation of ["delegate", "receive"] as const) {
+  test(`standalone ${operation} refuses a recorded-host link without resource routing`, async () => {
+    const { service, createDelegationWasm, fetch } = makeService({ routing: false });
+    const link = shareLink(service);
+    const result = operation === "delegate"
+      ? await service.delegateReceivedShare(link, { delegateDID: SHARE_DID })
+      : await service.receive(link, { autoSubdelegate: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "NOT_INITIALIZED" } });
+    expect(createDelegationWasm).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+}

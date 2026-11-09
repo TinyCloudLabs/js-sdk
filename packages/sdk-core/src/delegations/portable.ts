@@ -1,8 +1,48 @@
 import { z } from "zod";
-import type { FetchFunction } from "@tinycloud/sdk-services";
+import { ResourceNotRoutedError, routingResourceOf, type FetchFunction, type FetchResponse, type ResourceAccess, type ResourceTransport } from "@tinycloud/sdk-services";
 import type { DelegatedResource } from "./types";
-import { createCompactPolicyDescendant } from "../policy/unified";
+import { createCompactPolicyDescendant, parseSignedCompactUcanAttenuation } from "../policy/unified";
 import { httpResponseError } from "../http-error";
+import { parseSignedSiweCacao } from "./cacao";
+import { principalDid } from "../identity";
+
+export function spaceIdsEqual(left: string, right: string): boolean {
+  const normalizeOwnerAddress = (space: string): string => {
+    const match = /^(tinycloud:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.+)$/.exec(space);
+    return match === null ? space : `${match[1]}${match[2]!.toLowerCase()}${match[3]}`;
+  };
+  return normalizeOwnerAddress(left) === normalizeOwnerAddress(right);
+}
+
+/** Read routing scope from a grant whose signature and exact CID both verify. */
+export async function verifiedDelegationRouting(authorization: string, cid: string): Promise<{
+  audienceDid: string;
+  resources: readonly { resource: string; access: ResourceAccess }[];
+}> {
+  let audienceDid: string;
+  let attenuation: Readonly<Record<string, unknown>>;
+  if (authorization.includes(".")) {
+    const verified = parseSignedCompactUcanAttenuation(authorization, cid);
+    audienceDid = principalDid(verified.payload.aud);
+    attenuation = verified.payload.att;
+  } else {
+    const verified = await parseSignedSiweCacao(authorization, cid);
+    audienceDid = principalDid(verified.audience);
+    attenuation = verified.attenuation;
+  }
+  const resources: { resource: string; access: ResourceAccess }[] = [];
+  const seen = new Set<string>();
+  for (const uri of Object.keys(attenuation)) {
+    const resource = routingResourceOf(uri.startsWith("urn:tinycloud:encryption:") ? uri.split("/", 1)[0]! : uri);
+    const access = resource.startsWith("urn:tinycloud:encryption:") ? "encryption" : "host";
+    if (!seen.has(resource)) {
+      seen.add(resource);
+      resources.push({ resource, access });
+    }
+  }
+  if (resources.length === 0) throw new ResourceNotRoutedError("delegation");
+  return { audienceDid, resources };
+}
 
 /** Transport form shared by addressed-share recipients and normal agents. */
 export interface PortableDelegation {
@@ -76,23 +116,46 @@ export interface PortableDelegationImportReceipt {
   readonly [key: string]: unknown;
 }
 
-/** Admit a normal delegation through POST /delegate. */
+/**
+ * Admit a normal delegation through POST /delegate.
+ * Without resourceTransport, sends to the explicit host you pass and does not consult the registry.
+ * Received-share callers must supply resourceTransport; use Node/Web objects for registry routing.
+ */
 export async function importPortableDelegation(
   fetchFn: FetchFunction,
   host: string,
   delegation: PortableDelegation,
+  resourceTransport?: ResourceTransport,
 ): Promise<PortableDelegationImportReceipt> {
   const parsed = parsePortableDelegation(delegation);
-  const response = await fetchFn(`${host.replace(/\/+$/, "")}/delegate`, {
-    method: "POST",
-    headers: { Authorization: parsed.delegationHeader.Authorization },
-  });
+  const responses: FetchResponse[] = [];
+  if (resourceTransport) {
+    const verified = await verifiedDelegationRouting(parsed.delegationHeader.Authorization, parsed.cid);
+    await resourceTransport(verified.resources, async (target) => {
+      const response = await target.fetch(`${target.url}/delegate`, {
+        method: "POST", headers: { Authorization: parsed.delegationHeader.Authorization },
+      });
+      responses.push(response);
+      return response;
+    }, { independentResources: true });
+  } else {
+    responses.push(await fetchFn(`${host.replace(/\/+$/, "")}/delegate`, {
+      method: "POST",
+      headers: { Authorization: parsed.delegationHeader.Authorization },
+    }));
+  }
+  const response = responses[0]!;
   if (!response.ok)
     throw await httpResponseError(response, "node rejected delegation import");
-  const body: unknown = await response.json().catch(() => ({}));
-  if (body === null || typeof body !== "object" || Array.isArray(body))
-    return {};
-  return body as PortableDelegationImportReceipt;
+  const receipts: PortableDelegationImportReceipt[] = [];
+  for (const response of responses) {
+    const body: unknown = await response.json().catch(() => ({}));
+    if (body !== null && typeof body === "object" && !Array.isArray(body)) receipts.push(body as PortableDelegationImportReceipt);
+  }
+  if (receipts.length < 2) return receipts[0] ?? {};
+  const activated = [...new Set(receipts.flatMap((receipt) => receipt.activated ?? []))];
+  const skipped = [...new Set(receipts.flatMap((receipt) => receipt.skipped ?? []))].filter((space) => !activated.includes(space));
+  return { ...receipts[0], activated, skipped };
 }
 
 /**
@@ -104,6 +167,7 @@ export async function importPortableDelegation(
 export async function delegatePortablePolicySession(input: {
   readonly fetch: FetchFunction;
   readonly host: string;
+  readonly resourceTransport?: ResourceTransport;
   readonly parent: PortableDelegation;
   readonly issuerPrivateKey: Uint8Array;
   readonly delegateDID: string;
@@ -152,6 +216,6 @@ export async function delegatePortablePolicySession(input: {
     disableSubDelegation: descendant.payload.fct[0]?.remainingRedelegationDepth === 0,
     resources,
   };
-  await importPortableDelegation(input.fetch, input.host, portable);
+  await importPortableDelegation(input.fetch, input.host, portable, input.resourceTransport);
   return portable;
 }

@@ -373,13 +373,21 @@ describe("TinyCloudNode sharing", () => {
 
   test("real WASM attenuates a received share and the child survives transport/useDelegation", async () => {
     const wasmBindings = new NodeWasmBindings();
-    globalThis.fetch = mock(async () => new Response(
-      JSON.stringify({ activated: ["child"] }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    )) as unknown as typeof fetch;
 
     const host = "https://node.tinycloud.xyz";
-    const receiver = new TinyCloudNode({ host, wasmBindings });
+    const nodeDid = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.origin !== host) throw new Error(`Unexpected fixture origin ${url.origin}`);
+      if (/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return new Response(REGISTRY_NOT_FOUND_BODY, {
+        status: 404, headers: { "Content-Type": "application/json" },
+      });
+      if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
+      if (url.pathname === "/delegate") return Response.json({ activated: ["child"] });
+      throw new Error(`Unexpected fixture endpoint ${url.pathname}`);
+    }) as unknown as typeof fetch;
+    const receiver = new TinyCloudNode({ host, wasmBindings, tinycloudRegistryUrl: host });
     const owner = new Wallet("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
     const manager = wasmBindings.createSessionManager();
     const shareKeyId = manager.createSessionKey("share-parent");
