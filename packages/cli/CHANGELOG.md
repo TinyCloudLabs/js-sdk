@@ -1,5 +1,11 @@
 # @tinycloud/cli
 
+## 1.6.4
+
+### Patch Changes
+
+- 17665f1: Update the CLI's SDK dependencies to 3.11.1.
+
 ## 1.6.3
 
 ### Patch Changes
