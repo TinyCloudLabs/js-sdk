@@ -1141,7 +1141,7 @@ export function createProfileRegistrySequenceStore(profile: string): RegistrySeq
   };
   return {
     async get(key) {
-      return memory.get(key)?.sequence ?? (await getRegistration(key))?.sequence;
+      return (await getRegistration(key))?.sequence;
     },
     getRegistration,
     async set(key, sequence, kind = "signed-v2") {
