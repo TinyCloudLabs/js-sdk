@@ -80,12 +80,34 @@ No tool was removed or relabeled by this draft.
 
 ## Review-sensitive requirements, not speculative auth changes
 
-- **Reviewer access:** OpenAI requires a populated dedicated account that works
-  without MFA approval, email/SMS codes, magic links or private networking. Google
-  requires seeded credentials with 2FA disabled; Claude requires a standard
-  populated test account. Bobbie must assess an authorized OpenKey reviewer-login
-  path. This draft supplies no credentials, adds no bypass and does not weaken
-  normal sign-in. A developer's working passkey is not independent reviewer access.
+- **Reviewer access is not ready:** OpenAI's [submission requirements](https://developers.openai.com/plugins/deploy/submission)
+  require immediate access without MFA approval, email/SMS codes, magic links or
+  private networking; its [guidelines](https://developers.openai.com/plugins/plugin-guidelines)
+  additionally request a login and password for a populated review account.
+  The source assessment at pinned OpenKey commit
+  [`cc5d159dc9903085f6c20d4c1c700eee4d7f79ed`](https://github.com/TinyCloudLabs/openkey/blob/cc5d159dc9903085f6c20d4c1c700eee4d7f79ed/apps/api/src/auth.ts#L264-L267)
+  found passwords disabled, with [primary passkey and email-OTP methods](https://github.com/TinyCloudLabs/openkey/blob/cc5d159dc9903085f6c20d4c1c700eee4d7f79ed/apps/api/src/auth.ts#L317-L368).
+  Email OTP conflicts with OpenAI's explicit no-email-code rule; a primary
+  passkey avoids that ceremony but is not a verified store-accepted remote
+  reviewer credential. No ready, zero-change reviewer path is established.
+- **Keep store rules distinct:** Google's [review-account requirement](https://developers.google.com/connected-apps/gpc/perform-the-steps)
+  specifies seeded credentials with 2FA disabled; it does not establish
+  OpenAI's blanket prohibition on primary email OTP or passkeys. Google's
+  acceptance of either remains unverified. Claude requires a standard populated
+  test account. Source-supported authentication is not deployed configuration
+  or store acceptance.
+- **Approval before action:** Sam must authorize external store contact before
+  requesting an exception or an approved passwordless review procedure. Possible
+  paths are an accepted seeded passwordless account, an accepted ordinary
+  user-authorized OAuth review connection, or reviewer-held passkey enrollment
+  with agreed custody/logistics. Each remains unverified. An isolated
+  production-equivalent review account/deployment improves data isolation but
+  does not solve login or establish store acceptance. If existing methods cannot
+  be accepted, any auth-sensitive change requires separate explicit approval and
+  Bobbie review, not a review-only bypass or weaker normal sign-in. OAuth client
+  secrets, userless client-credentials tokens and preauthorized bearer handoffs
+  are not substitutes for an authenticated reviewer account. No credentials,
+  auth change, account provisioning or external contact is supplied by this draft.
 - **Domain verification:** OpenAI's `/.well-known/openai-apps-challenge` returns
   the portal's exact token as plain text. Google's
   `/.well-known/google-connected-apps` returns direct HTTP 200 JSON with a
