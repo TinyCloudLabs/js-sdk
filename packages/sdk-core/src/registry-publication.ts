@@ -1,6 +1,6 @@
 import { verifyResourceDestination } from "@tinycloud/sdk-services";
+import { boundedResponseBytes } from "./location";
 import {
-  boundedResponseBytes,
   canonicalLocationPayloadV2,
   exactHttpOrigin,
   LocationRecordValidationError,
@@ -13,10 +13,13 @@ import {
   type LocationRecordSigner,
   type LocationRecordV2,
   type LocationRecordV2Payload,
-} from "./location";
-import { verifyRegistryCacheEntry, type RegistryCacheStore } from "./registry-cache";
-import type { RegistrySequenceStore } from "./registry-policy";
-import { registryOwnerKeyV2 } from "./registry-verdict";
+  verifyRegistryCacheEntry,
+  registryOwnerKeyV2,
+  type RegistryCacheStore,
+  type RegistrySequenceStore,
+} from "./registry-publication-helpers";
+
+export { boundedResponseBytes };
 
 type PublicationFetch = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 
@@ -33,7 +36,7 @@ export interface PublishLocationRecordV2Options {
   /** Omitted: preserve the existing service. Null: explicitly select no service. */
   encryptionNode?: { did: string; url: string } | null;
   /** Supply the owning client's sequence/cache stores when it has registration history. */
-  sequenceStore?: Pick<RegistrySequenceStore, "get">;
+  sequenceStore?: Pick<RegistrySequenceStore, "get" | "getRegistration">;
   cacheStore?: RegistryCacheStore;
   /** The complete public result, before signing or writing. False cancels publication. */
   onPrepared?: (payload: Readonly<LocationRecordV2Payload>, current: Readonly<LocationRecordV2> | null) => boolean | Promise<boolean>;
@@ -83,10 +86,23 @@ export async function publishLocationRecordV2(options: PublishLocationRecordV2Op
   if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 0)) {
     throw new LocationRecordValidationError("invalid registration revision");
   }
-  const remembered = await sequenceStore?.get(key);
-  if (remembered !== undefined && (!Number.isSafeInteger(remembered) || remembered < 0)) {
-    throw new LocationRecordValidationError("invalid remembered registration sequence");
-  }
+  const readRememberedV2Sequence = async (): Promise<number | undefined> => {
+    const sequence = await sequenceStore?.get(key);
+    if (sequence !== undefined && (!Number.isSafeInteger(sequence) || sequence < 0)) {
+      throw new LocationRecordValidationError("invalid remembered registration sequence");
+    }
+    const registration = await sequenceStore?.getRegistration?.(key);
+    if (registration === undefined) return sequence;
+    if (!Number.isSafeInteger(registration.sequence) || registration.sequence < 0 ||
+        (registration.kind !== "legacy-v1" && registration.kind !== "signed-v2" && registration.kind !== "unknown") ||
+        (registration.kind === "legacy-v1" && registration.sequence !== 0)) {
+      throw new LocationRecordValidationError("invalid remembered registration evidence");
+    }
+    // Only explicit legacy-only evidence can distinguish a first v2 zero.
+    if (sequence === 0 && registration.sequence === 0 && registration.kind === "legacy-v1") return undefined;
+    return Math.max(sequence ?? -1, registration.sequence);
+  };
+  const remembered = await readRememberedV2Sequence();
   const cached = await cache?.get(key);
   const cachedRecord = cached ? (await verifyRegistryCacheEntry(subject, key, cached, remembered)).record : undefined;
   const highWater = Math.max(remembered ?? -1, cachedRecord?.sequence ?? -1);
@@ -162,7 +178,7 @@ export async function publishLocationRecordV2(options: PublishLocationRecordV2Op
   const record = await signLocationRecordV2(payload, signer);
   parentSignal?.throwIfAborted();
   if (cache && await cache.getRevision(key) !== revision) throw new LocationRegistryHttpError("registration changed before publication", 409);
-  const latestRemembered = await sequenceStore?.get(key);
+  const latestRemembered = await readRememberedV2Sequence();
   if (latestRemembered !== undefined && (!Number.isSafeInteger(latestRemembered) || latestRemembered < 0 || latestRemembered > (current?.sequence ?? -1))) {
     throw new LocationRegistryHttpError("registration sequence changed before publication", 409);
   }

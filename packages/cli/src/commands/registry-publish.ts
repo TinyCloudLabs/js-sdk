@@ -2,10 +2,11 @@ import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import {
-  boundedResponseBytes, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, exactHttpOrigin,
-  principalDidEquals, publishLocationRecordV2, registryOwnerKeyV2,
+  DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, exactHttpOrigin,
+  principalDidEquals, registryOwnerKeyV2,
   verifyRegistryCacheEntry, type LocationRecordV2, type LocationRecordV2Payload,
 } from "@tinycloud/sdk-core";
+import { boundedResponseBytes, publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publication";
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode } from "../config/constants.js";

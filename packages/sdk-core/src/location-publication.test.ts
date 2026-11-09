@@ -4,6 +4,7 @@ import { base58btc } from "multiformats/bases/base58";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   LocationRecordValidationError,
+  signLocationRecord,
   signLocationRecordV2,
   validateLocationRecordV2,
   verifyLocationRecordV2,
@@ -11,6 +12,8 @@ import {
 } from "./location";
 import { publishLocationRecordV2, type PublishLocationRecordV2Options } from "./registry-publication";
 import { createInMemoryRegistryCacheStore } from "./registry-cache";
+import { createInMemoryRegistrySequenceStore, createLocalStorageRegistrySequenceStore, registryOwnerSubjectV1, resolveOwnerHosts } from "./registry-policy";
+import { installTestWebLocks } from "./test-support/web-locks";
 
 const REGISTRY = "https://registry.example";
 const SERVER = "https://storage.example";
@@ -90,6 +93,122 @@ describe("explicit signed-v2 publication", () => {
     });
     expect(writes(f)).toHaveLength(1);
     expect(f.seen.every(({ redirect, authorization }) => redirect === "error" && !authorization)).toBe(true);
+  });
+
+  test("v1 recognition still permits explicit first-v2 publication without granting a legacy route", async () => {
+    const f = fixture();
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    const cacheStore = createInMemoryRegistryCacheStore();
+    const legacy = await signLocationRecord({
+      version: 1, subject: registryOwnerSubjectV1(owner.address),
+      multiaddrs: ["/dns4/storage.example/tcp/443/https"],
+      updated_at: NOW.toISOString(), sequence: 17,
+    }, signer);
+    const fetchFn: NonNullable<PublishLocationRecordV2Options["fetch"]> = (input, init) =>
+      String(input) === `${REGISTRY}/v1/locations/${encodeURIComponent(legacy.subject)}`
+        ? Promise.resolve(Response.json({ record: legacy })) : f.options.fetch!(input, init);
+
+    const verdict = await resolveOwnerHosts(SUBJECT, {
+      registryUrl: REGISTRY, fetch: fetchFn, sequenceStore, cacheStore,
+    });
+    expect(verdict).toMatchObject({ status: "unavailable", reason: "unsupported-format", hosts: [] });
+    expect(writes(f)).toEqual([]);
+
+    const record = await publishLocationRecordV2({ ...f.options, fetch: fetchFn, sequenceStore, cacheStore });
+    expect(record.sequence).toBe(0);
+    expect(await verifyLocationRecordV2(record)).toBe(true);
+    expect(record.spaces).toEqual([{ space: space("secrets"), nodes: [{ did: NODE, mode: "read-write" }] }]);
+    expect(writes(f)).toHaveLength(1);
+  });
+
+  test("accepted signed-v2 sequence zero survives cache loss and forbids recreation", async () => {
+    const before = await existing(0);
+    const f = fixture(before);
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    const cacheStore = createInMemoryRegistryCacheStore();
+    const verdict = await resolveOwnerHosts(SUBJECT, {
+      registryUrl: REGISTRY, fetch: f.options.fetch, sequenceStore, cacheStore,
+    });
+    expect(verdict).toMatchObject({ status: "registered", sequence: 0 });
+    f.lookup(404, { error: "location record not found" });
+    let signed = false;
+    await expect(publishLocationRecordV2({
+      ...f.options, sequenceStore, cacheStore: createInMemoryRegistryCacheStore(),
+      signer: { type: "did:pkh", signMessage: async (message) => {
+        signed = true;
+        return signer.signMessage(message);
+      } },
+    })).rejects.toBeInstanceOf(LocationRecordValidationError);
+    expect(signed).toBe(false);
+    expect(writes(f)).toEqual([]);
+  });
+
+  test("an untyped zero history is not guessed to be legacy-only", async () => {
+    const f = fixture();
+    let signed = false;
+    await expect(publishLocationRecordV2({
+      ...f.options, sequenceStore: { get: () => 0 },
+      signer: { type: "did:pkh", signMessage: async (message) => {
+        signed = true;
+        return signer.signMessage(message);
+      } },
+    })).rejects.toBeInstanceOf(LocationRecordValidationError);
+    expect(signed).toBe(false);
+    expect(writes(f)).toEqual([]);
+  });
+
+  test("a signed-v2 zero observed while the owner signs retires first-publication authority", async () => {
+    const f = fixture();
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    sequenceStore.set(owner.address, 0, "legacy-v1");
+    let signed = false;
+    await expect(publishLocationRecordV2({
+      ...f.options, sequenceStore,
+      signer: { type: "did:pkh", signMessage: async (message) => {
+        const observed = fixture(await existing(0));
+        await resolveOwnerHosts(SUBJECT, { registryUrl: REGISTRY, fetch: observed.options.fetch, sequenceStore });
+        signed = true;
+        return signer.signMessage(message);
+      } },
+    })).rejects.toMatchObject({ status: 409 });
+    expect(signed).toBe(true);
+    expect(writes(f)).toEqual([]);
+  });
+
+  test("browser history preserves legacy-only evidence and permanently promotes signed-v2 zero", async () => {
+    const platform = installTestWebLocks();
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+    try {
+      const f = fixture();
+      const legacy = await signLocationRecord({
+        version: 1, subject: registryOwnerSubjectV1(owner.address),
+        multiaddrs: ["/dns4/storage.example/tcp/443/https"],
+        updated_at: NOW.toISOString(), sequence: 9,
+      }, signer);
+      const fetchFn: NonNullable<PublishLocationRecordV2Options["fetch"]> = (input, init) =>
+        String(input) === `${REGISTRY}/v1/locations/${encodeURIComponent(legacy.subject)}`
+          ? Promise.resolve(Response.json({ record: legacy })) : f.options.fetch!(input, init);
+      await resolveOwnerHosts(SUBJECT, {
+        registryUrl: REGISTRY, fetch: fetchFn, sequenceStore: createLocalStorageRegistrySequenceStore(storage),
+      });
+      const record = await publishLocationRecordV2({
+        ...f.options, sequenceStore: createLocalStorageRegistrySequenceStore(storage),
+      });
+      expect(record.sequence).toBe(0);
+      expect(await verifyLocationRecordV2(record)).toBe(true);
+      await resolveOwnerHosts(SUBJECT, {
+        registryUrl: REGISTRY, fetch: f.options.fetch, sequenceStore: createLocalStorageRegistrySequenceStore(storage),
+      });
+      f.lookup(404, { error: "location record not found" });
+      await expect(publishLocationRecordV2({
+        ...f.options, sequenceStore: createLocalStorageRegistrySequenceStore(storage),
+      })).rejects.toBeInstanceOf(LocationRecordValidationError);
+      expect(writes(f)).toHaveLength(1);
+    } finally { platform.restore(); }
   });
 
   test("preserves unrelated spaces, nodes and the decryption service while advancing sequence", async () => {
