@@ -1064,6 +1064,7 @@ export class TinyCloudWeb {
    * resolves `"unknown"` when the node has no hosting answer.
    * Rejects with `Error("Space hosting was cancelled by sign-out.")` if sign-out
    * happens during the hosting run. Call from a user gesture so the approval popup can open.
+   * Also rejects if the initiating session is replaced before hosting finishes.
    */
   async ensureSpaceHosted(): Promise<SpaceHosting> {
     const signOuts = this.signOutCount;

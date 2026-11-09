@@ -60,6 +60,7 @@ describe("Core native redirect boundaries", () => {
   for (const [name, operation] of Object.entries(operations)) {
     test(`${name} refuses a native same-origin 307 before forwarding credentials or body`, async () => {
       const observed: { authorization: string | null; body: string }[] = [];
+      const initial: { path: string; method: string; authorization: string | null; body: string }[] = [];
       let sends = 0;
       const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
         const path = new URL(request.url).pathname;
@@ -69,12 +70,19 @@ describe("Core native redirect boundaries", () => {
           return Response.json({});
         }
         sends++;
+        initial.push({ path, method: request.method, authorization: request.headers.get("authorization"), body: await request.text() });
         return new Response(null, { status: 307, headers: { location: "/observer" } });
       } });
       try {
         await operation(manager(server.url.origin));
         expect(sends).toBe(1);
         expect(observed).toEqual([]);
+        if (name === "revoke") {
+          expect(initial).toEqual([{ path: "/revoke", method: "POST", authorization: AUTHORIZATION, body: "" }]);
+        } else if (name === "status") {
+          expect(initial[0]).toMatchObject({ path: "/delegation/status", method: "POST", authorization: AUTHORIZATION });
+          expect(JSON.parse(initial[0]!.body)).toEqual({ cid: "bafy-test" });
+        }
       } finally { server.stop(true); }
     });
   }
