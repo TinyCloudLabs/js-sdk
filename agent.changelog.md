@@ -3,6 +3,33 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-09
+
+- TC-2416: the hosted personal-records tools use one layout (the `applications`
+  space, one folder per app); the older `agent-data` layout, the move tool and the
+  `layout` input are removed with no compatibility path. `agent.dev.md` says not to
+  reintroduce them.
+
+## 2026-11-03
+
+- TC-2416: context accepts Health Log and Recipes catalog slugs, bundling
+  the known per-app task scopes and explaining read/change inputs in the schema.
+
+- TC-2416: personal-app context optionally bundles the named app and app list;
+  documented change/read access and reuse of read-only folder grants.
+
+## 2026-11-02
+
+- Added explicit reusable read-scope consent, cursor-preserving discovery and
+  digest-bound complete KV/SQL delivery to private/local MCP and shared
+  operations. Native reads retain their existing signed capability ceiling;
+  the public ChatGPT surface is unchanged. Handoffs carry locators/provenance,
+  not credentials or authority.
+- Verified the local hosted HTTP path against the live node using an isolated
+  profile copy: the 111,619-byte / 566-segment transcript reconstructed in ten
+  pages with the recorded SHA-256; a 130,000-character SQL field reconstructed
+  in eleven pages. No cloud records were written and no deployment was made.
+
 ## 2026-11-01
 
 - CI: the `conformance` PR job in `.github/workflows/operations-mcp.yml` is split into

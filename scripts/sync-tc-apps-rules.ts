@@ -14,7 +14,7 @@ type PublishedSkill = { name: string; version: string; files: PublishedFile[] };
 const index = JSON.parse((await download("/skills/index.json")).toString("utf8")) as { skills: PublishedSkill[] };
 const skill = index.skills.find((entry) => entry.name === "tc-apps");
 if (!skill?.version) throw new Error("Published index has no tc-apps version");
-const files = await Promise.all(["SKILL.md", "SQL.md"].map(async (name) => {
+const files = await Promise.all(["SKILL.md", "SQL.md", "TINY-APPS.md"].map(async (name) => {
   const entry = skill.files.find((file) => file.path === name);
   if (!entry || entry.url !== `/skills/apps/${name}` || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
     throw new Error(`Missing or invalid published metadata for ${name}`);

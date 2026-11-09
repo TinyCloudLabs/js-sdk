@@ -1,2 +1,5 @@
 [install.lockfile]
 print = "bun"
+
+[test]
+preload = ["./packages/operations/test-support/test-bootstrap.mjs"]

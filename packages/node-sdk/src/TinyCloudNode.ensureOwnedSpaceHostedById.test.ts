@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 /**
  * Per-sign-in hosting memo for the private `ensureOwnedSpaceHostedById`
  * (TC-293 P3).
@@ -13,11 +14,21 @@
 import { expect, mock, test } from "bun:test";
 
 import type { ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 const HOST = "https://tinycloud.test";
+
+function registryResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (url.origin !== HOST || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return;
+  expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+}
+
 const ACCOUNT_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 const SECRETS_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
 
@@ -46,6 +57,7 @@ function makeWasmBindings(): IWasmBindings {
 function makeNode(): TinyCloudNode {
   const node = new TinyCloudNode({
     host: HOST,
+    tinycloudRegistryUrl: HOST,
     signer: {
       getAddress: async () => ADDRESS,
       getChainId: async () => 1,
@@ -67,6 +79,7 @@ function makeNode(): TinyCloudNode {
       delegationHeader: { Authorization: `token-${Math.random()}` },
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
+    resolveResourceDestinations: async () => [{ url: HOST }],
     hostOwnedSpaceResult: mock(async () => ({ success: true, status: 200 })),
   };
   return node;
@@ -83,7 +96,9 @@ function withDelegateFetch<T>(
 ): Promise<T> {
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = mock(async (input: any, init?: any) => {
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = registryResponse(input, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/delegate") && init?.method === "POST") {
       calls += 1;
@@ -155,7 +170,9 @@ test("hosting confirmed after a create is memoized too", async () => {
   let firstCall = true;
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = mock(async (input: any, init?: any) => {
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = registryResponse(input, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/delegate") && init?.method === "POST") {
       calls += 1;

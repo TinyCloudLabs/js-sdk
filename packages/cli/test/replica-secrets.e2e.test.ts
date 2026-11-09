@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
@@ -7,10 +8,13 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "n
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
+import { startUnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+import type { UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN;
 const CLI = resolve(import.meta.dir, "../dist/index.js");
 const NO_NETWORK = resolve(import.meta.dir, "../test-support/no-network.cjs");
+const BOOTSTRAP = resolve(import.meta.dir, "../../operations/test-support/test-bootstrap.mjs");
 const ambient = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("TC_")));
 const cliEnvBase = ambient;
 
@@ -92,11 +96,14 @@ function secretValue(): string {
 }
 
 describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node", () => {
+  const originalHome = process.env.HOME;
+  const originalTcHome = process.env.TC_HOME;
   let home: string;
   let temp: string;
   let nodeData: string;
   let host: string;
   let port: number;
+  let registry: UnregisteredLocationRegistry;
   let node: ChildProcess | undefined;
   let secretsSpace: string;
   let syncGrantCid: string;
@@ -120,6 +127,9 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
         cwd: nodeData,
         env: {
           ...ambient,
+          HOME: home,
+          TC_HOME: home,
+          USERPROFILE: home,
           TMPDIR: temp,
           TINYCLOUD_STORAGE__DATADIR: join(nodeData, "data"),
           TINYCLOUD_PORT: String(port),
@@ -169,6 +179,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     let child: ChildProcess;
     try {
       child = trackChild(spawn("node", [
+        "--import", BOOTSTRAP,
         ...(offline ? ["--require", NO_NETWORK] : []), CLI, "-q", "--json", "--profile", profile, ...args,
       ], {
         cwd: home,
@@ -316,6 +327,9 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "tc733-secrets-home-"));
+    process.env.HOME = home;
+    process.env.TC_HOME = home;
+    registry = startUnregisteredLocationRegistry();
     temp = join(home, "tmp");
     await mkdir(temp, { mode: 0o700 });
     nodeData = await mkdtemp(join(temp, "node-"));
@@ -326,6 +340,12 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     expect(Array.isArray(features.features) && features.features.includes("kv-sync-v1")).toBe(true);
 
     await ok(["--host", host, "init", "--name", "owner", "--key-only"], "owner");
+    const { profileConfigPath, withTinyCloudStateRoot, writeJsonAtomic } = await import("@tinycloud/operations/state");
+    await withTinyCloudStateRoot(home, async () => {
+      const path = profileConfigPath("owner");
+      const profile = JSON.parse(await readFile(path, "utf8"));
+      await writeJsonAtomic(path, { ...profile, tinycloudRegistryUrl: registry.url.origin });
+    });
     await ok(["--host", host, "auth", "login", "--method", "local"], "owner");
     const network = await ok<{ networkId: string }>(["--host", host, "secrets", "network", "init"], "owner");
     encryptionNetworkId = network.networkId;
@@ -340,6 +360,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     secretsSpace = wasm.makeSpaceId(ownerAddress, 1, "secrets");
     const ownerSdk = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       privateKey: ownerProfile.privateKey,
       autoBootstrapAccount: false,
       autoCreateSpace: true,
@@ -381,7 +402,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     );
     expect(sourceCatalog.ok && sourceCatalog.data.rows.length === 1 &&
       sourceCatalog.data.rows[0]?.[0] === catalogMarker).toBe(true);
-    await ok(["profile", "create", "device", "--posture", "delegate-session", "--host", host], "device");
+    await ok(["profile", "create", "device", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin], "device");
     const deviceProfile = await readProfile("device");
     deviceDid = deviceProfile.did.split("#", 1)[0]!;
     await ok(["auth", "request", "--cap", `tinycloud.kv:${secretsSpace}:vault/secrets/:get,list,metadata,sync`, "--expiry", "30d", "--emit", "req.json"], "device");
@@ -395,10 +416,21 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     secretsDir = join(home, ".tinycloud", "profiles", "device", "replicas", shortName);
   }, 180_000);
   afterAll(async () => {
+    const stopped = await Promise.allSettled([
+      stopAllChildren(),
+      Promise.resolve().then(() => registry?.stop(true)),
+    ]);
     try {
-      await stopAllChildren();
+      for (const result of stopped) if (result.status === "rejected") throw result.reason;
     } finally {
-      if (home) await rm(home, { recursive: true, force: true });
+      try {
+        if (home) await rm(home, { recursive: true, force: true });
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+        if (originalTcHome === undefined) delete process.env.TC_HOME;
+        else process.env.TC_HOME = originalTcHome;
+      }
     }
   });
 
@@ -428,6 +460,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     const ownerProfile = await readProfile("owner");
     const grantor = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       privateKey: ownerProfile.privateKey,
       autoBootstrapAccount: false,
       autoCreateSpace: true,
@@ -508,12 +541,13 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
 
   test("expiry_and_learned_revocation_survive_restart", async () => {
     if (node === undefined || node.exitCode !== null) await startNode();
-    await ok(["profile", "create", "expiry-device", "--posture", "delegate-session", "--host", host], "expiry-device");
+    await ok(["profile", "create", "expiry-device", "--posture", "delegate-session", "--host", host, "--registry-url", registry.url.origin], "expiry-device");
     const expiryDevice = await readProfile("expiry-device");
     const expiryDid = expiryDevice.did.split("#", 1)[0]!;
     const ownerProfile = await readProfile("owner");
     const grantor = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       privateKey: ownerProfile.privateKey,
       autoBootstrapAccount: false,
       autoCreateSpace: true,
@@ -563,6 +597,7 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
 
     const owner = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       privateKey: ownerProfile.privateKey,
       autoBootstrapAccount: false,
       autoCreateSpace: true,

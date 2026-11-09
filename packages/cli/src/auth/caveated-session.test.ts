@@ -66,6 +66,7 @@ function nodeAndShareDouble(requests?: string[]): typeof globalThis.fetch {
   return Object.assign(async (input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     requests?.push(url.pathname);
+    if (/^\/v[12]\/locations\//.test(url.pathname)) return Response.json({ error: "location record not found" }, { status: 404 });
     if (url.pathname === "/.well-known/tinycloud-share/config.json") {
       return Response.json({ version: "tinycloud.share/config-v2", shareOrigin, registryOrigin: shareOrigin, credentialsOrigin: shareOrigin });
     }
@@ -91,7 +92,7 @@ function caveatsOf(entries: readonly { caveats?: unknown }[]): string[] {
 beforeEach(async () => {
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setKey("publisher", key);
-  await ProfileManager.setProfile("publisher", { name: "publisher", host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString() });
+  await ProfileManager.setProfile("publisher", { name: "publisher", host, tinycloudRegistryUrl: host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString() });
   await ProfileManager.clearSession("publisher");
   globalThis.fetch = nodeAndShareDouble();
 });

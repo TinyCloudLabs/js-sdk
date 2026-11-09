@@ -355,8 +355,6 @@ async function runSecretOperation<T>(params: {
       node: params.node,
       requested,
       expiryOption: undefined,
-      reason: secretPermissionReason(params.action, params.name),
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -366,10 +364,6 @@ async function runSecretOperation<T>(params: {
   return runSecretOperationAttempt(params.label, params.operation);
 }
 
-function secretPermissionReason(action: SecretAction, name?: string): string {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
-}
 
 /** Browser approval is possible when the person can see stderr or answer on stdin. */
 function assertOwnerApprovalPossible(profileName: string, profile: ProfileConfig, action: SecretAction, name?: string, missing: readonly Readonly<Record<string, unknown>>[] = []): void {
@@ -533,8 +527,6 @@ async function canonicalSecretGet(
       node,
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
-      reason: secretPermissionReason("get", params.name),
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -602,6 +594,9 @@ function throwCanonicalSecretGetError(
           ExitCode.AUTH_REQUIRED,
           { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
         );
+      }
+      if (result.error.code === "NODE_NOT_RESPONDING" || result.error.code === "DECRYPTION_DEPENDENCY_UNAVAILABLE") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.NETWORK_ERROR);
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);

@@ -51,7 +51,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       # The checkout's lockfile is used as committed; only the versioning step below may change it (TC-1155).
       - run: bun install --frozen-lockfile
@@ -345,7 +345,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       # Keep the checkout clean before selecting a previously pushed release.
       - run: bun install --frozen-lockfile

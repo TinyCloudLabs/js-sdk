@@ -18,11 +18,14 @@ export const EXIT_PENDING = 8;
  */
 export class CourierPending extends Error {
   readonly pending: { step: number; of: number; approvalUrl: string; expiresAt: string };
+  /** The link was made in this run (not a resumed request); only the agent-directed Next line on stderr reads it. */
+  readonly created: boolean;
 
-  constructor(pending: { step: number; of: number; approvalUrl: string; expiresAt: string }) {
+  constructor(pending: { step: number; of: number; approvalUrl: string; expiresAt: string }, created = false) {
     super('The approval is still pending.');
     this.name = 'CourierPending';
     this.pending = pending;
+    this.created = created;
   }
 }
 

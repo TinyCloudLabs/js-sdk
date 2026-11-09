@@ -1,5 +1,166 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.6
+
+### Minor Changes
+
+- adfe9b5: `requestPermissions` on an OpenKey session now names the key it asks OpenKey to sign with. Every OpenKey sign request for a runtime grant carries the `keyId` of the connected account, and a client that is not connected is connected first (`connect()`, in the configured `mode`), so a restored session no longer opens a sign dialog that has no key. The signed message and the requested permissions are unchanged. This replaces the earlier refusal for a never-connected client: it now connects instead of falling back to the node's wallet signer.
+
+  In popup mode (the default) a browser blocks a second popup opened after the user spent time in the connect popup, so the first Allow only connects: `requestPermissions` rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, nothing is signed, and the second click signs with the connected key in one popup. Show your Allow button again on that code. `iframe` and `redirect` mode connect and sign in one click.
+
+  New exported `OpenKeySigningKeyError` (with `OpenKeySigningKeyErrorCode`), thrown before any sign request: `OPENKEY_KEY_MISSING` (the client is not connected and cannot connect, or `connect()` returned no `keyId`), `OPENKEY_KEY_AMBIGUOUS` (the connected key is not the signed-in account's, or reports no address) and `OPENKEY_CONNECTED_RETRY`. The SDK never calls the client's `signMessage` without a `keyId`. If the session ends or changes while a connect or sign dialog is open, the grant is cancelled and the signature is not used. A signer set with `setRuntimePermissionSigner` still takes precedence.
+
+  Details: TC-2281
+
+## 3.12.0-beta.5
+
+### Patch Changes
+
+- 2139b24: Send only the public session key to OpenKey during sign-in.
+
+  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+
+  Details: TC-2582
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+
+## 3.12.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+  - @tinycloud/replica@0.4.5-beta.1
+
+## 3.12.0-beta.3
+
+### Minor Changes
+
+- b32f52e: Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. Cold unknown-owner HTTP5xx, transport errors and timeouts retain configured/default-host compatibility. Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; v1-only registrations and registered resources without destinations do not fall back. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/replica@0.4.5-beta.0
+
+## 3.12.0-beta.2
+
+### Minor Changes
+
+- 9ff4cf2: Expose `ensureSpaceHosted()` and allow restored sessions to host a missing primary space from a user gesture. Signing out during approval dismisses the prompt and rejects with an explicit cancellation error.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 3.12.0-beta.1
+
+### Minor Changes
+
+- 55d52f7: `TinyCloudWeb.restoreSession()` now makes one bounded node read before it reports `"restored"`: it asks the node whether the restored session's primary space is hosted, waiting at most 5 seconds. It never prompts and never fails or delays the restore past that cap; an answer it cannot get is `"unknown"`. Read the result from the new `TinyCloudWeb.spaceHosting` getter (`"hosted"`, `"not-hosted"` or `"unknown"`). `signIn()` on a restored session whose space is not hosted returns the restored session, as before. Exports the `SpaceHosting` type.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 3.11.1-beta.0
+
+### Patch Changes
+
+- 5817c2b: `TinyCloudWeb.signOut()` clears local state first. The node's sign-out starts at once, but `signOut()` waits for it for at most 3 seconds after the persisted session is cleared, so a node call that never answers (for example after a revoked grant) no longer leaves the tab signed in. When the 3 seconds pass, `signOut()` resolves while the node's own cleanup may still be running; the local session is already gone, but callers should not assume the node-side cleanup has finished. Errors the node's sign-out raises within that time still reject `signOut()`, as before. A session whose stored record could not be removed is now fenced in `BrowserSessionStorage` (`markSignedOut` / `isSignedOut`), so a reload cannot restore it; a successful `clear` or a different saved session lifts the fence. Other `ISessionStorage` implementations keep only the in-memory block, and a sign-out with no live session (a restore still pending) fences nothing: only the in-memory block applies there.
+
+  `signOut()` in both SDKs clears the stored session only when it is still the session being signed out (same signature): a sign-out that finishes after a newer sign-in for the same address no longer erases the newer saved copy.
+
+  `FileSessionStorage.save` writes a temp file (mode 0600, so the saved file is owner-only) and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
+
+  Details: TC-2379
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 3.11.0
+
+### Minor Changes
+
+- 75c0432: `openkey.expiryChangeable` is a new TinyCloudWeb option. When true, the OpenKey request tells OpenKey the user may change the session expiry, and the session is built with the expiry the user signed. It is a pass-through: `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards it and the option is inert on 0.12.x, so nothing changes until the app also updates `@openkey/sdk`.
+
+  `openkey.maxExpiresAt` (epoch milliseconds, a `Date`, or a function read when the approval comes back) sets the latest expiry the app accepts; a later signed expiry is refused before the session is built or stored, and the value is never sent to OpenKey.
+
+  Details: TC-2276
+
+### Patch Changes
+
+- cb0c6ce: When an app opts in with `openkey.expiryChangeable`, TinyCloudWeb now accepts a changed session expiry of any length up to 9999-12-31, including 11 or 100 years. It no longer refuses an expiry more than 10 years away. An expiry later than 9999-12-31, or one that is not a date, is refused with a message that names the date.
+
+  Details: TC-2272
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+  - @tinycloud/replica@0.4.4
+
 ## 3.11.0-beta.2
 
 ### Patch Changes

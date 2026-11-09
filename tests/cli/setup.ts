@@ -1,7 +1,11 @@
+import "../../packages/operations/test-support/test-bootstrap.mjs";
+import { assertPrivateTestEnvironment } from "../../packages/operations/test-support/private-home.mjs";
+import { afterAll } from "bun:test";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, writeFile, rm } from "node:fs/promises";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../packages/node-sdk/src/test-support/unregistered-location-registry";
 
 const SERVER_URL = process.env.TC_TEST_SERVER ?? "http://localhost:8000";
 const DEFAULT_KEY = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -10,6 +14,9 @@ const PROFILE_NAME = "cli-test";
 const PROFILES_DIR = join(homedir(), ".tinycloud", "profiles");
 const CONFIG_DIR = join(homedir(), ".tinycloud");
 const TC_BIN = join(import.meta.dir, "../../packages/cli/bin/tc");
+const TEST_BOOTSTRAP = join(import.meta.dir, "../../packages/operations/test-support/test-bootstrap.mjs");
+let registry: UnregisteredLocationRegistry | undefined;
+afterAll(() => registry?.stop(true));
 
 export { SERVER_URL, TEST_KEY, PROFILE_NAME, TC_BIN };
 
@@ -41,9 +48,12 @@ export async function checkServerHealth(): Promise<void> {
  * a CLI profile so that `tc --profile cli-test` commands work.
  */
 export async function setupCliProfile(): Promise<TinyCloudNode> {
+  assertPrivateTestEnvironment(process.env, CONFIG_DIR);
+  registry ??= startUnregisteredLocationRegistry();
   const node = new TinyCloudNode({
     privateKey: TEST_KEY,
     host: SERVER_URL,
+    tinycloudRegistryUrl: registry.url.origin,
     prefix: "cli-test",
     autoCreateSpace: true,
   });
@@ -67,6 +77,7 @@ export async function setupCliProfile(): Promise<TinyCloudNode> {
     JSON.stringify({
       name: PROFILE_NAME,
       host: SERVER_URL,
+      tinycloudRegistryUrl: registry.url.origin,
       chainId: session.chainId ?? 1,
       spaceName: "default",
       did: session.verificationMethod,
@@ -104,8 +115,9 @@ export async function setupCliProfile(): Promise<TinyCloudNode> {
 }
 
 async function runTc(args: string[], input?: string): Promise<TcResult> {
+  assertPrivateTestEnvironment(process.env, CONFIG_DIR);
   const proc = Bun.spawn(
-    ["bun", TC_BIN, "--profile", PROFILE_NAME, "--host", SERVER_URL, "--json", "--quiet", ...args],
+    ["bun", "--preload", TEST_BOOTSTRAP, TC_BIN, "--profile", PROFILE_NAME, "--host", SERVER_URL, "--json", "--quiet", ...args],
     {
       stdin: input === undefined ? "ignore" : "pipe",
       stdout: "pipe",
@@ -150,6 +162,7 @@ export async function tcWithInput(input: string, ...args: string[]): Promise<TcR
  * Clean up the test profile directory.
  */
 export async function cleanupCliProfile(): Promise<void> {
+  assertPrivateTestEnvironment(process.env, CONFIG_DIR);
   const profileDir = join(PROFILES_DIR, PROFILE_NAME);
   try {
     await rm(profileDir, { recursive: true });

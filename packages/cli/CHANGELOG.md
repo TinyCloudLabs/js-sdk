@@ -1,5 +1,325 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.19
+
+### Patch Changes
+
+- c8a7c9b: Exit-code change for scripts: `tinycloud share` now exits 2 (invalid input) instead of 8 for `UNSAFE_FILENAME`, `UNSAFE_PATH` and `OUTPUT_EXISTS`. These refusals cannot change when the same command is retried, and exit 8 stays reserved for pending states (a pending owner approval, `secrets wait`). Scripts that treated 8 from `share` as "retry later" should now treat these three codes as input errors. Nothing is written to stdout for them; the error JSON goes to stderr.
+
+  Details: TC-2609
+
+## 1.7.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [3319ede]
+  - @tinycloud/operations@0.9.0-beta.9
+
+## 1.7.0-beta.17
+
+### Patch Changes
+
+- 01f5fb6: Use storage-server and storage-settings vocabulary in owner-facing routing errors and offline inspection help. Keep existing error codes, retryability, command behavior, account-identifier parsing and JSON schemas. Display the optional inspection argument as `account-id` and label the human output with account, version, age and decryption service.
+
+  Human inspection displays the saved age in seconds below one minute, minutes through two hours, and hours above two hours. Storage modes read “read and write” or “read only”; server and decryption IDs are labelled while retaining their verified values. Partial permission registration uses the same server vocabulary without changing its code or retry verdict. Developer-facing SDK diagnostic templates are unchanged.
+
+  Use Monica's final warning for verified saved-copy routing without inventing an exact age. Remove the unreachable cold-fallback formatter now that #873 refuses cold routing; retain the approved refusal, warning code and machine-readable saved-copy reason.
+
+  Use one generic unavailable-settings message for an expired saved copy and other unavailable or unverifiable routing settings. Do not claim that every such refusal is caused by a copy older than an hour; keep the distinct no-saved-settings refusal unchanged.
+
+  This presentation-only change is stacked on #873's required cold-device refusal, which must land before stable release; it does not add a fallback or change routing authority.
+
+  Details: TC-2481
+
+- Updated dependencies [01f5fb6]
+  - @tinycloud/operations@0.9.0-beta.8
+
+## 1.7.0-beta.16
+
+### Patch Changes
+
+- 2139b24: Send only the public session key to OpenKey during sign-in.
+
+  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+
+  Details: TC-2582
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+  - @tinycloud/operations@0.9.0-beta.7
+
+## 1.7.0-beta.15
+
+### Patch Changes
+
+- ccf3347: Refuse live routing when storage settings cannot be reached and none are saved on the device, instead of selecting a configured or default server. Preserve first-time onboarding after a reachable, genuine no-entry response and the existing verified-cache fallback strictly younger than one hour. Keep the registry-unavailable error code and provide a value-free explanation for the cold-device refusal.
+
+  Compatibility: applications that previously continued on a default server during a cold outage must retry after storage settings are reachable. Offline session inspection remains local-only; this change does not add network access to restore or relax server-side verification.
+
+  Preserve typed routing failures through vault deletion and listing instead of reporting missing keys or generic storage errors. Secret get, put, delete and list now share the value-free `REGISTRY_UNAVAILABLE` CLI projection for unreachable storage settings, including the cold-device explanation; genuine HTTP authorization refusals, missing keys and other storage failures retain their existing classification.
+
+  Restore validated local replicas from the persisted session and host hints, retaining the existing capability check. Actual network operations still use current storage settings, including the cold-device refusal.
+
+  Classify the explicit no-saved-settings refusal as offline for replica synchronization, after HTTP and authority denials. Complete local reads retain consent, installed-grant and committed-write checks; unverifiable settings and revocation signals still prevent stale local delivery.
+
+  Details: TC-2481
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/operations@0.9.0-beta.6
+  - @tinycloud/sdk-services@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+
+## 1.7.0-beta.14
+
+### Patch Changes
+
+- 5f221d2: Clearer bug-report attach wording.
+
+  Details: TC-2515
+
+## 1.7.0-beta.13
+
+### Minor Changes
+
+- 44ccaf4: Add locally redacted, owner-confirmed CLI diagnostic attachments to bug reports, with a bounded owner-only diagnostic log.
+
+  Details: TC-2515
+
+## 1.7.0-beta.12
+
+### Minor Changes
+
+- b32f52e: Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. Cold unknown-owner HTTP5xx, transport errors and timeouts retain configured/default-host compatibility. Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+### Patch Changes
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; v1-only registrations and registered resources without destinations do not fall back. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/operations@0.9.0-beta.5
+  - @tinycloud/sdk-services@3.12.0-beta.3
+
+## 1.6.3-beta.11
+
+### Patch Changes
+
+- 7ab4cfe: In an app manifest (one with `app_id`), a `tinycloud.encryption` entry no longer gets the app's path prefix, as in the SDK's own manifests: an encryption entry names a network, not a path in a space. Its network is the entry's own `space`, else the manifest's. So `{"service":"tinycloud.encryption","space":"default","path":"","actions":["decrypt"]}` now means decrypt on your own `default` network without `skipPrefix: true`, both for `tinycloud auth login --device` (which refused it with `DEVICE_AUTH_UNSUPPORTED_SCOPE`) and for browser and paste sign-in (which turned it into an unusable decrypt under the app's path).
+
+  `--device` still asks only for that one encryption entry. An encryption entry naming another network is now refused even when the manifest's top-level `space` is `default` (before, the entry's own `space` was ignored). The `DEVICE_AUTH_UNSUPPORTED_SCOPE` message now says what `--device` allows and what the manifest or request asked for.
+
+  Details: TC-2550
+
+## 1.6.3-beta.10
+
+### Patch Changes
+
+- 7b24104: `auth request --preset apps-agent` now accepts any number of `--app` values (it used to stop at 5 and suggest read-only access to the whole space instead), and a preset request naming more than 5 apps is shown with the standard preset wording.
+
+  Details: TC-2533
+
+## 1.6.3-beta.9
+
+### Patch Changes
+
+- 9a4efa9: `tinycloud auth login --device` no longer refuses a manifest that asks for decrypt on your own `default` network (`tinycloud.encryption/decrypt`, space `default`, empty path). The CLI sends that entry to OpenKey as written. When the owner approves it, OpenKey signs decrypt on the approving owner's own `default` network, and the CLI checks that signature against the verified owner and saves it with the session. An approval signed for anything broader (encrypt as well, another network, another owner's network, a path nested under the network, or decrypt inside the space) is refused and nothing is saved. Every other encryption entry and the `secrets` space are still refused before OpenKey is asked, with `DEVICE_AUTH_UNSUPPORTED_SCOPE`, whose message now reads "--device can't authorize the secrets space, or tinycloud.encryption beyond decrypt on the default network."
+
+  Details: TC-2534
+
+## 1.6.3-beta.8
+
+### Patch Changes
+
+- 0a1ea8e: The CLI no longer asks "Approve local-key delegation? [y/N]" or "Sign the N entries marked ! above, and the rest of the request? [y/N]" before signing a permission grant, and no longer refuses a run without a terminal with `CONFIRMATION_REQUIRED` (exit 2). This covers `auth request --grant` and `auth grant` on a local-key profile, and the one-use revoke authority behind `delegation revoke` and `auth grants remove --revoke`. On an OpenKey profile the OpenKey approval is unchanged and still required.
+
+  `--yes` is still accepted on `auth request`, `auth grant` and `auth grants remove` and does nothing; on a terminal it prints `--yes is no longer needed and has no effect.` (nothing in JSON mode, so stderr stays machine-readable). `delegation revoke --yes` still confirms revoking the current sign-in session, as before.
+
+  Details: TC-2531
+
+## 1.6.3-beta.7
+
+### Patch Changes
+
+- 2dedcde: `tinycloud auth grant` on an OpenKey profile no longer asks "Sign the N entries marked ! above, and the rest of the request? [y/N]" on the terminal for entries beyond the apps-agent preset, and no longer exits 2 with `CONFIRMATION_REQUIRED` without a terminal. It prints the list, with those entries marked `!`, and goes straight to the OpenKey approval, where the owner approves that exact list; the grant is signed only from that approval, as before. `--yes` is still accepted and changes nothing on an OpenKey profile. Local-key profiles are unchanged: entries beyond the preset still need `--yes` or a yes on the terminal.
+
+  Details: TC-2527
+
+## 1.6.3-beta.6
+
+### Patch Changes
+
+- 8bb35f2: Preserve named permission spaces in `tc auth request` until the owner resolves them, including `--grant` from a key-only profile.
+
+  Details: TC-2473
+
+## 1.6.3-beta.5
+
+### Patch Changes
+
+- 68a8bd1: Omit generated OpenKey approval reasons when no explicit reason was provided.
+
+  Details: TC-2490
+
+## 1.6.3-beta.4
+
+### Patch Changes
+
+- Updated dependencies [2a1ac15]
+- Updated dependencies [2a1ac15]
+  - @tinycloud/operations@0.9.0-beta.4
+
+## 1.6.3-beta.3
+
+### Patch Changes
+
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
+## 1.6.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+  - @tinycloud/operations@0.8.1-beta.2
+
+## 1.6.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+  - @tinycloud/operations@0.8.1-beta.1
+
+## 1.6.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+  - @tinycloud/operations@0.8.1-beta.0
+
+## 1.6.2
+
+### Patch Changes
+
+- 7062e9f: When `onboard --timeout` or `auth grant --timeout` ends with exit 8 because the owner has not answered yet, stderr now ends with one `Next:` line after the link and the "Still waiting" message. The line asks the agent only to send the owner the link in its reply now, and to run the command again when the owner next writes to it; it no longer asks for the re-run in the same reply. For a link created in this run it says to send the link above now; for a resumed wait that reached its deadline it says to send the link only if it has not been sent yet. It never claims the owner already has the link. This works best with a short `--timeout` (for example `1s`), so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. The line names the command as it was run (with the program name `tc` or `tinycloud`) only when every part of the command line is known to be harmless: the subcommand words, a `.json` request file, and the flags `--timeout`, `--profile`, `--host`, `--json`, `--yes`, `--quiet`, `--verbose`, `--no-cache`, `--no-retry`, `--replication` with plain values. For anything else (any other flag, short flags, `--flag=value`, a code or token, a JWT-like or long value, any control character) it says `this same command` and echoes nothing from the command line. When `auth grant` reads its request from stdin (`--stdin`, `--paste`, a bare `-`, or no source) it says `this same command ... again with the same input`, because the command alone would read an empty stdin. stdout (`{"pending":{...}}`) and the exit code are unchanged, and no other exit prints the line.
+
+  A resumed approval now completes at least one status check of OpenKey before `onboard` or `auth grant` reports it as pending, whatever the `--timeout` (a new link still exits 8 at once, with no check). Before, with `--timeout 1s` the status request was cut off after about a second, so an OpenKey answer that took 1.5 s made an approval the owner had already given read as pending (exit 8). The command can now take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that first check at all it exits 6 instead of reporting the approval as pending; an approval OpenKey has already accepted (a saved result reference) keeps its earlier outcome.
+
+  Details: TC-2360
+
+## 1.6.2-beta.0
+
+### Patch Changes
+
+- 7062e9f: When `onboard --timeout` or `auth grant --timeout` ends with exit 8 because the owner has not answered yet, stderr now ends with one `Next:` line after the link and the "Still waiting" message. The line asks the agent only to send the owner the link in its reply now, and to run the command again when the owner next writes to it; it no longer asks for the re-run in the same reply. For a link created in this run it says to send the link above now; for a resumed wait that reached its deadline it says to send the link only if it has not been sent yet. It never claims the owner already has the link. This works best with a short `--timeout` (for example `1s`), so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. The line names the command as it was run (with the program name `tc` or `tinycloud`) only when every part of the command line is known to be harmless: the subcommand words, a `.json` request file, and the flags `--timeout`, `--profile`, `--host`, `--json`, `--yes`, `--quiet`, `--verbose`, `--no-cache`, `--no-retry`, `--replication` with plain values. For anything else (any other flag, short flags, `--flag=value`, a code or token, a JWT-like or long value, any control character) it says `this same command` and echoes nothing from the command line. When `auth grant` reads its request from stdin (`--stdin`, `--paste`, a bare `-`, or no source) it says `this same command ... again with the same input`, because the command alone would read an empty stdin. stdout (`{"pending":{...}}`) and the exit code are unchanged, and no other exit prints the line.
+
+  A resumed approval now completes at least one status check of OpenKey before `onboard` or `auth grant` reports it as pending, whatever the `--timeout` (a new link still exits 8 at once, with no check). Before, with `--timeout 1s` the status request was cut off after about a second, so an OpenKey answer that took 1.5 s made an approval the owner had already given read as pending (exit 8). The command can now take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that first check at all it exits 6 instead of reporting the approval as pending; an approval OpenKey has already accepted (a saved result reference) keeps its earlier outcome.
+
+  Details: TC-2360
+
+## 1.6.1
+
+### Patch Changes
+
+- a2253b8: A login by paste now accepts the lifetime the owner chose in OpenKey, longer than 10 years included. `tc auth login --paste`, `tc auth rotate --paste` (on a profile without named keys), `tc init --paste` and `tc auth request --grant --paste` (custom `--cap`, `--permission` and `--manifest` grants) tell OpenKey the owner may choose the session lifetime (their link carries `expiryChangeable=true`), and the CLI saves the lifetime that was signed, however long, with no upper cap. It refuses only a signed lifetime of 60 seconds or less (`OPENKEY_EXPIRY_TOO_SHORT`), one that no signed message can carry (after 9999-12-31: OpenKey cannot produce it, and one presented anyway is refused as an invalid proof (`OPENKEY_PROOF_INVALID`) or as `OPENKEY_EXPIRY_UNREPRESENTABLE`, never accepted), and one that has already ended (`AUTH_EXPIRED`). The first two are refusals of an approval OpenKey already granted, so they get the same cleanup and notice as the other refusals (no saved code, no key this login created, one notice).
+
+  Logins that do not send the opt-in keep the `--expiry` ceiling, so a longer lifetime is still refused there with `OPENKEY_EXPIRY_EXCEEDED`: the approval-request login, the device login, the prepared replica and `--keys` logins, and `tc auth request --grant --preset apps-agent --paste` (agent presets keep the 7-day agent policy: the lifetime can be shortened on the OpenKey page but not extended).
+
+  A paste login no longer refuses before approval because `--expiry` is shorter than a live session; the check runs again on the signed lifetime when the login is saved. A long paste session makes a later, shorter scoped login on the same profile ask for `--replace-session`, which is the existing policy for replacing a live session with a shorter one.
+
+  Details: TC-2276
+
+- 83d1d3d: When the CLI refuses an approval OpenKey already granted (a wrong owner, a scope that does not match, a grant broader or narrower than asked, a bad proof, a signed lifetime above `--expiry`), the delegation is live even though nothing was saved, and the CLI cannot revoke it itself (a login's approval carries no revoke ability). The CLI now says so once, on stderr: the delegation's CID, until when OpenKey granted it, whether its key was deleted or still exists on this device (the delegation's CID is printed only when it looks like a CID), and where to revoke it (https://account.tinycloud.xyz/delegations). It also stops keeping what would let the refused result be used or served again:
+  - `tc auth login`, `tc init`, `tc onboard`, `tc auth rotate`, `tc auth request --grant`, `tc auth login --device` and the agent grant commands drop the saved copy of a pasted short code and the pending approval request (its result key and reference) of a refused result.
+  - The profile's key is deleted only when this command created it: a profile it created (which is removed again, with the previous default profile restored) or a key that exists only in memory or in the refused pending request. A key that already existed, which other grants or sessions may use, is kept.
+  - `tc auth rotate` no longer touches `key.json` or the session until the approval is verified: the new key waits in memory (`--paste`) or in the pending approval request's file (mode 0600, the default flow) and is written with the new session only then. A refused rotation leaves the old key and the old login exactly as they were, and any failed rotation drops the pending request that holds the new key (and says so when the owner had already approved, adding that the current login and its key are unchanged); before, the old session was cleared and the new key written first.
+  - A pasted short code that OpenKey no longer has (already used, expired or refused) now says to approve again in OpenKey, instead of telling you to re-run the same command with the same code.
+
+  When OpenKey rejects this computer's poll of a rotation's approval request (a clock behind OpenKey's), the CLI cannot tell whether the owner approved; it then drops the request and prints a notice that says OpenKey may already have granted the approval, without claiming a CID or date.
+
+  A refusal that only means the approval cannot be saved yet (an expired approval, a lifetime that only looks too long because this computer's clock is behind OpenKey's, a session in use, a profile changed or locked meanwhile, a replica logout) keeps the saved approval so the same command can finish it, and prints no notice. A successful login or rotation is unchanged.
+
+  Details: TC-2363
+
+- 4ea5add: `tc auth rotate` now says that the previous sign-in stays live until its expiry, and where to revoke it. This CLI cannot revoke the OpenKey login delegation a rotation replaces, so after a rotation that succeeded and replaced a live session it prints one line on stderr: `The previous sign-in (<CID>) stays live until <expiry> unless you have already revoked it, because this CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.` The CID part is left out when the old session does not hold one, and `until it expires` stands in for an unknown date. Nothing is printed on a first login, when there was no previous session, when it had already ended, or when the rotation was refused or failed. stdout, the JSON output and exit codes are unchanged.
+
+  Details: TC-2412
+
+- 75c0432: The prepared OpenKey login accepts a shorter session lifetime picked on the OpenKey page instead of refusing the signed message, and saves the lifetime that was signed. A lifetime beyond the requested `--expiry` (plus 30 seconds) is still refused with `OPENKEY_EXPIRY_EXCEEDED`. The replica login now builds its node with the requested `--expiry` as the session lifetime, as the `--keys` login already did.
+
+  Details: TC-2276
+
+- Updated dependencies [dc48089]
+- Updated dependencies [dc48089]
+- Updated dependencies [3b759cf]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-services@3.11.0
+  - @tinycloud/operations@0.8.0
+  - @tinycloud/sdk-core@3.11.0
+
+## 1.6.1-beta.6
+
+### Patch Changes
+
+- Updated dependencies [3b759cf]
+  - @tinycloud/operations@0.8.0-beta.3
+
 ## 1.6.1-beta.5
 
 ### Patch Changes

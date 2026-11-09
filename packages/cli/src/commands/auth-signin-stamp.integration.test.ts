@@ -34,6 +34,7 @@ test("fresh local sign-in persists a genuine stamp for a new process without mak
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
       if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
       if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       return new Response(`Unsupported fake node request: ${request.method} ${path}`, { status: 404 });
@@ -44,7 +45,7 @@ test("fresh local sign-in persists a genuine stamp for a new process without mak
   const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
   const directory = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });
@@ -101,6 +102,7 @@ test("fresh local sign-in persists its verified replica stamp beside the owner s
     async fetch(request) {
       const path = new URL(request.url).pathname;
       networkRequests++;
+      if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
       if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
       if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       return new Response(`Unsupported fake node request: ${request.method} ${path}`, { status: 404 });
@@ -111,7 +113,7 @@ test("fresh local sign-in persists its verified replica stamp beside the owner s
   const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
   const paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });

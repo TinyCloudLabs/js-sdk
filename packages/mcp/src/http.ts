@@ -141,8 +141,8 @@ function createHostedSurface(
         instructions: nativeOwner === undefined
           ? surface === "public"
             ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
-            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first."
-          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads.",
+            : "Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for approval before retrying unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first. Other app data can be discovered with account-space listing, KV cursors and SQL schema/query tools without a knowledge bundle. If the user wants reusable read access, explicitly select prefixes/databases with tinycloud_auth_read_scope; never silently broaden a key read. Use tinycloud_read for complete bounded KV/SQL delivery and replay its continuation with the original resource."
+          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads. Use tinycloud_read for large values, retaining the original resource and returned digest-bound continuation.",
       },
     );
     registerTinyCloudTools(server, {
@@ -152,7 +152,7 @@ function createHostedSurface(
       allowOwnerProfile: false,
       stateRoot,
       ...(nativeOwner === undefined ? {} : {
-        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get"] as const,
+        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"] as const,
       }),
       beforeOperation: nativeOwner === undefined
         ? () => store.validateTenant(subject, ownerDids)
@@ -326,7 +326,7 @@ function createHostedSurface(
               { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
               { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
             ],
-            tools: ["tinycloud_sql_query", "tinycloud_kv_get"],
+            tools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"],
             errors: {
               required: NATIVE_GRANT_REQUIRED,
               expired: NATIVE_GRANT_EXPIRED,
@@ -381,10 +381,12 @@ function createHostedSurface(
         try {
           const destination = await store.approvalRedirect(requiredState(url));
           return Response.redirect(destination, 302);
-        } catch {
+        } catch (error) {
+          const reason = error instanceof ApprovalRequestError ? error.detail : "unknown";
+          writeDiagnostic(`connect rejected: reason=${reason} path=${connectPath}`);
           if (request.headers.get("accept")?.includes("text/html")) {
             return new Response(
-              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. No new approval was accepted through this link.</p><p>Return to the conversation that requested access. In ChatGPT, select @TinyCloud and ask it to continue your original request. If access is still needed, it can provide a fresh approval link.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
+              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. Go back to the assistant that sent it and ask it to connect TinyCloud again.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
               {
                 status: 400,
                 headers: {

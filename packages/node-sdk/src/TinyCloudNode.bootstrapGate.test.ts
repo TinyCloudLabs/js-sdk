@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 /**
  * Unit tests for TC-86: bootstrap gate for interactive signers.
  *
@@ -26,6 +27,7 @@ import type {
 import { TinyCloudNode } from "./TinyCloudNode";
 import {
   BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST,
+  REGISTRY_NOT_FOUND_BODY,
   BOOTSTRAP_SESSION_REQUESTS,
   createOpenKeyCallbackSigningStrategy,
   ServiceContext,
@@ -102,6 +104,26 @@ function makeFakeWasmBindings(overrides: Partial<IWasmBindings> = {}): IWasmBind
 }
 
 const FAKE_ADDRESS = "0x0000000000000000000000000000000000000001";
+const REGISTRY_URL = "https://tinycloud.test";
+
+async function withRegistryFixture(run: () => Promise<void>): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    if (url.origin !== REGISTRY_URL || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) {
+      throw new Error(`Unexpected bootstrap fixture request: ${method} ${url}`);
+    }
+    expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+    return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+  }, { preconnect: originalFetch.preconnect });
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
 
 const FAKE_SESSION: ClientSession = {
   address: FAKE_ADDRESS,
@@ -354,6 +376,7 @@ describe("bootstrap gate — abort on first rejection", () => {
       signer: makeExternalSigner() as any,
       signStrategy: openKeyStrategy,
       host: "https://tinycloud.test",
+      tinycloudRegistryUrl: REGISTRY_URL,
     });
 
     stubNodeForSignIn(node, { freshAccount: true });
@@ -377,7 +400,7 @@ describe("bootstrap gate — abort on first rejection", () => {
     });
 
     // Bootstrap failure degrades to skipped — signIn() itself resolves.
-    await node.signIn();
+    await withRegistryFixture(() => node.signIn());
 
     // Only one createBootstrapSession call — the abort prevents further calls.
     expect(createBootstrapCallCount).toBe(1);
@@ -402,6 +425,7 @@ describe("bootstrap gate — abort on first rejection", () => {
       signer: makeExternalSigner() as any,
       signStrategy: openKeyStrategy,
       host: "https://tinycloud.test",
+      tinycloudRegistryUrl: REGISTRY_URL,
     });
 
     stubNodeForSignIn(node, { freshAccount: true });
@@ -415,7 +439,7 @@ describe("bootstrap gate — abort on first rejection", () => {
     });
 
     // signIn() resolves; the cause is preserved in bootstrapStatus.reason.
-    await node.signIn();
+    await withRegistryFixture(() => node.signIn());
 
     expect(node.bootstrapStatus.skipped).toBe(true);
     expect(node.bootstrapStatus.reason).toContain("Account bootstrap aborted");

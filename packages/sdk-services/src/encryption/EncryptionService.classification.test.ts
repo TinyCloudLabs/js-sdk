@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { NodeIdentityMismatchError, NodeNotRespondingError, PartialNodeWriteError } from "../resourceRouting";
 import {
   base64Decode,
   base64Encode,
@@ -134,7 +135,9 @@ async function decryptWith(
   options: {
     localDecryptFails?: boolean;
     sign?: () => Promise<never>;
-    post: (canonicalBody: string, crypto: EncryptionCrypto) => Promise<DecryptResponseBody>;
+    discover?: () => Promise<NetworkDescriptor | null>;
+    resolveTargetNode?: () => Promise<string>;
+    post?: (canonicalBody: string, crypto: EncryptionCrypto) => Promise<DecryptResponseBody>;
   },
 ) {
   const serviceCrypto = crypto(options.localDecryptFails);
@@ -151,13 +154,17 @@ async function decryptWith(
       },
     },
     transport: {
-      postDecrypt: async ({ canonicalBody }) => options.post(canonicalBody, serviceCrypto),
+      postDecrypt: async ({ canonicalBody }) => options.post
+        ? options.post(canonicalBody, serviceCrypto)
+        : validResponse(serviceCrypto, canonicalBody),
     },
     node: { fetchByNetworkId: async () => descriptor() },
   });
   const encrypted = await service.encryptToNetwork(NETWORK_ID, utf8Encode("secret-value-canary"));
   expect(encrypted.ok).toBe(true);
   if (!encrypted.ok) throw new Error("test fixture encryption failed");
+  if (options.discover) service.config.node = { fetchByNetworkId: options.discover };
+  if (options.resolveTargetNode) service.config.resolveTargetNode = options.resolveTargetNode;
   return service.decryptEnvelope(encrypted.data as InlineEncryptedEnvelope, { proofs: [] });
 }
 
@@ -199,7 +206,7 @@ describe("EncryptionService decrypt failure classification", () => {
       },
     });
 
-    expect(result).toMatchObject({ ok: false, error: { code: "TRANSPORT_ERROR" } });
+    expect(result).toMatchObject({ ok: false, error: { code: "DECRYPTION_DEPENDENCY_UNAVAILABLE" } });
   });
 
   test("maps generic transport, signing, and local decrypt failures without transport text", async () => {
@@ -208,7 +215,7 @@ describe("EncryptionService decrypt failure classification", () => {
         throw new Error("generic transport canary");
       },
     });
-    expect(transportResult).toMatchObject({ ok: false, error: { code: "TRANSPORT_ERROR" } });
+    expect(transportResult).toMatchObject({ ok: false, error: { code: "DECRYPTION_DEPENDENCY_UNAVAILABLE" } });
 
     const signingResult = await decryptWith({
       sign: async () => {
@@ -224,5 +231,43 @@ describe("EncryptionService decrypt failure classification", () => {
     });
     expect(decryptResult).toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
     expect(JSON.stringify(decryptResult)).not.toContain("canary");
+  });
+
+  test.each(["descriptor", "identity", "decrypt"] as const)("names the unavailable decryption dependency at %s without returning plaintext", async (phase) => {
+    const fail = async (): Promise<never> => { throw new NodeNotRespondingError(["https://decryption.fixture.invalid"]); };
+    const result = await decryptWith({
+      ...(phase === "descriptor" ? { discover: fail } : {}),
+      ...(phase === "identity" ? { resolveTargetNode: fail } : {}),
+      ...(phase === "decrypt" ? { post: fail } : {}),
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "DECRYPTION_DEPENDENCY_UNAVAILABLE" } });
+    expect(result).not.toHaveProperty("data");
+    if (!result.ok) expect(result.error.message).toMatch(/decryption service/i);
+  });
+
+  test("keeps one transient decrypt503 an invalid-response failure without retry or plaintext", async () => {
+    let requests = 0;
+    const result = await decryptWith({ post: async (canonicalBody, serviceCrypto) => {
+      if (++requests === 1) throw httpFailure(503);
+      return validResponse(serviceCrypto, canonicalBody);
+    } });
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_RESPONSE" } });
+    expect(result).not.toHaveProperty("data");
+    expect(requests).toBe(1);
+  });
+
+  test("preserves identity, registry, data-partial and caller-cancellation classifications", async () => {
+    for (const error of [
+      new NodeIdentityMismatchError("https://wrong.fixture.invalid", TARGET_NODE),
+      { code: "registry_unavailable", message: "registry unavailable" },
+      new PartialNodeWriteError(["https://accepted.fixture.invalid"], [{ url: "https://offline.fixture.invalid", cause: new NodeNotRespondingError([]) }]),
+    ]) {
+      const result = await decryptWith({ post: async () => { throw error; } });
+      expect(result).toMatchObject({ ok: false, error: { code: error.code } });
+      expect(result).not.toHaveProperty("data");
+    }
+    const aborted = new DOMException("caller cancelled", "AbortError");
+    const result = await decryptWith({ post: async () => { throw aborted; } });
+    expect(result).toMatchObject({ ok: false, error: { code: "TRANSPORT_ERROR", cause: aborted } });
   });
 });

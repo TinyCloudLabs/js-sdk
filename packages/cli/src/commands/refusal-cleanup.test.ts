@@ -28,6 +28,7 @@ let savedPendingCopies = 0;
 let grantedUntil = "";
 let grantedCid = "";
 const stderr: string[] = [];
+const acquisitionReasons: Array<string | undefined> = [];
 
 const realBrowserAuth = await import("../auth/browser-auth.js");
 const wasm = new NodeWasmBindings();
@@ -87,6 +88,7 @@ let signRequest = false;
 let observedDuringApproval: { key: string; session: boolean } | undefined;
 let savePendingDelegation: typeof import("../auth/pending-code.js").savePendingDelegation;
 const acquisitionFlow = async (did: string, options: Record<string, unknown>) => {
+  acquisitionReasons.push(options.reason as string | undefined);
   // Another login commits a live session with this key while the owner is still approving.
   if (sessionDuringAcquisition) await ProfileManager.setSession(options.profileName as string, await proofFor(did, options.jwk as Record<string, unknown>, 30 * DAY));
   const delegation = await proofFor(did, options.jwk as Record<string, unknown>, pickedLifetimeMs, signRequest ? options.permissions as Permission[] : undefined);
@@ -161,6 +163,7 @@ beforeEach(async () => {
   recordedErrors.length = 0;
   outputs.length = 0;
   stderr.length = 0;
+  acquisitionReasons.length = 0;
   savedPendingCopies = 0;
   grantedUntil = "";
   grantedCid = "";
@@ -333,13 +336,14 @@ describe("a profile this command created and removed leaves no directory and no 
     await gone(profileName);
   });
 
-  test("onboard, refused: same", async () => {
+  test("onboard sends no generated OpenKey reason when none is supplied", async () => {
     pickedLifetimeMs = 7 * DAY;
     tamper = "signature";
     const program = new Command();
     program.option("-p, --profile <name>");
     registerOnboardCommand(program);
     await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard"], { from: "node" }));
+    expect(acquisitionReasons).toEqual([undefined]);
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
     await gone(profileName);
   });
@@ -659,7 +663,7 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
   const ensure = (profile: Parameters<typeof ensureDelegationAuthority>[0]["profile"], requested: Permission[], extra: Record<string, unknown> = {}) =>
     capturing(() => ensureDelegationAuthority({
       ctx: { profile: profileName, host: HOST }, profile, node, requested: requested as never, expiryOption: "7d", reason: "test",
-      yes: true, consentAlreadyGiven: true, openKeyAcquisition: acquisitionFlow as never, ...extra,
+      openKeyAcquisition: acquisitionFlow as never, ...extra,
     }));
 
   test("OPENKEY_OWNER_MISMATCH: the saved approval goes, the existing key stays, one kept notice names the CID, nothing is stored", async () => {
@@ -737,12 +741,23 @@ describe("tc auth request --grant: a refused approval", () => {
   test("the saved approval goes, the signed-in key and session stay, one kept notice", async () => {
     pickedLifetimeMs = 6 * DAY;
     await login("--expiry", "7d");
+    const registry = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch: () => Response.json({ error: "location record not found" }, { status: 404 }),
+    });
+    await ProfileManager.setProfile(profileName, {
+      ...await ProfileManager.getProfile(profileName), tinycloudRegistryUrl: registry.url.origin,
+    });
     expect(recordedErrors).toEqual([]);
     const before = { key: JSON.stringify(await ProfileManager.getKey(profileName)), session: JSON.stringify(await ProfileManager.getSession(profileName)) };
     stderr.length = 0;
     savedPendingCopies = 0;
     signRequest = false; // the owner signs the default read, not the list that was asked for
-    await runAuth("request", "--grant", "--paste", "--no-popup", "--cap", "tinycloud.kv:default:data/KEY:list", "--yes");
+    try {
+      await runAuth("request", "--grant", "--paste", "--no-popup", "--cap", "tinycloud.kv:default:data/KEY:list", "--yes");
+    } finally {
+      registry.stop(true);
+    }
     expect(recordedErrors).toEqual([expect.objectContaining({ code: expect.stringMatching(/^OPENKEY_(GRANT_BROADENED|APPROVAL_NARROWER|SCOPE_MISMATCH)$/) })]);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);

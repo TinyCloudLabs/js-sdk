@@ -38,6 +38,8 @@ jobs:
           npm ci --prefix .github/deploy-tools --ignore-scripts --no-audit --no-fund
           PHALA_BIN="$GITHUB_WORKSPACE/.github/deploy-tools/node_modules/.bin/phala" \
             node .github/scripts/test-mcp-deploy-env.mjs
+      - name: Run MCP image :latest tag regression
+        run: node .github/scripts/test-mcp-image-latest.mjs
       - name: Generate and scan authored coverage
         run: |
           bun run check:operations-mcp
@@ -60,7 +62,7 @@ jobs:
           failed=()
           for file in "${files[@]}"; do
             echo "::group::$file"
-            if ! timeout 120 bun test "./$file" 2>&1 | tee "$log"; then
+            if ! timeout 120 bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | tee "$log"; then
               failed+=("$file")
               echo "::error title=share test failed::$file"
             elif grep -Eq '\b0 pass\b' "$log" && grep -Eq '\b[1-9][0-9]* skip\b' "$log"; then
@@ -76,37 +78,52 @@ jobs:
           fi
       - name: Run focused conformance and concurrency tests
         run: |
-          bun test tests/operations-mcp-conformance/conformance.test.ts
-          bun test packages/operations/src/legacy-cli-concurrency.test.ts
-          bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
-          bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
-          bun test packages/cli/src/commands/share.test.ts
-          bun test packages/cli/src/commands/share-email-unavailable.test.ts
-          bun test packages/cli/src/commands/share-addressed-unavailable.test.ts
-          bun test packages/cli/src/commands/share-receive-email-claim.test.ts
-          bun test packages/cli/src/commands/share-artifact.test.ts
-          bun test packages/cli/src/commands/share.integration.test.ts
-          bun test packages/cli/src/share/adapters.test.ts
-          bun test packages/cli/src/share/path-bound-plan-permissions.test.ts
-          bun test packages/cli/src/share/short-links.test.ts
-          bun test packages/cli/src/share/bearer-revoke.test.ts
-          bun test packages/cli/src/share/native-receive.test.ts
-          bun test packages/cli/src/commands/share-folder.test.ts
-          bun test packages/cli/src/share/html-folder.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test tests/operations-mcp-conformance/conformance.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/operations/src/legacy-cli-concurrency.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-email-unavailable.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-addressed-unavailable.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-receive-email-claim.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-artifact.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share.integration.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/adapters.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/path-bound-plan-permissions.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/short-links.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/bearer-revoke.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/native-receive.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/share-folder.test.ts
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/share/html-folder.test.ts
       - name: Run production private-key secrets regression in isolation
-        run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/secrets-private-key-production.test.ts
       - name: Run MCP CLI regression in isolation
-        run: bun test packages/mcp/src/cli.test.ts
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/mcp/src/cli.test.ts
       - name: Run packed MCP CLI regression in isolation
-        run: bun test packages/mcp/src/packed-cli.test.ts
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/mcp/src/packed-cli.test.ts
       - name: Verify generated files and coverage ledger
         run: |
           bun run check:operations-mcp
           bun run --cwd packages/cli check:coverage
+      # The release metadata, checksum file and archives of the pinned node version are cached under a
+      # key made from the pin file, so a warm run makes no request to the node release downloads.
+      - name: Restore node release cache
+        id: node-release-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/node-release-cache
+          key: node-release-${{ hashFiles('packages/cli/src/lib/node-release.json') }}
       - name: Verify node release pin against upstream
         run: bun run --cwd packages/cli check:node-release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          NODE_RELEASE_CACHE_DIR: ${{ runner.temp }}/node-release-cache
+      - name: Save node release cache
+        if: steps.node-release-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/node-release-cache
+          key: node-release-${{ hashFiles('packages/cli/src/lib/node-release.json') }}
       - name: Verify packed Node 20 fixtures
         run: bun run check:operations-mcp-pack
 
@@ -230,7 +247,7 @@ jobs:
             fi
             ran=$((ran + 1))
             echo "::group::$file"
-            if ! timeout 120 bun test "./$file" 2>&1 | tee "$log"; then
+            if ! timeout 120 bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | tee "$log"; then
               failed+=("$file (failed, or ran past 120s)")
               echo "::error title=unit test failed::$file"
             elif ! grep -Eq '^ *[1-9][0-9]* pass' "$log"; then

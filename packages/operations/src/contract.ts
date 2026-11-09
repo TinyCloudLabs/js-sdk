@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { RegistryFallbackReason } from "@tinycloud/sdk-core";
 
 import type { OperationError, OperationErrorCode } from "./errors.js";
 
@@ -112,15 +113,19 @@ export type StoredGrantSkipReason = typeof STORED_GRANT_SKIP_REASONS[number];
 export const DELEGATION_CID_PATTERN = "^bafkr4i[a-z2-7]{52}$";
 
 /**
- * A non-fatal diagnostic attached to a result. `STORED_GRANT_SKIPPED`: a
- * stored grant failed validation and gave no authority; `grantCid` is present
- * only when the stored CID is the CID of the stored authorization bytes.
+ * A value-free non-fatal diagnostic attached to a result. Stored-grant
+ * diagnostics carry a verified CID only; a registry fallback names no owner,
+ * host, authority or secret.
  */
-export interface OperationWarning {
-  readonly code: "STORED_GRANT_SKIPPED";
-  readonly reason: StoredGrantSkipReason;
-  readonly grantCid?: string;
-}
+export type OperationWarning = Readonly<{
+  code: "STORED_GRANT_SKIPPED";
+  reason: StoredGrantSkipReason;
+  grantCid?: string;
+}> | Readonly<{
+  code: "REGISTRY_UNAVAILABLE";
+  reason: RegistryFallbackReason;
+  grantCid?: never;
+}>;
 
 /** Context given to planners and handlers after runtime authentication. */
 export interface RuntimeOperationContext extends OperationContext {

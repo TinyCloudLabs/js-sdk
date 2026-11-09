@@ -3,15 +3,13 @@
  * `replication.purgeLocalCopy()` retries a failed erase, and `replica.purge.failed` reports one that
  * stayed failed. Runs the real IndexedDB lifecycle over fake-indexeddb.
  */
-import { mkdtempSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 
-// Never touch a real home: every tool home is a temp dir, asserted before any write.
-const TEST_HOME = mkdtempSync("/var/tmp/tc1888.");
-process.env.HOME = TEST_HOME;
-process.env.BUN_INSTALL_CACHE_DIR = TEST_HOME;
-if (!process.env.HOME.startsWith("/var/tmp/tc1888.")) throw new Error("test home is not a temp dir");
+import { assertPrivateTestEnvironment } from "../../operations/test-support/private-home.mjs";
+
+assertPrivateTestEnvironment();
+const TEST_HOME = process.env.HOME;
 
 import { pkhDid, type ReplicaPurgeFailedEvent } from "@tinycloud/sdk-core";
 import { registerReplicationLoaders } from "./core";
@@ -19,6 +17,10 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
+import {
+  startUnregisteredLocationRegistry,
+  type UnregisteredLocationRegistry,
+} from "./test-support/unregistered-location-registry";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
 import { assertValidReplicationConfig } from "./replication/config";
 import { ledgerFor } from "../../replica/src/kv-storage/ledger";
@@ -27,7 +29,8 @@ import { KV_DATABASE } from "../../replica/src/kv-storage/schema";
 import { injectDenyFailure } from "../../replica/src/kv-storage/testing";
 import { requestAsPromise } from "../../replica/src/browser/idb";
 
-const RESTORE_HOST = "http://127.0.0.1:1";
+let locationRegistry: UnregisteredLocationRegistry;
+let RESTORE_HOST: string;
 const OTHER_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const tombstoneKey = "tinycloud-replica:deny-tombstone";
 const markerKey = "tinycloud-replica:logout-pending";
@@ -58,6 +61,8 @@ function loaders(): ReplicationModuleLoaders {
 
 beforeEach(() => {
   expect(process.env.HOME).toBe(TEST_HOME);
+  locationRegistry = startUnregisteredLocationRegistry();
+  RESTORE_HOST = locationRegistry.url.origin;
   registerReplicationLoaders({
     ...loaders(),
     runtime: async () => ({ ReplicationRuntime: StubRuntime }) as never,
@@ -66,6 +71,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  locationRegistry.stop(true);
   registerReplicationLoaders(loaders());
 });
 
@@ -122,6 +128,7 @@ async function restoredNode(
     consentAnchor: { source: "siwe", at: Date.parse(proof.siwe.match(/Issued At: (.+)/)![1]!) },
   });
   const node = new TinyCloudNode({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     host: RESTORE_HOST,
     signer: new PrivateKeySigner(signerKey),
     wasmBindings: new NodeWasmBindings(),

@@ -8,6 +8,9 @@ import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { richResultFor, withExpiration } from "../test-support/openkey-result";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.openkey-expiry.test";
 
 let originalFetch: typeof globalThis.fetch;
 
@@ -16,7 +19,9 @@ const calls = { delegate: 0 };
 beforeEach(() => {
   calls.delegate = 0;
   originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: unknown, init?: { method?: string }) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) {
       return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
@@ -47,6 +52,7 @@ async function setup(extra: Record<string, unknown> = {}) {
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const storage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: new NodeWasmBindings(),
     signStrategy: { type: "auto-sign" },
@@ -198,6 +204,7 @@ describe("through signInWithOpenKey / prepareOpenKeySignIn", () => {
     const signer = new PrivateKeySigner(PRIVATE_KEY);
     const storage = new MemorySessionStorage();
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer,
       wasmBindings: new NodeWasmBindings(),
       signStrategy: { type: "auto-sign" },
@@ -236,6 +243,7 @@ describe("through signInWithOpenKey / prepareOpenKeySignIn", () => {
     const signer = new PrivateKeySigner(PRIVATE_KEY);
     const storage = new MemorySessionStorage();
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer,
       wasmBindings: new NodeWasmBindings(),
       signStrategy: { type: "auto-sign" },
@@ -260,6 +268,7 @@ describe("through signInWithOpenKey / prepareOpenKeySignIn", () => {
   test("signInWithOpenKey without the option sends no flag and refuses the changed expiry", async () => {
     const signer = new PrivateKeySigner(PRIVATE_KEY);
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer,
       wasmBindings: new NodeWasmBindings(),
       signStrategy: { type: "auto-sign" },
@@ -312,6 +321,7 @@ describe("maxExpiresAt: an app-level maximum for the signed expiry", () => {
   test("a function maximum is read when the result arrives, so a slow approval is not refused for the delay", async () => {
     const signer = new PrivateKeySigner(PRIVATE_KEY);
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer, wasmBindings: new NodeWasmBindings(), signStrategy: { type: "auto-sign" }, domain: "example.com",
       tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
     });
@@ -335,6 +345,7 @@ describe("maxExpiresAt: an app-level maximum for the signed expiry", () => {
     const signer = new PrivateKeySigner(PRIVATE_KEY);
     const storage = new MemorySessionStorage();
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer, wasmBindings: new NodeWasmBindings(), signStrategy: { type: "auto-sign" }, domain: "example.com",
       tinycloudHosts: ["https://tinycloud.test"], sessionStorage: storage,
     });
@@ -352,6 +363,7 @@ describe("maxExpiresAt: an app-level maximum for the signed expiry", () => {
   test("a maximum that is not a finite time is refused before OpenKey is asked", async () => {
     const signer = new PrivateKeySigner(PRIVATE_KEY);
     const auth = new NodeUserAuthorization({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       signer, wasmBindings: new NodeWasmBindings(), signStrategy: { type: "auto-sign" }, domain: "example.com",
       tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
     });

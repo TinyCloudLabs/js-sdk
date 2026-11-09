@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
-import { TinyCloudNode, NodeWasmBindings } from '@tinycloud/node-sdk';
+import { TinyCloudNode, NodeWasmBindings, publicJwk } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
-import { loadGrant, loadKey, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
+import { loadGrant, loadKey, saveGrantIfCurrent, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
 import { nodeOpts } from './node.js';
 import { listAll } from './store.js';
 import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
@@ -44,8 +44,7 @@ export interface GrantPayload {
 export function openKeyDelegateUrl(request: DelegateRequest): string {
   const params = new URLSearchParams({ did: request.did, host: request.host, reason: request.reason, expiry: request.expiry ?? AGENT_GRANT_EXPIRY, protocolVersion: '1' });
   if (request.callback) params.set('callback', request.callback);
-  const publicJwk = Object.fromEntries(Object.entries(request.publicJwk).filter(([key]) => !PRIVATE_JWK_FIELDS.has(key)));
-  params.set('jwk', Buffer.from(JSON.stringify(publicJwk)).toString('base64url'));
+  params.set('jwk', Buffer.from(JSON.stringify(publicJwk(request.publicJwk))).toString('base64url'));
   params.set('permissions', Buffer.from(JSON.stringify({ permissions: request.permissions, reason: request.reason })).toString('base64url'));
   return `${request.openkeyHost.replace(/\/$/, '')}/delegate?${params}`;
 }
@@ -444,7 +443,7 @@ async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantP
   }
   const { node, expiresAt } = await restoreVerifiedGrant(profile, key, payload);
   const grant = ownerGrant(payload, expiresAt);
-  saveGrant(grant);
+  saveGrantIfCurrent(profile, grant);
   applyGrantToProfile(profile, grant);
   if (!(await verifySpaceReady(node))) {
     const pending = payload.spacePending === true && payload.spaceReady === null;

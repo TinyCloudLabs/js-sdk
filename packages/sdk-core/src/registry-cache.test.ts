@@ -1,0 +1,802 @@
+import { expect, spyOn, test } from "bun:test";
+import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import { ed25519 } from "@noble/curves/ed25519";
+import { bases } from "multiformats/basics";
+import { signLocationRecord, signLocationRecordV2 } from "./location";
+import type { LocationRecordV2Payload } from "./location";
+import { createInMemoryRegistryCacheStore, createLocalStorageRegistryCacheStore, verifyRegistryCacheEntry, DEFAULT_REGISTRY_CACHE_STORAGE_KEY } from "./registry-cache";
+import type { RegistryCacheEntry, RegistryCacheStore } from "./registry-cache";
+import { createInMemoryRegistrySequenceStore, refreshOwnerRegistry, registryOwnerSubjectV1, resolveFailClosedTinyCloudHosts, resolveOwnerHosts, resolveRegistryResource } from "./registry-policy";
+import { createLocalStorageRegistrySequenceStore, DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY } from "./registry-policy";
+import { installTestWebLocks } from "./test-support/web-locks";
+import { REGISTRY_NOT_FOUND_BODY, RegistryLookupInputError } from "./registry-verdict";
+
+const owner = privateKeyToAccount(generatePrivateKey()); // Ephemeral TEST owner only.
+const subject = registryOwnerSubjectV1(owner.address);
+const publicKey = ed25519.getPublicKey(new Uint8Array(32).fill(91));
+const nodeDid = `did:key:${bases.base58btc.encode(new Uint8Array([0xed, 1, ...publicKey]))}`;
+const space = `tinycloud:pkh:eip155:1:${owner.address}:secrets`;
+async function body(sequence: number, mode: "read-only" | "read-write" = "read-write", url = "https://TEST-node.invalid") {
+  const payload: LocationRecordV2Payload = { version: 2, subject, sequence, updated_at: "2026-11-04T00:00:00.000Z",
+    nodes: [{ did: nodeDid, url: url.toLowerCase() }], spaces: [{ space, nodes: [{ did: nodeDid, mode }] }], encryptionNode: nodeDid };
+  return ` { "record": ${JSON.stringify(await signLocationRecordV2(payload, { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) }))} }\n`;
+}
+const answer = (text: string): typeof fetch => (async () => new Response(text)) as typeof fetch;
+const down: typeof fetch = (async () => { throw new Error("TEST client transport down"); }) as typeof fetch;
+
+test("exact signed text survives cache reads and owner-chain changes; every read reverifies", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore();
+  const raw = await body(7);
+  await resolveOwnerHosts(subject, { cacheStore, fetch: answer(raw) });
+  const saved = (await cacheStore.get(owner.address))!;
+  expect(saved.responseBody).toBe(raw);
+  expect(await resolveOwnerHosts(registryOwnerSubjectV1(owner.address, 137), { cacheStore, fetch: down })).toMatchObject({ status: "registered", sequence: 7 });
+  const foreign = registryOwnerSubjectV1(privateKeyToAccount(generatePrivateKey()).address);
+  await expect(verifyRegistryCacheEntry(foreign, owner.address, saved)).rejects.toThrow();
+  await cacheStore.update(owner.address, async (current) => ({ ...current!, responseBody: current!.responseBody.replace("test-node.invalid", "removed-node.invalid") }));
+  await expect(resolveOwnerHosts(subject, { cacheStore, fetch: down })).rejects.toThrow("verification failed");
+});
+
+test("equal online sequence renews freshness without replacing signed bytes; rollback never renews", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore();
+  const raw = await body(8);
+  await resolveOwnerHosts(subject, { cacheStore, fetch: answer(raw) });
+  await cacheStore.update(owner.address, async (current) => ({ ...current!, fetchedAt: 1 }));
+  const clock = spyOn(Date, "now").mockReturnValue(10_000_000);
+  try {
+    expect(await refreshOwnerRegistry(subject, { cacheStore, fetch: answer(JSON.stringify(JSON.parse(raw), null, 2)) }))
+      .toMatchObject({ status: "registered", sequence: 8 });
+    const renewed = (await cacheStore.get(owner.address))!;
+    expect(renewed.responseBody).toBe(raw);
+    expect(renewed.fetchedAt).toBe(10_000_000);
+    expect(await refreshOwnerRegistry(subject, { cacheStore, fetch: answer(await body(7)) }))
+      .toMatchObject({ status: "unavailable", reason: "rollback" });
+    expect(await cacheStore.get(owner.address)).toEqual(renewed);
+    const upgraded = await body(9, "read-only", "https://new.invalid");
+    expect(await refreshOwnerRegistry(subject, { cacheStore, fetch: answer(upgraded) })).toMatchObject({ status: "registered", sequence: 9 });
+    expect((await cacheStore.get(owner.address))?.responseBody).toBe(upgraded);
+  } finally { clock.mockRestore(); }
+});
+
+test("equal-sequence conflicting signed membership refuses, preserves age until deletion, and cannot return during outage", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  let deletedEntry: RegistryCacheEntry | undefined;
+  const cacheStore: RegistryCacheStore = {
+    get: backing.get, update: backing.update,
+    getRevision: backing.getRevision,
+    delete: async (key, revision, maximumSequence) => { deletedEntry = await backing.get(key); await backing.delete(key, revision, maximumSequence); },
+  };
+  const raw = await body(0);
+  await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(raw) });
+  await cacheStore.update(owner.address, async (current) => ({ ...current!, fetchedAt: 1 }));
+  const { signature: _, ...payload } = JSON.parse(raw).record;
+  const record = await signLocationRecordV2({ ...payload, spaces: [] },
+    { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) });
+  const warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, autoDiscoverLocalNode: false,
+    onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  await expect(resolveRegistryResource(subject, space, "read", { ...options, fetch: answer(JSON.stringify({ record })) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(deletedEntry).toMatchObject({ responseBody: raw, fetchedAt: 1, sequence: 0 });
+  expect(await cacheStore.get(owner.address)).toBeUndefined();
+  expect(await sequenceStore.get(owner.address)).toBe(0);
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(warnings).toEqual([]);
+});
+
+test("each warm routing decision awaits a coalesced refresh and immediately applies changed membership", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore();
+  await resolveOwnerHosts(subject, { cacheStore, fetch: answer(await body(11)) });
+  const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+  let requests = 0, settled = 0;
+  const options = { cacheStore, fetch: Object.assign(async () => {
+    requests++; started.resolve(); return reply.promise;
+  }, { preconnect: fetch.preconnect }) };
+  const read = resolveRegistryResource(subject, space, "read", options).finally(() => { settled++; });
+  const write = resolveRegistryResource(subject, space, "write", options).then(() => undefined, (error: unknown) => error);
+  await started.promise;
+  await Promise.resolve();
+  expect(settled).toBe(0);
+  reply.resolve(new Response(await body(12, "read-only")));
+  expect((await read).hosts).toEqual([{ nodeDid, urls: ["https://test-node.invalid"], source: "offchain" }]);
+  expect(await write).toMatchObject({ code: "node_not_found" });
+  expect(requests).toBe(1);
+  let nextRequests = 0;
+  expect((await resolveRegistryResource(subject, space, "write", { cacheStore, fetch: Object.assign(async () => {
+    nextRequests++; return new Response(await body(13));
+  }, { preconnect: fetch.preconnect }) })).hosts[0]?.nodeDid).toBe(nodeDid);
+  expect(nextRequests).toBe(1);
+});
+
+test("concurrent clients cannot overwrite a higher persisted sequence with a late response", async () => {
+  const backing = createInMemoryRegistryCacheStore();
+  const client = (): RegistryCacheStore => ({ get: backing.get, getRevision: backing.getRevision, update: backing.update, delete: backing.delete });
+  const slow = client(), fast = client();
+  let release!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => { release = resolve; });
+  const older = refreshOwnerRegistry(subject, { cacheStore: slow, fetch: (async () => pending) as typeof fetch });
+  await refreshOwnerRegistry(subject, { cacheStore: fast, fetch: answer(await body(22)) });
+  release(new Response(await body(21)));
+  expect(await older).toMatchObject({ status: "registered", sequence: 22 });
+  expect((await backing.get(owner.address))?.sequence).toBe(22);
+});
+
+test("cold transport compatibility never swallows corruption, invalid records or registration evidence", async () => {
+  expect(await resolveOwnerHosts(subject, { cacheStore: createInMemoryRegistryCacheStore(), fetch: down })).toMatchObject({ status: "unregistered", offline: true });
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  await sequenceStore.set(owner.address, 30);
+  expect(await resolveOwnerHosts(subject, { cacheStore: createInMemoryRegistryCacheStore(), sequenceStore, fetch: down })).toMatchObject({ status: "unavailable", reason: "network-error" });
+  const cacheStore = createInMemoryRegistryCacheStore();
+  const invalid = (await body(31)).replace("test-node.invalid", "forged-node.invalid");
+  expect(await resolveOwnerHosts(subject, { cacheStore, fetch: answer(invalid) })).toMatchObject({ status: "unavailable", reason: "invalid-signature" });
+  expect(await resolveOwnerHosts(subject, { cacheStore, fetch: answer("{broken") })).toMatchObject({ status: "unavailable", reason: "malformed-response" });
+  await resolveOwnerHosts(subject, { cacheStore, fetch: answer(await body(31)) });
+  const missing = (async () => new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 })) as typeof fetch;
+  expect(await refreshOwnerRegistry(subject, { cacheStore, sequenceStore, fetch: missing })).toMatchObject({ status: "unavailable", reason: "not-found-after-registered" });
+  expect((await resolveOwnerHosts(subject, { cacheStore, fetch: down })).status).toBe("unavailable");
+});
+
+test("a verified v1-only owner stays registered evidence without blocking a later v2 sequence zero", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore();
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  const record = await signLocationRecord({ version: 1, subject, sequence: 7,
+    multiaddrs: ["/dns4/test-node.invalid/tcp/443/https"], updated_at: "2026-11-04T00:00:00.000Z",
+  }, { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) });
+  const fetchLegacy = (async (url: string | URL | Request) => String(url).includes("/v2/")
+    ? new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 }) : Response.json({ record })) as typeof fetch;
+  expect(await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: fetchLegacy })).toMatchObject({ status: "unavailable", reason: "unsupported-format" });
+  expect(await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: down })).toMatchObject({ status: "unavailable", reason: "network-error" });
+  expect(await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) })).toMatchObject({ status: "registered", sequence: 0 });
+});
+
+const httpFailure = (status: number): typeof fetch => Object.assign(
+  async () => new Response("TEST registry failure", { status }), { preconnect: fetch.preconnect },
+);
+
+for (const failure of ["503", "transport", "timeout"] as const) {
+  test(`cold ${failure} refuses secrets routing without selecting a default or configured host`, async () => {
+    const cacheStore = createInMemoryRegistryCacheStore();
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    const fetchFn = failure === "503" ? httpFailure(503) : failure === "transport" ? down
+      : Object.assign(async () => new Promise<Response>(() => {}), { preconnect: fetch.preconnect });
+    const options = { cacheStore, sequenceStore, fetch: fetchFn, timeoutMs: 5, autoDiscoverLocalNode: false,
+      ...(failure === "transport" ? { newUserHost: "https://configured.invalid" } : {}) };
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await refreshOwnerRegistry(subject, options)).toMatchObject({ status: "unregistered", offline: true });
+      expect(warning).not.toHaveBeenCalled();
+      for (const access of ["read", "write", "encryption"] as const) {
+        await expect(resolveRegistryResource(subject, space, access, options))
+          .rejects.toMatchObject({ code: "registry_unavailable", meta: { reason: "no-saved-settings" } });
+      }
+      await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+        ...options,
+        onNodeNotFound: () => ({ action: "use-host", host: "https://override.invalid" }),
+      })).rejects.toMatchObject({ code: "registry_unavailable" });
+      expect(warning).not.toHaveBeenCalled();
+      expect(await cacheStore.get(owner.address)).toBeUndefined();
+      expect(await sequenceStore.get(owner.address)).toBeUndefined();
+    } finally { warning.mockRestore(); }
+  });
+}
+
+test("reachable canonical absence still permits genuine first-time onboarding", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const fetchAbsent: typeof fetch = Object.assign(
+    async () => new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 }),
+    { preconnect: fetch.preconnect },
+  );
+  const options = { cacheStore, sequenceStore, fetch: fetchAbsent, autoDiscoverLocalNode: false,
+    newUserHost: "https://onboarding.invalid" };
+  expect(await resolveFailClosedTinyCloudHosts(owner.address, options))
+    .toMatchObject({ hosts: ["https://onboarding.invalid"], verdict: { status: "unregistered" } });
+  const route = await resolveRegistryResource(subject, space, "write", options);
+  expect(route).toMatchObject({ hosts: [], verdict: { status: "unregistered" } });
+  expect(route.verdict).not.toHaveProperty("offline");
+  expect(await sequenceStore.get(owner.address)).toBeUndefined();
+});
+
+for (const failure of [502, 503, 504, "transport", "timeout"] as const) {
+  test(`warm ${failure} uses only under-one-hour signed cache and emits one semantic warning`, async () => {
+    const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+    await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(44)) });
+    const now = 10_000_000;
+    await cacheStore.update(owner.address, async (current) => ({ ...current!, fetchedAt: now - 3_600_000 + 1 }));
+    const before = await cacheStore.get(owner.address);
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    const warnings: unknown[][] = [];
+    const fetchFn = typeof failure === "number" ? httpFailure(failure) : failure === "transport" ? down
+      : Object.assign(async () => new Promise<Response>(() => {}), { preconnect: fetch.preconnect });
+    const options = { cacheStore, sequenceStore, fetch: fetchFn, timeoutMs: 5, newUserHost: "https://unlisted.invalid",
+      autoDiscoverLocalNode: false, onRegistryFallback: (...args: unknown[]) => { warnings.push(args); } };
+    try {
+      for (let selected = 0; selected < 2; selected++) {
+        expect((await resolveFailClosedTinyCloudHosts(owner.address, options)).hosts).toEqual(["https://test-node.invalid"]);
+      }
+      expect(warnings).toEqual([["Storage settings are unreachable; using cached settings checked less than 1 hour ago.", "using_cached_settings"]]);
+      expect(await cacheStore.get(owner.address)).toEqual(before);
+      expect(await sequenceStore.get(owner.address)).toBe(44);
+      for (const age of [3_600_000, 3_600_001, -1]) {
+        await cacheStore.update(owner.address, async (current) => ({ ...current!, fetchedAt: now - age }));
+        await expect(resolveFailClosedTinyCloudHosts(owner.address, options)).rejects.toMatchObject({ code: "registry_unavailable" });
+        expect(warnings).toHaveLength(1);
+      }
+    } finally { clock.mockRestore(); }
+  });
+}
+
+test("warm HTTP500, other statuses, invalid signatures and rollback fail closed without renewing cache", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+  const before = await cacheStore.get(owner.address), warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, autoDiscoverLocalNode: false, newUserHost: "https://unlisted.invalid",
+    onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  for (const status of [500, 501, 505, 599]) {
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(status) }))
+      .rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "http-status" } });
+  }
+  const invalid = (await body(1)).replace("test-node.invalid", "forged-node.invalid");
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: answer(invalid) }))
+    .rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "invalid-signature" } });
+  expect(await cacheStore.get(owner.address)).toEqual(before);
+  expect(await sequenceStore.get(owner.address)).toBe(0);
+  await sequenceStore.set(owner.address, 1);
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: down }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(warnings).toEqual([]);
+});
+
+for (const authoritative of [401, 403, 404, 410, 429, "missing-space", "read-only"] as const) {
+  test(`authoritative ${authoritative} drops warm cache and a later outage cannot resurrect it`, async () => {
+    const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+    await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+    const warnings: string[] = [];
+    const options = { cacheStore, sequenceStore, autoDiscoverLocalNode: false, newUserHost: "https://unlisted.invalid",
+      onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+    let fetchFn: typeof fetch;
+    if (typeof authoritative === "number") fetchFn = httpFailure(authoritative);
+    else {
+      const { signature: _, ...payload } = JSON.parse(await body(1, "read-only")).record;
+      if (authoritative === "missing-space") payload.spaces = [];
+      const record = await signLocationRecordV2(payload, { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) });
+      fetchFn = answer(JSON.stringify({ record }));
+    }
+    await expect(resolveRegistryResource(subject, space, "write", { ...options, fetch: fetchFn })).rejects.toMatchObject({
+      code: typeof authoritative === "number" ? "registry_unavailable" : "node_not_found",
+    });
+    expect(await cacheStore.get(owner.address)).toBeUndefined();
+    expect(await sequenceStore.get(owner.address)).toBe(typeof authoritative === "number" ? 0 : 1);
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+  });
+}
+
+test("authoritative deletion retains known-owner evidence without an optional sequence adapter", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore();
+  await resolveOwnerHosts(subject, { cacheStore, fetch: answer(await body(0)) });
+  await expect(resolveRegistryResource(subject, space, "read", { cacheStore, fetch: httpFailure(403) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(await cacheStore.get(owner.address)).toBeUndefined();
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+    cacheStore, fetch: httpFailure(502), autoDiscoverLocalNode: false,
+  })).rejects.toMatchObject({ code: "registry_unavailable" });
+});
+
+for (const failure of ["marker", "delete"] as const) {
+  test(`authoritative ${failure} storage failure refuses now and blocks later cached fallback`, async () => {
+    const backing = createInMemoryRegistryCacheStore(), sequences = createInMemoryRegistrySequenceStore();
+    const cacheStore: RegistryCacheStore = {
+      get: backing.get, update: backing.update,
+      getRevision: backing.getRevision,
+      delete: async (key, revision, maximumSequence) => {
+        if (failure === "delete") throw new Error("TEST deletion unavailable");
+        await backing.delete(key, revision, maximumSequence);
+      },
+    };
+    await resolveOwnerHosts(subject, { cacheStore, sequenceStore: sequences, fetch: answer(await body(0)) });
+    const sequenceStore = { get: sequences.get, set: async () => { throw new Error("TEST marker unavailable"); } };
+    const options = { cacheStore, sequenceStore: failure === "marker" ? sequenceStore : sequences };
+    await expect(resolveRegistryResource(subject, space, "write", { ...options, fetch: httpFailure(403) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    expect((await backing.get(owner.address))?.sequence).toBe(0);
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503), autoDiscoverLocalNode: false }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+  });
+}
+
+test("cold HTTP failures do not forget known registration or turn 4xx into default routing", async () => {
+  const warnings: string[] = [];
+  const options = { cacheStore: createInMemoryRegistryCacheStore(), autoDiscoverLocalNode: false,
+    onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  for (const status of [401, 403, 429]) {
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(status) }))
+      .rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "http-status" } });
+  }
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  await sequenceStore.set(owner.address, 0); // Also the retained marker for known v1-only registration.
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, sequenceStore, fetch: httpFailure(503) }))
+    .rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "http-status" } });
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503), newUserHost: null }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(warnings).toEqual([]);
+});
+
+test("cold v2 outage still refuses a verified v1 record or a v1 HTTP4xx refusal", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore();
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  const record = await signLocationRecord({ version: 1, subject, sequence: 2,
+    multiaddrs: ["/dns4/test-node.invalid/tcp/443/https"], updated_at: "2026-11-04T00:00:00.000Z",
+  }, { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) });
+  const fetchLegacy = Object.assign(async (url: string | URL | Request) => String(url).includes("/v2/")
+    ? new Response("down", { status: 503 }) : Response.json({ record }), { preconnect: fetch.preconnect });
+  const warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, fetch: fetchLegacy, autoDiscoverLocalNode: false,
+    onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, options))
+    .rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "unsupported-format" } });
+  expect(await sequenceStore.get(owner.address)).toBe(0);
+  const v1Refusal = Object.assign(async (url: string | URL | Request) =>
+    new Response("refused", { status: String(url).includes("/v2/") ? 503 : 403 }), { preconnect: fetch.preconnect });
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+    cacheStore: createInMemoryRegistryCacheStore(), fetch: v1Refusal, autoDiscoverLocalNode: false,
+    onRegistryFallback: options.onRegistryFallback,
+  })).rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "http-status" } });
+  expect(warnings).toEqual([]);
+});
+
+test("refresh rejects a noncanonical owner before cache or network access", async () => {
+  let cacheReads = 0, requests = 0;
+  const cacheStore: RegistryCacheStore = {
+    get: async () => { cacheReads++; return undefined; },
+    getRevision: async () => { throw new Error("Invalid owner must not read revisions"); },
+    update: async () => { throw new Error("Invalid owner must not update storage"); },
+    delete: async () => { throw new Error("Invalid owner must not delete storage"); },
+  };
+  const fetchFn = Object.assign(async () => { requests++; throw new Error("Invalid owner must not reach the network"); },
+    { preconnect: fetch.preconnect });
+  await expect(refreshOwnerRegistry("not-an-owner", { cacheStore, fetch: fetchFn })).rejects.toBeInstanceOf(RegistryLookupInputError);
+  expect({ cacheReads, requests }).toEqual({ cacheReads: 0, requests: 0 });
+});
+
+test("a restored verified cache establishes highwater before later cache loss and registry outage", async () => {
+  const persisted = createInMemoryRegistryCacheStore();
+  await resolveOwnerHosts(subject, { cacheStore: persisted, fetch: answer(await body(63)) });
+  let visible = true;
+  const cacheStore: RegistryCacheStore = {
+    get: (key) => visible ? persisted.get(key) : Promise.resolve(undefined),
+    getRevision: persisted.getRevision,
+    update: persisted.update,
+    delete: persisted.delete,
+  };
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  const warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, fetch: httpFailure(503), autoDiscoverLocalNode: false,
+    newUserHost: "https://unlisted.invalid", onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  expect((await resolveFailClosedTinyCloudHosts(owner.address, options)).hosts).toEqual(["https://test-node.invalid"]);
+  await refreshOwnerRegistry(subject, options);
+  visible = false;
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, options))
+    .rejects.toMatchObject({ code: "registry_unavailable", verdict: { reason: "http-status" } });
+  expect(await sequenceStore.get(owner.address)).toBe(63);
+  expect(warnings).toEqual(["Storage settings are unreachable; using cached settings checked less than 1 hour ago."]);
+});
+
+test("fresh Core callers without a cache adapter receive the same outage policy and known-owner guard", async () => {
+  for (const failure of [500, 503, 599, "transport", "timeout"] as const) {
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    const warnings: string[] = [];
+    const fetchFn = typeof failure === "number" ? httpFailure(failure) : failure === "transport" ? down
+      : Object.assign(async () => new Promise<Response>(() => {}), { preconnect: fetch.preconnect });
+    const options = { sequenceStore, fetch: fetchFn, timeoutMs: 5, autoDiscoverLocalNode: false,
+      newUserHost: "https://configured.invalid", onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, options))
+      .rejects.toMatchObject({ code: "registry_unavailable", meta: { reason: "no-saved-settings" } });
+    expect(await sequenceStore.get(owner.address)).toBeUndefined();
+    await sequenceStore.set(owner.address, 0);
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, options)).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+  }
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, { fetch: httpFailure(502), autoDiscoverLocalNode: false }))
+      .rejects.toMatchObject({ code: "registry_unavailable", meta: { reason: "no-saved-settings" } });
+    expect(warning).not.toHaveBeenCalled();
+  } finally { warning.mockRestore(); }
+});
+
+test("a known-zero caller cannot inherit an older cold refresh's default authorization", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const started = Promise.withResolvers<void>(), outage = Promise.withResolvers<Response>(), knownRead = Promise.withResolvers<void>();
+  let watching = false, requests = 0;
+  const observedSequence = {
+    set: sequenceStore.set,
+    async get(key: string) {
+      const sequence = await sequenceStore.get(key);
+      if (watching && sequence === 0) knownRead.resolve();
+      return sequence;
+    },
+  };
+  const fetchFn = Object.assign(async (input: string | URL | Request) => {
+    requests++;
+    if (String(input).includes("/v2/")) { started.resolve(); return outage.promise; }
+    return new Response("TEST outage", { status: 503 });
+  }, { preconnect: fetch.preconnect });
+  const warnings: string[] = [];
+  const options = { cacheStore, sequenceStore: observedSequence, fetch: fetchFn, autoDiscoverLocalNode: false,
+    newUserHost: "https://unlisted.invalid", onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  const first = refreshOwnerRegistry(subject, options);
+  await started.promise;
+  expect(await resolveOwnerHosts(subject, { sequenceStore, fetch: answer(await body(0)) }))
+    .toMatchObject({ status: "registered", sequence: 0 });
+  expect(await sequenceStore.get(owner.address)).toBe(0);
+  watching = true;
+  const second = resolveFailClosedTinyCloudHosts(owner.address, options);
+  const outcome = second.then(() => undefined, (error: unknown) => error);
+  await knownRead.promise;
+  outage.resolve(new Response("TEST outage", { status: 503 }));
+  expect(await outcome).toMatchObject({ code: "registry_unavailable" });
+  expect((await first).status).toBe("unavailable");
+  expect(requests).toBe(2);
+  expect(warnings).toEqual([]);
+  expect(await cacheStore.get(owner.address)).toBeUndefined();
+  const freshWarnings: string[] = [];
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+    cacheStore: createInMemoryRegistryCacheStore(), sequenceStore: createInMemoryRegistrySequenceStore(),
+    fetch: httpFailure(503), autoDiscoverLocalNode: false, newUserHost: "https://configured.invalid",
+    onRegistryFallback: (reason) => { freshWarnings.push(reason); },
+  })).rejects.toMatchObject({ code: "registry_unavailable", meta: { reason: "no-saved-settings" } });
+  expect(freshWarnings).toEqual([]);
+});
+
+test("a shared registered refresh respects independent caller highwaters and remembers each accepted result", async () => {
+  const backing = createInMemoryRegistryCacheStore();
+  const firstSequence = createInMemoryRegistrySequenceStore(), knownSequence = createInMemoryRegistrySequenceStore();
+  const freshSequence = createInMemoryRegistrySequenceStore();
+  const latest = await body(7, "read-write", "https://current.TEST-node.invalid");
+  const retired = await body(0, "read-write", "https://retired.TEST-node.invalid");
+  expect(await resolveOwnerHosts(subject, { sequenceStore: knownSequence, fetch: answer(latest) }))
+    .toMatchObject({ status: "registered", sequence: 7 });
+  let onEmptyRead: (() => void) | undefined;
+  const cacheStore: RegistryCacheStore = {
+    update: backing.update,
+    getRevision: backing.getRevision,
+    delete: backing.delete,
+    async get(key) {
+      const current = await backing.get(key);
+      // The awaiting caller resumes before the test gate, so it joins before I/O is released.
+      if (current === undefined && onEmptyRead) queueMicrotask(onEmptyRead);
+      return current;
+    },
+  };
+  const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+  let requests = 0;
+  const fetchFn = Object.assign(async () => { requests++; started.resolve(); return reply.promise; }, { preconnect: fetch.preconnect });
+  const first = refreshOwnerRegistry(subject, { cacheStore, sequenceStore: firstSequence, fetch: fetchFn });
+  const pending: Promise<unknown>[] = [first];
+  try {
+    await started.promise;
+    expect(await knownSequence.get(owner.address)).toBe(7);
+    const knownRead = Promise.withResolvers<void>(), warnings: string[] = [];
+    onEmptyRead = knownRead.resolve;
+    const joined = resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore, sequenceStore: knownSequence, fetch: fetchFn, autoDiscoverLocalNode: false,
+      newUserHost: "https://unlisted.invalid", onRegistryFallback: (reason) => { warnings.push(reason); },
+    });
+    pending.push(joined);
+    const outcome = joined.then(() => undefined, (error: unknown) => error);
+    await knownRead.promise;
+    const freshRead = Promise.withResolvers<void>();
+    onEmptyRead = freshRead.resolve;
+    const fresh = resolveOwnerHosts(subject, { cacheStore, sequenceStore: freshSequence, fetch: fetchFn });
+    pending.push(fresh);
+    await freshRead.promise;
+    onEmptyRead = undefined;
+    reply.resolve(new Response(retired));
+    expect(await first).toMatchObject({ status: "registered", sequence: 0 });
+    expect(await outcome).toMatchObject({ code: "registry_unavailable" });
+    expect(await fresh).toMatchObject({ status: "registered", sequence: 0 });
+    expect(await firstSequence.get(owner.address)).toBe(0);
+    expect(await knownSequence.get(owner.address)).toBe(7);
+    expect(await freshSequence.get(owner.address)).toBe(0);
+    expect((await cacheStore.get(owner.address))?.responseBody).toBe(retired);
+    expect(requests).toBe(1);
+    expect(warnings).toEqual([]);
+  } finally {
+    reply.resolve(new Response(retired));
+    await Promise.allSettled(pending);
+  }
+});
+
+test("direct refresh repairs restored highwater before outage I/O and later cache absence", async () => {
+  const persisted = createInMemoryRegistryCacheStore();
+  await resolveOwnerHosts(subject, { cacheStore: persisted, fetch: answer(await body(73)) });
+  let visible = true;
+  const cacheStore: RegistryCacheStore = {
+    get: (key) => visible ? persisted.get(key) : Promise.resolve(undefined),
+    getRevision: persisted.getRevision,
+    update: persisted.update,
+    delete: persisted.delete,
+  };
+  const sequenceStore = createInMemoryRegistrySequenceStore();
+  const observedAtFetch: Array<number | undefined> = [], warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, autoDiscoverLocalNode: false, newUserHost: "https://unlisted.invalid",
+    fetch: Object.assign(async () => {
+      observedAtFetch.push(await sequenceStore.get(owner.address));
+      return new Response("TEST outage", { status: 503 });
+    }, { preconnect: fetch.preconnect }),
+    onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  expect(await sequenceStore.get(owner.address)).toBeUndefined();
+  expect(await refreshOwnerRegistry(subject, options)).toMatchObject({ status: "registered", sequence: 73, offline: true });
+  expect(observedAtFetch).toEqual([73]);
+  expect(await sequenceStore.get(owner.address)).toBe(73);
+  visible = false;
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, options)).rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(warnings).toEqual([]);
+});
+
+test("the shared browser sequence lock retains every owner's zero and maximum across cache loss", async () => {
+  const platform = installTestWebLocks();
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); } };
+  const other = privateKeyToAccount(generatePrivateKey()).address;
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const held = platform.locks.request(DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY, async () => { entered.resolve(); await release.promise; });
+  const pending: Promise<void>[] = [];
+  try {
+    await entered.promise;
+    const first = createLocalStorageRegistrySequenceStore(storage), second = createLocalStorageRegistrySequenceStore(storage);
+    for (const [store, key, sequence] of [[first, owner.address, 0], [second, other, 0], [second, owner.address, 9], [first, owner.address, 4]] as const) {
+      pending.push(Promise.resolve(store.set(key, sequence)));
+    }
+    await Promise.resolve();
+    expect(storage.getItem(DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY)).toBeNull();
+    release.resolve(); await held; await Promise.all(pending);
+    const reloaded = createLocalStorageRegistrySequenceStore(storage);
+    expect(await reloaded.get(owner.address)).toBe(9);
+    expect(await reloaded.get(other)).toBe(0);
+    const warnings: string[] = [];
+    for (const address of [owner.address, other]) {
+      await expect(resolveFailClosedTinyCloudHosts(address, {
+        cacheStore: createInMemoryRegistryCacheStore(), sequenceStore: reloaded, fetch: httpFailure(503), autoDiscoverLocalNode: false,
+        newUserHost: "https://unlisted.invalid", onRegistryFallback: (reason) => { warnings.push(reason); },
+      })).rejects.toMatchObject({ code: "registry_unavailable" });
+    }
+    expect(warnings).toEqual([]);
+  } finally {
+    release.resolve(); await held; await Promise.allSettled(pending); platform.restore();
+  }
+});
+
+test("browser deletion and persisted sequence survive a new cache adapter", async () => {
+  const platform = installTestWebLocks();
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+  try {
+    const cacheStore = createLocalStorageRegistryCacheStore(storage), sequenceStore = createLocalStorageRegistrySequenceStore(storage);
+    await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+    await expect(resolveRegistryResource(subject, space, "read", { cacheStore, sequenceStore, fetch: httpFailure(403) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    const reloaded = createLocalStorageRegistryCacheStore(storage), sequences = createLocalStorageRegistrySequenceStore(storage);
+    expect(await reloaded.get(owner.address)).toBeUndefined();
+    expect(await sequences.get(owner.address)).toBe(0);
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: reloaded, sequenceStore: sequences, fetch: httpFailure(502), autoDiscoverLocalNode: false,
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+  } finally { platform.restore(); }
+});
+
+test("a fresh registered owner without any usable host is dropped before subsequent outage", async () => {
+  const cacheStore = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+  const { signature: _, ...payload } = JSON.parse(await body(1)).record;
+  const record = await signLocationRecordV2({ ...payload, nodes: [], spaces: [], encryptionNode: null },
+    { type: "did:pkh", signMessage: (message) => owner.signMessage({ message }) });
+  const options = { cacheStore, sequenceStore, autoDiscoverLocalNode: false };
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: answer(JSON.stringify({ record })) }))
+    .rejects.toMatchObject({ code: "node_not_found" });
+  expect(await cacheStore.get(owner.address)).toBeUndefined();
+  expect(await sequenceStore.get(owner.address)).toBe(1);
+  await expect(resolveFailClosedTinyCloudHosts(owner.address, { ...options, fetch: httpFailure(503) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+});
+
+for (const warmAtStart of [true, false]) {
+  test(`invalidation revisions fence stale flights from ${warmAtStart ? "warm" : "known-empty"} adapters`, async () => {
+    const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+    const raw = await body(0);
+    await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(raw) });
+    if (!warmAtStart) await backing.delete(owner.address);
+    const adapter = (): RegistryCacheStore => ({
+      get: backing.get, getRevision: backing.getRevision, update: backing.update, delete: backing.delete,
+    });
+    const A = adapter(), B = adapter(), C = adapter();
+    const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+    const late = resolveRegistryResource(subject, space, "read", {
+      cacheStore: A, sequenceStore, fetch: Object.assign(async () => { started.resolve(); return reply.promise; }, { preconnect: fetch.preconnect }),
+    }).then(() => undefined, (error: unknown) => error);
+    await started.promise;
+    await expect(resolveRegistryResource(subject, space, "read", { cacheStore: B, sequenceStore, fetch: httpFailure(403) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    const revision = warmAtStart ? 1 : 2;
+    expect(await backing.getRevision(owner.address)).toBe(revision);
+    expect(await backing.get(owner.address)).toBeUndefined();
+    reply.resolve(new Response(raw));
+    expect(await late).toMatchObject({ code: "registry_unavailable" });
+    expect(await backing.get(owner.address)).toBeUndefined();
+    expect(await sequenceStore.get(owner.address)).toBe(0);
+    const warnings: string[] = [];
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: C, sequenceStore, fetch: httpFailure(503), autoDiscoverLocalNode: false,
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+    // A new lookup after invalidation may accept valid signed sequence zero.
+    expect((await resolveRegistryResource(subject, space, "read", { cacheStore: C, sequenceStore, fetch: answer(raw) })).hosts[0]?.nodeDid).toBe(nodeDid);
+    expect(await backing.getRevision(owner.address)).toBe(revision);
+  });
+}
+
+test("invalidation revisions refuse an old outage flight without deleting a newly accepted higher record", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const adapter = (): RegistryCacheStore => ({
+    get: backing.get, getRevision: backing.getRevision, update: backing.update, delete: backing.delete,
+  });
+  await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(await body(0)) });
+  const started = Promise.withResolvers<void>(), reply = Promise.withResolvers<Response>();
+  const stale = resolveRegistryResource(subject, space, "read", {
+    cacheStore: adapter(), sequenceStore,
+    fetch: Object.assign(async () => { started.resolve(); return reply.promise; }, { preconnect: fetch.preconnect }),
+  }).then(() => undefined, (error: unknown) => error);
+  await started.promise;
+  await expect(resolveRegistryResource(subject, space, "read", { cacheStore: adapter(), sequenceStore, fetch: httpFailure(403) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  const current = await body(1, "read-write", "https://current.invalid");
+  await resolveRegistryResource(subject, space, "read", { cacheStore: adapter(), sequenceStore, fetch: answer(current) });
+  reply.resolve(new Response("TEST outage", { status: 503 }));
+  expect(await stale).toMatchObject({ code: "registry_unavailable" });
+  expect((await backing.get(owner.address))?.responseBody).toBe(current);
+  expect(await backing.getRevision(owner.address)).toBe(1);
+  expect(await sequenceStore.get(owner.address)).toBe(1);
+});
+
+test("conditional invalidation cannot delete a higher signed record accepted before its atomic delete", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const newer = await body(1);
+  let guardedRevision: number | undefined, guardedSequence: number | undefined;
+  const cacheStore: RegistryCacheStore = {
+    get: backing.get, getRevision: backing.getRevision, update: backing.update,
+    async delete(key, revision, maximumSequence) {
+      guardedRevision = revision; guardedSequence = maximumSequence;
+      await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(newer) });
+      await backing.delete(key, revision, maximumSequence);
+    },
+  };
+  await resolveOwnerHosts(subject, { cacheStore, sequenceStore, fetch: answer(await body(0)) });
+  await expect(resolveRegistryResource(subject, space, "read", { cacheStore, sequenceStore, fetch: httpFailure(403) }))
+    .rejects.toMatchObject({ code: "registry_unavailable" });
+  expect(guardedRevision).toBe(0);
+  expect(guardedSequence).toBe(0);
+  expect((await backing.get(owner.address))?.responseBody).toBe(newer);
+  expect(await backing.getRevision(owner.address)).toBe(0);
+  expect(await sequenceStore.get(owner.address)).toBe(1);
+});
+
+test("durable browser tombstones remain known without sequence storage and guard new signed state", async () => {
+  const platform = installTestWebLocks();
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  const key = `${DEFAULT_REGISTRY_CACHE_STORAGE_KEY}:${owner.address}`;
+  const raw = await body(0);
+  try {
+    storage.setItem(key, JSON.stringify({ ownerKey: owner.address, responseBody: raw, fetchedAt: Date.now(), sequence: 0 }));
+    const cache = createLocalStorageRegistryCacheStore(storage);
+    expect(await cache.getRevision(owner.address)).toBe(0);
+    await cache.delete(owner.address, 0, 0);
+    expect(JSON.parse(storage.getItem(key)!)).toEqual({ ownerKey: owner.address, revision: 1, invalidated: true });
+    const reloaded = createLocalStorageRegistryCacheStore(storage);
+    expect(await reloaded.get(owner.address)).toBeUndefined();
+    expect(await reloaded.getRevision(owner.address)).toBe(1);
+    const warnings: string[] = [];
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: reloaded, fetch: httpFailure(503), autoDiscoverLocalNode: false,
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+    await reloaded.delete(owner.address); // Deleting an empty tombstone still advances.
+    expect(await reloaded.getRevision(owner.address)).toBe(2);
+    await resolveOwnerHosts(subject, { cacheStore: reloaded, fetch: answer(await body(1)) });
+    const accepted = await reloaded.get(owner.address);
+    expect(accepted?.revision).toBe(2);
+    await expect(reloaded.delete(owner.address, 1, 1)).rejects.toThrow("revision changed");
+    await expect(reloaded.delete(owner.address, 2, 0)).rejects.toThrow("sequence advanced");
+    expect(await reloaded.get(owner.address)).toEqual(accepted);
+    expect(await reloaded.getRevision(owner.address)).toBe(2);
+  } finally { platform.restore(); }
+});
+
+test("corrupt browser revisions and revision overflow refuse without removing signed state", async () => {
+  const platform = installTestWebLocks();
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  const key = `${DEFAULT_REGISTRY_CACHE_STORAGE_KEY}:${owner.address}`;
+  const entry = { ownerKey: owner.address, responseBody: await body(0), fetchedAt: Date.now(), sequence: 0 };
+  try {
+    const cache = createLocalStorageRegistryCacheStore(storage);
+    for (const revision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, null]) {
+      storage.setItem(key, JSON.stringify({ ...entry, revision }));
+      await expect(cache.getRevision(owner.address)).rejects.toThrow("revision");
+    }
+    storage.setItem(key, JSON.stringify({ ownerKey: owner.address, revision: 0, invalidated: true }));
+    let requests = 0;
+    const warnings: string[] = [];
+    await expect(resolveFailClosedTinyCloudHosts(owner.address, {
+      cacheStore: cache, autoDiscoverLocalNode: false,
+      fetch: Object.assign(async () => { requests++; return new Response("TEST outage", { status: 503 }); }, { preconnect: fetch.preconnect }),
+      onRegistryFallback: (reason) => { warnings.push(reason); },
+    })).rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(requests).toBe(0);
+    expect(warnings).toEqual([]);
+    await expect(cache.getRevision(owner.address)).rejects.toThrow("tombstone");
+    const persisted = JSON.stringify({ ...entry, revision: Number.MAX_SAFE_INTEGER });
+    storage.setItem(key, persisted);
+    await expect(cache.delete(owner.address)).rejects.toThrow("overflow");
+    await expect(cache.delete(owner.address, -1)).rejects.toThrow("revision");
+    await expect(cache.delete(owner.address, Number.MAX_SAFE_INTEGER, -1)).rejects.toThrow("sequence");
+    expect(storage.getItem(key)).toBe(persisted);
+  } finally { platform.restore(); }
+});
+
+test("a failed invalidation keeps its runtime fence against an older positive continuation until a new verified lookup", async () => {
+  const backing = createInMemoryRegistryCacheStore(), sequenceStore = createInMemoryRegistrySequenceStore();
+  const raw = await body(0);
+  await resolveOwnerHosts(subject, { cacheStore: backing, sequenceStore, fetch: answer(raw) });
+  const finalRead = Promise.withResolvers<void>(), releaseFinalRead = Promise.withResolvers<void>();
+  const committed = Promise.withResolvers<void>(), releaseUpdate = Promise.withResolvers<void>();
+  let reads = 0, updates = 0, deletions = 0;
+  const cacheStore: RegistryCacheStore = {
+    async get(key) {
+      const number = ++reads;
+      const entry = await backing.get(key);
+      if (number === 3) { finalRead.resolve(); await releaseFinalRead.promise; }
+      return entry;
+    },
+    getRevision: backing.getRevision,
+    async update(key, callback) {
+      const number = ++updates;
+      const entry = await backing.update(key, callback);
+      if (number === 2) { committed.resolve(); await releaseUpdate.promise; }
+      return entry;
+    },
+    async delete(_key, _revision, _maximumSequence) { deletions++; throw new Error("TEST deletion failed"); },
+  };
+  const warnings: string[] = [];
+  const options = { cacheStore, sequenceStore, fetch: answer(raw), onRegistryFallback: (reason: string) => { warnings.push(reason); } };
+  try {
+    const denial = resolveRegistryResource(subject, `${space}-unlisted`, "read", options).then(() => undefined, (error: unknown) => error);
+    await finalRead.promise;
+    const older = resolveRegistryResource(subject, space, "read", options).then(() => undefined, (error: unknown) => error);
+    await committed.promise;
+    releaseFinalRead.resolve();
+    expect(await denial).toMatchObject({ code: "registry_unavailable" });
+    expect(deletions).toBe(1);
+    expect(await backing.getRevision(owner.address)).toBe(0);
+    releaseUpdate.resolve();
+    expect(await older).toMatchObject({ code: "registry_unavailable" });
+    await expect(resolveRegistryResource(subject, space, "read", { ...options, fetch: httpFailure(503) }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+    expect(warnings).toEqual([]);
+    expect((await resolveRegistryResource(subject, space, "read", options)).hosts[0]?.nodeDid).toBe(nodeDid);
+    expect((await resolveRegistryResource(subject, space, "read", { ...options, fetch: httpFailure(503) })).hosts[0]?.nodeDid).toBe(nodeDid);
+    expect(warnings).toHaveLength(1);
+    expect(await sequenceStore.get(owner.address)).toBe(0);
+  } finally { releaseFinalRead.resolve(); releaseUpdate.resolve(); }
+});

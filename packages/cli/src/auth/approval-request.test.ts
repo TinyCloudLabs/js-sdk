@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { buildShortLink, checkLinkRecord, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
 
@@ -28,6 +30,7 @@ const { verifyScopedLogin } = await import("./scoped-login.js");
 const { clearProfileCredentials } = await import("../lib/logout-pending.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 const { createECDH } = await import("node:crypto");
+const execFileAsync = promisify(execFile);
 restoreEnvironment(original);
 let caseEnvironment = original;
 const wasm = new NodeWasmBindings();
@@ -50,6 +53,7 @@ let terminalAck: { requestId: string; bodyCid: string; ackId: string } | undefin
 let retainedResultExpiresAt: string | undefined;
 
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  if (/^\/v[12]\/locations\//.test(new URL(request.url).pathname)) return Response.json({ error: "location record not found" }, { status: 404 });
   if (new URL(request.url).pathname === "/v1/links") {
     const checked = await checkLinkRecord(await request.json(), Date.now());
     if (checked.header.issuer !== did || checked.header.audience !== "https://api.tinycloud.xyz") return new Response(null, { status: 401 });
@@ -85,8 +89,12 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   return Response.json({ ackId: body.ackId, status: "acknowledged" });
 } });
 
-async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds = 3600) {
-  const prepared = wasm.prepareSession({ abilities: { kv: { "": actions } }, address, chainId: 1,
+async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds = 3600, includeCapabilities = false) {
+  const abilities = {
+    kv: { "": actions },
+    ...(includeCapabilities ? { capabilities: { "": ["tinycloud.capabilities/read"] } } : {}),
+  };
+  const prepared = wasm.prepareSession({ abilities, address, chainId: 1,
     domain: "cli.example", spaceId, jwk: key, issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + lifetimeSeconds * 1000).toISOString() });
   const signature = await wallet.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -94,11 +102,15 @@ async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
 }
 
-async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid }) {
+async function stage(
+  delegation: Record<string, unknown>,
+  options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid },
+  requestPermissions: typeof requested = requested,
+) {
   const relay = createECDH("prime256v1"); relay.generateKeys();
   const recipientJwk = relayPublicJwkOf(relay);
   const request = { issuer: did, requestVersion: 1 as const, targetDid: did,
-    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requested,
+    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requestPermissions,
     grantLifetimeSeconds: options.grantLifetimeSeconds ?? 3600, resultEncryptionPublicJwk: recipientJwk };
   const prepared = await prepareLinkRecord({ type: "openkey-approval-request", plaintext: new TextEncoder().encode(JSON.stringify(request)),
     issuerKey: signerFromJwk(key), apiOrigin: "https://api.tinycloud.xyz", expiresAt: new Date(Date.now() + 3600_000) });
@@ -134,7 +146,7 @@ beforeEach(async () => {
   Object.assign(process.env, fixtureEnvironment);
   acknowledgements = new Map(); dropAck = false; savedBeforeAck = false; terminalAckCode = undefined; terminalAck = undefined; retainedResultExpiresAt = undefined;
   await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
-  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
+  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, tinycloudRegistryUrl: server.url.origin, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
   await ProfileManager.clearSession("approval");
 });
@@ -165,6 +177,66 @@ test("a fetched approval is not acknowledged before durable login persistence", 
   const durable = await readJson<Array<{ committed?: boolean; ackId: string }>>(join(profilePath("approval"), "approval-pending.json"));
   expect(durable?.[0]).toMatchObject({ committed: true, ackId: pending.ackId });
   await completeApprovalResult("approval");
+  expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+});
+
+test("key-only auth request retries ACK after its saved session covers the request", async () => {
+  const requestPermissions = [
+    { service: "tinycloud.capabilities", space: "applications", path: "", actions: ["tinycloud.capabilities/read"] },
+    ...requested,
+  ];
+  const delegation = await signedDelegation(["tinycloud.kv/list"], 3600, true);
+  const pending = await stage(delegation, { expectedOwner: ownerDid }, requestPermissions);
+  process.env.TC_OPENKEY_HOST = "https://openkey.example";
+  process.env.TC_OPENKEY_API_HOST = server.url.origin;
+  process.env.TC_LINKS_API_ORIGIN = "https://api.tinycloud.xyz";
+
+  const args = [
+    "node",
+    "tc",
+    "--profile",
+    "approval",
+    "auth",
+    "request",
+    "--grant",
+    "--cap",
+    "tinycloud.kv:applications::list",
+    "--expiry",
+    "1h",
+    "--no-popup",
+  ];
+  const authCommandPath = join(import.meta.dir, "../commands/auth.ts");
+  const projectRoot = resolve(import.meta.dir, "../../../..");
+  const script = `
+    import { Command } from "commander";
+    import { registerAuthCommand } from ${JSON.stringify(authCommandPath)};
+    const program = new Command().option("--profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(${JSON.stringify(args)}, { from: "node" });
+  `;
+  const run = async () => {
+    try {
+      const { stdout, stderr } = await execFileAsync("bun", ["-e", script], { cwd: projectRoot, env: { ...process.env } });
+      return { status: 0, stdout, stderr };
+    } catch (error) {
+      const result = error as Error & { code?: number | string; stdout?: string; stderr?: string };
+      return { status: typeof result.code === "number" ? result.code : -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+    }
+  };
+
+  dropAck = true;
+  const firstAttempt = await run();
+  expect(firstAttempt).toMatchObject({ status: 8 });
+  expect(firstAttempt.stderr).toContain("APPROVAL_ACK_PENDING");
+  expect(savedBeforeAck).toBe(true);
+  expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  expect((await ProfileManager.getSession("approval"))?.delegationCid).toBe(delegation.delegationCid);
+  expect((await readJson<Array<{ committed?: boolean }>>(join(profilePath("approval"), "approval-pending.json")))?.[0])
+    .toMatchObject({ committed: true });
+
+  const retry = await run();
+  expect(retry.status).toBe(0);
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
   expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
 });

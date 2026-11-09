@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -11,6 +11,7 @@ const originalHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-portable-proof-"));
 process.env.TC_HOME = home;
 const recordedErrors: unknown[] = [];
+const openKeyReasons: Array<string | undefined> = [];
 type SignedCallback = OpenKeyCallback;
 let callback: SignedCallback;
 const staticCallback: OpenKeyDelegate = async () => callback;
@@ -26,10 +27,9 @@ mock.module("../lib/sdk.js", () => ({
   restoreProfileSessionNode: async () => ({ unavailable: "session_missing" as const }),
 }));
 mock.module("../auth/browser-auth.js", () => ({
-  startAuthFlow: async (did: string, options: { permissions?: PermissionEntry[] }) => acquire(did, options),
-  publicJwkForDelegation: (jwk: Record<string, unknown>) => {
-    const { d: _privateKey, ...publicKey } = jwk;
-    return publicKey;
+  startAuthFlow: async (did: string, options: { permissions?: PermissionEntry[]; reason?: string }) => {
+    openKeyReasons.push(options.reason);
+    return acquire(did, options);
   },
   validateDelegationCallbackPayload: () => null,
 }));
@@ -132,6 +132,7 @@ beforeEach(async () => {
   activationError = undefined;
   acquire = staticCallback;
   openKeyRequests.length = 0;
+  openKeyReasons.length = 0;
   openKey.refusals.length = 0;
   profileName = `portable-${++profileNumber}`;
   await ProfileManager.ensureConfigDir();
@@ -142,6 +143,8 @@ beforeEach(async () => {
     spaceName: "secrets", spaceId, authMethod: "openkey", posture: "owner-openkey",
     operatorType: "human", createdAt: new Date().toISOString(),
   });
+  // These tests cover grants from an already authenticated profile, not key-only bootstrap.
+  await ProfileManager.setSession(profileName, { delegationCid: "existing-session", spaceId });
 });
 
 afterAll(async () => {
@@ -160,7 +163,7 @@ async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryO
     ctx: { profile: profileName, host },
     profile: await ProfileManager.getProfile(profileName),
     node: node as never,
-    requested, expiryOption, reason: "Read named secret", yes: true, exactApproval,
+    requested, expiryOption, reason: "Read named secret", exactApproval,
     openKeyAcquisition: async () => callback,
   });
 }
@@ -256,7 +259,7 @@ describe("signed portable OpenKey grants", () => {
       profile: await ProfileManager.getProfile(profileName),
       node,
       requested: [...requested, otherSpace],
-      expiryOption: undefined, reason: "Read secret and application", yes: true,
+      expiryOption: undefined, reason: "Read secret and application",
       openKeyAcquisition: async () => callback,
     })).rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
@@ -365,6 +368,34 @@ describe("signed portable OpenKey grants", () => {
     });
   });
 
+  test("auth request --grant omits generated reason containing requested capability", async () => {
+    callback = { ...await signedProof({ raw: false }), permissions: [] };
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(["node", "tc", "--profile", profileName, "auth", "request", "--grant",
+      "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get"], { from: "node" });
+    expect(openKeyReasons).toEqual([undefined]);
+    expect(JSON.stringify(openKeyReasons)).not.toContain("vault/secrets/KEY");
+  });
+
+  test("auth grant omits generated reason containing requested capability", async () => {
+    callback = { ...await signedProof({ raw: false }), permissions: [] };
+    const requestPath = join(home, "auth-grant-request.json");
+    await writeFile(requestPath, JSON.stringify({
+      kind: "tinycloud.auth.request", version: 1, requestId: "reason-omission-test",
+      createdAt: new Date().toISOString(), profile: profileName, posture: "delegate-session",
+      operatorType: "agent", host, sessionDid: did,
+      requested: [{ service: "tinycloud.kv", space: spaceId, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+    }), "utf8");
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(["node", "tc", "--profile", profileName, "auth", "grant", requestPath, "--yes"], { from: "node" });
+    expect(openKeyReasons).toEqual([undefined]);
+    expect(JSON.stringify(openKeyReasons)).not.toContain("vault/secrets/KEY");
+  });
+
   test("auth request activation failure leaves no stored grant or history", async () => {
     callback = { ...await signedProof({ raw: false }), permissions: [requested[0]] };
     activationError = new Error("activation refused");
@@ -385,7 +416,7 @@ describe("signed portable OpenKey grants", () => {
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
       node,
-      requested: missing, expiryOption: undefined, reason: "Read named secret", yes: true, force: true,
+      requested: missing, expiryOption: undefined, reason: "Read named secret", force: true,
       anchorSpace: "secrets",
       openKeyAcquisition: openKey.delegate,
     });
@@ -410,7 +441,7 @@ describe("signed portable OpenKey grants", () => {
       profile: { ...await ProfileManager.getProfile(profileName), spaceName: "default", spaceId: undefined },
       node,
       requested: [{ service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry],
-      expiryOption: undefined, reason: "Decrypt named secret", yes: true, force: true,
+      expiryOption: undefined, reason: "Decrypt named secret", force: true,
       anchorSpace: "secrets",
       openKeyAcquisition: openKey.delegate,
     });
@@ -454,7 +485,6 @@ describe("signed portable OpenKey grants", () => {
       requested,
       expiryOption: "5m",
       reason: "Revoke delegation",
-      yes: true,
       persist: false,
       openKeyAcquisition: async (_did, options) => {
         received = options?.permissions ?? [];
@@ -475,23 +505,23 @@ describe("signed portable OpenKey grants", () => {
     expect(await readGrantHistory(profileName)).toEqual([]);
   });
 
-  test("requires --yes before invoking OpenKey in noninteractive mode", async () => {
+  test("one-use OpenKey authority goes straight to the OpenKey approval without a terminal and without --yes", async () => {
     let called = false;
-    await expect(ensureDelegationAuthority({
+    const authority = await ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
       node,
       requested,
-      expiryOption: undefined,
+      expiryOption: "5m",
       reason: "Revoke delegation",
-      yes: false,
       persist: false,
       openKeyAcquisition: async () => {
         called = true;
-        return await signedProof();
+        return await signedProof({ capabilitiesRead: true, lifetimeSeconds: 300 });
       },
-    })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
-    expect(called).toBe(false);
+    });
+    expect(called).toBe(true);
+    expect(authority).toBeDefined();
   });
 
   test("one-use OpenKey authority without an expiry is refused before any approval", async () => {
@@ -503,7 +533,6 @@ describe("signed portable OpenKey grants", () => {
       requested,
       expiryOption: undefined,
       reason: "Revoke delegation",
-      yes: true,
       persist: false,
       openKeyAcquisition: async () => {
         called = true;
@@ -529,7 +558,6 @@ describe("signed portable OpenKey grants", () => {
       requested: [permission],
       expiryOption: "5m",
       reason: `Revoke delegation ${cid}`,
-      yes: true,
       persist: false,
       openKeyAcquisition: async () => {
         acquisitionCalls++;
@@ -559,7 +587,7 @@ describe("signed portable OpenKey grants", () => {
         expect(await ensureDelegationAuthority({
           ctx: { profile: profileName, host }, profile: await ProfileManager.getProfile(profileName),
           node, requested: [permission], expiryOption: undefined, reason: "Revoke delegation",
-          yes: false, persist: false,
+          persist: false,
           openKeyAcquisition: async () => { called = true; return await signedProof(); },
         })).toBeUndefined();
         expect(called).toBe(false);
@@ -570,7 +598,7 @@ describe("signed portable OpenKey grants", () => {
     expect(activated).toEqual([]);
   });
 
-  test("requires --yes for local-key authority acquisition in noninteractive mode", async () => {
+  test("local-key command authority is signed without a terminal and without --yes", async () => {
     const profile = await ProfileManager.getProfile(profileName);
     await ProfileManager.setProfile(profileName, { ...profile, authMethod: "local" });
     const permission: PermissionEntry = {
@@ -579,18 +607,26 @@ describe("signed portable OpenKey grants", () => {
       path: "",
       actions: ["tinycloud.delegation/revoke"],
     };
+    const signed = { cid: "bafy-local-revoke-authority" };
+    const signedRequests: PermissionEntry[][] = [];
+    const originalGrant = node.grantRuntimePermissions;
+    node.grantRuntimePermissions = (async (permissions: PermissionEntry[]) => {
+      signedRequests.push(permissions);
+      return [signed];
+    }) as never;
     try {
-      await expect(ensureDelegationAuthority({
+      expect(await ensureDelegationAuthority({
         ctx: { profile: profileName, host },
         profile: await ProfileManager.getProfile(profileName),
         node,
         requested: [permission],
         expiryOption: undefined,
         reason: "Revoke delegation bafy-revocation-target",
-        yes: false,
         persist: false,
-      })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+      })).toBe(signed as never);
+      expect(signedRequests).toEqual([[permission]]);
     } finally {
+      node.grantRuntimePermissions = originalGrant;
       await ProfileManager.setProfile(profileName, profile);
     }
   });

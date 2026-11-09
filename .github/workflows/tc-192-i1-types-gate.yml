@@ -52,7 +52,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Verify pinned Bun runtime
         run: test "$(bun --version)" = "1.2.0"
@@ -105,7 +105,7 @@ jobs:
         run: |
           bun run --cwd packages/operations build
           bun run --cwd packages/replica build
-          bun run --cwd packages/operations test
+          bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun run --cwd packages/operations test
           bun run --cwd packages/operations check:generated
 
       - name: Save Rust/Cargo cache

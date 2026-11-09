@@ -36,8 +36,6 @@ export const APPS_AGENT_SPACE = "applications";
 export const APPS_AGENT_EXPIRY_DAYS = 7;
 /** ms-format lifetime accepted by `--expiry`. */
 export const APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
-/** Most apps one request may name. */
-export const APPS_AGENT_MAX_APPS = 5;
 
 const DAY_MS = 86_400_000;
 
@@ -255,9 +253,6 @@ export function resolveAppsAgentRequest(options: AppsAgentRequestOptions): AppsA
   for (const appId of appIds) {
     if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
   }
-  if (appIds.length > APPS_AGENT_MAX_APPS) {
-    throw usage(`--app can be repeated at most ${APPS_AGENT_MAX_APPS} times; for more apps, ask for read-only access to the whole space (leave --app off).`);
-  }
   if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) {
     throw usage("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
   }
@@ -305,7 +300,7 @@ export function matchAppsAgentRequest(
     if (slash < 1 || !isAppId(appId)) return undefined;
     if (!appIds.includes(appId)) appIds.push(appId);
   }
-  if (appIds.length > APPS_AGENT_MAX_APPS || (appIds.length > 0 && kvPaths.includes(""))) return undefined;
+  if ((appIds.length > 0 && kvPaths.includes(""))) return undefined;
   for (const mode of ["read", "write"] as const) {
     if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) continue;
     const expected = appsAgentPermissions(mode, appIds);
@@ -326,7 +321,7 @@ export interface GrantScope {
   readonly text: string;
   /** The entries described, exactly the resolved list that is signed. */
   readonly entries: readonly PermissionEntry[];
-  /** Entries outside what the apps-agent preset can ever grant; they need an explicit confirmation. */
+  /** Entries outside what the apps-agent preset can ever grant; listed first and marked `!`. */
   readonly extras: readonly PermissionEntry[];
 }
 
@@ -471,7 +466,7 @@ function withinPresetSet(entry: PermissionEntry, applicationsSpace: string): boo
  * is used only when the list is exactly a preset variant. When the list
  * touches an `applications` space and holds any entry the preset could never
  * grant (another service or space, delete, any schema entry outside the exact write variant, delegation, a write outside
- * a named app's write folders), those entries come first, marked `!`, and need a confirmation.
+ * a named app's write folders), those entries come first, marked `!`.
  */
 export function describeGrantScope(
   requested: readonly PermissionEntry[],
