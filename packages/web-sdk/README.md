@@ -79,20 +79,31 @@ restores a stored session without the manifest check.
 ### Runtime permission grants with OpenKey
 
 `requestPermissions()` (and the panel's "allow" buttons) sign each runtime grant's SIWE as a byte-exact message through
-`config.openkey.client.signMessage`, with the `keyId` of the connected OpenKey account. If the client is not connected (a
-restored session, or a sign-in through `authorizeTinyCloud`), the SDK connects it first with `client.connect()`, in the
-configured `mode`, and signs with the key that call returns. The SDK never sends `signMessage` without a `keyId`.
+`config.openkey.client.signMessage`, with the `keyId` of the connected OpenKey account. The SDK never sends `signMessage`
+without a `keyId`. If the client is not connected (a restored session, or a sign-in through `authorizeTinyCloud`), the SDK
+connects it first with `client.connect()`, in the configured `mode`:
 
-When no single key can be named, `requestPermissions()` rejects with `OpenKeySigningKeyError` before any sign request:
+- **`iframe` (and `redirect`)**: the grant connects and signs in one go, in one click.
+- **`popup` (the default)**: a browser lets a page open a popup only soon after the user's click, and the user needs longer
+  than that to sign in inside the connect popup, so a sign popup opened right after it would be blocked. The first click
+  therefore connects and rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, signing nothing. The client
+  is now connected: show your Allow button again, and the second click signs with the connected key in one popup. Once the
+  client is connected, every later grant is one click.
 
-| `code`                  | Meaning                                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `OPENKEY_KEY_MISSING`   | The client is not connected and has no `connect()`, or `connect()` answered without a `keyId`. |
-| `OPENKEY_KEY_AMBIGUOUS` | The connected key's address is not the signed-in account's, or it reports no address.          |
+When no single key can be named, or the client was just connected in popup mode, `requestPermissions()` rejects with
+`OpenKeySigningKeyError` before any sign request:
 
-Fix either by connecting the configured client as the signed-in account (`await openkey.connect()`), or sign runtime grants with
-`tc.setRuntimePermissionSigner(...)`. A user closing the connect dialog rejects with OpenKey's own error. A client without
-`lastAuth` is connected before every grant.
+| `code`                    | Meaning                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENKEY_CONNECTED_RETRY` | Popup mode only. The SDK connected the client. Nothing was signed; ask the user to click Allow again.                               |
+| `OPENKEY_KEY_MISSING`     | The client is not connected and has no `connect()`, or `connect()` answered without a `keyId`.                                      |
+| `OPENKEY_KEY_AMBIGUOUS`   | The connected key's address is not the signed-in account's, or it reports no address.                                               |
+
+`OPENKEY_KEY_MISSING` and `OPENKEY_KEY_AMBIGUOUS`: connect the configured client as the signed-in account
+(`await openkey.connect()`), or sign runtime grants with `tc.setRuntimePermissionSigner(...)`. Connecting it yourself in the
+click that starts sign-in avoids the extra click. A user closing the connect dialog rejects with OpenKey's own error. If
+the session ends or changes (sign-out, another account) while a dialog is open, the grant is cancelled and nothing is
+signed. The two-click flow needs a client that keeps the connect result in `lastAuth`, as `@openkey/sdk` does.
 
 ## Signed registry cache
 

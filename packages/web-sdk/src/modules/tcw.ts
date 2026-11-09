@@ -1800,18 +1800,25 @@ export class TinyCloudWeb {
     if (openkey === undefined || typeof client?.signMessage !== "function") return undefined;
     // TC-2281: OpenKey opens a sign dialog with no key when `signMessage` carries no keyId, and the dialog dead-ends on "Please connect
     // first to sign messages." So every request names the keyId of the connected account, and a client that is not connected is
-    // connected first. No key, or a key that is not the session's account, is an OpenKeySigningKeyError: never a request without a keyId.
-    const account = this._node?.address;
-    if (account === undefined) return undefined;
+    // connected first (popup mode: the browser would block a sign popup after the slow connect popup, so the grant ends with OPENKEY_CONNECTED_RETRY and the
+    // next click signs). No key, or a key that is not the session's account, is an OpenKeySigningKeyError: never a request without a keyId.
+    const node = this._node;
+    const account = node?.address;
+    if (node === undefined || account === undefined) return undefined;
+    const session = node.session;
     const signOuts = this.signOutCount;
     const mode = openkey.mode ?? "popup";
-    return async (siwe) => {
-      const keyId = await resolveOpenKeySigningKey(client, account, mode);
-      // The connect dialog can outlive the session it was opened for.
-      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 || this._node?.address !== account) {
+    // The connect and sign dialogs can outlive the session they were opened for: the same node, account and session object.
+    const assertCurrent = (): void => {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 || this._node !== node || node.address !== account || node.session !== session) {
         throw new Error("Permission request cancelled because the signed session changed or signed out.");
       }
-      return (await client.signMessage!({ message: siwe, keyId }, { mode })).signature;
+    };
+    return async (siwe) => {
+      const keyId = await resolveOpenKeySigningKey(client, account, mode, assertCurrent);
+      const { signature } = await client.signMessage!({ message: siwe, keyId }, { mode });
+      assertCurrent();
+      return signature;
     };
   }
 

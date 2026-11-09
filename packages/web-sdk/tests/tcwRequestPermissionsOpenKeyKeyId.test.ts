@@ -68,8 +68,8 @@ function stubNode(options: { signer?: boolean } = {}): StubNode {
   };
   node.grantRuntimePermissions = mock(async (entries: PermissionEntry[], grant?: RuntimePermissionGrantOptions) => {
     if (grant?.signMessage === undefined && node.signer === undefined) throw new Error("no signer");
-    granted.push(entries);
     signatures.push(await (grant?.signMessage ?? signerSign)(SIWE));
+    granted.push(entries);
     return [];
   });
   return { node, signerSign, signatures, granted };
@@ -107,7 +107,7 @@ function fakeClient(
   const connect = mock(async (...args: unknown[]) => {
     calls.push({ fn: "connect", args });
     const result = typeof options.connect === "function" ? await (options.connect as () => Promise<unknown>)() : (options.connect ?? CONNECTED);
-    if ("lastAuth" in client) client.lastAuth = result;
+    if ("lastAuth" in client) try { client.lastAuth = result; } catch { /* a read-only lastAuth, as in the throwing-getter tests */ }
     return result;
   });
   if (options.connect !== "absent") client.connect = connect;
@@ -180,41 +180,109 @@ describe("the OpenKey client is already connected: its keyId rides on the sign r
   });
 });
 
-describe("the OpenKey client is not connected: the SDK connects first, then signs with that key", () => {
-  test("restored page, lastAuth null: connect() runs before signMessage and its keyId is the one signed with", async () => {
+describe("popup mode, the OpenKey client is not connected: connect, then OPENKEY_CONNECTED_RETRY; the second click signs in one popup", () => {
+  // The user needs longer in the connect popup than the click's user activation lasts, so a sign popup right after it is blocked by the browser.
+  // Chromium proof: e2e/openkey-runtime-grant.pw.ts.
+  test("restored page, lastAuth null: the first Allow connects and rejects with OPENKEY_CONNECTED_RETRY, signing nothing; the second signs with the connected keyId", async () => {
     const stub = stubNode();
     const fake = fakeClient({ lastAuth: null });
     const tcw = restored(stub, { openkey: { client: fake.client } });
 
-    const result = await tcw.requestPermissions([ENTRY]);
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toMatchObject({ name: "OpenKeySigningKeyError", code: "OPENKEY_CONNECTED_RETRY" });
 
-    expect(result.approved).toBe(true);
-    expect(fake.calls.map((call) => call.fn)).toEqual(["connect", "signMessage"]);
+    expect(fake.calls.map((call) => call.fn)).toEqual(["connect"]);
     expect(fake.calls[0]!.args).toEqual([{ mode: "popup" }]);
+    expect(stub.signatures).toEqual([]);
+    expect(stub.granted).toEqual([]);
+
+    const second = await tcw.requestPermissions([ENTRY]);
+
+    expect(second.approved).toBe(true);
+    expect(fake.calls.map((call) => call.fn)).toEqual(["connect", "signMessage"]);
     expect(fake.calls[1]!.args).toEqual([{ message: SIWE, keyId: "key-1" }, { mode: "popup" }]);
     expect(stub.signatures).toEqual(["0xopenkey"]);
     expect(stub.granted).toEqual([[ENTRY]]);
   });
 
-  test("popup, iframe, redirect and the default mode: connect() and signMessage use the same mode, and every sign request has a keyId", async () => {
-    for (const mode of ["popup", "iframe", "redirect", undefined] as const) {
+  test("the explicit popup mode and the default mode alike; the error says what happened and what to do", async () => {
+    for (const mode of ["popup", undefined] as const) {
       const stub = stubNode();
       const fake = fakeClient({ lastAuth: null });
       const tcw = restored(stub, { openkey: { client: fake.client, ...(mode ? { mode } : {}) } });
 
-      await tcw.requestPermissions([ENTRY]);
+      const error = await tcw.requestPermissions([ENTRY]).then(() => undefined, (e: unknown) => e as Error & { code?: string });
 
-      const expected = { mode: mode ?? "popup" };
+      expect([mode, error?.name, error?.code]).toEqual([mode, "OpenKeySigningKeyError", "OPENKEY_CONNECTED_RETRY"]);
+      expect(error!.message).toBe("OpenKey is now connected; click Allow again to sign");
+      expect([mode, fake.signMessage.mock.calls.length]).toEqual([mode, 0]);
+    }
+  });
+
+  test("the REAL OpenKey class, never connected: connect() runs, no sign request; after connect set lastAuth, the next Allow signs with its keyId", async () => {
+    const client = new OpenKey({ host: "https://openkey.example", appName: "test" } as never);
+    expect((client as unknown as { lastAuth: unknown }).lastAuth).toBeNull();
+    const connect = spyOn(client, "connect").mockImplementation((async () => {
+      (client as unknown as { lastAuth: unknown }).lastAuth = CONNECTED;
+      return CONNECTED;
+    }) as never);
+    const sign = spyOn(client, "signMessage").mockImplementation((async () => ({ signature: "0xreal" })) as never);
+    const stub = stubNode();
+    const tcw = restored(stub, { openkey: { client } });
+
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toMatchObject({ code: "OPENKEY_CONNECTED_RETRY" });
+    expect(sign).not.toHaveBeenCalled();
+
+    await tcw.requestPermissions([ENTRY]);
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(sign).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
+  });
+
+  test("the user cancelling the connect dialog rejects with OpenKey's own error, not the retry error, and no sign request is made", async () => {
+    const cancelled = { code: "USER_CANCELLED", message: "closed" };
+    const stub = stubNode();
+    const fake = fakeClient({ lastAuth: null, connect: async () => { throw cancelled; } });
+    const tcw = restored(stub, { openkey: { client: fake.client } });
+
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toBe(cancelled);
+
+    expect(fake.signMessage).not.toHaveBeenCalled();
+    expect(stub.signatures).toEqual([]);
+  });
+
+  test("a lastAuth getter that throws reads as not connected: the client connects, never signs blind", async () => {
+    const stub = stubNode();
+    const fake = fakeClient({ lastAuth: "absent" });
+    Object.defineProperty(fake.client, "lastAuth", { get() { throw new Error("not readable"); }, enumerable: true });
+    const tcw = restored(stub, { openkey: { client: fake.client } });
+
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toMatchObject({ code: "OPENKEY_CONNECTED_RETRY" });
+
+    expect(fake.calls.map((call) => call.fn)).toEqual(["connect"]);
+    expect(fake.signMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("iframe and redirect mode, the OpenKey client is not connected: connect, then sign in one go", () => {
+  test("restored page, lastAuth null: connect() runs before signMessage, in the same mode, and its keyId is the one signed with", async () => {
+    for (const mode of ["iframe", "redirect"] as const) {
+      const stub = stubNode();
+      const fake = fakeClient({ lastAuth: null });
+      const tcw = restored(stub, { openkey: { client: fake.client, mode } });
+
+      const result = await tcw.requestPermissions([ENTRY]);
+
+      expect([mode, result.approved]).toEqual([mode, true]);
       expect([mode, fake.calls.map((call) => call.fn)]).toEqual([mode, ["connect", "signMessage"]]);
-      expect([mode, fake.calls[0]!.args[0]]).toEqual([mode, expected]);
-      expect([mode, fake.calls[1]!.args[1]]).toEqual([mode, expected]);
-      expect(signRequests(fake).every((request) => typeof request.keyId === "string" && request.keyId !== "")).toBe(true);
+      expect(fake.calls[0]!.args).toEqual([{ mode }]);
+      expect(fake.calls[1]!.args).toEqual([{ message: SIWE, keyId: "key-1" }, { mode }]);
+      expect(stub.signatures).toEqual(["0xopenkey"]);
+      expect(stub.granted).toEqual([[ENTRY]]);
     }
   });
 
   test("the REAL OpenKey class, never connected: connect() runs first and signMessage gets the keyId it returned", async () => {
     const client = new OpenKey({ host: "https://openkey.example", appName: "test" } as never);
-    expect((client as unknown as { lastAuth: unknown }).lastAuth).toBeNull();
     const order: string[] = [];
     const connect = spyOn(client, "connect").mockImplementation((async () => {
       order.push("connect");
@@ -226,19 +294,19 @@ describe("the OpenKey client is not connected: the SDK connects first, then sign
       return { signature: "0xreal" };
     }) as never);
     const stub = stubNode();
-    const tcw = restored(stub, { openkey: { client } });
+    const tcw = restored(stub, { openkey: { client, mode: "iframe" } });
 
     await tcw.requestPermissions([ENTRY]);
 
     expect(order).toEqual(["connect", "signMessage"]);
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(sign).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
+    expect(sign).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "iframe" });
   });
 
   test("a client that exposes no lastAuth (a shape this SDK does not know) is connected first too", async () => {
     const stub = stubNode();
     const fake = fakeClient({ lastAuth: "absent" });
-    const tcw = restored(stub, { openkey: { client: fake.client } });
+    const tcw = restored(stub, { openkey: { client: fake.client, mode: "iframe" } });
 
     await tcw.requestPermissions([ENTRY]);
 
@@ -249,7 +317,7 @@ describe("the OpenKey client is not connected: the SDK connects first, then sign
   test("a lastAuth that carries no keyId is not a connected key: connect() runs", async () => {
     const stub = stubNode();
     const fake = fakeClient({ lastAuth: { address: ALICE } });
-    const tcw = restored(stub, { openkey: { client: fake.client } });
+    const tcw = restored(stub, { openkey: { client: fake.client, mode: "iframe" } });
 
     await tcw.requestPermissions([ENTRY]);
 
@@ -260,7 +328,7 @@ describe("the OpenKey client is not connected: the SDK connects first, then sign
   test("the node's own signer does not bypass OpenKey: with an OpenKey client configured, the connected key signs", async () => {
     const stub = stubNode({ signer: true });
     const fake = fakeClient({ lastAuth: null });
-    const tcw = restored(stub, { openkey: { client: fake.client } });
+    const tcw = restored(stub, { openkey: { client: fake.client, mode: "iframe" } });
 
     await tcw.requestPermissions([ENTRY]);
 
@@ -269,16 +337,16 @@ describe("the OpenKey client is not connected: the SDK connects first, then sign
     expect(stub.signerSign).not.toHaveBeenCalled();
   });
 
-  test("the user cancelling the connect dialog rejects with OpenKey's own error and no sign request is made", async () => {
-    const cancelled = { code: "USER_CANCELLED", message: "closed" };
+  test("a lastAuth getter that throws reads as not connected: the client connects, then signs with the keyId it returned", async () => {
     const stub = stubNode();
-    const fake = fakeClient({ lastAuth: null, connect: async () => { throw cancelled; } });
-    const tcw = restored(stub, { openkey: { client: fake.client } });
+    const fake = fakeClient({ lastAuth: "absent" });
+    Object.defineProperty(fake.client, "lastAuth", { get() { throw new Error("not readable"); }, enumerable: true });
+    const tcw = restored(stub, { openkey: { client: fake.client, mode: "iframe" } });
 
-    await expect(tcw.requestPermissions([ENTRY])).rejects.toBe(cancelled);
+    await tcw.requestPermissions([ENTRY]);
 
-    expect(fake.signMessage).not.toHaveBeenCalled();
-    expect(stub.signatures).toEqual([]);
+    expect(fake.calls.map((call) => call.fn)).toEqual(["connect", "signMessage"]);
+    expect(signRequests(fake)).toEqual([{ message: SIWE, keyId: "key-1" }]);
   });
 
   test("a session established through OpenKey in this instance whose lastAuth reads null is connected first, not signed blind", async () => {
@@ -358,16 +426,37 @@ describe("a missing or ambiguous key is a typed OpenKeySigningKeyError and never
     expect(fake.signMessage).not.toHaveBeenCalled();
   });
 
-  test("the session ends while the connect dialog is open: the grant is cancelled and no sign request is made", async () => {
+  test("the session changes while the connect dialog is open (sign-out, another account, another node, another session): the grant is cancelled, nothing is signed, in every mode", async () => {
+    const changes: Record<string, (tcw: TinyCloudWebType, stub: StubNode) => void> = {
+      "sign-out": (tcw) => { (tcw as unknown as { signOutCount: number }).signOutCount += 1; },
+      "sign-out in flight": (tcw) => { (tcw as unknown as { signOutInFlight: number }).signOutInFlight += 1; },
+      "another account": (_tcw, stub) => { stub.node.address = BOB; },
+      "another node": (tcw, stub) => { (tcw as unknown as { _node: unknown })._node = { ...stub.node }; },
+      "another session object": (_tcw, stub) => { stub.node.session = { ...(stub.node.session as object) }; },
+    };
+    for (const mode of ["popup", "iframe"] as const) {
+      for (const [change, apply] of Object.entries(changes)) {
+        const stub = stubNode();
+        let tcw!: TinyCloudWebType;
+        const fake = fakeClient({ lastAuth: null, connect: async () => { apply(tcw, stub); return CONNECTED; } });
+        tcw = restored(stub, { openkey: { client: fake.client, mode } });
+
+        await expect(tcw.requestPermissions([ENTRY]).then(() => "granted")).rejects.toThrow("Permission request cancelled because the signed session changed or signed out.");
+
+        expect([mode, change, fake.signMessage.mock.calls.length, stub.signatures]).toEqual([mode, change, 0, []]);
+      }
+    }
+  });
+
+  test("the account changes while the sign dialog is open: the signature is not used", async () => {
     const stub = stubNode();
-    let tcw!: TinyCloudWebType;
-    const fake = fakeClient({ lastAuth: null, connect: async () => { (tcw as unknown as { signOutCount: number }).signOutCount += 1; return CONNECTED; } });
-    tcw = restored(stub, { openkey: { client: fake.client } });
+    const fake = fakeClient({ lastAuth: CONNECTED });
+    fake.signMessage.mockImplementation(async () => { stub.node.address = BOB; return { signature: "0xopenkey" }; });
+    const tcw = restored(stub, { openkey: { client: fake.client } });
 
-    await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow(/signed session changed or signed out|cancelled/i);
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow();
 
-    expect(fake.signMessage).not.toHaveBeenCalled();
-    expect(stub.signatures).toEqual([]);
+    expect(stub.granted).toEqual([]);
   });
 
   test("the error is an Error with the documented name, code and message", async () => {
