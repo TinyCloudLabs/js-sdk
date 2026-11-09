@@ -76,6 +76,49 @@ await tc.signIn();
 There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
+### Runtime permission grants with OpenKey
+
+`requestPermissions()` (and the panel's "allow" buttons) sign each runtime grant's SIWE as a byte-exact message through
+`config.openkey.client.signMessage`, with the `keyId` of the connected OpenKey account. The SDK never sends `signMessage`
+without a `keyId`. If the client is not connected (a restored session, or a sign-in through `authorizeTinyCloud`), the SDK
+connects it first with `client.connect()`, in the configured `mode`:
+
+- **`iframe` (and `redirect`)**: the grant connects and signs in one go, in one click.
+- **`popup` (the default)**: a browser lets a page open a popup only soon after the user's click, and the user needs longer
+  than that to sign in inside the connect popup, so a sign popup opened right after it would be blocked. The first click
+  therefore connects and rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, signing nothing. The client
+  is now connected: show your Allow button again, and the second click signs with the connected key in one popup. Once the
+  client is connected, every later grant is one click.
+
+When no single key can be named, or the client was just connected in popup mode, `requestPermissions()` rejects with
+`OpenKeySigningKeyError` before any sign request:
+
+| `code`                    | Meaning                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENKEY_CONNECTED_RETRY` | Popup mode only. The SDK connected the client. Nothing was signed; ask the user to click Allow again.                               |
+| `OPENKEY_KEY_MISSING`     | The client is not connected and has no `connect()`, or `connect()` answered without a `keyId`.                                      |
+| `OPENKEY_KEY_AMBIGUOUS`   | The connected key's address is not the signed-in account's, or it reports no address.                                               |
+
+`OPENKEY_KEY_MISSING` and `OPENKEY_KEY_AMBIGUOUS`: connect the configured client as the signed-in account
+(`await openkey.connect()`), or sign runtime grants with `tc.setRuntimePermissionSigner(...)`. Connecting it yourself in the
+click that starts sign-in avoids the extra click. A user closing the connect dialog rejects with `@openkey/sdk`'s own plain-object rejection `{ code: "USER_CANCELLED" }` (not an `Error`, and not an `OpenKeySigningKeyError`), so tell it apart from `OPENKEY_CONNECTED_RETRY`, which is an `OpenKeySigningKeyError`. A blocked popup rejects the same way with `{ code: "POPUP_BLOCKED" }`. If
+the session ends or changes (sign-out, another account) while a dialog is open, the grant is cancelled and nothing is
+signed. The two-click flow needs a client that keeps the connect result in `lastAuth`, as `@openkey/sdk` does.
+
+## Signed registry cache
+
+The browser client stores exact owner-signed v2 registry responses beside its identity pins, under `tinycloud.registryCache.v2:<ownerKey>`. Fetch time, invalidation revision and sequence metadata are outside the signed response. Every routing decision awaits a bounded, coalesced refresh and verifies cached responses again. Only a higher verified sequence replaces signed bytes; equal-sequence renewal requires identical canonical signed meaning, not identical HTTP formatting.
+
+Registry v2 and v1 fetches use `cache: "no-store"` to bypass the browser HTTP cache. The separate signed-response cache remains independently verified and subject to the outage fallback age limit below.
+
+Custom `RegistryCacheStore` adapters implement `get`, `getRevision`, atomic `update(ownerKey, (current, revision) => ...)`, and `delete(ownerKey, expectedRevision?, maximumSequence?)`. Forward both callback arguments and every deletion argument. The default persistent adapter uses the same per-entry Web Lock and storage key for updates and invalidation. Deletion atomically writes `{ ownerKey, revision: previousRevision + 1, invalidated: true }`, including when empty; `get` hides this metadata-only tombstone while `getRevision` preserves its history. Legacy live entries without revision are revision zero. Accepted writes retain the store's revision. Conditional deletion refuses without mutation if its revision differs or the current signed sequence exceeds the supplied maximum; malformed or overflowing revisions refuse.
+
+Revision capture before lookup, atomic commit checks and final fallback checks prevent older in-flight responses from repopulating invalidated settings. Positive persisted revisions remain known-owner evidence without a sequence adapter. The independent `tinycloud.registrySequences.v2` map keeps signed maxima under its storage-key Web Lock across owners. Storage absence uses memory; unreadable/corrupt state refuses. Browsers without Web Locks must supply transactional persistent cache and sequence adapters; a separate revision counter write is not atomic enough.
+
+Warm fallback requires a canonically reverified cache younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500, other statuses, invalid responses and invalid cached state refuse. Authoritative HTTP4xx responses and fresh signed records without the required route remove cached settings while retaining known-owner history. With no saved settings, cold HTTP5xx, transport errors and timeouts refuse live routing instead of selecting a configured/default host. Reachable genuine absence still permits onboarding. `onRegistryFallback(reason, code?)` receives `using_cached_settings` after selecting a verified cached route, once per owner/cache; without it the SDK logs a value-free warning. Non-replicating stored-session hydration is local-only; later live operations still refresh routing. Explicit replication retains preflight. Nodes performing online admission still require their registry connection.
+
+Details: TC-2481
+
 ## Optional local KV replication
 
 Install `@tinycloud/replica`, then load and register the optional browser plugin

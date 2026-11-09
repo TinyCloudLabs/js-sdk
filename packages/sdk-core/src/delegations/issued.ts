@@ -9,7 +9,8 @@
  * @packageDocumentation
  */
 
-import type { FetchFunction, FetchResponse } from "@tinycloud/sdk-services";
+import type { FetchFunction, FetchResponse, ResourceTransport } from "@tinycloud/sdk-services";
+import { routingFailure, wrapError } from "@tinycloud/sdk-services";
 import {
   DelegationErrorCodes,
   DelegationRevocationReceiptSchema,
@@ -34,6 +35,8 @@ export interface IssuedContext {
   host: string;
   fetchFn: FetchFunction;
   sessionInvocationSigner?: SessionInvocationSigner;
+  resourceTransport?: ResourceTransport;
+  spaceId?: string;
   /** Set once the node's `/info` lists the issued-query feature; owned by the manager. */
   state: { issuedQuerySupported: boolean };
 }
@@ -96,7 +99,7 @@ async function issuedHttpError(
  */
 async function nodeListsIssued(ctx: IssuedContext): Promise<Result<boolean>> {
   if (ctx.state.issuedQuerySupported) return { ok: true, data: true };
-  const response = await ctx.fetchFn(`${ctx.host}/info`);
+  const response = await ctx.fetchFn(`${ctx.host}/info`, { redirect: "error" });
   if (!response.ok) {
     return {
       ok: false,
@@ -112,6 +115,20 @@ async function nodeListsIssued(ctx: IssuedContext): Promise<Result<boolean>> {
   ctx.state.issuedQuerySupported =
     Array.isArray(info.features) && info.features.includes(ISSUED_QUERY_FEATURE);
   return { ok: true, data: ctx.state.issuedQuerySupported };
+}
+
+class IssuedQueryUnsupported extends Error {}
+
+function unsupportedIssuedQuery(): Result<never> {
+  return {
+    ok: false,
+    error: createError(
+      DelegationErrorCodes.UNSUPPORTED_OPERATION,
+      "This node doesn't support listing issued delegations yet",
+      undefined,
+      { feature: ISSUED_QUERY_FEATURE },
+    ),
+  };
 }
 
 /**
@@ -135,27 +152,31 @@ export async function queryIssued(
     };
   }
   try {
-    const supported = await nodeListsIssued(ctx);
-    if (!supported.ok) return supported;
-    if (!supported.data) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.UNSUPPORTED_OPERATION,
-          "This node doesn't support listing issued delegations yet",
-          undefined,
-          { feature: ISSUED_QUERY_FEATURE },
-        ),
-      };
+    const send = async (fetchFn: FetchFunction, host: string, nodeAudience?: string) => {
+      const authorization = await signer.sign({
+        [`${signer.did()}/delegation`]: { [DelegationAction.LIST]: [{}] },
+      }, nodeAudience);
+      return fetchFn(`${host}/delegation/query`, {
+        method: "POST",
+        headers: { Authorization: authorization, "content-type": "application/json" },
+        body: JSON.stringify(options),
+        redirect: "error",
+      });
+    };
+    let response: FetchResponse;
+    if (ctx.resourceTransport) {
+      response = await ctx.resourceTransport([{ resource: ctx.spaceId ?? "", access: "read" }], (target) => {
+        // This is the /info body already checked against the destination's key.
+        const features = target.nodeInfo.features;
+        if (!Array.isArray(features) || !features.includes(ISSUED_QUERY_FEATURE)) throw new IssuedQueryUnsupported();
+        return send(target.fetch, target.url, target.nodeDid);
+      }, { nodeLocal: true });
+    } else {
+      const supported = await nodeListsIssued(ctx);
+      if (!supported.ok) return supported;
+      if (!supported.data) return unsupportedIssuedQuery();
+      response = await send(ctx.fetchFn, ctx.host);
     }
-    const authorization = await signer.sign({
-      [`${signer.did()}/delegation`]: { [DelegationAction.LIST]: [{}] },
-    });
-    const response = await ctx.fetchFn(`${ctx.host}/delegation/query`, {
-      method: "POST",
-      headers: { Authorization: authorization, "content-type": "application/json" },
-      body: JSON.stringify(options),
-    });
     if (!response.ok) {
       return {
         ok: false,
@@ -174,6 +195,8 @@ export async function queryIssued(
     }
     return { ok: true, data: parsed.data };
   } catch (error) {
+    if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
+    if (error instanceof IssuedQueryUnsupported) return unsupportedIssuedQuery();
     return {
       ok: false,
       error: createError(
@@ -269,13 +292,19 @@ export async function revokeIssued(
     };
   }
   try {
-    const authorization = await signer.sign({
-      [`urn:cid:${cid}`]: { [DelegationAction.REVOKE]: [{}] },
-    });
-    const response = await ctx.fetchFn(`${ctx.host}/revoke`, {
-      method: "POST",
-      headers: { Authorization: authorization },
-    });
+    const send = async (fetchFn: FetchFunction, host: string, nodeAudience?: string) => {
+      const authorization = await signer.sign({
+        [`urn:cid:${cid}`]: { [DelegationAction.REVOKE]: [{}] },
+      }, nodeAudience);
+      return fetchFn(`${host}/revoke`, {
+        method: "POST",
+        headers: { Authorization: authorization },
+        redirect: "error",
+      });
+    };
+    const response = ctx.resourceTransport
+      ? await ctx.resourceTransport([{ resource: ctx.spaceId ?? "", access: "read" }], (target) => send(target.fetch, target.url, target.nodeDid), { nodeLocal: true })
+      : await send(ctx.fetchFn, ctx.host);
     if (!response.ok) {
       if (response.status === 404) {
         return {
@@ -302,6 +331,7 @@ export async function revokeIssued(
     }
     return { ok: true, data: parsed.data };
   } catch (error) {
+    if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
     return {
       ok: false,
       error: createError(

@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type {
   FetchFunction,
+  ResourceTransport,
   InvokeAnyFunction,
   InvokeFunction,
   ServiceSession,
@@ -558,7 +559,7 @@ export interface SessionInvocationSigner {
    * Signs one short-lived invocation carrying exactly `attenuation` and no
    * proof; returns the `Authorization` header value.
    */
-  sign(attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>): Promise<string>;
+  sign(attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>, nodeAudience?: string): Promise<string>;
 }
 
 /**
@@ -589,6 +590,8 @@ export const DelegationManagerConfigSchema = z.object({
   signOwnerRevocation: z.custom<(cid: string) => Promise<string>>().optional(),
   /** Optional signer for proofless invocations by the session's own did:key (issued-delegation list and revoke) */
   sessionInvocationSigner: z.custom<SessionInvocationSigner>().optional(),
+  /** Resource-specific transport supplied by the owning platform graph. */
+  resourceTransport: z.custom<ResourceTransport>().optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",

@@ -15,7 +15,10 @@ import type {
   InvokeFunction,
   ServiceSession,
   ServiceHeaders,
+  ResourceTransport,
+  ResourceTransportTarget,
 } from "@tinycloud/sdk-services";
+import { routingFailure, wrapError } from "@tinycloud/sdk-services";
 import {
   Result,
   DelegationErrorCodes,
@@ -88,9 +91,12 @@ export class DelegationManager {
   private accountSpaceId?: string;
   private sessionInvocationSigner?: SessionInvocationSigner;
   private issuedState = { issuedQuerySupported: false };
+  private readonly resourceTransport?: ResourceTransport;
 
   /**
    * Creates a new DelegationManager instance.
+   * Standalone calls send to the host you pass and do not consult the registry.
+   * Use Node/Web objects for registry routing.
    *
    * @param config - Configuration including hosts, session, and invoke function
    */
@@ -103,6 +109,22 @@ export class DelegationManager {
     this.sessionInvocationSigner = config.sessionInvocationSigner;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.accountSpaceId = config.accountSpaceId;
+    this.resourceTransport = config.resourceTransport;
+  }
+
+  private async invocationHeaders(
+    entries: Parameters<InvokeAnyFunction>[1],
+    target?: ResourceTransportTarget,
+  ): Promise<ServiceHeaders> {
+    const headers = this.invokeAny!(this.session, entries);
+    if (!target) return headers;
+    const fields = Array.isArray(headers) ? headers : Object.entries(headers);
+    const authorization = fields.find(([name]) => name.toLowerCase() === "authorization");
+    if (!authorization) throw new Error("Delegation invocation has no authorization");
+    const signed = await target.bindAudience(authorization[1]);
+    return Array.isArray(headers)
+      ? headers.map(([name, value]): [string, string] => [name, name.toLowerCase() === "authorization" ? signed : value])
+      : { ...headers, [authorization[0]]: signed };
   }
 
   /**
@@ -135,6 +157,7 @@ export class DelegationManager {
       method: "POST",
       headers,
       body,
+      redirect: "error",
     });
   }
 
@@ -190,29 +213,36 @@ export class DelegationManager {
         };
       }
 
-      let headers: ServiceHeaders;
-      if (ownerSigner) {
-        headers = { Authorization: await ownerSigner(cid) };
-      } else {
-        const entry = {
-          resource: `urn:cid:${cid}`,
-          ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
-          service: "delegation",
-          path: "",
-          action: DelegationAction.REVOKE,
-        } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
-        if (options?.authorityCid !== undefined) {
-          Object.defineProperty(entry, "revokeAuthorityCid", {
-            value: options.authorityCid,
-            enumerable: false,
-          });
+      const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+        let headers: ServiceHeaders;
+        if (ownerSigner) {
+          // Owner CACAO is already signed for its protocol role; retain its bytes.
+          headers = { Authorization: await ownerSigner(cid) };
+        } else {
+          const entry = {
+            resource: `urn:cid:${cid}`,
+            ...(options?.targetSpaceId === undefined ? {} : { spaceId: options.targetSpaceId }),
+            service: "delegation",
+            path: "",
+            action: DelegationAction.REVOKE,
+          } as Parameters<InvokeAnyFunction>[1][number] & { revokeAuthorityCid?: string };
+          if (options?.authorityCid !== undefined) {
+            Object.defineProperty(entry, "revokeAuthorityCid", {
+              value: options.authorityCid,
+              enumerable: false,
+            });
+          }
+          headers = await this.invocationHeaders([entry], target);
         }
-        headers = this.invokeAny!(this.session, [entry]);
-      }
-      const response = await this.fetchFn(`${this.host}/revoke`, {
-        method: "POST",
-        headers,
-      });
+        return fetchFn(`${host}/revoke`, { method: "POST", headers, redirect: "error" });
+      };
+      const response = this.resourceTransport
+        ? await this.resourceTransport(
+          [{ resource: options?.targetSpaceId ?? this.session.spaceId, access: options?.targetSpaceId ? "write" : "read" }],
+          (target) => send(target.fetch, target.url, target),
+          { nodeLocal: options?.targetSpaceId === undefined },
+        )
+        : await send(this.fetchFn, this.host);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -252,6 +282,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -295,17 +326,23 @@ export class DelegationManager {
     }
 
     try {
-      const headers = this.invokeAny(this.session, [{
-        resource: `urn:cid:${cid}`,
-        service: "delegation",
-        path: "",
-        action: DelegationAction.STATUS,
-      }]);
-      const response = await this.fetchFn(`${this.host}/delegation/status`, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ cid }),
-      });
+      const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+        const headers = await this.invocationHeaders([{
+          resource: `urn:cid:${cid}`,
+          service: "delegation",
+          path: "",
+          action: DelegationAction.STATUS,
+        }], target);
+        return fetchFn(`${host}/delegation/status`, {
+          method: "POST",
+          headers: Array.isArray(headers) ? [...headers, ["Content-Type", "application/json"]] : { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ cid }),
+          redirect: "error",
+        });
+      };
+      const response = this.resourceTransport
+        ? await this.resourceTransport([{ resource: this.session.spaceId, access: "read" }], (target) => send(target.fetch, target.url, target), { nodeLocal: true })
+        : await send(this.fetchFn, this.host);
       if (!response.ok && response.status !== 404) {
         const errorText = await response.text();
         return {
@@ -337,6 +374,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -403,19 +441,25 @@ export class DelegationManager {
       // session's own space (a plain OpenKey login grants only that one).
       let response: FetchResponse | undefined;
       for (const spaceId of new Set(scope.spaces ?? [accountSpaceId, this.session.spaceId])) {
-        // A signing failure is not a permission refusal: it propagates as a typed error below.
-        const headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
-          spaceId,
-          service: "delegation",
-          path: "",
-          action: DelegationAction.LIST,
-        }])).entries());
-        headers["content-type"] = "application/json";
-        response = await this.fetchFn(`${this.host}/delegation/query`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(validated.data),
-        });
+        const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
+          // Resolve this scope before creating its node-audience-bound invocation.
+          const headers = Object.fromEntries(new Headers(await this.invocationHeaders([{
+            spaceId,
+            service: "delegation",
+            path: "",
+            action: DelegationAction.LIST,
+          }], target)).entries());
+          headers["content-type"] = "application/json";
+          return fetchFn(`${host}/delegation/query`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(validated.data),
+            redirect: "error",
+          });
+        };
+        response = this.resourceTransport
+          ? await this.resourceTransport([{ resource: spaceId, access: "read" }], (target) => send(target.fetch, target.url, target), { nodeLocal: true })
+          : await send(this.fetchFn, this.host);
         if (response.status !== 403) break;
       }
       if (!response || response.status === 403) {
@@ -453,6 +497,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       return {
         ok: false,
         error: createError(
@@ -471,6 +516,8 @@ export class DelegationManager {
       fetchFn: this.fetchFn,
       sessionInvocationSigner: this.sessionInvocationSigner,
       state: this.issuedState,
+      resourceTransport: this.resourceTransport,
+      spaceId: this.session.spaceId,
     };
   }
 
@@ -616,6 +663,7 @@ export class DelegationManager {
 
       return { ok: true, data: chain };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -709,6 +757,7 @@ export class DelegationManager {
       if (!body2.ok) return body2;
       return { ok: true, data: body2.data.allowed };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,

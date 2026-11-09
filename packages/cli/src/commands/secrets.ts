@@ -355,7 +355,6 @@ async function runSecretOperation<T>(params: {
       node: params.node,
       requested,
       expiryOption: undefined,
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -528,7 +527,6 @@ async function canonicalSecretGet(
       node,
       requested: first.missing as PermissionEntry[],
       expiryOption: undefined,
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE,
       openKeyAcquisition: params.openKeyAcquisition,
@@ -596,6 +594,9 @@ function throwCanonicalSecretGetError(
           ExitCode.AUTH_REQUIRED,
           { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
         );
+      }
+      if (result.error.code === "NODE_NOT_RESPONDING" || result.error.code === "DECRYPTION_DEPENDENCY_UNAVAILABLE") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.NETWORK_ERROR);
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);

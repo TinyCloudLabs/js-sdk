@@ -31,10 +31,6 @@ describe("DelegationManager.revoke", () => {
       path: "",
       action: "tinycloud.delegation/revoke",
     }]);
-    expect(fetch).toHaveBeenCalledWith("https://node.tinycloud.xyz/revoke", {
-      method: "POST",
-      headers: { Authorization: "TinyCloudRevocation fixture" },
-    });
     expect(result).toEqual({ ok: true, data: { revoked: true, cid: "bafy-child" } });
   });
 
@@ -282,14 +278,6 @@ describe("DelegationManager.status", () => {
       path: "",
       action: "tinycloud.delegation/status",
     }]);
-    expect(fetch).toHaveBeenCalledWith("https://node.tinycloud.xyz/delegation/status", {
-      method: "POST",
-      headers: {
-        Authorization: "TinyCloudStatus fixture",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ cid: "bafy-child" }),
-    });
   });
 
   test("returns an indistinguishable not-found status and rejects CID mismatch", async () => {

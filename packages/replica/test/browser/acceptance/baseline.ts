@@ -13,11 +13,11 @@ const need = () => {
 };
 
 const api = {
-  async boot(options: { host: string; walletKey: string }): Promise<void> {
+  async boot(options: { host: string; registryUrl: string; walletKey: string }): Promise<void> {
     tcw = await TinyCloudWeb.create({
       provider: testWallet(options.walletKey),
       tinycloudHosts: [options.host],
-      tinycloudRegistryUrl: null,
+      tinycloudRegistryUrl: options.registryUrl,
       autoDiscoverLocalNode: false,
       autoCreateSpace: true,
       persistSession: true,

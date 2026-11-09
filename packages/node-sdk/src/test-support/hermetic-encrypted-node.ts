@@ -7,6 +7,7 @@ import { Cbor } from "ox";
 import { SiweMessage } from "siwe";
 import {
   canonicalHashHex,
+  REGISTRY_NOT_FOUND_BODY,
   canonicalizeEncryptionJson,
   canonicalSignedResponse,
   extractRecapAttenuations,
@@ -138,11 +139,9 @@ export function hermeticAuthorizationSha256(authorization: string): string {
 
 class LoopbackEncryptedNode {
   readonly wasm = new NodeWasmBindings();
-  readonly nodePrivateKey = new Uint8Array(32).fill(17);
-  readonly nodeId = didKeyFromPublicKey(ed25519.getPublicKey(this.nodePrivateKey));
-  readonly networkKeyPair = this.wasm.vault_x25519_from_seed(
-    new Uint8Array(32).fill(23),
-  );
+  readonly nodePrivateKey: Uint8Array;
+  readonly nodeId: string;
+  readonly networkKeyPair: { publicKey: Uint8Array; privateKey: Uint8Array };
   readonly activations = new Set<string>();
   readonly rejectedActivationCids = new Set<string>();
   readonly observed = {
@@ -188,7 +187,12 @@ class LoopbackEncryptedNode {
   /** Compact grants activated through `/delegate`; they authorize their audience's invocations. */
   private readonly activatedGrants: CompactPayload[] = [];
 
-  constructor() {
+  constructor(input: { nodePrivateKey?: Uint8Array; networkSeed?: Uint8Array } = {}) {
+    this.nodePrivateKey = input.nodePrivateKey ?? new Uint8Array(32).fill(17);
+    this.nodeId = didKeyFromPublicKey(ed25519.getPublicKey(this.nodePrivateKey));
+    this.networkKeyPair = this.wasm.vault_x25519_from_seed(
+      input.networkSeed ?? new Uint8Array(32).fill(23),
+    );
     this.server = createServer(async (incoming, outgoing) => {
       try {
         const chunks: Buffer[] = [];
@@ -568,6 +572,9 @@ class LoopbackEncryptedNode {
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204 });
+    if (request.method === "GET" && /^\/v[12]\/locations\//.test(url.pathname)) {
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "content-type": "application/json" } });
+    }
     if (url.pathname === "/healthz" && request.method === "GET") return new Response("ok");
     if (url.pathname === "/info" && request.method === "GET") {
       return this.json({
@@ -576,6 +583,9 @@ class LoopbackEncryptedNode {
         features: [],
         nodeId: this.nodeId,
       });
+    }
+    if (url.pathname === "/.well-known/tinycloud/node-keys" && request.method === "GET") {
+      return this.json({ nodeDid: this.nodeId });
     }
     if (url.pathname.startsWith("/peer/generate/") && request.method === "GET") {
       return new Response(this.nodeId, {
@@ -966,7 +976,7 @@ function makeNode(
   const signer = new PrivateKeySigner(privateKey, OWNER_CHAIN_ID);
   return {
     signer,
-    node: new TinyCloudNode({ host, signer, wasmBindings, signStrategy }),
+    node: new TinyCloudNode({ host, tinycloudRegistryUrl: host, signer, wasmBindings, signStrategy }),
   };
 }
 
@@ -1121,14 +1131,26 @@ export async function createHermeticEncryptedNode(
     secretPayloadValue?: string;
     secretPresent?: boolean;
     ownerConnectorCapabilities?: boolean;
+    ownerPrivateKey?: string;
+    delegatePrivateKey?: string;
+    nodePrivateKey?: Uint8Array;
+    networkSeed?: Uint8Array;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
-  const transport = new LoopbackEncryptedNode();
+  const transport = new LoopbackEncryptedNode({
+    nodePrivateKey: options.nodePrivateKey,
+    networkSeed: options.networkSeed,
+  });
   await transport.ready();
-  const ownerRuntime = makeNode(transport.host, OWNER_PRIVATE_KEY, transport.wasm);
+  const ownerPrivateKey = options.ownerPrivateKey ?? OWNER_PRIVATE_KEY;
+  const ownerRuntime = makeNode(
+    transport.host,
+    ownerPrivateKey,
+    transport.wasm,
+  );
   const delegateRuntime = makeNode(
     transport.host,
-    DELEGATE_PRIVATE_KEY,
+    options.delegatePrivateKey ?? DELEGATE_PRIVATE_KEY,
     transport.wasm,
     options.delegateSignStrategy,
   );
@@ -1293,7 +1315,7 @@ export async function createHermeticEncryptedNode(
       signature: ownerSession.signature,
       tinycloudHosts: [transport.host],
     },
-    ownerPrivateKey: OWNER_PRIVATE_KEY,
+    ownerPrivateKey,
     ownerDid,
     accountSpaceId,
     applicationsSpaceId,
@@ -1325,7 +1347,7 @@ export async function createHermeticEncryptedNode(
       envelope: encrypted.data,
     }),
     createRestoredDelegate: () =>
-      new TinyCloudNode({ host: transport.host, wasmBindings: transport.wasm }),
+      new TinyCloudNode({ host: transport.host, tinycloudRegistryUrl: transport.host, wasmBindings: transport.wasm }),
     async createRotatedRestorableSession() {
       const rotatedRuntime = makeNode(
         transport.host,

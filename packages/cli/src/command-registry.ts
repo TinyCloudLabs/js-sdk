@@ -1,6 +1,7 @@
 import { Command } from "commander";
 
 import { registerAccountCommand } from "./commands/account.js";
+import { registerBugReportCommand } from "./commands/bug-report.js";
 import { registerAuthCommand } from "./commands/auth.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerCourierCommand } from "./commands/courier.js";
@@ -20,6 +21,7 @@ import { registerNodeCommand } from "./commands/node.js";
 import { registerOnboardCommand } from "./commands/onboard.js";
 import { registerProfileCommand } from "./commands/profile.js";
 import { registerReplicaCommand } from "./commands/replica.js";
+import { registerRegistryCommand } from "./commands/registry.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerShareCommand } from "./commands/share.js";
 import { registerSpaceCommand } from "./commands/space.js";
@@ -45,6 +47,7 @@ export function registerTinyCloudCommands(program: Command): void {
   registerShareCommand(program);
   registerNodeCommand(program);
   registerProfileCommand(program);
+  registerRegistryCommand(program);
   registerCompletionCommand(program);
   registerVaultCommand(program);
   registerSecretsCommand(program);
@@ -59,4 +62,5 @@ export function registerTinyCloudCommands(program: Command): void {
   registerUpgradeCommand(program);
   registerStatusCommand(program);
   registerAccountCommand(program);
+  registerBugReportCommand(program);
 }

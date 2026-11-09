@@ -1,6 +1,21 @@
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
+import {
+  createResourceRoutingFetch,
+  routeResourceRequest,
+  routingResourceOf,
+  verifyResourceDestination,
+  NodeNotRespondingError,
+  NodeIdentityMismatchError,
+  PartialNodeWriteError,
+  ResourceNotRoutedError,
+  routingFailure,
+  type ResourceDestination,
+  type ResourceAccess,
+  type ResourceTransport,
+  type FetchResponse,
+} from "@tinycloud/sdk-services";
 import { generateNonce, SiweMessage } from "siwe";
 /**
  * TinyCloudNode - High-level API for Node.js users.
@@ -158,9 +173,16 @@ import {
   canonicalizeAddress,
   pkhDid,
   parseSpaceUri,
-  resolveTinyCloudHosts,
-  resolveFailClosedTinyCloudHosts,
+  resolveRegistryResource,
+  warnRegistryDefaultNode,
+  NodeNotFoundError,
+  exactHttpOrigin,
   createInMemoryRegistrySequenceStore,
+  createInMemoryRegistryCacheStore,
+  refreshOwnerRegistry,
+  registryOwnerKeyV2,
+  type RegistryCacheStore,
+  type RegistryFallbackReason,
   publishLocationRecord,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
@@ -864,32 +886,15 @@ export interface TinyCloudNodeConfig {
   signer?: ISigner;
   /** Strategy for root signature requests. Defaults to auto-sign for local keys. */
   signStrategy?: SignStrategy;
-  /** Explicit TinyCloud server URL. When omitted, signIn resolves the user's host. */
+  /** Host hint for genuine no-entry onboarding; a signed registry entry takes precedence. */
   host?: string;
   /** Build a developer request log (sanitized, in-memory, bounded). Off by default. */
   requestLog?: boolean;
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /**
-   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
-   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
-   * deprecated and will be removed in a future major release.
-   */
+  /** Host hints for genuine no-entry onboarding. Never used for registered or unavailable owners. */
   tinycloudFallbackHosts?: string[] | null;
-  /**
-   * How sign-in uses the location registry when no `host` is configured.
-   * Default `"legacy-fallback"` (deprecated): a registry miss or failure
-   * silently uses `tinycloudFallbackHosts`, with a one-time warning.
-   * `"fail-closed"`: routing acts on the registry verdict for the signer
-   * address, an unavailable registry is `RegistryUnavailableError` (never a
-   * new account), record hosts are used only if HTTPS or loopback, and
-   * automatic space creation (sign-in, account bootstrap, owned-space
-   * hosting, the public space the vault creates) is refused on a host the
-   * owner's registry record does not list (`NodeRegistryEntryExistsError`)
-   * or when the registry gives no verdict. An explicit `hostOwnedSpace()`
-   * call is not guarded. `newUserHost` governs routing only: a pinned host
-   * may still create spaces for an unregistered owner.
-   */
+  /** Registry routing is always v2-first and fail-closed. */
   registryPolicy?: RegistryPolicy;
   /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
   newUserHost?: string | null;
@@ -897,9 +902,13 @@ export interface TinyCloudNodeConfig {
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
   registrySequenceStore?: RegistrySequenceStore;
-  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
+  /** Exact signed-v2 responses; pass a persistent adapter to survive restarts. */
+  registryCacheStore?: RegistryCacheStore;
+  /** Value-free warning after an actual cached-settings or default-node fallback. */
+  onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
+  /** Retry or abort when registry resolution fails; `use-host` is accepted only for genuine no-entry onboarding. */
   onNodeNotFound?: OnNodeNotFound;
-  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
+  /** Probe configured local nodes only for genuine no-entry onboarding. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
@@ -1337,6 +1346,8 @@ export class TinyCloudNode {
 
   private config: TinyCloudNodeConfig;
   private readonly explicitHost?: string;
+  private readonly trustedNoEntryHosts: readonly string[];
+  private readonly registryRefreshOwners = new Set<string>();
   private signer: ISigner | null = null;
   private auth: NodeUserAuthorization | null = null;
   private readonly consumedOpenKeyPendings = new WeakSet<PreparedOpenKeyAuthorization>();
@@ -1786,7 +1797,11 @@ export class TinyCloudNode {
       // A session saved but never registered on this node is refused: it registers once.
       activate: (signal) => {
         assertCurrent();
-        return activateSessionWithHost(host, session.delegationHeader, AbortSignal.any([signal, graph.signal]));
+        const activationSignal = AbortSignal.any([signal, graph.signal]);
+        if (primary && primary.delegationCid === session.delegationCid) {
+          return this.activateSignedSession(primary, primary.siwe, activationSignal);
+        }
+        return this.activateResourceSession(session.delegationHeader, [spaceId], activationSignal);
       },
     });
     // A session replaced while the read was in flight owns neither answer.
@@ -1943,14 +1958,17 @@ export class TinyCloudNode {
     // loader is registered synchronously; disabled clients do not load replica policy.
     if (config.replication?.enabled) getNodeReplicationLoaders().validateConfig(config.replication);
     this.explicitHost = config.host;
+    this.trustedNoEntryHosts = config.host ? [config.host] : [];
 
     // Store config with default host
     this.config = {
       ...config,
       host: config.host ?? DEFAULT_HOST,
+      registryPolicy: "fail-closed",
       // One store for every authorization this client creates.
       registrySequenceStore:
         config.registrySequenceStore ?? createInMemoryRegistrySequenceStore(),
+      registryCacheStore: config.registryCacheStore ?? createInMemoryRegistryCacheStore(),
     };
     if (this.config.replication?.enabled) {
       const runtime = getNodeReplicationLoaders()
@@ -2073,6 +2091,7 @@ export class TinyCloudNode {
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
       fetch: receiveOnlyGraph.fetch,
+      resourceTransport: this.createResourceTransport(receiveOnlyGraph),
       assertActive: () => receiveOnlyGraph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
@@ -2177,20 +2196,204 @@ export class TinyCloudNode {
     return this._requestLog === undefined ? undefined : readOnlyRequestLog(this._requestLog);
   }
 
-  private createServiceGraphLifetime(): ServiceGraphLifetime {
+  private throwRegistryRefusal(status: number, text: string): void {
+    if ((status !== 403 && status !== 503) ||
+      (!text.startsWith("registry_unavailable:") && !text.startsWith("registry_hosting_denied:"))) return;
+    const code = status === 503 ? "registry_unavailable" : "node_registry_entry_exists";
+    throw Object.assign(new Error(status === 503 ? "The location registry is unavailable for this resource." : "The registry does not authorize this node for the requested resource."), { code, meta: { status } });
+  }
+
+  private createServiceGraphLifetime(session?: ServiceSession): ServiceGraphLifetime {
+    const routedFetch = createResourceRoutingFetch(
+      async (url, init) => {
+        try {
+          const response = await globalThis.fetch(url, init);
+          if (response.status === 403 || response.status === 503) {
+            this.throwRegistryRefusal(response.status, await response.clone().text());
+          }
+          return response;
+        } catch (error) {
+          if (routingFailure(error)) throw error;
+          if (new URL(url).pathname.startsWith("/encryption/") && !init?.signal?.aborted) {
+            throw new NodeNotRespondingError([new URL(url).origin], error);
+          }
+          throw error;
+        }
+      },
+      {
+        resolveResource: (resource, access) => this.routingDestinations(resource, access),
+        bindAudience: (authorization, nodeDid) => this.bindRoutedAudience(authorization, nodeDid, session),
+        verifyDestination: (target) => verifyResourceDestination(target, globalThis.fetch.bind(globalThis)),
+      },
+    );
     return new ServiceGraphLifetime(
       this.invokeWithRuntimePermissions,
       this.invokeAnyWithRuntimePermissions,
-      // Resolve fetch at request time. This keeps the graph-owned lifetime
-      // signal while preserving the SDK's existing injectable global fetch
-      // behavior (including adapters that install it after construction).
-      (url, init) => globalThis.fetch(url, init),
+      routedFetch,
       (context) => {
         this.storageFull.observe(context);
         if (this._requestLog) observeReplicaReads(context, this._requestLog);
       },
       this._requestLog,
     );
+  }
+
+  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+    const owner = resource.startsWith("urn:tinycloud:encryption:")
+      ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
+        (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
+    if (!owner) throw new ResourceNotRoutedError(resource);
+    // Pure restoration stays offline; the first live route also prefetches the
+    // verified wallet owner when the requested resource belongs to someone else.
+    const session = this.currentTinyCloudSession();
+    if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
+    // Auth receives constructor-trusted hosts separately and may accept an
+    // explicit code-supplied sign-in override, never a restored host list.
+    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
+    const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
+    const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
+    const resolved = await resolveRegistryResource(subject, resource, access, {
+      registryUrl: this.config.tinycloudRegistryUrl,
+      registryChainId: this.config.registryChainId,
+      sequenceStore: this.config.registrySequenceStore,
+      cacheStore: this.config.registryCacheStore,
+      onRegistryFallback: this.config.onRegistryFallback,
+    });
+    if (resolved.verdict.status === "unregistered") {
+      // Restored config.host is a hint, never authority for a new registration.
+      const hint = candidates[0];
+      const host = hint ?? this.config.newUserHost ??
+        (this.config.tinycloudFallbackHosts === undefined ? DEFAULT_HOST : this.config.tinycloudFallbackHosts?.[0]);
+      if (!host || (!hint && this.config.newUserHost === null)) throw new NodeNotFoundError(subject, resolved.verdict);
+      const url = exactHttpOrigin(host, "new-user host");
+      warnRegistryDefaultNode(resolved.verdict, this.config.registryCacheStore, this.config.onRegistryFallback);
+      return [{ url }];
+    }
+    const destinations = resolved.hosts.flatMap((host) => host.urls.map((url) => ({ url, nodeDid: host.nodeDid })));
+    return destinations;
+  }
+  private async resolveNodeDestination(
+    resource: string,
+    access: ResourceAccess,
+  ): Promise<ResourceDestination> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    const target = (await this.routingDestinations(resource, access))[0];
+    graph.assertActive();
+    if (!target) throw new ResourceNotRoutedError(resource);
+    await verifyResourceDestination(target, this.fetchForGraph(graph));
+    graph.assertActive();
+    return target;
+  }
+
+  private fetchForGraph(graph: ServiceGraphLifetime): FetchFunction {
+    return async (url, init) => {
+      graph.assertActive();
+      const signal = init?.signal ? AbortSignal.any([init.signal, graph.signal]) : graph.signal;
+      const response = await globalThis.fetch(url, { ...init, signal });
+      graph.assertActive();
+      return response;
+    };
+  }
+
+  /** A resource-specific transport bound to the current service graph. */
+  get resourceTransport(): ResourceTransport {
+    return this.createResourceTransport(this._serviceGraph, this._serviceContext?.session ?? undefined);
+  }
+
+  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession): ResourceTransport {
+    const rawFetch = this.fetchForGraph(graph);
+    return async (resources, send, options) => {
+      graph.assertActive();
+      return routeResourceRequest(resources, {
+        resolveResource: async (requestedResource, requestedAccess) => {
+          graph.assertActive();
+          const targets = await this.routingDestinations(requestedResource, requestedAccess);
+          graph.assertActive();
+          return targets;
+        },
+      }, async (target) => {
+        graph.assertActive();
+        const nodeDid = target.nodeDid ?? options?.nodeDid ?? await this.fetchNodeId(target.url);
+        const nodeInfo = await verifyResourceDestination({ url: target.url, nodeDid }, rawFetch);
+        if (!nodeInfo) throw new NodeIdentityMismatchError(target.url, nodeDid);
+        graph.assertActive();
+        const response = await send({
+          url: target.url,
+          nodeDid,
+          nodeInfo,
+          bindAudience: async (authorization) => {
+            graph.assertActive();
+            const signed = await this.bindRoutedAudience(authorization, nodeDid, session, options?.invocationSession);
+            graph.assertActive();
+            return signed;
+          },
+          fetch: async (url, init) => {
+            const parsed = new URL(url);
+            if (parsed.origin !== target.url || parsed.username || parsed.password || parsed.hash) throw new ResourceNotRoutedError(resources.map(({ resource }) => resource).join(", "));
+            const timeout = AbortSignal.timeout(5_000);
+            const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+            try {
+              return await rawFetch(url, { ...init, signal, redirect: "error" });
+            } catch (error) {
+              if (init?.signal?.aborted || routingFailure(error)) throw error;
+              graph.assertActive();
+              throw new NodeNotRespondingError([target.url], error);
+            }
+          },
+        });
+        graph.assertActive();
+        return response;
+      }, options);
+    };
+  }
+
+
+  /** Transport hints cannot override verified full-resource registry routing. */
+  async resolveRegisteredDelegationHost(permissions: readonly PermissionEntry[], noEntryHost: string): Promise<string | undefined> {
+    const resources = new Map<string, "host" | "encryption">();
+    let hasData = false;
+    for (const permission of permissions) {
+      const encryption = this.isEncryptionNetworkOperation(this.invocationServiceName(permission.service), permission.path, permission.space);
+      const resource = encryption ? permission.path.split("/")[0] : permission.space;
+      if (!resource) throw new ResourceNotRoutedError("delegation");
+      resources.set(resource, encryption ? "encryption" : "host");
+      hasData ||= !encryption;
+    }
+    let dataHost: string | undefined;
+    let encryptionHost: string | undefined;
+    let unserved: NodeNotFoundError | undefined;
+    for (const [resource, access] of resources) {
+      try {
+        const destinations = await this.routingDestinations(resource, access, [noEntryHost]);
+        if (destinations.some(({ nodeDid }) => nodeDid === undefined)) return undefined;
+        if (access === "host") dataHost ??= destinations[0]?.url;
+        else encryptionHost ??= destinations[0]?.url;
+      } catch (error) {
+        if (!(error instanceof NodeNotFoundError) || error.verdict.status !== "registered") throw error;
+        // Mixed grants may carry unserved extras, but those never establish a host.
+        unserved ??= error;
+      }
+    }
+    const host = hasData ? dataHost : encryptionHost;
+    if (!host) throw unserved ?? new ResourceNotRoutedError("delegation");
+    return host;
+  }
+
+  private async bindRoutedAudience(authorization: string, nodeDid: string, stagedSession?: ServiceSession, requiredSession?: ServiceSession): Promise<string> {
+    const payload: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(authorization.split(".")[1])));
+    const issuer = typeof payload === "object" && payload !== null && "iss" in payload ? payload.iss : undefined;
+    let session: ServiceSession | undefined;
+    if (requiredSession) {
+      if (typeof issuer === "string" && requiredSession.verificationMethod.split("#", 1)[0] === issuer.split("#", 1)[0]) session = requiredSession;
+    } else {
+      session = [
+        stagedSession, this._serviceContext?.session, this.auth?.tinyCloudSession,
+        ...this.runtimePermissionGrants.map((grant) => grant.session),
+      ].find((candidate) => candidate?.verificationMethod === issuer) ?? undefined;
+    }
+    if (!session) throw new Error("Invocation signing session is not active");
+    return rewriteInvocationAudience(authorization, nodeDid, session.jwk);
   }
 
   private syncResolvedHostFromAuth(): void {
@@ -2251,13 +2454,17 @@ export class TinyCloudNode {
 
   /** The registry-resolved Node endpoint and the identity returned by that exact Node. */
   async activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }> {
-    const host = this.hosts[0];
-    if (host === undefined) throw new Error("TinyCloud node host has not been resolved");
-    const parsed = new URL(host);
-    if ((parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost"))) || parsed.origin !== host) {
+    const graph = this._serviceGraph;
+    const resource = this._serviceContext?.session?.spaceId ?? this.currentTinyCloudSession()?.spaceId;
+    if (!resource) throw new Error("Node identity requires an authenticated resource");
+    const destination = await this.resolveNodeDestination(resource, "read");
+    graph.assertActive();
+    const parsed = new URL(destination.url);
+    if ((parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost"))) || parsed.origin !== destination.url) {
       throw new Error("TinyCloud node host is not a canonical origin");
     }
-    const nodeDid = await this.fetchNodeId();
+    const nodeDid = destination.nodeDid ?? await this.fetchNodeId(destination.url);
+    graph.assertActive();
     if (!nodeDid.startsWith("did:key:z")) throw new Error("TinyCloud node identity is not a did:key");
     return Object.freeze({ origin: parsed.origin, nodeDid });
   }
@@ -2267,14 +2474,33 @@ export class TinyCloudNode {
     registryUrl: string,
     fetchFn: typeof fetch = globalThis.fetch.bind(globalThis),
   ) {
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    const session = this.currentTinyCloudSession();
+    if (!session) throw new Error("Node publication requires an authenticated session");
+    const subject = session.verificationMethod.split("#", 1)[0]!;
     const node = await this.activeNodeIdentity();
-    return publishLocationRecord({
+    graph.assertActive();
+    const record = await publishLocationRecord({
       registryUrl,
-      subject: this.credentialHolderDid,
+      subject,
       nodeOrigin: node.origin,
-      signer: { type: "did:key", signBytes: (bytes) => this.signSessionBytes(bytes) },
-      fetch: fetchFn,
+      signer: { type: "did:key", signBytes: async (bytes) => {
+        graph.assertActive();
+        const signature = await signBytesWithJwk(bytes, session.jwk);
+        graph.assertActive();
+        return signature;
+      } },
+      fetch: async (url, init) => {
+        graph.assertActive();
+        const signal = init?.signal ? AbortSignal.any([init.signal, graph.signal]) : graph.signal;
+        const response = await fetchFn(url, { ...init, signal });
+        graph.assertActive();
+        return response;
+      },
     });
+    graph.assertActive();
+    return record;
   }
 
   /**
@@ -2325,6 +2551,36 @@ export class TinyCloudNode {
   getVerifiedSessionCapabilities(): PermissionEntry[] {
     const session = this.currentTinyCloudSession();
     return session?.siwe ? this.projectSignedRecapCapabilities(session.siwe) : [];
+  }
+
+  /** Start one background refresh for each owner derived from verified authority. */
+  refreshRegistryForCapabilities(permissions: readonly PermissionEntry[]): void {
+    for (const permission of permissions) {
+      try {
+        const owner = permission.service === "tinycloud.encryption" && permission.path.startsWith("urn:tinycloud:encryption:")
+          ? parseNetworkId(permission.path.split("/")[0]).ownerDid
+          : permission.space ? this.ownerDidFromSpaceId(permission.space) : undefined;
+        if (owner) this.refreshRegistryOwner(owner);
+      } catch {
+        // Unsupported resources never become owner hints or routing authority.
+      }
+    }
+  }
+
+  private refreshRegistryOwner(owner: string): void {
+    if (this.config.tinycloudRegistryUrl === null) return;
+    const subject = owner.startsWith("did:pkh:")
+      ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1)
+      : owner;
+    const key = registryOwnerKeyV2(subject);
+    if (this.registryRefreshOwners.has(key)) return;
+    this.registryRefreshOwners.add(key);
+    void refreshOwnerRegistry(subject, {
+      registryUrl: this.config.tinycloudRegistryUrl,
+      registryChainId: this.config.registryChainId,
+      sequenceStore: this.config.registrySequenceStore,
+      cacheStore: this.config.registryCacheStore,
+    }).catch(() => undefined);
   }
 
   /** Normalize signed capabilities without collapsing nested encryption into raw authority. */
@@ -2661,7 +2917,7 @@ export class TinyCloudNode {
 
   /**
    * Fresh OpenKey sign-in. The callback receives the SDK's original SIWE and
-   * session JWK before approval; the signed result is verified against those
+   * public session JWK before approval; the signed result is verified against those
    * bytes before the network session or replica stamp is committed.
    */
   async signInWithOpenKey(
@@ -2848,6 +3104,8 @@ export class TinyCloudNode {
     const primarySession = this.currentTinyCloudSession();
     if (primarySession) {
       this.registerPrimarySessionGrant(primarySession);
+      this.refreshRegistryOwner(pkhDid(primarySession.address, primarySession.chainId));
+      this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
       // The activation says nothing about the primary space when both of its
       // lists are empty: ask the node with a read the session holds.
       if (this.auth?.spaceHosting === "unknown") {
@@ -3155,8 +3413,8 @@ export class TinyCloudNode {
       auth.capabilityRequest === BOOTSTRAP_SESSION_REQUESTS.default;
 
     // Refuse before any bootstrap signature is requested.
-    if (steps.some((step) => step.kind === "host")) {
-      await this.assertMayCreateSpace();
+    for (const step of steps) {
+      if (step.kind === "host") await this.assertMayCreateSpace(step.spaceId);
     }
 
     for (const step of steps) {
@@ -3212,11 +3470,20 @@ export class TinyCloudNode {
       if (!session) {
         throw new Error(`Missing bootstrap session for ${step.space}`);
       }
-      const activated = await activateSessionWithHost(host, session.delegationHeader, graph.signal)
-        .catch((error: unknown) => {
+      const destinations = await this.routingDestinations(step.spaceId, "host");
+      let activated: SpaceHostResult | undefined;
+      for (const destination of destinations) {
+        try {
+          await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+          const result = await activateSessionWithHost(destination.url, session.delegationHeader, graph.signal);
+          if (!result.success) throw Object.assign(new Error("Bootstrap activation failed"), { cause: result });
+          activated = result;
+        } catch (error) {
           graph.assertActive();
           throw error;
-        });
+        }
+      }
+      if (!activated) throw new Error("Bootstrap space has no destination");
       // Signed out during activation: install nothing for the retired session.
       graph.assertActive();
       if (!activated.success || activated.skipped?.includes(step.spaceId)) {
@@ -3556,6 +3823,7 @@ export class TinyCloudNode {
     const spaces = new SpaceService({
       hosts: context.hosts,
       session,
+      resourceTransport: this.createResourceTransport(this._serviceGraph, session),
       invoke: context.invoke,
       fetch: (url, init) =>
         context.fetch(url, {
@@ -3908,6 +4176,14 @@ export class TinyCloudNode {
       throw new Error("Owned space hosting requires an active session");
     }
 
+    await this.assertMayCreateSpace(spaceId);
+    if (this.auth.registryRecordPresent) {
+      const hosted = await this.hostOwnedSpaceOnce(spaceId, signal);
+      if (!hosted.success) throw Object.assign(new Error(`Failed to activate listed space ${spaceId}: ${describeHostFailure(hosted)}`), { cause: hosted });
+      if (this.auth.tinyCloudSession === session) this.confirmedHostedSpaceIds.add(spaceId);
+      return;
+    }
+
     if (this.confirmedHostedSpaceIds.has(spaceId) || this.hostedOwnedSpaceIds.has(spaceId)) {
       return;
     }
@@ -3930,7 +4206,7 @@ export class TinyCloudNode {
       );
     }
 
-    await this.assertMayCreateSpace();
+    await this.assertMayCreateSpace(spaceId);
     if (signal?.aborted) throw signal.reason;
     const created = await this.hostOwnedSpaceOnce(spaceId, signal);
     if (!created.success) {
@@ -4005,19 +4281,21 @@ export class TinyCloudNode {
     // the session can actually use it before reporting success: a successful
     // /delegate that still lists the space under `skipped` means it is not
     // hosted for this session.
-    const activation = await activateSessionWithHost(
-      host,
-      session.delegationHeader,
-    );
-    if (!activation.success || activation.skipped?.includes(spaceId)) {
-      throw Object.assign(
-        new Error(
-          `Failed to activate session for owned space ${spaceId}: ${
-            activation.success ? "space was skipped" : describeHostFailure(activation)
-          }`,
-        ),
-        { cause: activation },
+    if (!this.auth.registryRecordPresent) {
+      const activation = await activateSessionWithHost(
+        host,
+        session.delegationHeader,
       );
+      if (!activation.success || activation.skipped?.includes(spaceId)) {
+        throw Object.assign(
+          new Error(
+            `Failed to activate session for owned space ${spaceId}: ${
+              activation.success ? "space was skipped" : describeHostFailure(activation)
+            }`,
+          ),
+          { cause: activation },
+        );
+      }
     }
     if (this.auth?.tinyCloudSession === session) this.hostedOwnedSpaceIds.add(spaceId);
 
@@ -4065,11 +4343,9 @@ export class TinyCloudNode {
    * session's recap doesn't cover it and the registry has no record; the host
    * SIWE is idempotent server-side. Must be called after {@link signIn}.
    *
-   * Under `registryPolicy: "fail-closed"`, hosting is refused with
-   * `NodeRegistryEntryExistsError` when the owner's registry record does not
-   * list the host, or `RegistryUnavailableError` when the registry gives no
-   * verdict. {@link hostOwnedSpace} itself is an explicit action and is not
-   * guarded.
+   * Current signed per-space membership is checked before both automatic and
+   * explicit hosting. Registered replicas use the session grant; no-entry
+   * onboarding retains the host-SIWE flow.
    *
    * @param name - The owned space name (e.g. `"secrets"`).
    * @returns The hosted owned-space URI.
@@ -4080,34 +4356,28 @@ export class TinyCloudNode {
     }
 
     const spaceId = this.ownedSpaceId(name);
+    await this.assertMayCreateSpace(spaceId);
 
     if (this.hostedOwnedSpaceIds.has(spaceId) || await this.isOwnedSpaceRegistered(spaceId)) {
       return spaceId;
     }
 
-    await this.assertMayCreateSpace();
     return this.hostOwnedSpace(name);
   }
 
-  /**
-   * Space-creation guard (TC-1443) for the automatic hosting paths: sign-in's
-   * owned spaces, account bootstrap, {@link ensureOwnedSpaceHosted} and
-   * {@link ensurePublicSpace}. Only `registryPolicy: "fail-closed"` consults
-   * the registry ({@link NodeUserAuthorization.assertMayCreateSpace}); the
-   * default policy performs no lookup.
-   */
-  private async assertMayCreateSpace(): Promise<void> {
-    if (this.config.registryPolicy !== "fail-closed") return;
-    await (this.auth as NodeUserAuthorization).assertMayCreateSpace();
+  /** Refresh full-space membership before any automatic or explicit hosting. */
+  private async assertMayCreateSpace(spaceId: string): Promise<void> {
+    await this.routingDestinations(spaceId, "host");
   }
 
   /** Registry-policy settings shared by every authorization this client creates. */
   private registryPolicyConfig(): Pick<
     TinyCloudNodeConfig,
-    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "onNodeNotFound"
-  > {
-    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound } = this.config;
-    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, onNodeNotFound };
+    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "onNodeNotFound" | "onRegistryFallback"
+  > & { registryNoEntryHosts: readonly string[] } {
+    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback } = this.config;
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback,
+      registryNoEntryHosts: this.trustedNoEntryHosts };
   }
 
   /**
@@ -4256,13 +4526,8 @@ export class TinyCloudNode {
      */
     expiresAt?: string;
     /**
-     * The TinyCloud hosts this session was created against (from
-     * {@link PersistedSessionData.tinycloudHosts}). When present they are
-     * adopted so the restored session targets the same node as the
-     * original sign-in — without this, service calls fall back to the
-     * default host and the auth layer throws "TinyCloud hosts have not
-     * been resolved". When absent (old persisted session) hosts resolve
-     * lazily via the registry/fallback on the first host-needing call.
+     * Persisted node origins are no-entry hints only. Restore resolves the
+     * current signed entry before selecting any data destination.
      */
     tinycloudHosts?: string[];
     /**
@@ -4401,16 +4666,16 @@ export class TinyCloudNode {
       }
       stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
-    const resolvedHost = await this.resolveRestoredHost(
-      sessionData.tinycloudHosts,
-      restoredAddress,
-      sessionData.chainId,
-    );
-    const stagedHost = resolvedHost ?? this.config.host!;
+    const restoreHints = this.explicitHost ? [this.explicitHost] : sessionData.tinycloudHosts ?? [];
+    // Hydration stages locally verified authority and host hints. Replication
+    // checks capabilities below; network operations still use the fresh routed graph.
+    const stagedHost = exactHttpOrigin(restoreHints[0] ?? this.config.host!, "restored host hint");
     let restoredNodeFeatures: string[] | undefined;
     let replicaProtocolMismatch = false;
     if (this.config.replication?.enabled) {
       try {
+        // Audited exception: this hint-only capability probe sends no credentials
+        // or body. Local hydration must not wait for a live registry lookup.
         restoredNodeFeatures = (await checkNodeInfo(stagedHost, this.wasmBindings.protocolVersion())).features;
       } catch (error) {
         // Offline restores may serve complete local data; an incompatible node cannot.
@@ -4536,7 +4801,7 @@ export class TinyCloudNode {
     this.sessionManager = stagedManager;
     this.sessionKeyId = stagedKeyId;
     this.sessionKeyJwk = stagedJwk;
-    if (resolvedHost) this.config.host = resolvedHost;
+    this.config.host = stagedHost;
     // Another account starts with no known rejection. Decide that from the
     // primary space's owner alone: restore metadata (address, SIWE) is
     // optional, so its appearing or disappearing says nothing about the owner.
@@ -4605,6 +4870,10 @@ export class TinyCloudNode {
     if (epoch !== this.sessionEpoch) {
       if (attempt === this.latestSessionAttempt) await this.endSession();
       this.assertSessionEpoch(epoch, "Session restore");
+    }
+    if (this.config.replication?.enabled) {
+      if (stagedAddress !== undefined) this.refreshRegistryOwner(pkhDid(stagedAddress, stagedChainId));
+      this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
     }
   }
 
@@ -4694,7 +4963,8 @@ export class TinyCloudNode {
     // TinyCloud owns the public-KV service graph. Stage a replacement core
     // context alongside the node graph so repeated cross-host restores cannot
     // leave publicKV pointed at a stale or uninitialized context.
-    const graph = this.createServiceGraphLifetime();
+    const graph = this.createServiceGraphLifetime(input.serviceSession);
+    const resourceTransport = this.createResourceTransport(graph, input.serviceSession);
     const core = this.auth
       ? new TinyCloud(this.auth, {
         invokeAny: graph.invokeAny,
@@ -4785,12 +5055,14 @@ export class TinyCloudNode {
       signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
       sessionInvocationSigner: this.sessionInvocationSignerFor(input.serviceSession),
       fetch: graph.fetch,
+      resourceTransport,
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
     const sharingService = new SharingService({
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
+      resourceTransport,
       assertActive: () => graph.assertActive(),
       keyProvider,
       registry: capabilityRegistry,
@@ -4837,6 +5109,7 @@ export class TinyCloudNode {
       session: input.serviceSession,
       invoke: graph.invoke,
       fetch: graph.fetch,
+      resourceTransport,
       capabilityRegistry,
       userDid: input.nodeDid,
       createKVService: (spaceId) => {
@@ -4926,60 +5199,6 @@ export class TinyCloudNode {
     return { core, graph, serviceContext, kv, sql, duckdb, hooks, vault, encryption, capabilityRegistry, keyProvider, sharingService, delegationManager, spaceService };
   }
 
-  /**
-   * Resolve the host a restored session should target.
-   *
-   * Mirrors fresh sign-in host resolution but for the restore path:
-   * an explicit/pinned host always wins, then the hosts the session was
-   * persisted with, then a lazy registry/fallback resolution for sessions
-   * that predate the persisted `tinycloudHosts` field. Returns `undefined`
-   * only when there's nothing to resolve from (no explicit host, no
-   * persisted hosts, and no address/chainId) — in which case the existing
-   * `config.host` (default) is left in place.
-   *
-   * Resolution failures are surfaced, not swallowed: a genuinely broken
-   * registry lookup throws rather than silently falling back to a wrong host.
-   */
-  private async resolveRestoredHost(
-    persistedHosts: string[] | undefined,
-    address: string | undefined,
-    chainId: number | undefined,
-  ): Promise<string | undefined> {
-    if (this.explicitHost) {
-      return this.explicitHost;
-    }
-    if (persistedHosts && persistedHosts.length > 0) {
-      return persistedHosts[0];
-    }
-    if (address === undefined || chainId === undefined) {
-      return undefined;
-    }
-    if (this.config.registryPolicy === "fail-closed") {
-      const resolved = await resolveFailClosedTinyCloudHosts(address, {
-        registryUrl: this.config.tinycloudRegistryUrl,
-        registryChainId: this.config.registryChainId,
-        newUserHost: this.config.newUserHost,
-        sequenceStore: this.config.registrySequenceStore,
-        onNodeNotFound: this.config.onNodeNotFound,
-        autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
-        localNodeUrl: this.config.localNodeUrl,
-        localLinkName: this.config.localLinkName,
-        expectedNodeDid: this.config.expectedNodeDid,
-        localNodeIdentityStore: this.config.localNodeIdentityStore,
-      });
-      return resolved.hosts[0];
-    }
-    const resolved = await resolveTinyCloudHosts(pkhDid(address, chainId), {
-      registryUrl: this.config.tinycloudRegistryUrl,
-      fallbackHosts: this.config.tinycloudFallbackHosts,
-      autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
-      localNodeUrl: this.config.localNodeUrl,
-      localLinkName: this.config.localLinkName,
-      expectedNodeDid: this.config.expectedNodeDid,
-      localNodeIdentityStore: this.config.localNodeIdentityStore,
-    });
-    return resolved.hosts[0];
-  }
 
   /**
    * Resolve the currently-active TinyCloudSession, preferring the auth
@@ -5019,11 +5238,11 @@ export class TinyCloudNode {
   private sessionInvocationSignerFor(session: ServiceSession): SessionInvocationSigner {
     return {
       did: () => session.verificationMethod.split("#", 1)[0]!,
-      sign: async (attenuation) => {
+      sign: async (attenuation, nodeAudience) => {
         const now = Math.floor(Date.now() / 1000);
         const invocation = await signCompactUcanAuthorization({
           issuerDid: session.verificationMethod.split("#", 1)[0]!,
-          audienceDid: await this.fetchNodeId(),
+          audienceDid: nodeAudience ?? await this.fetchNodeId(undefined, session.spaceId),
           attenuation,
           facts: [{}],
           proofs: [],
@@ -5539,22 +5758,29 @@ export class TinyCloudNode {
   }
 
   /**
-   * The node DID for {@link config.host}.
-   *
-   * Sign-in already performs `GET /info` for the protocol-version check, and
-   * that response carries `nodeId`, so reuse it rather than fetching `/info` a
-   * second time. Only a value recorded for this exact host qualifies; older
-   * nodes that omit `nodeId` fall through to the fetch.
+   * Default identity lookups resolve the signed session's resource first.
+   * Explicit hosts are used only after a resource-specific routing decision.
    */
-  private async fetchNodeId(): Promise<string> {
-    const cached = this.auth?.nodeIdForHost(this.config.host!);
-    if (cached) return cached;
-
-    const response = await fetch(`${this.config.host}/info`);
+  private async fetchNodeId(
+    host?: string,
+    resource = this._serviceContext?.session?.spaceId ?? this.currentTinyCloudSession()?.spaceId,
+  ): Promise<string> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    if (host === undefined) {
+      if (!resource) throw new Error("Node identity requires an authenticated resource");
+      const destination = await this.resolveNodeDestination(resource, "read");
+      graph.assertActive();
+      if (destination.nodeDid) return destination.nodeDid;
+      host = destination.url;
+    }
+    const response = await this.fetchForGraph(graph)(`${host}/info`, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+    graph.assertActive();
     if (!response.ok) {
       throw await httpResponseError(response, "Failed to fetch node info");
     }
     const info = (await response.json()) as { nodeId?: unknown };
+    graph.assertActive();
     if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
       throw new Error("Node /info response did not include nodeId");
     }
@@ -5608,14 +5834,30 @@ export class TinyCloudNode {
     };
   }
 
+  private async encryptionDestination(networkId: string): Promise<ResourceDestination & { nodeDid: string }> {
+    const destination = (await this.routingDestinations(networkId, "encryption"))[0];
+    if (!destination) throw new Error("No encryption destination is registered");
+    await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+    return { ...destination, nodeDid: destination.nodeDid ?? await this.fetchNodeId(destination.url) };
+  }
+
   private async fetchEncryptionNetworkAt(
     host: string,
     networkId: string,
     fetchFn: FetchFunction,
+    callerSignal?: AbortSignal,
   ): Promise<NetworkDescriptor | null> {
-    const response = await fetchFn(
-      `${host}/encryption/networks/${encodeURIComponent(networkId)}`,
-    );
+    let response: FetchResponse;
+    const timeout = AbortSignal.timeout(5_000);
+    try {
+      response = await fetchFn(`${host}/encryption/networks/${encodeURIComponent(networkId)}`, {
+        signal: callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout, redirect: "error",
+      });
+    } catch (error) {
+      if (routingFailure(error) || callerSignal?.aborted ||
+          (!timeout.aborted && error instanceof Error && error.name === "AbortError")) throw error;
+      throw new NodeNotRespondingError([host], error);
+    }
     if (response.status === 404) return null;
     if (!response.ok) {
       throw await httpResponseError(response, `Failed to fetch encryption network ${networkId}`);
@@ -5635,7 +5877,6 @@ export class TinyCloudNode {
     chainId: number;
   }): EncryptionService {
     const graph = binding?.graph ?? this._serviceGraph;
-    const host = binding?.host ?? this.config.host!;
     // The public service path always has a ServiceContext. Keep the auth-session
     // fallback for the internal runtime-permission helpers, which construct an
     // encryption service before a ServiceContext is installed. Both paths bind
@@ -5646,17 +5887,16 @@ export class TinyCloudNode {
     const address = binding?.address ?? this._address;
     const chainId = binding?.chainId ?? this._chainId;
     const crypto = this.createEncryptionCrypto();
-    // Successful descriptor lookups are immutable for a key version. Cache
-    // and coalesce them for this session graph; replacing the graph replaces
-    // this cache. Misses and failures remain retryable.
-    const descriptorCache = new Map<string, Promise<NetworkDescriptor | null>>();
     const transport: DecryptTransport = {
-      postDecrypt: async ({ networkId, authorization, canonicalBody, signal }) => {
+      postDecrypt: async ({ targetNode, networkId, authorization, canonicalBody, signal }) => {
         graph.assertActive();
+        const destination = await this.encryptionDestination(networkId);
+        if (destination.nodeDid !== targetNode) throw new NodeIdentityMismatchError(destination.url, destination.nodeDid, targetNode);
         const response = await graph.fetch(
-          `${host}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
+          `${destination.url}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
           {
             method: "POST",
+            redirect: "error",
             headers: {
               Authorization: authorization,
               "Content-Type": "application/json",
@@ -5692,6 +5932,7 @@ export class TinyCloudNode {
       },
     };
     return new EncryptionService({
+      resolveTargetNode: async (networkId) => (await this.encryptionDestination(networkId)).nodeDid,
       crypto,
       signer: {
         signDecryptInvocation: async (
@@ -5719,20 +5960,8 @@ export class TinyCloudNode {
       node: {
         fetchByNetworkId: async (networkId) => {
           graph.assertActive();
-          let pending = descriptorCache.get(networkId);
-          if (!pending) {
-            pending = this.fetchEncryptionNetworkAt(host, networkId, graph.fetch)
-              .then((descriptor) => {
-                if (descriptor === null) descriptorCache.delete(networkId);
-                return descriptor;
-              })
-              .catch((error) => {
-                descriptorCache.delete(networkId);
-                throw error;
-              });
-            descriptorCache.set(networkId, pending);
-          }
-          const descriptor = await pending;
+          const destination = await this.encryptionDestination(networkId);
+          const descriptor = await this.fetchEncryptionNetworkAt(destination.url, networkId, graph.fetch, graph.signal);
           graph.assertActive();
           return descriptor;
         },
@@ -5740,13 +5969,15 @@ export class TinyCloudNode {
       wellKnown: {
         fetchWellKnown: async (principal, discoveryKey) => {
           graph.assertActive();
+          const destination = await this.encryptionDestination(this.getDefaultEncryptionNetworkId());
+          if (this.auth?.registryRecordPresent) return null;
           if (!address || !didPrincipalMatches(principal, did)) {
             return null;
           }
           const publicSpaceId = makePublicSpaceId(address, chainId);
           const encodedKey = discoveryKey.split("/").map(encodeURIComponent).join("/");
           const response = await graph.fetch(
-            `${host}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
+            `${destination.url}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
             { method: "GET" },
           );
           graph.assertActive();
@@ -5845,6 +6076,7 @@ export class TinyCloudNode {
    */
   private initializeV2Services(serviceSession: ServiceSession): void {
     const graph = this._serviceGraph;
+    const resourceTransport = this.createResourceTransport(graph, serviceSession);
 
     // Initialize CapabilityKeyRegistry
     this._capabilityRegistry = new CapabilityKeyRegistry();
@@ -5905,6 +6137,7 @@ export class TinyCloudNode {
       signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
       sessionInvocationSigner: this.sessionInvocationSignerFor(serviceSession),
       fetch: graph.fetch,
+      resourceTransport,
     });
 
     // Initialize SpaceService
@@ -5913,6 +6146,7 @@ export class TinyCloudNode {
       session: serviceSession,
       invoke: graph.invoke,
       fetch: graph.fetch,
+      resourceTransport,
       capabilityRegistry: this._capabilityRegistry,
       userDid: this.did,
       createKVService: (spaceId: string) => {
@@ -5989,6 +6223,7 @@ export class TinyCloudNode {
       session: serviceSession,
       invoke: graph.invoke,
       fetch: graph.fetch,
+      resourceTransport,
       assertActive: () => graph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
@@ -6134,7 +6369,8 @@ export class TinyCloudNode {
     params: CreateOwnerDelegationParams,
     assertActive?: () => void,
   ): Promise<OwnerDelegationReceipt> {
-    const assertOwnerGraphActive = assertActive ?? this._serviceGraph.assertActive.bind(this._serviceGraph);
+    const graph = this._serviceGraph;
+    const assertOwnerGraphActive = assertActive ?? graph.assertActive.bind(graph);
     assertOwnerGraphActive();
     if (!params.delegateDid.startsWith("did:key:")) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
@@ -6175,7 +6411,7 @@ export class TinyCloudNode {
     const signature = await this.signer.signMessage(prepared.siwe);
     assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
-    const activation = await activateSessionWithHost(host, delegationSession.delegationHeader);
+    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
     assertOwnerGraphActive();
     if (!activation.success) {
       throw Object.assign(
@@ -6239,12 +6475,28 @@ export class TinyCloudNode {
   async registerPolicy(
     params: Omit<RegisterPolicyV3Input, "nodeOrigin" | "fetch">,
   ): Promise<RegisterPolicyV3Receipt> {
-    this._serviceGraph.assertActive();
-    return registerPolicyV3({
-      ...params,
-      nodeOrigin: this.config.host!,
-      fetch: globalThis.fetch.bind(globalThis),
-    });
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    const source = params.policy.contentSource;
+    if (typeof source !== "object" || source === null || !("kvResource" in source) || typeof source.kvResource !== "string") {
+      throw new ResourceNotRoutedError("policy content source");
+    }
+    const resource = routingResourceOf(source.kvResource);
+    let receipt: RegisterPolicyV3Receipt | undefined;
+    await this.resourceTransport([{ resource, access: "write" }], async (target) => {
+      let response: FetchResponse | undefined;
+      const registered = await registerPolicyV3({
+        ...params,
+        nodeOrigin: target.url,
+        fetch: async (url, init) => {
+          response = await target.fetch(url, init);
+          return response;
+        },
+      });
+      receipt ??= registered;
+      return response!;
+    }, { nodeLocal: true, nodeDid: params.expectedNodeAudience });
+    return receipt!;
   }
 
   /**
@@ -6266,11 +6518,16 @@ export class TinyCloudNode {
     /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
     readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
-    assertExpiryWithinTechnicalLimit(new Date(input.expiresAt), "siwe");
-    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
+    const graph = this._serviceGraph;
+    graph.assertActive();
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
+    const transport = this.createResourceTransport(graph, serviceSession);
+    const senderKeyDid = session.verificationMethod.split("#", 1)[0]!;
+    assertExpiryWithinTechnicalLimit(new Date(input.expiresAt), "siwe");
+    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
+    graph.assertActive();
     const idempotencyBytes = new TextEncoder().encode(input.idempotencyKey);
     if (idempotencyBytes.byteLength === 0 || idempotencyBytes.byteLength > 512) {
       throw new Error("Share delivery idempotency key is invalid");
@@ -6279,6 +6536,7 @@ export class TinyCloudNode {
     // Never send the caller's opaque retry key over the wire: it can contain
     // application identifiers and has no protocol meaning beyond this binding.
     const jtiDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", idempotencyBytes));
+    graph.assertActive();
     const body = {
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
@@ -6288,6 +6546,7 @@ export class TinyCloudNode {
       expiresAt: new Date(input.expiresAt).toISOString(),
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
+    graph.assertActive();
     const request = { ...body, requestBodyDigest };
     // The node records this invocation's signer as the admission's senderKeyDid,
     // and the receipt below is bound to (and countersigned by) credentialHolderDid.
@@ -6297,37 +6556,50 @@ export class TinyCloudNode {
     // node now refuses this invocation, where a covering grant used to be tried.
     // Same single-capability binding ordinary KV reads use; serviceSession.spaceId is session.spaceId.
     const authorization = authorizationHeader(this.wasmBindings.invoke(serviceSession, "kv", input.resourcePath, "tinycloud.kv/get"));
-    const response = await fetch(`${this.config.host!}/policy/v3/deliveries/authorize`, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json", authorization },
-      body: canonicalizeEncryptionJson(request),
+    const response = await transport([{ resource: serviceSession.spaceId, access: "read" }], async (target) => {
+      const signed = await target.bindAudience(authorization);
+      graph.assertActive();
+      return target.fetch(`${target.url}/policy/v3/deliveries/authorize`, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json", authorization: signed },
+        body: canonicalizeEncryptionJson(request),
+      });
     });
+    graph.assertActive();
     // 422 (the body did not parse) and 400 (it failed the node's checks) are one refusal with one error.
     if (response.status === 400 || response.status === 422) throw new ShareDeliveryRefusedError();
     if (!response.ok) {
       // The node's reply is part of the message. The whole reply is redacted before it is cut to 512 characters, so a
       // link or key that crosses the cut is replaced too.
       const reply = await response.text().catch(() => response.statusText);
+      graph.assertActive();
       const body = (await withoutShareLink(reply, input.shareUrl)).trim().slice(0, 512);
+      graph.assertActive();
       throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${response.status}${body ? ` - ${body}` : ""}`), { status: response.status });
     }
-    const verified = await verifyShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    graph.assertActive();
+    const verified = await verifyShareDeliveryAuthorizationV3Bytes(responseBytes, {
       request,
       envelope: input.envelope,
       envelopeRef,
-      senderKeyDid: this.credentialHolderDid,
+      senderKeyDid,
       deliveryAudience: input.deliveryAudience,
     });
+    graph.assertActive();
     const requestDigest = new Uint8Array(await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(`${CREDENTIAL_INVITATION_REQUEST_DOMAIN}${canonicalizeEncryptionJson(verified.request as any)}`),
     ));
+    graph.assertActive();
+    const signature = await signBytesWithJwk(requestDigest, session.jwk);
+    graph.assertActive();
     return {
       ...verified,
       proof: {
         alg: "EdDSA",
-        kid: this.credentialHolderDid,
-        signature: base64UrlEncode(await this.signSessionBytes(requestDigest)),
+        kid: senderKeyDid,
+        signature: base64UrlEncode(signature),
       },
     };
   }
@@ -6544,7 +6816,7 @@ export class TinyCloudNode {
       ? nameOrNetworkId
       : this.getDefaultEncryptionNetworkId(nameOrNetworkId);
     return this.fetchEncryptionNetworkAt(
-      this.config.host!,
+      (await this.encryptionDestination(networkId)).url,
       networkId,
       globalThis.fetch.bind(globalThis),
     );
@@ -6553,9 +6825,14 @@ export class TinyCloudNode {
   async createEncryptionNetwork(
     name = DEFAULT_ENCRYPTION_NETWORK_NAME,
   ): Promise<NetworkDescriptor> {
-    const targetNode = await this.fetchNodeId();
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    const session = this.requireEncryptionSession();
     const ownerDid = this.did;
     const networkId = this.getDefaultEncryptionNetworkId(name);
+    const destination = await this.encryptionDestination(networkId);
+    graph.assertActive();
+    const targetNode = destination.nodeDid;
     const body = {
       name,
       ownerDid,
@@ -6577,9 +6854,11 @@ export class TinyCloudNode {
       networkId,
       action: NETWORK_CREATE_ACTION,
       facts,
-    });
-    const response = await fetch(`${this.config.host}/encryption/networks`, {
+    }, { graph, session });
+    graph.assertActive();
+    const response = await graph.fetch(`${destination.url}/encryption/networks`, {
       method: "POST",
+      redirect: "error",
       headers: {
         Authorization: signed.authorization,
         "Content-Type": "application/json",
@@ -6588,6 +6867,7 @@ export class TinyCloudNode {
         body as unknown as CanonicalizableEncryptionJson,
       ),
     });
+    graph.assertActive();
     // `NetworkAlreadyExists` is the only error this route maps to Conflict
     // (`NetworkNotActive`, the other Conflict in the shared error mapper, is
     // reachable only from the decrypt routes). So a 409 means the network is
@@ -6595,6 +6875,7 @@ export class TinyCloudNode {
     // Read it back rather than failing an otherwise-successful ensure.
     if (response.status === 409) {
       const existing = await this.getEncryptionNetwork(networkId);
+      graph.assertActive();
       if (existing) return existing;
       throw new Error(
         `Encryption network ${networkId} already exists but could not be read back`,
@@ -6604,6 +6885,7 @@ export class TinyCloudNode {
       throw await httpResponseError(response, `Failed to create encryption network ${networkId}`);
     }
     const created = (await response.json()) as { descriptor: NetworkDescriptor };
+    graph.assertActive();
     return created.descriptor;
   }
 
@@ -6986,6 +7268,106 @@ export class TinyCloudNode {
     return { recap: exactVerifiedRecap(verified), expiresAt };
   }
 
+  private async activateResourceSession(
+    delegationHeader: TinyCloudSession["delegationHeader"],
+    resources: Iterable<string>,
+    signal: AbortSignal = this._serviceGraph.signal,
+  ): Promise<SpaceHostResult> {
+    const targets = new Map<string, { destination: ResourceDestination; spaces: string[] }>();
+    const routedSpaces: string[] = [];
+    let unserved: NodeNotFoundError | undefined;
+    let requestedResource: string | undefined;
+    for (const resource of new Set(resources)) {
+      requestedResource ??= resource;
+      signal?.throwIfAborted();
+      try {
+        const encryption = resource.startsWith("urn:tinycloud:encryption:");
+        const destinations = await this.routingDestinations(resource, encryption ? "encryption" : "host");
+        if (!encryption && destinations.some(({ nodeDid }) => nodeDid !== undefined)) routedSpaces.push(resource);
+        for (const destination of destinations) {
+          let target = targets.get(destination.url);
+          if (!target) {
+            target = { destination, spaces: [] };
+            targets.set(destination.url, target);
+          }
+          if (!encryption && destination.nodeDid !== undefined) target.spaces.push(resource);
+        }
+      } catch (error) {
+        if (!(error instanceof NodeNotFoundError)) throw error;
+        // A mixed grant may also name unserved resources; never route those
+        // elsewhere, but register the original proof on its legitimate union.
+        unserved ??= error;
+      }
+    }
+    if (targets.size === 0) throw unserved ?? new ResourceNotRoutedError(requestedResource ?? "session grant");
+
+    const succeeded: string[] = [];
+    const accepted: SpaceHostResult[] = [];
+    const failed: Array<PartialNodeWriteError["failed"][number]> = [];
+    let refusal: SpaceHostResult | undefined;
+    for (const { destination: target, spaces } of targets.values()) {
+      signal?.throwIfAborted();
+      try {
+        await verifyResourceDestination(target, globalThis.fetch.bind(globalThis));
+        signal.throwIfAborted();
+        const timeout = AbortSignal.timeout(5_000);
+        const result = await activateSessionWithHost(target.url, delegationHeader,
+          AbortSignal.any([signal, timeout]));
+        signal.throwIfAborted();
+        this.throwRegistryRefusal(result.status, result.error ?? "");
+        if (result.success) {
+          const skipped = result.skipped?.find((space) => spaces.some((expected) => this.spaceIdsEqual(space, expected)));
+          if (skipped) {
+            failed.push({ url: target.url, status: result.status, cause: new ResourceNotRoutedError(skipped) });
+            continue;
+          }
+          succeeded.push(target.url);
+          accepted.push(result);
+        } else {
+          refusal = result;
+          failed.push({ url: target.url, status: result.status, cause: result });
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        failed.push({ url: target.url, cause: routingFailure(error) ? error : new NodeNotRespondingError([target.url], error) });
+      }
+    }
+    if (failed.length > 0) {
+      if (targets.size > 1) throw new PartialNodeWriteError(succeeded, failed);
+      if (refusal) return refusal;
+      throw failed[0]!.cause;
+    }
+    const activated = new Set(accepted.flatMap((result) => result.activated ?? []));
+    return {
+      ...accepted[0]!,
+      activated: [...activated],
+      skipped: [...new Set(accepted.flatMap((result) => result.skipped ?? []))]
+        .filter((space) => !activated.has(space) && !routedSpaces.some((expected) => this.spaceIdsEqual(space, expected))),
+    };
+  }
+
+  private activateRoutedDelegation(delegation: PortableDelegation, signal?: AbortSignal): Promise<SpaceHostResult> {
+    const resources = this.operationsFromDelegation(delegation).map((operation) =>
+      operation.resource?.startsWith("urn:tinycloud:encryption:")
+        ? operation.resource.split("/")[0]!
+        : operation.spaceId ?? delegation.spaceId,
+    );
+    return this.activateResourceSession(delegation.delegationHeader, resources, signal);
+  }
+
+  private activateSignedSession(
+    session: Pick<TinyCloudSession, "delegationHeader" | "spaceId">,
+    siwe: string,
+    signal?: AbortSignal,
+  ): Promise<SpaceHostResult> {
+    const resources = this.parseRecapWithCaveats(siwe).map((entry) =>
+      this.isEncryptionNetworkOperation(this.invocationServiceName(entry.service), entry.path, entry.space) ? entry.path.split("/")[0]!
+        : entry.space.startsWith("tinycloud:") ? entry.space : session.spaceId,
+    );
+    return this.activateResourceSession(session.delegationHeader,
+      resources.length > 0 ? resources : [session.spaceId], signal);
+  }
+
   /**
    * Install a portable runtime permission delegation into this SDK instance so
    * matching service calls and downstream `delegateTo()` calls can use it.
@@ -7007,16 +7389,12 @@ export class TinyCloudNode {
       );
     }
 
-    const targetHost = delegation.host ?? this.config.host!;
     let activateResult: SpaceHostResult;
     try {
-      activateResult = await activateSessionWithHost(
-        targetHost,
-        delegation.delegationHeader,
-        graph.signal,
-      );
+      activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
     } catch (cause) {
       graph.assertActive();
+      if (routingFailure(cause)) throw cause;
       throw Object.assign(
         new Error("The TinyCloud host could not be reached to activate the delegation."),
         { code: "ACTIVATION_TRANSPORT_FAILED", cause },
@@ -7177,12 +7555,16 @@ export class TinyCloudNode {
         ...prepared,
         signature,
       });
+      const delegation = this.runtimeDelegationFromSession(
+        delegatedSession,
+        delegatedEntries,
+        spaceId,
+        session,
+        expiresAt,
+        { siwe: prepared.siwe, signature },
+      );
 
-      const activateResult = await activateSessionWithHost(
-        this.config.host!,
-        delegatedSession.delegationHeader,
-        graph.signal,
-      ).catch((error: unknown) => {
+      const activateResult = await this.activateRoutedDelegation(delegation, graph.signal).catch((error: unknown) => {
         graph.assertActive();
         throw error;
       });
@@ -7203,14 +7585,7 @@ export class TinyCloudNode {
         );
       }
 
-      const delegation = this.runtimeDelegationFromSession(
-        delegatedSession,
-        delegatedEntries,
-        spaceId,
-        session,
-        expiresAt,
-        { siwe: prepared.siwe, signature },
-      );
+
       // The session may have been replaced or signed out while signing.
       graph.assertActive();
       this.runtimePermissionGrants.push({
@@ -7359,6 +7734,8 @@ export class TinyCloudNode {
    * space-creation guard.
    */
   async ensurePublicSpace() {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (!this.auth || !this.session || !this.signer) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -7368,9 +7745,11 @@ export class TinyCloudNode {
       throw new Error("Public space not enabled. Set enablePublicSpace: true in config.");
     }
 
-    await this.assertMayCreateSpace();
+    await this.assertMayCreateSpace(publicSpaceId);
+    graph.assertActive();
     // Create the public space on the server (host SIWE)
-    await (this.auth as NodeUserAuthorization).hostPublicSpace(publicSpaceId);
+    await (this.auth as NodeUserAuthorization).hostPublicSpace(publicSpaceId, graph.signal);
+    graph.assertActive();
 
     // Create a session delegation for the public space using the session key JWK.
     // This mirrors the primary session flow (prepareSession with jwk), ensuring
@@ -7398,16 +7777,15 @@ export class TinyCloudNode {
     });
 
     const signature = await this.signer.signMessage(prepared.siwe);
+    graph.assertActive();
 
     const delegationSession = this.wasmBindings.completeSessionSetup({
       ...prepared,
       signature,
     });
 
-    const activateResult = await activateSessionWithHost(
-      this.config.host!,
-      delegationSession.delegationHeader
-    );
+    const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    graph.assertActive();
 
     if (!activateResult.success) {
       throw Object.assign(
@@ -7965,6 +8343,8 @@ export class TinyCloudNode {
     did: string,
     request: ComposedManifestRequest | undefined = this.capabilityRequest,
   ): Promise<DelegateToResult & { target: ResolvedDelegate }> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (!request) {
       throw new Error(
         "materializeDelegation requires a composed manifest request",
@@ -7979,6 +8359,7 @@ export class TinyCloudNode {
     const result = await this.delegateTo(target.did, target.permissions, {
       expiry: target.expiryMs,
     });
+    graph.assertActive();
     return { ...result, target };
   }
 
@@ -7989,6 +8370,8 @@ export class TinyCloudNode {
   async materializeDelegations(
     request: ComposedManifestRequest | undefined = this.capabilityRequest,
   ): Promise<Array<DelegateToResult & { target: ResolvedDelegate }>> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (!request) {
       throw new Error(
         "materializeDelegations requires a composed manifest request",
@@ -7997,6 +8380,7 @@ export class TinyCloudNode {
     const out: Array<DelegateToResult & { target: ResolvedDelegate }> = [];
     for (const target of request.delegationTargets) {
       out.push(await this.materializeDelegation(target.did, request));
+      graph.assertActive();
     }
     return out;
   }
@@ -8022,6 +8406,8 @@ export class TinyCloudNode {
     disableSubDelegation = false,
     requireActivation = false,
   ): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (entries.length === 0) {
       throw new Error(
         "createDelegationViaWasmPath requires a non-empty entries array",
@@ -8144,10 +8530,8 @@ export class TinyCloudNode {
     // a backend calling useDelegation) can find it by CID when building
     // their invoker SIWE. The host validates the UCAN's parent chain
     // (session key → wallet SIWE) to confirm authority.
-    const activateResult = await activateSessionWithHost(
-      this.config.host!,
-      delegationHeader,
-    );
+    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+    graph.assertActive();
     assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
@@ -8163,6 +8547,8 @@ export class TinyCloudNode {
     disableSubDelegation = false,
     requireActivation = false,
   ): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
     const result = this.createDelegationWrapper({
@@ -8195,10 +8581,8 @@ export class TinyCloudNode {
       await onPrepared(delegation);
     }
 
-    const activateResult = await activateSessionWithHost(
-      targetHost,
-      delegationHeader,
-    );
+    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+    graph.assertActive();
     assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
@@ -9100,6 +9484,8 @@ export class TinyCloudNode {
     spaceIdOverride?: string;
     includePublicSpace?: boolean;
   }): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (params.disableSubDelegation) {
       throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
@@ -9148,6 +9534,7 @@ export class TinyCloudNode {
 
     // Sign the SIWE message with this user's signer
     const signature = await this.signer.signMessage(prepared.siwe);
+    graph.assertActive();
 
     // Complete the session setup
     const delegationSession = this.wasmBindings.completeSessionSetup({
@@ -9156,10 +9543,8 @@ export class TinyCloudNode {
     });
 
     // Activate the delegation with the server
-    const activateResult = await activateSessionWithHost(
-      this.config.host!,
-      delegationSession.delegationHeader
-    );
+    const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    graph.assertActive();
 
     if (!activateResult.success) {
       throw Object.assign(
@@ -9203,15 +9588,14 @@ export class TinyCloudNode {
         parents: [session.delegationCid],
       });
       const publicSignature = await this.signer.signMessage(publicPrepared.siwe);
+      graph.assertActive();
       const publicSession = this.wasmBindings.completeSessionSetup({
         ...publicPrepared,
         signature: publicSignature,
       });
 
-      const publicActivateResult = await activateSessionWithHost(
-        this.config.host!,
-        publicSession.delegationHeader
-      );
+      const publicActivateResult = await this.activateSignedSession(publicSession, publicPrepared.siwe, graph.signal);
+      graph.assertActive();
 
       if (publicActivateResult.success) {
         result.publicDelegation = {
@@ -9360,11 +9744,7 @@ export class TinyCloudNode {
     });
 
     // Activate with server
-    const activateResult = await activateSessionWithHost(
-      targetHost,
-      invokerSession.delegationHeader,
-      graph.signal,
-    ).catch((error: unknown) => {
+    const activateResult = await this.activateSignedSession(invokerSession, prepared.siwe, graph.signal).catch((error: unknown) => {
       graph.assertActive();
       throw error;
     });
@@ -9452,6 +9832,8 @@ export class TinyCloudNode {
       }>;
     }
   ): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
     // Requested resources have no caveat field; a spread argument can still carry one.
     refuseCaveated(params.resources);
@@ -9541,6 +9923,7 @@ export class TinyCloudNode {
 
     // Sign with THIS user's signer
     const signature = await this.signer.signMessage(prepared.siwe);
+    graph.assertActive();
 
     // Complete the session setup
     const subDelegationSession = this.wasmBindings.completeSessionSetup({
@@ -9549,10 +9932,8 @@ export class TinyCloudNode {
     });
 
     // Activate the sub-delegation with the server
-    const activateResult = await activateSessionWithHost(
-      targetHost,
-      subDelegationSession.delegationHeader
-    );
+    const activateResult = await this.activateSignedSession(subDelegationSession, prepared.siwe, graph.signal);
+    graph.assertActive();
 
     if (!activateResult.success) {
       throw Object.assign(

@@ -152,6 +152,155 @@ var init_constants = __esm({
   }
 });
 
+// src/lib/diagnostic-logs.ts
+import { constants as fsConstants } from "fs";
+import { mkdir, open, readFile, rm, lstat, writeFile } from "fs/promises";
+import { join } from "path";
+function setDiagnosticCommandContext(options) {
+  activeCommand = options.command;
+  activeArgs = [...options.args];
+  activeDisabled = options.disabled;
+  activeCliVersion = options.cliVersion;
+  activeStartedAt = Date.now();
+}
+function redactDiagnosticText(input) {
+  let text = input;
+  let count = 0;
+  const replace = (pattern, replacement) => {
+    text = text.replace(pattern, (...matches) => {
+      count += 1;
+      return typeof replacement === "string" ? replacement : replacement(...matches);
+    });
+  };
+  replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "[ANSI_REMOVED]");
+  replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
+  replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
+  replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
+  replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
+  replace(/\b(?:0x)?[a-f0-9]{64}\b/gi, "[REDACTED_KEY]");
+  replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
+  replace(/\bdid:[a-z0-9]+:[A-Za-z0-9._:%-]+/gi, "[REDACTED_DID]");
+  replace(/\b0x[a-f0-9]{40}\b/gi, "[REDACTED_ADDRESS]");
+  replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
+  replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
+  replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
+  replace(/(--(?:profile|space|user|owner|account|key|name)(?:=|\s+))(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s,;]+)/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*([:=]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`]?))[^\s,"'`}]+["'`]?/gi, (_match, label, separator) => `${label}${separator}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?(?!["'`]\[REDACTED(?:_[A-Z]+)?\]["'`])["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
+  replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");
+  replace(/("(?:name|fullName|user|owner)"\s*:\s*)(?!\[REDACTED(?:_[A-Z]+)?\])"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  return { text, count };
+}
+function redactArgs(args) {
+  const values = [];
+  let count = 0;
+  const booleanFlags = /* @__PURE__ */ new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") break;
+    if (!arg.startsWith("-")) continue;
+    const shortFlag = /^-[A-Za-z]/.exec(arg)?.[0];
+    if (shortFlag && arg.length > shortFlag.length) {
+      values.push(`${shortFlag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
+    const equals7 = arg.indexOf("=");
+    const flag = equals7 < 0 ? arg : arg.slice(0, equals7);
+    if (equals7 >= 0) {
+      values.push(`${flag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
+    if (booleanFlags.has(arg)) {
+      values.push(arg);
+      continue;
+    }
+    const next = args[index + 1];
+    if (next && next !== "--" && !booleanFlags.has(next)) {
+      values.push(`${arg}=[REDACTED]`);
+      count += 1;
+      index += 1;
+    } else values.push(arg);
+  }
+  return { values, count };
+}
+function redactDiagnosticEntry(entry) {
+  const command = redactDiagnosticText(entry.command);
+  const args = redactArgs(entry.args);
+  const errorCode2 = entry.errorCode ? redactDiagnosticText(entry.errorCode) : void 0;
+  const errorMessage = entry.errorMessage ? redactDiagnosticText(entry.errorMessage) : void 0;
+  return {
+    command: command.text,
+    args: args.values,
+    exitCode: entry.exitCode,
+    ...errorCode2 ? { errorCode: errorCode2.text } : {},
+    ...errorMessage ? { errorMessage: errorMessage.text } : {},
+    cliVersion: entry.cliVersion,
+    nodeVersion: entry.nodeVersion,
+    durationMs: entry.durationMs,
+    localRedactions: command.count + args.count + (errorCode2?.count ?? 0) + (errorMessage?.count ?? 0)
+  };
+}
+async function recordDiagnosticFailure(error, root) {
+  if (!activeCommand || activeCommand === "bug-report" || activeDisabled || process.env.TINYCLOUD_CLI_LOGS === "0") return;
+  await appendDiagnosticLog({
+    root,
+    entry: {
+      command: activeCommand,
+      args: activeArgs,
+      exitCode: error.exitCode,
+      errorCode: error.code,
+      errorMessage: error.message,
+      cliVersion: activeCliVersion,
+      nodeVersion: process.version,
+      durationMs: Date.now() - activeStartedAt
+    }
+  });
+}
+async function appendDiagnosticLog(options) {
+  if (options.disabled) return;
+  const maximum = options.maxBytes ?? MAX_BYTES;
+  await mkdir(options.root, { recursive: true, mode: 448 });
+  const path = join(options.root, FILE_NAME);
+  const line = `${JSON.stringify({ timestamp: (/* @__PURE__ */ new Date()).toISOString(), ...redactDiagnosticEntry(options.entry) })}
+`;
+  const lineBytes = Buffer.byteLength(line);
+  if (lineBytes >= maximum) return;
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    if (current.size + lineBytes > maximum) {
+      const old = await readFile(path);
+      const tail = old.subarray(Math.max(0, old.length - Math.floor(maximum / 2)));
+      const firstNewline = tail.indexOf(10);
+      await writeFile(path, firstNewline < 0 ? Buffer.alloc(0) : tail.subarray(firstNewline + 1), { mode: 384 });
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW, 384);
+  try {
+    await file.chmod(384);
+    await file.write(line);
+  } finally {
+    await file.close();
+  }
+}
+var FILE_NAME, MAX_BYTES, activeCommand, activeArgs, activeDisabled, activeCliVersion, activeStartedAt;
+var init_diagnostic_logs = __esm({
+  "src/lib/diagnostic-logs.ts"() {
+    "use strict";
+    FILE_NAME = "cli-diagnostics.jsonl";
+    MAX_BYTES = 1024 * 1024;
+    activeArgs = [];
+    activeDisabled = false;
+    activeCliVersion = "unknown";
+    activeStartedAt = Date.now();
+  }
+});
+
 // src/output/safe-text.ts
 function escape(match) {
   return `\\u{${match.codePointAt(0).toString(16)}}`;
@@ -244,6 +393,9 @@ function recordWarnings(warnings) {
   const holder = globalThis;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
+function recordRegistryFallbackWarning(_message, reason = "using_default_node") {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
+}
 function drainWarnings() {
   const holder = globalThis;
   const warnings = holder[PENDING_WARNINGS] ?? [];
@@ -265,9 +417,16 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
-  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`;
+  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
+  const parts = [];
+  if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
+  if (skipped.length > 0) {
+    const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+    const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
+    parts.push(`${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`);
+  }
+  return parts.join(" ");
 }
 function outputError(code5, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
@@ -420,7 +579,7 @@ var init_storage = __esm({
 
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
-import { join } from "path";
+import { join as join2 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME3 } from "@tinycloud/operations/cli-name";
@@ -432,6 +591,7 @@ import {
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -441,6 +601,15 @@ function approvalPendingOf(error) {
   const { step, of, approvalUrl, expiresAt } = pending;
   if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
   return { step, of, approvalUrl, expiresAt };
+}
+function registryUnavailableError(error) {
+  const failure = routingFailure(error);
+  if (failure?.code !== "registry_unavailable") return void 0;
+  return new CLIError(
+    "REGISTRY_UNAVAILABLE",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't get your storage settings. Try again in a few minutes.",
+    ExitCode.ERROR
+  );
 }
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
@@ -478,6 +647,8 @@ function wrapError(error) {
   if (verdict === "forbidden") {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
+  const unavailable = registryUnavailableError(error);
+  if (unavailable) return unavailable;
   if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
@@ -525,8 +696,9 @@ function storageFullError(error, progress) {
   const { message, hint } = describeStorageRejection(rejection, progress);
   return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
-function handleError(error) {
+async function handleError(error) {
   const cliError = wrapError(error);
+  await recordDiagnosticFailure(cliError, CONFIG_DIR).catch(() => void 0);
   const pending = approvalPendingOf(cliError);
   if (pending) {
     outputJson({ pending });
@@ -632,7 +804,7 @@ function capSpecFromAuthMeta(resource, action) {
 function buildNetworkHint() {
   const readHost = (name) => {
     try {
-      const raw = readFileSync(join(PROFILES_DIR, name, "profile.json"), "utf8");
+      const raw = readFileSync(join2(PROFILES_DIR, name, "profile.json"), "utf8");
       return JSON.parse(raw).host;
     } catch {
       return void 0;
@@ -674,6 +846,7 @@ var init_errors = __esm({
     "use strict";
     init_replication_registry();
     init_constants();
+    init_diagnostic_logs();
     init_formatter();
     init_safe_text();
     init_storage();
@@ -695,13 +868,13 @@ var init_errors = __esm({
 });
 
 // src/config/storage.ts
-import { constants as fsConstants } from "fs";
+import { constants as fsConstants2 } from "fs";
 import { randomUUID } from "crypto";
-import { readFile, writeFile, stat, mkdir, rm, readdir, rename, open } from "fs/promises";
-import { basename, dirname, join as join2 } from "path";
+import { readFile as readFile2, writeFile as writeFile2, stat, mkdir as mkdir2, rm as rm2, readdir, rename, open as open2 } from "fs/promises";
+import { basename, dirname, join as join3 } from "path";
 async function readJson(filePath) {
   try {
-    const data = await readFile(filePath, "utf-8");
+    const data = await readFile2(filePath, "utf-8");
     return JSON.parse(data);
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -712,22 +885,22 @@ async function readJson(filePath) {
 }
 async function writeJson(filePath, data) {
   const directory = dirname(filePath);
-  const tempPath = join2(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const tempPath = join3(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir2(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+    await writeFile2(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
     await rename(tempPath, filePath);
   } catch (err) {
-    await rm(tempPath, { force: true }).catch(() => void 0);
+    await rm2(tempPath, { force: true }).catch(() => void 0);
     throw err;
   }
 }
 async function writeJsonDurable(filePath, data) {
   const directory = dirname(filePath);
-  const tempPath = join2(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const tempPath = join3(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir2(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    const file = await open(tempPath, "wx", PRIVATE_FILE_MODE);
+    const file = await open2(tempPath, "wx", PRIVATE_FILE_MODE);
     try {
       await file.writeFile(JSON.stringify(data, null, 2) + "\n", "utf8");
       await file.sync();
@@ -735,14 +908,14 @@ async function writeJsonDurable(filePath, data) {
       await file.close();
     }
     await rename(tempPath, filePath);
-    const parent = await open(directory, "r");
+    const parent = await open2(directory, "r");
     try {
       await parent.sync();
     } finally {
       await parent.close();
     }
   } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => void 0);
+    await rm2(tempPath, { force: true }).catch(() => void 0);
     throw error;
   }
 }
@@ -758,7 +931,7 @@ async function fileExists(filePath) {
   }
 }
 async function ensureDir(dirPath) {
-  await mkdir(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await mkdir2(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
 }
 async function listDirs(dirPath) {
   try {
@@ -1920,6 +2093,7 @@ var init_hmac = __esm({
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
+    init_safe_text();
   }
 });
 
@@ -1951,8 +2125,8 @@ var init_publishing_manifest = __esm({
 });
 
 // src/lib/permissions.ts
-import { appendFile, chmod, readFile as readFile2 } from "fs/promises";
-import { join as join3 } from "path";
+import { appendFile, chmod, readFile as readFile3 } from "fs/promises";
+import { join as join4 } from "path";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact
@@ -2060,11 +2234,11 @@ var init_retry_policy = __esm({
 // src/lib/replication-log.ts
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
-import { dirname as dirname2, join as join4 } from "path";
+import { dirname as dirname2, join as join5 } from "path";
 function appendReplicationEvent(root, event) {
   mkdirSync(root, { recursive: true, mode: DIR_MODE });
   chmodSync(root, DIR_MODE);
-  const path = join4(root, LOG_FILE);
+  const path = join5(root, LOG_FILE);
   let size = 0;
   try {
     size = statSync(path).size;
@@ -2074,7 +2248,7 @@ function appendReplicationEvent(root, event) {
   const line = `${JSON.stringify(event)}
 `;
   if (size + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-    const rotated = join4(root, ROTATED_LOG_FILE);
+    const rotated = join5(root, ROTATED_LOG_FILE);
     try {
       renameSync(path, rotated);
     } catch (error) {
@@ -2087,7 +2261,7 @@ function appendReplicationEvent(root, event) {
   chmodSync(path, LOG_MODE);
 }
 function replicationLogPath(profileRoot) {
-  return join4(profileRoot, "replication", LOG_FILE);
+  return join5(profileRoot, "replication", LOG_FILE);
 }
 function createReplicationEventSink(profileRoot, options) {
   const pinnedNotices = /* @__PURE__ */ new Set();
@@ -4220,7 +4394,7 @@ var init_dist = __esm({
 });
 
 // src/lib/replication-config.ts
-import { join as join5 } from "path";
+import { join as join6 } from "path";
 import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
@@ -4266,8 +4440,8 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
     grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
     maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
-      dir: join5(root, "replication"),
-      logoutPendingFile: join5(root, REPLICA_LOGOUT_PENDING_FILE),
+      dir: join6(root, "replication"),
+      logoutPendingFile: join6(root, REPLICA_LOGOUT_PENDING_FILE),
       diagnosticFiles: REPLICATION_DIAGNOSTIC_FILES,
       guard: (section) => withProfileLock2(profile, section, { requireProfile: true, timeoutMs: 35e3 })
     }),
@@ -4285,8 +4459,8 @@ var init_replication_config = __esm({
 });
 
 // ../replica/dist/profile-gate.js
-import { mkdir as mkdir2, open as open2, readFile as readFile3, rename as rename2, rm as rm2 } from "fs/promises";
-import { join as join6 } from "path";
+import { mkdir as mkdir3, open as open3, readFile as readFile4, rename as rename2, rm as rm3 } from "fs/promises";
+import { join as join7 } from "path";
 function gatedError(gate, message) {
   return Object.assign(new ReplicaError2(ReplicaErrorCode2.GATED, message, { gate }), { gate });
 }
@@ -4376,7 +4550,7 @@ function isNotFound(error) {
 async function readStoredState(profileDir) {
   let text;
   try {
-    text = await readFile3(join6(profileDir, REPLICA_GATE_FILE), "utf8");
+    text = await readFile4(join7(profileDir, REPLICA_GATE_FILE), "utf8");
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica gate file cannot be read.");
@@ -4386,7 +4560,7 @@ async function readStoredState(profileDir) {
 async function readDenyFloor(profileDir) {
   let record2;
   try {
-    record2 = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record2 = JSON.parse(await readFile4(join7(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
@@ -4510,12 +4684,12 @@ var init_profile_gate = __esm({
 // ../replica/dist/sqlite.js
 import { AsyncLocalStorage } from "async_hooks";
 import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync, constants as fsConstants2, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
-import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir3, open as open22, readFile as readFile4, readdir as readdir2, rm as rm3, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
+import { closeSync, constants as fsConstants22, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
+import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir4, open as open22, readFile as readFile5, readdir as readdir2, rm as rm4, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
 import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
 import { constants as fsConstants3 } from "fs";
-import { lstat, open as open3, readdir as readdir3, rmdir, unlink } from "fs/promises";
-import { join as join7, parse, resolve, sep } from "path";
+import { lstat as lstat3, open as open4, readdir as readdir3, rmdir, unlink } from "fs/promises";
+import { join as join8, parse, resolve, sep } from "path";
 function isReplicaError(error, code5) {
   return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code5 === void 0 || error.code === code5);
 }
@@ -4689,8 +4863,8 @@ async function pathComponents(path) {
   let current = parse(absolute).root;
   const components = [];
   for (const part of ["", ...parts]) {
-    if (part) current = join7(current, part);
-    const details = await lstat(current, { bigint: true });
+    if (part) current = join8(current, part);
+    const details = await lstat3(current, { bigint: true });
     if (details.isSymbolicLink()) throw new Error(`Symlink in replica path: ${current}`);
     if (!details.isDirectory()) throw new Error(`Replica path component is not a directory: ${current}`);
     components.push({ path: current, identity: details });
@@ -4699,10 +4873,10 @@ async function pathComponents(path) {
 }
 async function pinnedDirectory(path, parent, relative = "") {
   const components = process.platform === "linux" ? void 0 : parent?.components ?? await pathComponents(path);
-  const before = await lstat(path, { bigint: true });
+  const before = await lstat3(path, { bigint: true });
   if (before.isSymbolicLink()) throw new Error(`Symlink in replica path: ${path}`);
   if (!before.isDirectory()) throw new Error("Replica directory is not a real directory.");
-  const handle = await open3(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
+  const handle = await open4(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
   try {
     if (!sameFile(before, await handle.stat({ bigint: true }))) {
       throw new Error("Replica directory changed during inspection.");
@@ -4723,14 +4897,14 @@ async function pinnedDirectory(path, parent, relative = "") {
   }
 }
 async function checkDirectory(directory) {
-  const details = await lstat(directory.name, { bigint: true });
+  const details = await lstat3(directory.name, { bigint: true });
   if (!details.isDirectory() || !sameFile(directory.identity, details)) {
     throw new Error(`Replica directory changed: ${directory.relative || directory.name}`);
   }
   if (directory.parent) await checkDirectory(directory.parent);
   else if (directory.components) {
     for (const component of directory.components) {
-      const current = await lstat(component.path, { bigint: true });
+      const current = await lstat3(component.path, { bigint: true });
       if (current.isSymbolicLink() || !current.isDirectory() || !sameFile(component.identity, current)) {
         throw new Error(`Replica path component changed: ${component.path}`);
       }
@@ -4750,8 +4924,8 @@ async function inspect(dir, allowAdapterFence) {
       for (const name of (await readdir3(parent.path)).sort()) {
         await checkDirectory(parent);
         const relative = parent.relative ? `${parent.relative}/${name}` : name;
-        const path = join7(parent.path, name);
-        const details = await lstat(path, { bigint: true });
+        const path = join8(parent.path, name);
+        const details = await lstat3(path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
           throw new Error(`Symlink in replica path: ${relative}`);
         }
@@ -4780,7 +4954,7 @@ async function inspect(dir, allowAdapterFence) {
     await walk(root);
     if (!hasDatabase) {
       unknownPaths.push("replica.db");
-    } else if (!await sourceMirrorSchema(join7(root.path, "replica.db"))) {
+    } else if (!await sourceMirrorSchema(join8(root.path, "replica.db"))) {
       const index = knownEntries.findIndex((entry) => entry.path === "replica.db");
       if (index >= 0) unknownEntries.push(knownEntries.splice(index, 1)[0]);
       unknownPaths.push("replica.db");
@@ -4800,15 +4974,15 @@ async function inspect(dir, allowAdapterFence) {
         if (pathIndex >= 0) unknownPaths.splice(pathIndex, 1);
         continue;
       }
-      const current = await lstat(child.path, { bigint: true });
+      const current = await lstat3(child.path, { bigint: true });
       if (!sameFile(child.identity, current) || fileKind(current) !== child.kind) {
         throw new Error(`Replica child changed during schema inspection: ${child.relative}`);
       }
     }
     for (const name of names) {
       if (root.children.some((child) => child.relative === name)) continue;
-      const path = join7(root.path, name);
-      const details = await lstat(path, { bigint: true });
+      const path = join8(root.path, name);
+      const details = await lstat3(path, { bigint: true });
       if (!/^replica\.db-(?:wal|shm|journal)$/.test(name) || !details.isFile()) {
         throw new Error(`Unexpected replica child during schema inspection: ${name}`);
       }
@@ -4882,7 +5056,7 @@ async function removeSqliteReplicaLayout(dir, options = {}) {
         }
         await options[LAYOUT_FAULTS]?.beforeUnlink?.(child.relative);
         await checkDirectory(directory);
-        const details = await lstat(child.path, { bigint: true });
+        const details = await lstat3(child.path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
           throw new Error(`Symlink in replica path: ${child.relative}`);
         }
@@ -4923,7 +5097,7 @@ async function captureNamedPath(path) {
   return identities;
 }
 async function openVerifiedDatabase(path, opener, options = {}) {
-  const leaf = await open22(path, fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+  const leaf = await open22(path, fsConstants22.O_RDONLY | fsConstants22.O_NOFOLLOW);
   let db;
   try {
     const identity = await leaf.stat();
@@ -5052,7 +5226,7 @@ async function unlinkWriterOrphans(root, keep) {
   const touched = /* @__PURE__ */ new Set();
   for (const file of await writerBlobFiles(root)) {
     if (file.hash !== null && keep.has(file.hash)) continue;
-    await rm3(file.path, { force: true });
+    await rm4(file.path, { force: true });
     touched.add(dirname3(file.path));
     removed += 1;
   }
@@ -5065,7 +5239,7 @@ async function unlinkBlobsIn(root, keep) {
     const shardPath = join22(root, shard);
     if (shard === ".tmp") {
       for (const name of await entriesOf(shardPath)) {
-        await rm3(join22(shardPath, name), { force: true });
+        await rm4(join22(shardPath, name), { force: true });
         removed += 1;
       }
       continue;
@@ -5076,7 +5250,7 @@ async function unlinkBlobsIn(root, keep) {
         kept += 1;
         continue;
       }
-      await rm3(join22(shardPath, name), { force: true });
+      await rm4(join22(shardPath, name), { force: true });
       removed += 1;
     }
     if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
@@ -5483,9 +5657,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
         let store;
         let directoryFd;
         try {
-          if (options.create) await mkdir3(dir, { recursive: true, mode: 448 });
+          if (options.create) await mkdir4(dir, { recursive: true, mode: 448 });
           if (process.platform === "linux") {
-            directoryFd = openSync(dir, fsConstants2.O_RDONLY | fsConstants2.O_DIRECTORY | fsConstants2.O_NOFOLLOW);
+            directoryFd = openSync(dir, fsConstants22.O_RDONLY | fsConstants22.O_DIRECTORY | fsConstants22.O_NOFOLLOW);
           }
           const opened = directoryFd === void 0 ? lstatSync(dir, { bigint: true }) : fstatSync(directoryFd, { bigint: true });
           if (!opened.isDirectory() || opened.isSymbolicLink() || options.expectedDirectory && (opened.dev !== BigInt(options.expectedDirectory.dev) || opened.ino !== BigInt(options.expectedDirectory.ino))) {
@@ -5498,9 +5672,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
           const pinnedDir = directoryFd === void 0 ? dir : `/proc/self/fd/${directoryFd}`;
           const dbPath = join22(pinnedDir, "replica.db");
           if (options.create) {
-            await mkdir3(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
+            await mkdir4(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
             await Promise.all([chmod2(pinnedDir, 448), chmod2(join22(pinnedDir, "blobs"), 448), chmod2(join22(pinnedDir, "blobs", ".tmp"), 448)]);
-            const handle = await open22(dbPath, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_RDWR | fsConstants2.O_NOFOLLOW, 384).catch((error) => {
+            const handle = await open22(dbPath, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_RDWR | fsConstants22.O_NOFOLLOW, 384).catch((error) => {
               if (errnoOf(error) === "EEXIST") return null;
               throw error;
             });
@@ -5512,7 +5686,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
               }
             }
           }
-          const leaf = await open22(dbPath, fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+          const leaf = await open22(dbPath, fsConstants22.O_RDONLY | fsConstants22.O_NOFOLLOW);
           let db;
           try {
             const identity = await leaf.stat();
@@ -6129,11 +6303,11 @@ CREATE TABLE IF NOT EXISTS grant_install (
           );
           if (exists) continue;
           const shard = join22(this.#pinnedDir, "blobs", hash.slice(0, 2));
-          await mkdir3(shard, { mode: 448 }).catch((error) => {
+          await mkdir4(shard, { mode: 448 }).catch((error) => {
             if (errnoOf(error) !== "EEXIST") throw error;
           });
           const temp = join22(this.#pinnedDir, "blobs", ".tmp", `${hash}.${randomBytes2(6).toString("hex")}`);
-          const handle = await open22(temp, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_WRONLY, 384);
+          const handle = await open22(temp, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_WRONLY, 384);
           try {
             await handle.writeFile(bytes);
             await handle.sync();
@@ -6151,7 +6325,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
           dirs.add(join22(this.#pinnedDir, "blobs"));
         }
         for (const dir of dirs) {
-          const handle = await open22(dir, fsConstants2.O_RDONLY);
+          const handle = await open22(dir, fsConstants22.O_RDONLY);
           try {
             await handle.sync();
           } finally {
@@ -6512,7 +6686,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
       async readContent(hash) {
         if (!isHash(hash)) return void 0;
         try {
-          return new Uint8Array(await readFile4(this.#blobPath(hash)));
+          return new Uint8Array(await readFile5(this.#blobPath(hash)));
         } catch (error) {
           if (errnoOf(error) === "ENOENT") return void 0;
           throw storageError(error, "Reading replica content");
@@ -6599,9 +6773,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
 });
 
 // src/lib/profile-replicas.ts
-import { lstat as lstat3, open as open4, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
+import { lstat as lstat4, open as open5, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
 import { constants as fsConstants4 } from "fs";
-import { dirname as dirname4, join as join8, resolve as resolve3, sep as sep2 } from "path";
+import { dirname as dirname4, join as join9, resolve as resolve3, sep as sep2 } from "path";
 import { ProfileDeletedError as ProfileDeletedError2, profilePath as profilePath3, withProfileLock as withProfileLock3 } from "@tinycloud/operations/state";
 function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
   return new CLIError(
@@ -6613,7 +6787,7 @@ function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
 async function safeReplicaRoot(profile, root, operation = "logout") {
   let rootStats;
   try {
-    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat3(root);
+    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat4(root);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -6631,12 +6805,12 @@ async function safeReplicaRoot(profile, root, operation = "logout") {
   return rootRealPath;
 }
 async function safeReplicaEntry(profile, root, entry, operation = "logout") {
-  const entryPath = join8(root, entry.name);
+  const entryPath = join9(root, entry.name);
   const rootRealPath = await safeReplicaRoot(profile, root, operation);
   if (rootRealPath === null) {
     throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`, operation);
   }
-  const entryStats = await lstat3(entryPath);
+  const entryStats = await lstat4(entryPath);
   if (entry.isSymbolicLink() || entryStats.isSymbolicLink()) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`, operation);
   }
@@ -6651,7 +6825,7 @@ async function safeReplicaEntry(profile, root, entry, operation = "logout") {
 }
 async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatabase = false) {
   const { path, identity } = await safeReplicaEntry(profile, root, entry);
-  const handle = await open4(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open5(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinnedEntry = await handle.stat();
     if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino) {
@@ -6667,7 +6841,7 @@ async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatab
   }
 }
 async function pinReplicaRoot(profile, named, operation, allowNamedLogout = false) {
-  const initial = await lstat3(named, { bigint: true }).catch((error) => {
+  const initial = await lstat4(named, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -6678,7 +6852,7 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
   const ancestors = [];
   if (process.platform !== "linux") {
     for (let path = resolve3(named); ; path = dirname4(path)) {
-      const details = await lstat3(path, { bigint: true });
+      const details = await lstat4(path, { bigint: true });
       if (!details.isDirectory() || details.isSymbolicLink()) {
         throw refuseUnsafeReplicaPath(profile, `replica path component "${path}" is not a real directory`, operation);
       }
@@ -6686,17 +6860,17 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
       if (dirname4(path) === path) break;
     }
   }
-  const handle = await open4(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open5(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinned = await handle.stat({ bigint: true });
     const assertNamed = async () => {
       for (const component of ancestors) {
-        const details = await lstat3(component.path, { bigint: true });
+        const details = await lstat4(component.path, { bigint: true });
         if (!details.isDirectory() || details.isSymbolicLink() || details.dev !== component.dev || details.ino !== component.ino) {
           throw refuseUnsafeReplicaPath(profile, `replica path component "${component.path}" changed during cleanup`, operation);
         }
       }
-      const current = await lstat3(named, { bigint: true });
+      const current = await lstat4(named, { bigint: true });
       if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial?.dev || current.ino !== initial?.ino || current.dev !== pinned.dev || current.ino !== pinned.ino) {
         throw refuseUnsafeReplicaPath(profile, "the replicas directory changed during cleanup", operation);
       }
@@ -6786,8 +6960,8 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
   if (inventory.roots.has(relative)) {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" has conflicting recorded identities`);
   }
-  const path = join8(root, entry.name);
-  const info = await lstat3(path, { bigint: true });
+  const path = join9(root, entry.name);
+  const info = await lstat4(path, { bigint: true });
   const kind = info.isDirectory() ? "directory" : info.isSymbolicLink() ? "symlink" : info.isFile() ? "file" : null;
   if (kind === null || process.platform !== "linux" && kind === "symlink") {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" cannot be removed safely`);
@@ -6808,7 +6982,7 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
 async function removeProfileReplicas(profile, options = {}) {
   const inventory = legacyInventory(profile, options);
   return withProfileLock3(profile, async () => {
-    const namedRoot = join8(profilePath3(profile), "replicas");
+    const namedRoot = join9(profilePath3(profile), "replicas");
     const pinned = await pinReplicaRoot(profile, namedRoot, "logout", true);
     if (!pinned) return [];
     const expectedRoot = inventory?.roots.get("replicas");
@@ -6845,7 +7019,7 @@ async function removeProfileReplicas(profile, options = {}) {
         if (inventory) {
           if (layout) assertRecordedChild(profile, entry.name, layout, inventory, false);
           else {
-            const child = await lstat3(inspected.path, { bigint: true });
+            const child = await lstat4(inspected.path, { bigint: true });
             const recorded = inventory.roots.get(`replicas/${entry.name}`);
             if (!recorded || child.dev.toString() !== recorded.dev || child.ino.toString() !== recorded.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed since the recorded inventory`);
@@ -6866,14 +7040,14 @@ async function removeProfileReplicas(profile, options = {}) {
           if (current.identity.dev !== identity.dev || current.identity.ino !== identity.ino) {
             throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
           }
-          const handle = await open4(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+          const handle = await open5(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
           try {
             const pinnedEntry = await handle.stat();
             if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino || (await readdir4(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : current.path)).length !== 0) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
             }
             await pinned.assertNamed();
-            const namedEntry = await lstat3(current.path);
+            const namedEntry = await lstat4(current.path);
             if (!namedEntry.isDirectory() || namedEntry.dev !== pinnedEntry.dev || namedEntry.ino !== pinnedEntry.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed at removal`);
             }
@@ -6946,7 +7120,7 @@ async function removeProfileReplicas(profile, options = {}) {
             }
             removed.push(entry.name);
           } catch (error) {
-            const replicaStillExists = await lstat3(join8(root, entry.name)).then(
+            const replicaStillExists = await lstat4(join9(root, entry.name)).then(
               () => true,
               (statError) => statError.code !== "ENOENT"
             );
@@ -6962,7 +7136,7 @@ async function removeProfileReplicas(profile, options = {}) {
         }
         for (const { entry, path, identity, layout } of unknownRoots) {
           await pinned.assertNamed();
-          const current = await lstat3(path, { bigint: true });
+          const current = await lstat4(path, { bigint: true });
           const kind = current.isDirectory() ? "directory" : current.isSymbolicLink() ? "symlink" : current.isFile() ? "file" : null;
           if (kind !== identity.kind || current.dev.toString() !== identity.dev || current.ino.toString() !== identity.ino || process.platform !== "linux" && kind === "symlink") {
             throw refuseUnsafeReplicaPath(profile, `approved legacy entry "${entry.name}" changed at removal`);
@@ -7014,8 +7188,8 @@ var init_profile_replicas = __esm({
 });
 
 // src/lib/logout-pending.ts
-import { lstat as lstat4, open as open5, readFile as readFile5, rm as rm4 } from "fs/promises";
-import { join as join9 } from "path";
+import { lstat as lstat5, open as open6, readFile as readFile6, rm as rm5 } from "fs/promises";
+import { join as join10 } from "path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE2, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import { namedProfilePath, profilePath as profilePath4 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE2 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -7098,7 +7272,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
     const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-    await rm4(join9(profilePath4(name), "approval-pending.json"), { force: true });
+    await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
     await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
     let failed = false;
     let error;
@@ -7116,7 +7290,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
     }
     if (failed) throw error;
     if (syncDirectory) {
-      const directory = await open5(profilePath4(name), "r");
+      const directory = await open6(profilePath4(name), "r");
       try {
         await directory.sync();
       } finally {
@@ -7133,7 +7307,7 @@ async function finishSignedOutCredentialRemoval(name) {
   if (profile?.authSignedOut !== true) return;
   for (const file of ["session.json", "key.json"]) {
     try {
-      await lstat4(join9(profilePath4(name), file));
+      await lstat5(join10(profilePath4(name), file));
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
       throw error;
@@ -7148,12 +7322,12 @@ async function finishSignedOutCredentialRemoval(name) {
 }
 async function recoverPendingLogout(name) {
   try {
-    await lstat4(join9(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
+    await lstat5(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
   } catch (error) {
     if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
     await finishSignedOutCredentialRemoval(name);
     try {
-      await lstat4(profilePath4(name));
+      await lstat5(profilePath4(name));
     } catch (missing) {
       if (typeof missing === "object" && missing !== null && "code" in missing && missing.code === "ENOENT") return;
       throw missing;
@@ -7165,7 +7339,7 @@ async function recoverPendingLogout(name) {
     if (!profile) {
       for (const child of [REPLICA_GATE_FILE2, "replicas", "replication"]) {
         try {
-          await lstat4(join9(profilePath4(name), child));
+          await lstat5(join10(profilePath4(name), child));
         } catch (childError) {
           if (typeof childError === "object" && childError !== null && "code" in childError && childError.code === "ENOENT") continue;
           throw childError;
@@ -7208,7 +7382,7 @@ async function recoverPendingLogout(name) {
   const report = await ProfileManager.withLock(name, async () => {
     const unreadable = (file) => new CLIError(
       "REPLICA_GATED",
-      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join9(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
+      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join10(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
       ExitCode.ERROR
     );
     try {
@@ -7223,7 +7397,7 @@ async function recoverPendingLogout(name) {
       throw unreadable("session.json");
     }
     if (session) {
-      const marker = await readFile5(join9(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text) => {
+      const marker = await readFile6(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text) => {
         try {
           return JSON.parse(text);
         } catch {
@@ -7286,9 +7460,17 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+function configuredRegistryUrl(contextUrl, profile) {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : void 0;
+}
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -7360,7 +7542,12 @@ async function restoreProfileSessionNode(ctx) {
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -7382,8 +7569,13 @@ async function storedSessionVerifiesLocally(profileName) {
     const session = await ProfileManager.getSession(profileName);
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
+    const tinycloudRegistryUrl = configuredRegistryUrl(void 0, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -7408,6 +7600,7 @@ async function createSDKInstance(ctx, options) {
     );
   }
   const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key = await ProfileManager.getKey(ctx.profile);
   const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
@@ -7429,7 +7622,11 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -7470,7 +7667,11 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
+    ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -7788,9 +7989,9 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm5 } from "fs/promises";
+import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
@@ -7846,7 +8047,7 @@ var init_profiles = __esm({
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
         const profileDir = profilePath5(name);
-        if (profileDir !== join10(PROFILES_DIR, name)) {
+        if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
         }
@@ -7880,7 +8081,7 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join10(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -7895,25 +8096,25 @@ var init_profiles = __esm({
        */
       static async setProfile(name, data) {
         await _ProfileManager.withLock(name, async () => {
-          await writeJson(join10(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Publish explicit logout provenance (or its verified-login clear) durably under the profile lock. */
       static async setProfileDurable(name, data) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJsonDurable(join10(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJsonDurable(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
        */
       static async profileExists(name) {
-        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join10(directory, "profile.json")) : Promise.resolve(false));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join11(directory, "profile.json")) : Promise.resolve(false));
       }
       /**
        * Returns an array of profile directory names.
@@ -7952,22 +8153,22 @@ var init_profiles = __esm({
             `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME11} profile default <other>\`.`
           );
         }
-        const kind = await lstat5(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
+        const kind = await lstat6(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
           if (error.code === "ENOENT") return "missing";
           throw error;
         });
         if (kind === "missing") return;
         if (kind === "link") {
-          await rm5(profileDir, { force: true });
+          await rm6(profileDir, { force: true });
           return;
         }
         await _ProfileManager.withLock(name, async () => {
           const directory = profilePath5(name);
-          for (const file of ["session.json", "key.json"]) await rm5(join10(directory, file), { force: true });
+          for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm5(join10(directory, entry), { recursive: true, force: true });
+            if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
           }
-          await rm5(join10(directory, "profile.json"), { force: true });
+          await rm6(join11(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
         });
       }
@@ -7978,9 +8179,9 @@ var init_profiles = __esm({
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join10(directory, "profile.json");
+          const profileFile = join11(directory, "profile.json");
           if ((await readJson(profileFile))?.authSignedOut === true) return null;
-          const key = await readJson(join10(directory, "key.json"));
+          const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
       }
@@ -7992,12 +8193,12 @@ var init_profiles = __esm({
       static async setKey(name, jwk) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJson(join10(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
         });
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -8006,7 +8207,7 @@ var init_profiles = __esm({
       static async getSession(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join10(directory, "profile.json");
+          const profileFile = join11(directory, "profile.json");
           if ((await readJson(profileFile))?.authSignedOut === true) return null;
           const session = await readSession(name);
           return (await readJson(profileFile))?.authSignedOut === true ? null : session;
@@ -8032,10 +8233,10 @@ var init_profiles = __esm({
       static async getCacheDir(name) {
         const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
-          const cacheDir = join10(await _ProfileManager.ensureProfileDir(name), "cache");
+          const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
           await chmod3(cacheDir, PRIVATE_DIR_MODE);
-          return alreadyPinned ? cacheDir : join10(namedProfilePath2(name), "cache");
+          return alreadyPinned ? cacheDir : join11(namedProfilePath2(name), "cache");
         });
       }
       // ── Resolution helpers ──────────────────────────────────────────────
@@ -8044,6 +8245,7 @@ var init_profiles = __esm({
        *
        * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
        * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+       * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
        *
        * Local-node discovery (TC-106) only runs when no explicit host was given
        * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -8063,6 +8265,9 @@ var init_profiles = __esm({
         } catch (error) {
           if (error instanceof ProfileSymlinkError2) throw error;
         }
+        const envRegistryUrl = process.env.TC_REGISTRY_URL;
+        const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+        const tinycloudRegistryUrl = typeof envRegistryUrl === "string" && envRegistryUrl.length > 0 ? envRegistryUrl : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0 ? profileRegistryUrl : void 0;
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
         const explicitEnvOff = envReplication === "0" || envReplication === "false" || envReplication === "off";
@@ -8087,6 +8292,7 @@ var init_profiles = __esm({
         return {
           profile,
           host,
+          ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
           verbose: options.verbose ?? false,
           noCache: options.noCache ?? false,
           quiet: options.quiet ?? false,
@@ -14429,7 +14635,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open6(blob, key32) {
+async function open7(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -14846,7 +15052,7 @@ async function openRecordChecked(record2, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open6(body, key);
+    plaintext = await open7(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -26718,7 +26924,7 @@ async function seal2(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH2 + nonce.length);
   return { blob, cid: await computeCid2(blob) };
 }
-async function open7(blob, key32) {
+async function open8(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -27293,7 +27499,7 @@ async function resolveLegacyV2(link4, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open7(sealed, parsed.key32);
+      plaintext = await open8(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -30891,9 +31097,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat6, mkdir as mkdir4, mkdtemp, open as open8, readFile as readFile6, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm6, unlink as unlink4 } from "fs/promises";
+import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open9, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
-import { basename as basename2, join as join11, resolve as resolve4, sep as sep3 } from "path";
+import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -30925,7 +31131,7 @@ function shareFilename(value) {
     throw new CLIError(
       "UNSAFE_FILENAME",
       hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
-      8
+      2
     );
   }
 }
@@ -30938,7 +31144,7 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const path = resolve4(input);
   const info = await stat4(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile6(path));
+  const bytes = new Uint8Array(await readFile7(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
@@ -30947,9 +31153,9 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join11(current, segment) : join11(current, segment);
+    current = current === sep3 ? join12(current, segment) : join12(current, segment);
     try {
-      const info = await lstat6(current);
+      const info = await lstat7(current);
       if (info.isSymbolicLink()) {
         const canonical = await realpath2(current);
         if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
@@ -30957,8 +31163,8 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir4(current, { mode: 448 });
-      const created = await lstat6(current);
+      await mkdir5(current, { mode: 448 });
+      const created = await lstat7(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
@@ -30967,31 +31173,31 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve4(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open8(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open9(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
-  const outputPath = join11(stableDirectory, safeName);
+  const outputPath = join12(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat4(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join11(stableDirectory, ".tinycloud-share-stage-"));
-  const stagingInfo = await lstat6(stagingDirectory);
+  const stagingDirectory = await mkdtemp(join12(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingInfo = await lstat7(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join11(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
+  const stagingPath = join12(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
     await assertStableDirectory();
     try {
-      const existing = await lstat6(outputPath);
+      const existing = await lstat7(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open8(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open9(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -31013,10 +31219,10 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink4(temporaryPath);
     } catch {
     }
-    await rm6(stagingDirectory, { recursive: true, force: true });
+    await rm7(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join11(outputDirectory, safeName);
+  return join12(outputDirectory, safeName);
 }
 
 // src/share/artifact-store.ts
@@ -31235,10 +31441,11 @@ init_profiles();
 init_constants();
 init_errors();
 init_session_expired();
-import { chmod as chmod4, link as link3, open as open9, readFile as readFile7, stat as stat5, unlink as unlink5 } from "fs/promises";
-import { dirname as dirname5, join as join12 } from "path";
+init_warnings();
+import { chmod as chmod4, link as link3, open as open10, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
+import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
-import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
@@ -31407,8 +31614,8 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   const observedProfiles = /* @__PURE__ */ new Set();
   let preparedKeys;
   let preparedKey;
-  const path = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
-  const legacyPath = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
+  const path = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
+  const legacyPath = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
   const b64 = (value) => Buffer.from(value).toString("base64url");
   const unb64 = (value) => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
@@ -31444,7 +31651,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   };
   const readIfPresent = async (file) => {
     try {
-      return await readFile7(file);
+      return await readFile8(file);
     } catch (error) {
       if (error.code === "ENOENT") return void 0;
       throw new ShareHistoryReadError();
@@ -31592,7 +31799,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       await link3(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink5(found.file);
-      const directory = await open9(dirname5(found.file), "r");
+      const directory = await open10(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -31745,7 +31952,9 @@ function createShareAuthorityAdapters(input = {}) {
         issuerDid: node.credentialHolderDid,
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
-        sign: (digest) => node.signSessionBytes(digest)
+        sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport
       });
     } catch (error) {
       if (!(error instanceof Error && "status" in error && error.status === 409 && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
@@ -32166,11 +32375,25 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const nativeReader = async (link4) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false }).sharing);
+    let sharing = input.nativeSharing;
+    if (sharing === void 0) {
+      const selectedProfile2 = await profileName();
+      const selected = await ProfileManager.profileExists(selectedProfile2) ? await ProfileManager.getProfile(selectedProfile2) : void 0;
+      const registry = selected === void 0 ? {} : {
+        registryCacheStore: createProfileRegistryCacheStore2(selectedProfile2),
+        registrySequenceStore: createProfileRegistrySequenceStore2(selectedProfile2),
+        tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl
+      };
+      sharing = () => new TinyCloudNode2({
+        ...registry,
+        newUserHost: null,
+        autoDiscoverLocalNode: false,
+        onRegistryFallback: recordRegistryFallbackWarning
+      }).sharing;
+    }
     const token = parseNativeShareUrl(link4);
-    const decoded = sharing(void 0).decodeLink(token);
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin2(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const share = sharing();
+    const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
     const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
@@ -32227,8 +32450,8 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync } from "fs";
-import { lstat as lstat7, open as open10, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
-import { basename as basename3, dirname as dirname6, isAbsolute, join as join13, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
+import { lstat as lstat8, open as open11, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
+import { basename as basename3, dirname as dirname6, isAbsolute, join as join14, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -32582,9 +32805,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open11 = html.indexOf("<", index);
-    if (open11 === -1) return;
-    index = open11 + 1;
+    const open12 = html.indexOf("<", index);
+    if (open12 === -1) return;
+    index = open12 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -33170,7 +33393,7 @@ async function linuxDescriptorPath(fd) {
 async function parentChainIsRealDirectories(root, path) {
   let current = dirname6(path);
   while (current !== root && isWithinFolder(root, current)) {
-    const info = await lstat7(current);
+    const info = await lstat8(current);
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
     current = dirname6(current);
   }
@@ -33183,9 +33406,9 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
   let before;
   try {
     await hooks.beforeOpen?.();
-    before = await lstat7(path);
+    before = await lstat8(path);
     await hooks.afterLstat?.();
-    handle = await open10(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open11(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -33223,7 +33446,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.afterRead?.();
     if (byDescriptor === void 0) {
       try {
-        const again = await lstat7(path);
+        const again = await lstat8(path);
         if (again.isSymbolicLink() || again.dev !== info.dev || again.ino !== info.ino || !await parentChainIsRealDirectories(root, path)) return problem(CHANGED);
       } catch (error) {
         if (isRaceError(error)) return problem(CHANGED);
@@ -33240,11 +33463,11 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   try {
     await hooks.beforeOpen?.();
-    const before = await lstat7(absolute);
+    const before = await lstat8(absolute);
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open10(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open11(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -33258,7 +33481,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
       const real = await realpath3(absolute);
       if (real !== absolute || absolute !== root && !isWithinFolder(root, real)) return problem("symbolic link");
       const entries = await readdir6(absolute, { withFileTypes: true });
-      const after = await lstat7(absolute);
+      const after = await lstat8(absolute);
       if (after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) return problem(CHANGED);
       if (absolute !== root && !await parentChainIsRealDirectories(root, absolute)) return problem(CHANGED);
       return { entries };
@@ -33278,7 +33501,7 @@ function problemError(problems) {
   return new CLIError(
     first.code,
     `folder has ${problems.length} ${noun}: ${listed}${more}`,
-    first.code === "UNSAFE_PATH" ? 8 : 2,
+    2,
     { hint: first.code === "UNSAFE_PATH" ? "Rename these files to plain names without control, invisible or direction-changing characters." : "Symbolic links and special files are never followed or read; copy the real files into the folder." }
   );
 }
@@ -33301,7 +33524,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join13(absolute, entry.name);
+      const child = join14(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -33351,7 +33574,7 @@ function htmlFolderError(error) {
   return new CLIError(
     pathProblem ? "UNSAFE_PATH" : "INVALID_ARGUMENT",
     `folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file}${reference})`}`,
-    pathProblem ? 8 : 2
+    2
   );
 }
 async function jsdomParser() {
@@ -33570,8 +33793,8 @@ function shareCliError(error, operation = "publish") {
   const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
   const known = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 2 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 2 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
     AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
@@ -33993,10 +34216,22 @@ async function loadCourierEntry() {
 
 // src/index.ts
 init_retry_policy();
+init_constants();
+init_diagnostic_logs();
 var { version } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
 );
 var program = new Command2();
+var commandStartedAt = Date.now();
+function fullCommandName(command) {
+  const names = [];
+  let current = command;
+  while (current && current !== program) {
+    names.push(current.name());
+    current = current.parent;
+  }
+  return names.reverse().join(" ");
+}
 var shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch
@@ -34010,20 +34245,27 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
-program.hook("preAction", async (thisCommand) => {
-  const opts = thisCommand.optsWithGlobals();
+program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr").option("--no-diagnostic-logs", "Don't record a CLI log for this command");
+program.hook("preAction", async (hookedCommand, actionCommand) => {
+  const opts = hookedCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
   applyNoRetryFlag(opts);
-  const parentName = thisCommand.parent?.name();
-  const isShareCommand = parentName === "share" || thisCommand.name() === "share";
+  const parentName = hookedCommand.parent?.name();
+  const isShareCommand = parentName === "share" || hookedCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
-  const commandName = thisCommand.name();
-  const isRootCommand = thisCommand === program;
-  const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
+  const commandName = hookedCommand.name();
+  const isRootCommand = hookedCommand === program;
+  const fullCommand = fullCommandName(hookedCommand);
+  setDiagnosticCommandContext({
+    command: fullCommandName(actionCommand),
+    args: process.argv.slice(2),
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || opts.diagnosticLogs === false,
+    cliVersion: version
+  });
+  commandStartedAt = Date.now();
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create" || fullCommand === "registry show";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();
@@ -34041,8 +34283,21 @@ program.hook("preAction", async (thisCommand) => {
     }
   }
 });
-program.hook("postAction", () => {
+program.hook("postAction", async (_hookedCommand, actionCommand) => {
   outputWarnings([]);
+  if (actionCommand.name() === "bug-report") return;
+  await appendDiagnosticLog({
+    root: CONFIG_DIR,
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || actionCommand.optsWithGlobals().diagnosticLogs === false,
+    entry: {
+      command: fullCommandName(actionCommand),
+      args: process.argv.slice(2),
+      exitCode: 0,
+      cliVersion: version,
+      nodeVersion: process.version,
+      durationMs: Date.now() - commandStartedAt
+    }
+  }).catch(() => void 0);
 });
 configureShareCommandServices({
   targetAdapter: shareAuthority.targetAdapter,
@@ -34098,6 +34353,12 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 `;
 });
 var commandToken = firstCommandToken(argv);
+setDiagnosticCommandContext({
+  command: commandToken ?? "unknown",
+  args: argv,
+  disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
+  cliVersion: version
+});
 if (argv[0] === "courier") {
   const code5 = await (await loadCourierEntry()).runCourier(argv.slice(1));
   if (code5 !== 0) process.exit(code5);

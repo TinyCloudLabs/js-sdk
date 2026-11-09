@@ -58,10 +58,6 @@ import {
   DelegationResult,
   ClientSession,
   Extension,
-  EncodedShareData,
-  KVService,
-  ServiceContext,
-  ServiceSession,
   type TelemetryConfig,
   type RetryPolicy,
   ISpaceCreationHandler,
@@ -76,16 +72,18 @@ import {
   type OwnerDelegationReceipt,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
-  type RegistryPolicy,
   type RegistrySequenceStore,
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
+  createLocalStorageRegistryCacheStore,
+  type RegistryCacheStore,
   type StorageFullEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 import { closeActiveModal, showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
@@ -120,9 +118,8 @@ import {
 import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
+import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
 import type { NotificationConfig } from "../notifications/types";
-import { WasmInitializer } from "./WasmInitializer";
-import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess, SpaceHosting } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
 import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
@@ -140,10 +137,10 @@ export interface RuntimePermissionSigner {
   signMessage(message: string): Promise<string>;
 }
 
-/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. */
-interface OpenKeyMessageSigner {
+/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. The SDK always sends a `keyId`. */
+interface OpenKeyMessageSigner extends OpenKeyConnection {
   signMessage?: (
-    request: { message: string; keyId?: string },
+    request: { message: string; keyId: string },
     opts?: { mode?: "iframe" | "popup" | "redirect" },
   ) => Promise<{ signature: string }>;
 }
@@ -184,33 +181,23 @@ export interface Config extends ClientConfig {
   /** Local KV replication. Off unless set; node-sdk validates the config and owns the storage. */
   replication?: TinyCloudNodeConfig["replication"];
 
-  /** Explicit TinyCloud server hosts. When omitted, signIn resolves the user's host. */
+  /** Explicit host hints for owners absent from both registry namespaces. Signed v2 entries select their own hosts. */
   tinycloudHosts?: string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /**
-   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
-   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
-   * deprecated and will be removed in a future major release.
-   */
-  tinycloudFallbackHosts?: string[] | null;
-  /**
-   * How sign-in uses the location registry when no `tinycloudHosts` are set.
-   * Default `"legacy-fallback"` (deprecated). `"fail-closed"` routes on the
-   * registry verdict for the wallet address and refuses automatic space
-   * creation on a host the owner's registry record does not list, or when
-   * the registry gives no verdict. See `TinyCloudNodeConfig.registryPolicy`.
-   */
-  registryPolicy?: RegistryPolicy;
-  /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them. */
+  /** Host hint for owners absent from both v2 and v1 registries. Default https://node.tinycloud.xyz; null disables onboarding. */
   newUserHost?: string | null;
-  /** `fail-closed` only: chain ID of the v1 registry subject built from the wallet address. Default 1. */
+  /** Chain ID used to distinguish a v1-only owner from an owner with no registry entry. Default 1. */
   registryChainId?: number;
-  /** `fail-closed` only: highest registry sequence seen per owner. Default: a `localStorage`-backed store. */
+  /** Highest signed v2 sequence seen per owner. Default: a `localStorage`-backed store. */
   registrySequenceStore?: RegistrySequenceStore;
-  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
+  /** Exact signed responses in browser storage, reverified on every routing read. */
+  registryCacheStore?: RegistryCacheStore;
+  /** Called after an actual cached-settings or default-node fallback. */
+  onRegistryFallback?: TinyCloudNodeConfig["onRegistryFallback"];
+  /** Called only when no host resolves for a genuinely unregistered owner. */
   onNodeNotFound?: OnNodeNotFound;
-  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
+  /** Probe local nodes only for owners absent from both registry namespaces. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
@@ -335,42 +322,6 @@ export type FenceCapableStorage = ISessionStorage & {
   isSignedOut?: (address: string, signature: string) => boolean;
 };
 
-const TC1_PREFIX = "tc1:";
-
-function base64UrlDecode(encoded: string): string {
-  let base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-  while (base64.length % 4) {
-    base64 += "=";
-  }
-  if (typeof atob !== "undefined") {
-    return decodeURIComponent(escape(atob(base64)));
-  } else if (typeof Buffer !== "undefined") {
-    return Buffer.from(base64, "base64").toString("utf-8");
-  }
-  throw new Error("No base64 decoding available");
-}
-
-function decodeShareLink(link: string): EncodedShareData {
-  let encoded = link;
-  if (link.includes("/share/")) {
-    const parts = link.split("/share/");
-    encoded = parts[parts.length - 1];
-  }
-  if (link.includes("?share=")) {
-    const url = new URL(link);
-    encoded = url.searchParams.get("share") ?? encoded;
-  }
-  if (!encoded.startsWith(TC1_PREFIX)) {
-    throw new Error(`Invalid share link format. Expected prefix '${TC1_PREFIX}'`);
-  }
-  const base64Data = encoded.slice(TC1_PREFIX.length);
-  const jsonString = base64UrlDecode(base64Data);
-  const data = JSON.parse(jsonString) as EncodedShareData;
-  if (data.version !== 1) {
-    throw new Error(`Unsupported share link version: ${data.version}`);
-  }
-  return data;
-}
 
 /**
  * Result of receiving a share link.
@@ -380,7 +331,7 @@ export interface ShareReceiveResult<T = unknown> {
   delegation: Delegation;
   path: string;
   spaceId: string;
-  /** Owner Node named by the link; that node independently verifies the accompanying delegation. */
+  /** Identity-checked registry destination where the verified parent was activated. */
   host: string;
 }
 
@@ -452,8 +403,6 @@ export class TinyCloudWeb {
   private signOutCount = 0;
   /** The signer set with `setRuntimePermissionSigner`, with the session it was set for. */
   private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number };
-  /** Set when this instance's session was established through the configured OpenKey client; bound to that session like `runtimeSigner`. */
-  private openkeySession?: { readonly address: string; readonly signOuts: number };
   private signOutInFlight = 0;
   private persistedRestoreBlocked = false;
   private signOutCleanupFailed = false;
@@ -578,14 +527,14 @@ export class TinyCloudWeb {
     const nodeConfig: TinyCloudNodeConfig = {
       host: this.config.tinycloudHosts?.[0],
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
-      tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      registryPolicy: this.config.registryPolicy,
       newUserHost: this.config.newUserHost,
       registryChainId: this.config.registryChainId,
       registrySequenceStore:
         this.config.registrySequenceStore ??
         createLocalStorageRegistrySequenceStore(),
+      registryCacheStore: this.config.registryCacheStore ?? createLocalStorageRegistryCacheStore(),
       onNodeNotFound: this.config.onNodeNotFound,
+      onRegistryFallback: this.config.onRegistryFallback,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
       localNodeUrl: this.config.localNodeUrl,
       localLinkName: this.config.localLinkName,
@@ -682,6 +631,27 @@ export class TinyCloudWeb {
       await this._initPromise;
     }
     return this._node!;
+  }
+
+  /** Bind a wrapper call to its entry-time authority before initialization can yield. */
+  private async dispatchCurrentNode<T>(
+    dispatch: (node: TinyCloudNode, assertCurrent: () => void) => T | Promise<T>,
+  ): Promise<T> {
+    const entryNode = this._node;
+    const session = entryNode?.restorableSession;
+    const signOuts = this.signOutCount;
+    if (this.signOutInFlight > 0) throw new Error("Operation cancelled by sign-out.");
+    const node = await this.ensureNode();
+    const assertCurrent = (): void => {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 ||
+        this._node !== node || (entryNode != null && entryNode !== node) ||
+        node.restorableSession !== session) {
+        throw new Error("Operation cancelled because the signed session changed or signed out.");
+      }
+    };
+    assertCurrent();
+    // Dispatch synchronously after the check so the Node captures this same graph.
+    return dispatch(node, assertCurrent);
   }
 
   /**
@@ -807,14 +777,13 @@ export class TinyCloudWeb {
   get replication(): TinyCloudNode["replication"] { return this.node.replication; }
   /** Registry-resolved owner Node identity used to bind native share targets. */
   async activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }> {
-    return (await this.ensureNode()).activeNodeIdentity();
+    return this.dispatchCurrentNode((node) => node.activeNodeIdentity());
   }
   /** Publish the active owner Node as a session-signed registry record. */
   async publishActiveNodeLocation(registryUrl: string, fetchFn?: typeof fetch) {
-    const node = await this.ensureNode();
-    return fetchFn === undefined
+    return this.dispatchCurrentNode((node) => fetchFn === undefined
       ? node.publishActiveNodeLocation(registryUrl)
-      : node.publishActiveNodeLocation(registryUrl, fetchFn);
+      : node.publishActiveNodeLocation(registryUrl, fetchFn));
   }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
 
@@ -836,22 +805,19 @@ export class TinyCloudWeb {
   async getEncryptionNetwork(
     nameOrNetworkId = "default",
   ): Promise<NetworkDescriptor | null> {
-    const node = await this.ensureNode();
-    return node.getEncryptionNetwork(nameOrNetworkId);
+    return this.dispatchCurrentNode((node) => node.getEncryptionNetwork(nameOrNetworkId));
   }
 
   async createEncryptionNetwork(
     name = "default",
   ): Promise<NetworkDescriptor> {
-    const node = await this.ensureNode();
-    return node.createEncryptionNetwork(name);
+    return this.dispatchCurrentNode((node) => node.createEncryptionNetwork(name));
   }
 
   async ensureEncryptionNetwork(
     name = "default",
   ): Promise<NetworkDescriptor> {
-    const node = await this.ensureNode();
-    return node.ensureEncryptionNetwork(name);
+    return this.dispatchCurrentNode((node) => node.ensureEncryptionNetwork(name));
   }
 
   /**
@@ -875,8 +841,7 @@ export class TinyCloudWeb {
    * @returns The hosted owned-space URI.
    */
   async ensureOwnedSpaceHosted(name: string): Promise<string> {
-    const node = await this.ensureNode();
-    return node.ensureOwnedSpaceHosted(name);
+    return this.dispatchCurrentNode((node) => node.ensureOwnedSpaceHosted(name));
   }
 
   // ===========================================================================
@@ -922,7 +887,6 @@ export class TinyCloudWeb {
     const signOuts = this.signOutCount;
     // A restore may bring back a different account: a runtime permission signer set for the current one is cleared.
     this.runtimeSigner = undefined;
-    this.openkeySession = undefined;
     const assertNotSignedOut = (): void => {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
         throw new Error("Session restore was cancelled by sign-out.");
@@ -1076,63 +1040,47 @@ export class TinyCloudWeb {
    * resolves `"unknown"` when the node has no hosting answer.
    * Rejects with `Error("Space hosting was cancelled by sign-out.")` if sign-out
    * happens during the hosting run. Call from a user gesture so the approval popup can open.
+   * Also rejects if the initiating session is replaced before hosting finishes.
    */
   async ensureSpaceHosted(): Promise<SpaceHosting> {
     const signOuts = this.signOutCount;
     const cancellation = () => new Error("Space hosting was cancelled by sign-out.");
-    const assertNotSignedOut = (): void => {
-      if (this.signOutCount !== signOuts) throw cancellation();
-    };
-
-    let node: TinyCloudNode;
     try {
-      node = await this.ensureNode();
+      return await this.dispatchCurrentNode(async (node, assertCurrent) => {
+        const hosting = node.spaceHosting;
+        if (hosting !== "not-hosted") return hosting;
+        const session = node.restorableSession;
+        if (session && this.walletSigner) {
+          const signerAddress = await this.walletSigner.getAddress();
+          assertCurrent();
+          if (signerAddress.toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
+        }
+
+        const spaceId = node.spaceId;
+        const existing = this.spaceHostingInFlight;
+        if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
+          return existing.run;
+        }
+
+        const hasCreationPath = this.walletSigner !== undefined &&
+          (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
+        if (!hasCreationPath) return "not-hosted";
+
+        const run = node.ensurePrimarySpaceHosted("not-hosted").then(() => {
+          assertCurrent();
+          return node.spaceHosting;
+        });
+        const inFlight = { run, signOuts, spaceId };
+        this.spaceHostingInFlight = inFlight;
+        try {
+          return await run;
+        } finally {
+          if (this.spaceHostingInFlight === inFlight) this.spaceHostingInFlight = undefined;
+        }
+      });
     } catch (error) {
-      if (this.signOutCount !== signOuts) throw cancellation();
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw cancellation();
       throw error;
-    }
-    assertNotSignedOut();
-    const hosting = node.spaceHosting;
-    if (hosting !== "not-hosted") return hosting;
-    const session = node.restorableSession;
-    if (session && this.walletSigner) {
-      let signerAddress: string;
-      try {
-        signerAddress = await this.walletSigner.getAddress();
-      } catch (error) {
-        if (this.signOutCount !== signOuts) throw cancellation();
-        throw error;
-      }
-      assertNotSignedOut();
-      if (signerAddress.toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
-    }
-
-    const spaceId = node.spaceId;
-    const existing = this.spaceHostingInFlight;
-    if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
-      return existing.run;
-    }
-
-    const hasCreationPath = this.walletSigner !== undefined &&
-      (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
-    if (!hasCreationPath) return "not-hosted";
-
-    const run = node.ensurePrimarySpaceHosted("not-hosted").then(
-      () => {
-        assertNotSignedOut();
-        return node.spaceHosting;
-      },
-      (error: unknown) => {
-        if (this.signOutCount !== signOuts) throw cancellation();
-        throw error;
-      },
-    );
-    const inFlight = { run, signOuts, spaceId };
-    this.spaceHostingInFlight = inFlight;
-    try {
-      return await run;
-    } finally {
-      if (this.spaceHostingInFlight === inFlight) this.spaceHostingInFlight = undefined;
     }
   }
 
@@ -1245,7 +1193,6 @@ export class TinyCloudWeb {
     assertNotSignedOut();
     // A new sign-in is a new session: a runtime permission signer set for an earlier one does not carry over.
     this.runtimeSigner = undefined;
-    this.openkeySession = undefined;
     if (this.config.openkey && options) {
       throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
     }
@@ -1305,8 +1252,6 @@ export class TinyCloudWeb {
     this.uiClient.armPrefetch(this);
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
-    // Signed in through the OpenKey client: the client holds this session's key, so a later runtime grant may sign through it.
-    if (this.config.openkey) this.openkeySession = { address: session.address, signOuts };
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
     return {
@@ -1336,7 +1281,6 @@ export class TinyCloudWeb {
     closeActiveModal();
     this.runtimeSigner = undefined;
     this.spaceHostingInFlight = undefined;
-    this.openkeySession = undefined;
     this.invalidatePreparedSignIn();
     this.signOutInFlight++;
     this.persistedRestoreBlocked = true;
@@ -1508,8 +1452,7 @@ export class TinyCloudWeb {
     disableSubDelegation?: boolean;
     expiryMs?: number;
   }): Promise<PortableDelegation> {
-    const node = await this.ensureNode();
-    return node.createDelegation(params);
+    return this.dispatchCurrentNode((node) => node.createDelegation(params));
   }
 
   /** Create and activate a wallet-rooted delegation for an ephemeral share key. */
@@ -1520,23 +1463,24 @@ export class TinyCloudWeb {
         : never
       : never,
   ): Promise<OwnerDelegationReceipt> {
-    const node = await this.ensureNode();
-    const spaceId = params.spaceId ?? this.spaceId;
-    if (spaceId === undefined) throw new Error("Owner share delegation requires an authenticated space.");
-    if ("permissions" in params) {
+    return this.dispatchCurrentNode((node) => {
+      const spaceId = params.spaceId ?? node.spaceId;
+      if (spaceId === undefined) throw new Error("Owner share delegation requires an authenticated space.");
+      if ("permissions" in params) {
+        return node.createOwnerDelegation({
+          delegateDid: params.delegateDid,
+          permissions: params.permissions!,
+          expiresAt: params.expiresAt,
+          spaceId,
+        });
+      }
       return node.createOwnerDelegation({
         delegateDid: params.delegateDid,
-        permissions: params.permissions!,
+        path: params.path,
+        actions: params.actions,
         expiresAt: params.expiresAt,
         spaceId,
       });
-    }
-    return node.createOwnerDelegation({
-      delegateDid: params.delegateDid,
-      path: params.path,
-      actions: params.actions,
-      expiresAt: params.expiresAt,
-      spaceId,
     });
   }
 
@@ -1544,14 +1488,12 @@ export class TinyCloudWeb {
   async registerPolicy(
     params: Omit<RegisterPolicyV3Input, "nodeOrigin" | "fetch">,
   ): Promise<RegisterPolicyV3Receipt> {
-    const node = await this.ensureNode();
-    return node.registerPolicy(params);
+    return this.dispatchCurrentNode((node) => node.registerPolicy(params));
   }
 
   /** Authorize a short-lived, one-use v3 delivery against the signed envelope and roots. */
   async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): Promise<Awaited<ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]>>> {
-    const node = await this.ensureNode();
-    return node.authorizeShareDeliveryV3(input);
+    return this.dispatchCurrentNode((node) => node.authorizeShareDeliveryV3(input));
   }
 
   /**
@@ -1570,23 +1512,20 @@ export class TinyCloudWeb {
     permissions: PermissionEntry[],
     options?: DelegateToOptions,
   ): Promise<DelegateToResult> => {
-    const node = await this.ensureNode();
-    return node.delegateTo(did, permissions, options);
+    return this.dispatchCurrentNode((node) => node.delegateTo(did, permissions, options));
   };
 
   materializeDelegation = async (
     did: string,
     request?: ComposedManifestRequest,
   ): Promise<DelegateToResult & { target: ResolvedDelegate }> => {
-    const node = await this.ensureNode();
-    return node.materializeDelegation(did, request);
+    return this.dispatchCurrentNode((node) => node.materializeDelegation(did, request));
   };
 
   materializeDelegations = async (
     request?: ComposedManifestRequest,
   ): Promise<Array<DelegateToResult & { target: ResolvedDelegate }>> => {
-    const node = await this.ensureNode();
-    return node.materializeDelegations(request);
+    return this.dispatchCurrentNode((node) => node.materializeDelegations(request));
   };
 
   /**
@@ -1711,9 +1650,10 @@ export class TinyCloudWeb {
 
   /**
    * Signs the SIWE of a runtime permission grant. Precedence: the signer set with `setRuntimePermissionSigner`, then
-   * the OpenKey client the session was established with (its byte-exact `signMessage`; an OpenKey session's wallet
-   * provider does not implement `personal_sign`), then undefined: the connected wallet signs. Only
-   * `requestPermissions` calls this; sign-in and session setup never do.
+   * the configured OpenKey client's byte-exact `signMessage` (an OpenKey session's wallet provider does not implement
+   * `personal_sign`), signing with the keyId of the connected account after connecting the client first when it is not
+   * connected; a missing or ambiguous key throws `OpenKeySigningKeyError`. Without an OpenKey client or a session account,
+   * undefined: the connected wallet signs. Only `requestPermissions` calls this; sign-in and session setup never do.
    */
   private runtimeMessageSigner(): ((siwe: string) => Promise<string>) | undefined {
     const bound = this.runtimeSigner;
@@ -1731,43 +1671,28 @@ export class TinyCloudWeb {
     const openkey = this.config?.openkey;
     const client = openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
     if (openkey === undefined || typeof client?.signMessage !== "function") return undefined;
-    // TC-2281: an OpenKey client that was never connected would open a sign popup that hangs ("Please connect first to sign messages").
-    // Refuse that before any popup: with no signer the node then throws its own clear "requires wallet mode with a signer" error.
-    if (!this.openkeyClientMaySign(client)) return undefined;
-    return async (siwe) => (await client.signMessage!({ message: siwe }, { mode: openkey.mode ?? "popup" })).signature;
-  }
-
-  /**
-   * Whether the OpenKey client may sign a runtime grant: always, unless there is POSITIVE evidence that it is not connected. It may sign when
-   * this instance's session was established through it (and is still the live session), or when its in-memory `lastAuth` is set (`connect()` ran
-   * on this client, for example because the app connected it after a restore), or when it exposes no `lastAuth` at all (a client shape this SDK
-   * does not know: today's behaviour, fail open). `lastAuth` is read here because nothing public says it: `@openkey/sdk` 0.12.2 declares
-   * `lastAuth = null`, sets it in `connect()` and clears it in `signOut()`; 0.9.0 declares it and sets it in `connect()` but has no `signOut`.
-   * `getSessionToken()` always answers null in 0.12.2 and `isConnected()` reads the OpenKey cookie, which can be true when `connect()` never ran
-   * on this page. web-sdk documents `@openkey/sdk` >= 0.12.2, so 0.12.2 is the lowest version this was checked against. The clean fix is
-   * `signMessage()` rejecting when not connected, in `@openkey/sdk`. Trade-off: an app that connects through a DIFFERENT OpenKey instance than
-   * `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or
-   * `setRuntimePermissionSigner`.
-   */
-  private openkeyClientMaySign(client: object): boolean {
-    const established = this.openkeySession;
-    if (established !== undefined) {
-      const current = this._node?.address;
-      if (
-        established.signOuts === this.signOutCount &&
-        this.signOutInFlight === 0 &&
-        current !== undefined &&
-        current.toLowerCase() === established.address.toLowerCase()
-      ) return true;
-      // The session it was established for has ended or been replaced.
-      this.openkeySession = undefined;
-    }
-    try {
-      if (!("lastAuth" in client)) return true;
-      return (client as { readonly lastAuth?: unknown }).lastAuth != null;
-    } catch {
-      return true;
-    }
+    // TC-2281: OpenKey opens a sign dialog with no key when `signMessage` carries no keyId, and the dialog dead-ends on "Please connect
+    // first to sign messages." So every request names the keyId of the connected account, and a client that is not connected is
+    // connected first (popup mode: the browser would block a sign popup after the slow connect popup, so the grant ends with OPENKEY_CONNECTED_RETRY and the
+    // next click signs). No key, or a key that is not the session's account, is an OpenKeySigningKeyError: never a request without a keyId.
+    const node = this._node;
+    const account = node?.address;
+    if (node === undefined || account === undefined) return undefined;
+    const session = node.session;
+    const signOuts = this.signOutCount;
+    const mode = openkey.mode ?? "popup";
+    // The connect and sign dialogs can outlive the session they were opened for: the same node, account and session object.
+    const assertCurrent = (): void => {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 || this._node !== node || node.address !== account || node.session !== session) {
+        throw new Error("Permission request cancelled because the signed session changed or signed out.");
+      }
+    };
+    return async (siwe) => {
+      const keyId = await resolveOpenKeySigningKey(client, account, mode, assertCurrent);
+      const { signature } = await client.signMessage!({ message: siwe, keyId }, { mode });
+      assertCurrent();
+      return signature;
+    };
   }
 
   /**
@@ -1835,17 +1760,11 @@ export class TinyCloudWeb {
   }
 
   async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
-    const signOuts = this.signOutCount;
-    const node = await this.ensureNode();
-    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw new Error("Delegation use was cancelled by sign-out.");
-    await node.useRuntimeDelegation(delegation);
+    return this.dispatchCurrentNode((node) => node.useRuntimeDelegation(delegation));
   }
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {
-    const signOuts = this.signOutCount;
-    const node = await this.ensureNode();
-    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw new Error("Delegation use was cancelled by sign-out.");
-    return node.useDelegation(delegation);
+    return this.dispatchCurrentNode((node) => node.useDelegation(delegation));
   }
 
   async createSubDelegation(
@@ -1864,18 +1783,15 @@ export class TinyCloudWeb {
       }>;
     }
   ): Promise<PortableDelegation> {
-    const node = await this.ensureNode();
-    return node.createSubDelegation(parentDelegation, params);
+    return this.dispatchCurrentNode((node) => node.createSubDelegation(parentDelegation, params));
   }
 
   async revokeDelegation(cid: string): Promise<Result<DelegationRevocationReceipt, DelegationError>> {
-    const node = await this.ensureNode();
-    return node.revokeDelegation(cid);
+    return this.dispatchCurrentNode((node) => node.revokeDelegation(cid));
   }
 
   async checkPermission(path: string, action: string): Promise<Result<boolean, DelegationError>> {
-    const node = await this.ensureNode();
-    return node.checkPermission(path, action);
+    return this.dispatchCurrentNode((node) => node.checkPermission(path, action));
   }
 
   // ===========================================================================
@@ -1884,116 +1800,77 @@ export class TinyCloudWeb {
 
   /**
    * Receive and retrieve data from a native TinyCloud bearer delegation.
-   * Static method — no auth required. Uses browser WASM.
+   * Static method — no sign-in required. Verifies the parent with browser WASM and routes through the owner's registry.
    */
   public static async receiveShare<T = unknown>(
     link: string,
     key?: string,
     options?: { readonly binary?: boolean },
   ): Promise<Result<ShareReceiveResult<T>, DelegationError>> {
-    await WasmInitializer.ensureInitialized();
+    const wasmBindings = new BrowserWasmBindings();
+    await wasmBindings.ensureInitialized();
 
     try {
-      const shareData = decodeShareLink(link);
+      const node = new TinyCloudNode({
+        wasmBindings,
+        registrySequenceStore: createLocalStorageRegistrySequenceStore(),
+        registryCacheStore: createLocalStorageRegistryCacheStore(),
+        newUserHost: null,
+        autoDiscoverLocalNode: false,
+      });
+      const received = await node.sharing.receive(link, {
+        autoSubdelegate: false,
+        useSessionKey: false,
+      });
+      if (received.ok === false) return received;
+      const share = received.data;
 
-      if (!shareData.key || !shareData.key.d) {
-        return {
-          ok: false,
-          error: {
-            code: "INVALID_TOKEN",
-            message: "Share link does not contain a valid private key",
-            service: "delegation",
-          },
-        };
-      }
-
-      const expiry = new Date(shareData.delegation.expiry);
-      if (expiry < new Date()) {
-        return {
-          ok: false,
-          error: {
-            code: "AUTH_EXPIRED",
-            message: "Share link has expired",
-            service: "delegation",
-          },
-        };
-      }
-
-      if (shareData.delegation.isRevoked) {
-        return {
-          ok: false,
-          error: {
-            code: "REVOKED",
-            message: "Share link has been revoked",
-            service: "delegation",
-          },
-        };
-      }
-
-      let authToken = shareData.delegation.authHeader ?? shareData.delegation.cid;
-      if (authToken.startsWith("Bearer ")) {
-        authToken = authToken.slice(7);
-      }
-
-      const session: ServiceSession = {
-        delegationHeader: { Authorization: authToken },
-        delegationCid: shareData.delegation.cid,
-        spaceId: shareData.spaceId,
-        verificationMethod: shareData.keyDid,
-        jwk: shareData.key,
-      };
-
-      // Register delegation with server
-      const delegateResponse = await globalThis.fetch(
-        `${shareData.host}/delegate`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: authToken,
-          },
-        }
+      // receive() has verified the parent CID, signature, space and embedded key.
+      // Its recorded host is never promoted to routing authority.
+      let registeredHost: string | undefined;
+      const delegateResponse = await node.resourceTransport(
+        [{ resource: share.spaceId, access: "read" }],
+        async (target) => {
+          const response = await target.fetch(`${target.url}/delegate`, {
+            method: "POST",
+            headers: { Authorization: share.delegation.authHeader! },
+            redirect: "error",
+          });
+          if (response.ok) registeredHost = target.url;
+          return response;
+        },
       );
-
       if (!delegateResponse.ok) {
         const errorText = await delegateResponse.text();
         return {
-          ok: false as const,
+          ok: false,
           error: {
             code: "DELEGATION_FAILED",
             message: `Failed to register delegation: ${delegateResponse.status} - ${errorText}`,
-            service: "delegation" as const,
+            service: "delegation",
           },
         };
       }
 
-      const context = new ServiceContext({
-        invoke,
-        fetch: globalThis.fetch.bind(globalThis),
-        hosts: [shareData.host],
-      });
-      context.setSession(session);
+      // The public static API accepts full keys, unlike the path-prefixed ShareAccess.
+      const kvResult = await share.kv.get<T>(key ?? share.path, { ...options, prefix: "" });
 
-      const kvService = new KVService({ prefix: "" });
-      kvService.initialize(context);
-
-      const fetchKey = key ?? shareData.path;
-      const kvResult = await kvService.get<T>(fetchKey, options);
-
-      if (kvResult.ok) {
+      if (kvResult.ok === true) {
         return {
           ok: true as const,
           data: {
             data: kvResult.data.data,
-            delegation: shareData.delegation,
-            path: shareData.path,
-            spaceId: shareData.spaceId,
-            host: shareData.host,
+            delegation: share.delegation,
+            path: share.path,
+            spaceId: share.spaceId,
+            host: registeredHost!,
           },
         };
       }
 
-      const errorResult = kvResult as { ok: false; error: { message: string; cause?: Error } };
+      const routed = routingFailure(kvResult.error);
+      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
+      const errorResult = kvResult;
       return {
         ok: false as const,
         error: {
@@ -2004,6 +1881,8 @@ export class TinyCloudWeb {
         },
       };
     } catch (err) {
+      const routed = routingFailure(err);
+      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
       return {
         ok: false,
         error: {

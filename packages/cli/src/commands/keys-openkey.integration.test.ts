@@ -43,6 +43,7 @@ async function setup(features = ["encryption-named-keys-v1"]) {
   homes.push(home);
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
+    if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
     if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     return new Response(`Unsupported stub node request: ${path}`, { status: 404 });
@@ -56,7 +57,7 @@ async function setup(features = ["encryption-named-keys-v1"]) {
   const directory = join(home, ".tinycloud", "profiles", PROFILE);
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, "profile.json"), JSON.stringify({
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
       ownerDid, posture: "owner-openkey", authMethod: "openkey", createdAt: "2026-10-01T00:00:00.000Z",
     }));
   const sessionFile = join(directory, "session.json");
@@ -128,7 +129,7 @@ test("OpenKey --keys with everything approved records the folder and signs the r
 test("the prepared ReCap equals a prepared sign-in without --keys plus exactly the one encryption row", async () => {
   const r = await keysLogin("all");
   const bare = new TinyCloudNode({
-    host: r.node.url.origin, signer: new PrivateKeySigner(OWNER_KEY),
+    host: r.node.url.origin, tinycloudRegistryUrl: r.node.url.origin, signer: new PrivateKeySigner(OWNER_KEY),
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
   });
   let plain: string | undefined;

@@ -3,6 +3,13 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-09
+
+- TC-2416: the hosted personal-records tools use one layout (the `applications`
+  space, one folder per app); the older `agent-data` layout, the move tool and the
+  `layout` input are removed with no compatibility path. `agent.dev.md` says not to
+  reintroduce them.
+
 ## 2026-11-07
 
 - Share publishing no longer creates the share key: removed the runtime

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
+import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const wasm = new NodeWasmBindings();
@@ -52,7 +53,7 @@ fs.mkdirSync(path.join(root, 'pairing'), { recursive: true });
 
 async function run(home, args) {
   const { stdout } = await execFileAsync(process.execPath, [CLI, ...args], {
-    env: { ...process.env, COURIER_HOME: home, HOME: home },
+    env: courierRegistryFixtureEnv(home, HOST),
     encoding: 'utf8',
   });
   return JSON.parse(stdout);
@@ -61,7 +62,7 @@ async function run(home, args) {
 async function runFail(home, args) {
   try {
     await execFileAsync(process.execPath, [CLI, ...args], {
-      env: { ...process.env, COURIER_HOME: home, HOME: home },
+      env: courierRegistryFixtureEnv(home, HOST),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });

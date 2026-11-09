@@ -9,6 +9,9 @@ import { describe, expect, mock, test } from "bun:test";
 import { type IWasmBindings, type ISessionManager } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.share-prefix-key.test";
 
 function makeFakeSessionManager(): ISessionManager {
   // Pre-seed with "default" since that's the key name the
@@ -143,6 +146,7 @@ function makeNodeWithSigner(
     getChainId: async () => 1,
   };
   const node = new TinyCloudNode({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     wasmBindings: wasm,
     signer: fakeSigner as any,
     host: "https://tinycloud.test",
@@ -193,6 +197,8 @@ async function withFetchResponses(
   let position = 0;
 
   const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     const expectedKind = expectedSequence[position];

@@ -39,7 +39,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
@@ -134,7 +134,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./js-sdk/.github/actions/install-wasm-pack
 
       - name: Install js-sdk dependencies
         working-directory: js-sdk
@@ -225,7 +225,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./js-sdk/.github/actions/install-wasm-pack
 
       - name: Install js-sdk dependencies
         working-directory: js-sdk

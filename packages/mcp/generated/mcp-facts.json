@@ -57,24 +57,6 @@
       "sensitiveOutput": true
     },
     {
-      "name": "tinycloud_apps_move",
-      "surfaces": [
-        "hosted"
-      ],
-      "operationId": "tinycloud.apps.move",
-      "operationVersion": 1,
-      "effects": [
-        "read",
-        "write"
-      ],
-      "postures": [
-        "owner-openkey",
-        "delegate-session",
-        "local-owner-key"
-      ],
-      "sensitiveOutput": true
-    },
-    {
       "name": "tinycloud_apps_query",
       "surfaces": [
         "hosted",
@@ -362,6 +344,22 @@
         "local-owner-key"
       ],
       "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud.registry.show",
+      "surfaces": [],
+      "operationId": "tinycloud.registry.show",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key",
+        "unauthenticated"
+      ],
+      "sensitiveOutput": false
     },
     {
       "name": "tinycloud_secrets_get",

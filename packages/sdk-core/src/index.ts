@@ -126,6 +126,8 @@ export {
   type PkhDidParts,
 } from "./identity";
 
+export { publicJwk } from "./jwk";
+
 export {
   HOLDER_KEY_BINDING_PRESENTATION_SCHEMA,
   LISTEN_SQL_STATEMENT_CATALOG,
@@ -1017,6 +1019,7 @@ export {
   createInMemoryLocalNodeIdentityStore,
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
+  exactHttpOrigin,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -1086,9 +1089,12 @@ export {
   registryOwnerSubjectV1,
   resolveFailClosedTinyCloudHosts,
   resolveOwnerHosts,
+  warnRegistryDefaultNode,
   type FailClosedHostOptions,
   type FailClosedHosts,
   type LookupOwnerRegistryVerdictOptions,
+  type RegistryFallbackReason,
+  REGISTRY_CACHE_MAX_AGE_MS,
   type NodeNotFoundContext,
   type NodeNotFoundDecision,
   type OnNodeNotFound,
@@ -1096,7 +1102,28 @@ export {
   type RegistrySequenceStore,
   type ResolveOwnerHostsOptions,
 } from "./registry-policy";
+export {
+  canonicalLocationPayloadV2,
+  signLocationRecordV2,
+  validateLocationRecordV2,
+  validateLocationRecordV2Payload,
+  verifyLocationRecordV2,
+} from "./location";
+export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
+export { resolveRegistryResource } from "./registry-policy";
 
+export {
+  createInMemoryRegistryCacheStore,
+  createLocalStorageRegistryCacheStore,
+  verifyRegistryCacheEntry,
+  DEFAULT_REGISTRY_CACHE_STORAGE_KEY,
+  type RegistryCacheEntry,
+  type RegistryCacheTombstone,
+  type RegistryCacheRecord,
+  type RegistryCacheStore,
+} from "./registry-cache";
+export { refreshOwnerRegistry } from "./registry-policy";
+export { registryOwnerKeyV2 } from "./registry-verdict";
 // Capability subset checking and recap parsing
 export {
   // Errors
