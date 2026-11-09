@@ -2251,9 +2251,10 @@ export class TinyCloudNode {
     // verified wallet owner when the requested resource belongs to someone else.
     const session = this.currentTinyCloudSession();
     if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
-    // Do not let restored authorization hosts become first-use routing authority.
+    // Auth receives constructor-trusted hosts separately and may accept an
+    // explicit code-supplied sign-in override, never a restored host list.
+    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
     const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
-    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, candidates);
     const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
     const resolved = await resolveRegistryResource(subject, resource, access, {
       registryUrl: this.config.tinycloudRegistryUrl,
@@ -5880,6 +5881,7 @@ export class TinyCloudNode {
           `${destination.url}/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
           {
             method: "POST",
+            redirect: "error",
             headers: {
               Authorization: authorization,
               "Content-Type": "application/json",

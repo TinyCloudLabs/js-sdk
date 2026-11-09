@@ -427,7 +427,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
   private tinycloudHosts?: string[];
-  private readonly registryNoEntryHosts: readonly string[];
+  private registryNoEntryHosts: readonly string[];
   private readonly tinycloudRegistryUrl?: string | null;
   private readonly tinycloudFallbackHosts?: string[] | null;
   private readonly newUserHost?: string | null;
@@ -2233,6 +2233,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         throw new Error("OpenKey authorization host must not be empty");
       }
       this.tinycloudHosts = [overrideHost];
+      this.registryNoEntryHosts = this.tinycloudHosts;
     }
 
     // OpenKey binds the target host into its authorization context. Resolve

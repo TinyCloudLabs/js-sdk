@@ -1,7 +1,60 @@
-import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
+import {
+  REGISTRY_NOT_FOUND_BODY,
+  registryOwnerKeyV2,
+  signLocationRecordV2,
+  type LocationRecordV2Payload,
+} from "@tinycloud/sdk-core";
 import { TinyCloudNode } from "../TinyCloudNode";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { signedRestorableSession } from "./signed-restorable-session";
+import { PrivateKeySigner } from "../signers/PrivateKeySigner";
+import { unregisteredLocationRegistryResponse } from "./unregistered-location-registry";
+
+/** An independent, owner-signed routing oracle for fixtures that change live destinations. */
+export function signedLocationRecordForTest(options: {
+  ownerDid: string;
+  ownerPrivateKey: string;
+  host: string;
+  nodeDid: string;
+  spaces: readonly string[];
+  sequence: number;
+}) {
+  const signer = new PrivateKeySigner(options.ownerPrivateKey);
+  const payload: LocationRecordV2Payload = {
+    version: 2,
+    subject: options.ownerDid,
+    nodes: [{ did: options.nodeDid, url: options.host }],
+    spaces: [...new Set(options.spaces)].map((space) => ({
+      space: space.toLowerCase(),
+      nodes: [{ did: options.nodeDid, mode: "read-write" }],
+    })),
+    encryptionNode: options.nodeDid,
+    sequence: options.sequence,
+    updated_at: "2026-10-18T00:00:00.000Z",
+  };
+  return signLocationRecordV2(payload, {
+    type: "did:pkh",
+    signMessage: (message) => signer.signMessage(message),
+  });
+}
+
+/** Matching signed v2 metadata; other owned lookups retain canonical no-entry responses. */
+export function signedRegistryResponseForTest(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+  origin: string,
+  record: Awaited<ReturnType<typeof signedLocationRecordForTest>>,
+): Response | undefined {
+  const noEntry = unregisteredLocationRegistryResponse(input, origin, init);
+  if (!noEntry) return;
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  const ownerKey = registryOwnerKeyV2(record.subject).toLowerCase();
+  if (url.pathname.startsWith("/v2/locations/") &&
+      decodeURIComponent(url.pathname.slice("/v2/locations/".length)).toLowerCase() === ownerKey) {
+    return Response.json({ record });
+  }
+  return noEntry;
+}
 
 /** Public responses from the explicitly owned unit-test peer, never an authorization substitute. */
 export function ownedNodeMetadata(

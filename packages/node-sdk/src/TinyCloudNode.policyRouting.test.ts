@@ -23,6 +23,8 @@ import "./replication/node-loader";
 import { createSqliteReplicaStorage } from "./replication/sqlite";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
+import { activateValidatedRuntimeDelegation } from "./delegation";
+import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
 
 const REGISTRY = "https://registry.test";
 const STALE = "https://stale-node.test";
@@ -654,4 +656,72 @@ test("retiring the public-space graph during identity verification sends no host
   await node.ensurePublicSpace().catch(() => undefined);
   expect(replaced).toBe(true);
   expect(attempts.filter(({ authorization }) => authorization !== null).map(({ method, url }) => ({ method, url }))).toEqual([]);
+});
+
+test("an explicit code host override remains authoritative for canonical-absence onboarding, not a saved host", async () => {
+  const { node, records, attempts } = await fixture("registered", { newUserHost: ROUTED });
+  records.clear();
+  const prepared = await node.prepareOpenKeySignIn({ host: SECOND });
+  expect(prepared.request.host).toBe(SECOND);
+  expect(await node.activeNodeIdentity()).toEqual({ origin: SECOND, nodeDid: OTHER_DID });
+  expect(attempts.some(({ url }) => new URL(url).origin === STALE)).toBe(false);
+});
+
+test("an explicit code host override cannot replace a registered identity-checked route", async () => {
+  const { node, attempts } = await fixture("registered", { newUserHost: ROUTED });
+  const prepared = await node.prepareOpenKeySignIn({ host: SECOND });
+  expect(prepared.request.host).toBe(ROUTED);
+  expect(await node.activeNodeIdentity()).toEqual({ origin: ROUTED, nodeDid: NODE_DID });
+  expect(attempts.some(({ url }) => new URL(url).origin === SECOND || new URL(url).origin === STALE)).toBe(false);
+});
+
+test("decrypt POST refuses a 307 before forwarding its signed invocation or ciphertext body", async () => {
+  const fixture = await createHermeticEncryptedNode();
+  const decryptRequests: Array<{ authorized: boolean; bodyBytes: number }> = [];
+  const redirectedRequests: Array<{ authorized: boolean; bodyBytes: number }> = [];
+  const sink = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      redirectedRequests.push({
+        authorized: request.headers.has("authorization"),
+        bodyBytes: (await request.arrayBuffer()).byteLength,
+      });
+      return Response.json({});
+    },
+  });
+  const front = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname.endsWith("/decrypt")) {
+        decryptRequests.push({
+          authorized: request.headers.has("authorization"),
+          bodyBytes: (await request.arrayBuffer()).byteLength,
+        });
+        return new Response(null, { status: 307, headers: { Location: `${sink.url.origin}/capture` } });
+      }
+      return fetch(new Request(`${fixture.host}${url.pathname}${url.search}`, request), { redirect: "error" });
+    },
+  });
+  try {
+    const node = new TinyCloudNode({
+      host: front.url.origin,
+      tinycloudRegistryUrl: fixture.host,
+      wasmBindings: new NodeWasmBindings(),
+      autoDiscoverLocalNode: false,
+    });
+    await node.restoreSession({ ...fixture.restorableSession, tinycloudHosts: [front.url.origin] });
+    const delegation = await fixture.mintDelegation();
+    const activated = await activateValidatedRuntimeDelegation(node, delegation, { host: fixture.host });
+    await expect(fixture.readAndDecrypt(node, activated)).rejects.toThrow("loopback delegated decrypt failed");
+    expect(decryptRequests).toHaveLength(1);
+    expect(decryptRequests[0]!.authorized).toBe(true);
+    expect(decryptRequests[0]!.bodyBytes).toBeGreaterThan(0);
+    expect(redirectedRequests).toEqual([]);
+  } finally {
+    await Promise.all([front.stop(true), sink.stop(true)]);
+    fixture.stop();
+  }
 });
