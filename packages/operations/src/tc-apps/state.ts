@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { profilePath, readJson, writeJsonAtomic, readAdditionalDelegations, withProfileLock } from "../state.js";
 import { tcAppsPermissionKind, TC_APPS_COPY_ACTIONS } from "../tc-apps.js";
-import { spaceName, type Layout } from "./layout.js";
 import { isObject } from "./records.js";
 
 export function validTimezone(timezone: string): boolean {
@@ -49,15 +48,14 @@ export function withLocalOffset(at: string, timezone: string): string {
   return `${at}${offset}`;
 }
 
-/** A stored grant is a preference signal, not authorization; runtime preflight still verifies it. `app` is ignored for the legacy layout's one shared copy. */
-export async function appsCopyState(profile: string, layout: Layout, app: string, space: string): Promise<"present" | "expired" | "none"> {
+/** A stored grant is a preference signal, not authorization; runtime preflight still verifies it. */
+export async function appsCopyState(profile: string, app: string, space: string): Promise<"present" | "expired" | "none"> {
   let expired = false;
   for (const entry of await readAdditionalDelegations<unknown>(profile)) {
     if (!isObject(entry) || !isObject(entry.delegation) || !Array.isArray(entry.permissions)) continue;
     const copy = entry.permissions.some((permission) => {
       const kind = tcAppsPermissionKind(permission);
-      const matches = layout === "legacy" ? kind?.kind === "legacy-copy" : kind?.kind === "app-copy" && kind.app === app;
-      return matches && isObject(permission) && (permission.space === space || permission.space === spaceName(layout)) &&
+      return kind?.kind === "app-copy" && kind.app === app && isObject(permission) && (permission.space === space || permission.space === "applications") &&
         Array.isArray(permission.actions) && TC_APPS_COPY_ACTIONS.every((action) => (permission.actions as unknown[]).includes(action));
     });
     if (!copy || typeof entry.delegation.expiry !== "string") continue;

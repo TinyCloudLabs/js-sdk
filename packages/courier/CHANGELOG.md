@@ -1,5 +1,20 @@
 # @tinycloud/courier
 
+## 0.5.3-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/sdk-core@3.12.0-beta.7
+
+## 0.5.3-beta.6
+
+### Patch Changes
+
+- 2c3c65d: Courier refuses a flag the command does not accept: it exits 2 with `Unknown flag --name for <command>` and the accepted flags, before reading stdin or a grant file or touching the profile.
+
+  Details: TC-2343
+
 ## 0.5.3-beta.5
 
 ### Patch Changes

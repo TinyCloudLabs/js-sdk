@@ -234,6 +234,13 @@
       "index.mjs": 99,
       "index.cjs": 104,
       "note": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Cumulative ESM is 391 against its former 388 budget: the exact 3-byte increase is explicit; CJS allowance remains 861."
+    },
+    {
+      "pr": "#893",
+      "ticket": "TC-2606",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
