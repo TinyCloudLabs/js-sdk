@@ -56,7 +56,8 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
       try { parsed = await response.json(); } catch { parsed = undefined; }
       const typed = serverError(parsed, response, this.options.honorServerRecoverable === true);
       if (typed) throw typed;
-      if (response.status === 410) throw new CredentialError("REQUEST_EXPIRED", "Credential request expired", { state: "expired" });
+      // Only a request-scoped endpoint (it carries the request id) reports the request itself as expired; a 410 elsewhere, such as issuer metadata, says nothing about a stored request.
+      if (response.status === 410) throw new CredentialError("REQUEST_EXPIRED", "Credential request expired", input.id === undefined ? undefined : { state: "expired" });
       if (response.status === 409) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential request was replayed or substituted");
       if (response.status === 503) throw new CredentialError("ISSUER_UNREADY", "Credential issuer is not ready", { retryAfterMs: Number(response.headers.get("retry-after")) * 1000 || undefined });
       throw new CredentialError("VERIFICATION_FAILED", "OpenCredentials rejected the request");

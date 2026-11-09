@@ -70,3 +70,22 @@ test("a transient error keeps the redirect request for the next attempt", async 
   await expect(resume(store, transportFailing(async () => { throw new CredentialError("OFFLINE", "OpenCredentials is unavailable"); }))).rejects.toMatchObject({ code: "OFFLINE" });
   expect(store.value).toEqual(before);
 });
+
+test("a 410 from issuer metadata after the flow does not clear the stored request", async () => {
+  const store = await seeded();
+  const before = store.value;
+  const complete: CredentialRequestState = { type: "OpenCredentialsAcquisitionState", version: 1, requestId: REQUEST, transitionId: "complete", state: "complete", correlationId: REQUEST };
+  const metadataGone = new OpenCredentialsHttpTransport(email, async () => new Response("", { status: 410 }));
+  const transport = { state: async () => complete, result: async () => ({}), issuerMetadata: (signal?: AbortSignal) => metadataGone.issuerMetadata(signal) } as unknown as CredentialAcquisitionTransport;
+  await expect(resume(store, transport)).rejects.toMatchObject({ code: "REQUEST_EXPIRED" });
+  expect(store.value).toEqual(before);
+});
+
+test("an expired challenge that can be re-issued keeps the stored request", async () => {
+  const store = await seeded();
+  const before = store.value;
+  const challengeExpired = new Response(JSON.stringify({ type: "tinycloud.credentials/error/v1", code: "CHALLENGE_EXPIRED", recoverable: true, state: "challenge_expired", correlationId: "C".repeat(16) }), { status: 409 });
+  const transport = new OpenCredentialsHttpTransport(email, async () => challengeExpired.clone());
+  await expect(resume(store, transport)).rejects.toMatchObject({ code: "REQUEST_EXPIRED" });
+  expect(store.value).toEqual(before);
+});
