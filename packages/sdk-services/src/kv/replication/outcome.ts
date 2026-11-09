@@ -13,12 +13,10 @@ export function classifyWriteOutcome<T>(
   if (result.ok) return "committed";
   const { code, meta } = result.error;
   if (op === "delete" && code === ErrorCodes.KV_NOT_FOUND) {
-    return options.conditional === true ? "failed" : "committed";
+    return options.conditional ? "failed" : "committed";
   }
-  if (meta?.requestMayHaveDispatched === false) return "failed";
-  if (DEFINITIVE_FAILURES.has(code)) return "failed";
-  if (meta?.outcome === "batch-unconfirmed") return "ambiguous";
-  const status = typeof meta?.status === "number" ? meta.status : undefined;
-  if (code === ErrorCodes.NODE_BUSY || (status !== undefined && status >= 400 && status < 500)) return "failed"; // NODE_BUSY: the node's 503 busy marker, nothing applied
-  return "ambiguous";
+  // NODE_BUSY is the node's 503 busy marker: nothing was applied.
+  if (meta?.requestMayHaveDispatched === false || DEFINITIVE_FAILURES.has(code) || code === ErrorCodes.NODE_BUSY) return "failed";
+  const status = meta?.status;
+  return meta?.outcome !== "batch-unconfirmed" && typeof status === "number" && status >= 400 && status < 500 ? "failed" : "ambiguous";
 }
