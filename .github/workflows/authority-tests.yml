@@ -134,7 +134,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        uses: ./.github/actions/install-wasm-pack
+        uses: ./js-sdk/.github/actions/install-wasm-pack
 
       - name: Install js-sdk dependencies
         working-directory: js-sdk
@@ -225,7 +225,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        uses: ./.github/actions/install-wasm-pack
+        uses: ./js-sdk/.github/actions/install-wasm-pack
 
       - name: Install js-sdk dependencies
         working-directory: js-sdk
