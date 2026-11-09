@@ -134,6 +134,7 @@ export async function importPortableDelegation(
     await resourceTransport(verified.resources, async (target) => {
       const response = await target.fetch(`${target.url}/delegate`, {
         method: "POST", headers: { Authorization: parsed.delegationHeader.Authorization },
+        redirect: "error",
       });
       responses.push(response);
       return response;
@@ -142,6 +143,7 @@ export async function importPortableDelegation(
     responses.push(await fetchFn(`${host.replace(/\/+$/, "")}/delegate`, {
       method: "POST",
       headers: { Authorization: parsed.delegationHeader.Authorization },
+      redirect: "error",
     }));
   }
   const response = responses[0]!;

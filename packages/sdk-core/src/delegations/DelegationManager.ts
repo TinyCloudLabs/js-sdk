@@ -18,6 +18,7 @@ import type {
   ResourceTransport,
   ResourceTransportTarget,
 } from "@tinycloud/sdk-services";
+import { routingFailure, wrapError } from "@tinycloud/sdk-services";
 import {
   Result,
   DelegationErrorCodes,
@@ -156,6 +157,7 @@ export class DelegationManager {
       method: "POST",
       headers,
       body,
+      redirect: "error",
     });
   }
 
@@ -232,7 +234,7 @@ export class DelegationManager {
           }
           headers = await this.invocationHeaders([entry], target);
         }
-        return fetchFn(`${host}/revoke`, { method: "POST", headers });
+        return fetchFn(`${host}/revoke`, { method: "POST", headers, redirect: "error" });
       };
       const response = this.resourceTransport
         ? await this.resourceTransport(
@@ -280,6 +282,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -334,6 +337,7 @@ export class DelegationManager {
           method: "POST",
           headers: Array.isArray(headers) ? [...headers, ["Content-Type", "application/json"]] : { ...headers, "Content-Type": "application/json" },
           body: JSON.stringify({ cid }),
+          redirect: "error",
         });
       };
       const response = this.resourceTransport
@@ -370,6 +374,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -449,6 +454,7 @@ export class DelegationManager {
             method: "POST",
             headers,
             body: JSON.stringify(validated.data),
+            redirect: "error",
           });
         };
         response = this.resourceTransport
@@ -491,6 +497,7 @@ export class DelegationManager {
       }
       return { ok: true, data: parsed.data };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       return {
         ok: false,
         error: createError(
@@ -656,6 +663,7 @@ export class DelegationManager {
 
       return { ok: true, data: chain };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,
@@ -749,6 +757,7 @@ export class DelegationManager {
       if (!body2.ok) return body2;
       return { ok: true, data: body2.data.allowed };
     } catch (error) {
+      if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
       if (error instanceof Error && error.name === "AbortError") {
         return {
           ok: false,

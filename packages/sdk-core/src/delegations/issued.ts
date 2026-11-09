@@ -10,6 +10,7 @@
  */
 
 import type { FetchFunction, FetchResponse, ResourceTransport } from "@tinycloud/sdk-services";
+import { routingFailure, wrapError } from "@tinycloud/sdk-services";
 import {
   DelegationErrorCodes,
   DelegationRevocationReceiptSchema,
@@ -98,7 +99,7 @@ async function issuedHttpError(
  */
 async function nodeListsIssued(ctx: IssuedContext): Promise<Result<boolean>> {
   if (ctx.state.issuedQuerySupported) return { ok: true, data: true };
-  const response = await ctx.fetchFn(`${ctx.host}/info`);
+  const response = await ctx.fetchFn(`${ctx.host}/info`, { redirect: "error" });
   if (!response.ok) {
     return {
       ok: false,
@@ -159,6 +160,7 @@ export async function queryIssued(
         method: "POST",
         headers: { Authorization: authorization, "content-type": "application/json" },
         body: JSON.stringify(options),
+        redirect: "error",
       });
     };
     let response: FetchResponse;
@@ -193,6 +195,7 @@ export async function queryIssued(
     }
     return { ok: true, data: parsed.data };
   } catch (error) {
+    if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
     if (error instanceof IssuedQueryUnsupported) return unsupportedIssuedQuery();
     return {
       ok: false,
@@ -296,6 +299,7 @@ export async function revokeIssued(
       return fetchFn(`${host}/revoke`, {
         method: "POST",
         headers: { Authorization: authorization },
+        redirect: "error",
       });
     };
     const response = ctx.resourceTransport
@@ -327,6 +331,7 @@ export async function revokeIssued(
     }
     return { ok: true, data: parsed.data };
   } catch (error) {
+    if (routingFailure(error)) return { ok: false, error: { ...wrapError("delegation", error), service: "delegation" } };
     return {
       ok: false,
       error: createError(

@@ -60,10 +60,6 @@ import {
   DelegationResult,
   ClientSession,
   Extension,
-  EncodedShareData,
-  KVService,
-  ServiceContext,
-  ServiceSession,
   type TelemetryConfig,
   type RetryPolicy,
   ISpaceCreationHandler,
@@ -89,6 +85,7 @@ import {
   type StorageFullEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 import { closeActiveModal, showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
@@ -126,8 +123,6 @@ import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../provi
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
 import type { NotificationConfig } from "../notifications/types";
-import { WasmInitializer } from "./WasmInitializer";
-import { invoke } from "./Storage/tinycloud/module";
 import type { PortableDelegation, DelegatedAccess, SpaceHosting } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
 import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
@@ -351,42 +346,6 @@ export type FenceCapableStorage = ISessionStorage & {
   isSignedOut?: (address: string, signature: string) => boolean;
 };
 
-const TC1_PREFIX = "tc1:";
-
-function base64UrlDecode(encoded: string): string {
-  let base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-  while (base64.length % 4) {
-    base64 += "=";
-  }
-  if (typeof atob !== "undefined") {
-    return decodeURIComponent(escape(atob(base64)));
-  } else if (typeof Buffer !== "undefined") {
-    return Buffer.from(base64, "base64").toString("utf-8");
-  }
-  throw new Error("No base64 decoding available");
-}
-
-function decodeShareLink(link: string): EncodedShareData {
-  let encoded = link;
-  if (link.includes("/share/")) {
-    const parts = link.split("/share/");
-    encoded = parts[parts.length - 1];
-  }
-  if (link.includes("?share=")) {
-    const url = new URL(link);
-    encoded = url.searchParams.get("share") ?? encoded;
-  }
-  if (!encoded.startsWith(TC1_PREFIX)) {
-    throw new Error(`Invalid share link format. Expected prefix '${TC1_PREFIX}'`);
-  }
-  const base64Data = encoded.slice(TC1_PREFIX.length);
-  const jsonString = base64UrlDecode(base64Data);
-  const data = JSON.parse(jsonString) as EncodedShareData;
-  if (data.version !== 1) {
-    throw new Error(`Unsupported share link version: ${data.version}`);
-  }
-  return data;
-}
 
 /**
  * Result of receiving a share link.
@@ -396,7 +355,7 @@ export interface ShareReceiveResult<T = unknown> {
   delegation: Delegation;
   path: string;
   spaceId: string;
-  /** Owner Node named by the link; that node independently verifies the accompanying delegation. */
+  /** Identity-checked registry destination where the verified parent was activated. */
   host: string;
 }
 
@@ -698,6 +657,27 @@ export class TinyCloudWeb {
     return this._node!;
   }
 
+  /** Bind a wrapper call to its entry-time authority before initialization can yield. */
+  private async dispatchCurrentNode<T>(
+    dispatch: (node: TinyCloudNode, assertCurrent: () => void) => T | Promise<T>,
+  ): Promise<T> {
+    const entryNode = this._node;
+    const session = entryNode?.restorableSession;
+    const signOuts = this.signOutCount;
+    if (this.signOutInFlight > 0) throw new Error("Operation cancelled by sign-out.");
+    const node = await this.ensureNode();
+    const assertCurrent = (): void => {
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0 ||
+        this._node !== node || (entryNode != null && entryNode !== node) ||
+        node.restorableSession !== session) {
+        throw new Error("Operation cancelled because the signed session changed or signed out.");
+      }
+    };
+    assertCurrent();
+    // Dispatch synchronously after the check so the Node captures this same graph.
+    return dispatch(node, assertCurrent);
+  }
+
   /**
    * Get the TinyCloudNode instance synchronously.
    * Throws if called before WASM initialization completes.
@@ -821,14 +801,13 @@ export class TinyCloudWeb {
   get replication(): TinyCloudNode["replication"] { return this.node.replication; }
   /** Registry-resolved owner Node identity used to bind native share targets. */
   async activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }> {
-    return (await this.ensureNode()).activeNodeIdentity();
+    return this.dispatchCurrentNode((node) => node.activeNodeIdentity());
   }
   /** Publish the active owner Node as a session-signed registry record. */
   async publishActiveNodeLocation(registryUrl: string, fetchFn?: typeof fetch) {
-    const node = await this.ensureNode();
-    return fetchFn === undefined
+    return this.dispatchCurrentNode((node) => fetchFn === undefined
       ? node.publishActiveNodeLocation(registryUrl)
-      : node.publishActiveNodeLocation(registryUrl, fetchFn);
+      : node.publishActiveNodeLocation(registryUrl, fetchFn));
   }
   get sessionRestoreStatus(): SessionRestoreStatus { return this._sessionRestoreStatus; }
 
@@ -850,22 +829,19 @@ export class TinyCloudWeb {
   async getEncryptionNetwork(
     nameOrNetworkId = "default",
   ): Promise<NetworkDescriptor | null> {
-    const node = await this.ensureNode();
-    return node.getEncryptionNetwork(nameOrNetworkId);
+    return this.dispatchCurrentNode((node) => node.getEncryptionNetwork(nameOrNetworkId));
   }
 
   async createEncryptionNetwork(
     name = "default",
   ): Promise<NetworkDescriptor> {
-    const node = await this.ensureNode();
-    return node.createEncryptionNetwork(name);
+    return this.dispatchCurrentNode((node) => node.createEncryptionNetwork(name));
   }
 
   async ensureEncryptionNetwork(
     name = "default",
   ): Promise<NetworkDescriptor> {
-    const node = await this.ensureNode();
-    return node.ensureEncryptionNetwork(name);
+    return this.dispatchCurrentNode((node) => node.ensureEncryptionNetwork(name));
   }
 
   /**
@@ -889,8 +865,7 @@ export class TinyCloudWeb {
    * @returns The hosted owned-space URI.
    */
   async ensureOwnedSpaceHosted(name: string): Promise<string> {
-    const node = await this.ensureNode();
-    return node.ensureOwnedSpaceHosted(name);
+    return this.dispatchCurrentNode((node) => node.ensureOwnedSpaceHosted(name));
   }
 
   // ===========================================================================
@@ -1093,59 +1068,42 @@ export class TinyCloudWeb {
   async ensureSpaceHosted(): Promise<SpaceHosting> {
     const signOuts = this.signOutCount;
     const cancellation = () => new Error("Space hosting was cancelled by sign-out.");
-    const assertNotSignedOut = (): void => {
-      if (this.signOutCount !== signOuts) throw cancellation();
-    };
-
-    let node: TinyCloudNode;
     try {
-      node = await this.ensureNode();
+      return await this.dispatchCurrentNode(async (node, assertCurrent) => {
+        const hosting = node.spaceHosting;
+        if (hosting !== "not-hosted") return hosting;
+        const session = node.restorableSession;
+        if (session && this.walletSigner) {
+          const signerAddress = await this.walletSigner.getAddress();
+          assertCurrent();
+          if (signerAddress.toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
+        }
+
+        const spaceId = node.spaceId;
+        const existing = this.spaceHostingInFlight;
+        if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
+          return existing.run;
+        }
+
+        const hasCreationPath = this.walletSigner !== undefined &&
+          (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
+        if (!hasCreationPath) return "not-hosted";
+
+        const run = node.ensurePrimarySpaceHosted("not-hosted").then(() => {
+          assertCurrent();
+          return node.spaceHosting;
+        });
+        const inFlight = { run, signOuts, spaceId };
+        this.spaceHostingInFlight = inFlight;
+        try {
+          return await run;
+        } finally {
+          if (this.spaceHostingInFlight === inFlight) this.spaceHostingInFlight = undefined;
+        }
+      });
     } catch (error) {
-      if (this.signOutCount !== signOuts) throw cancellation();
+      if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw cancellation();
       throw error;
-    }
-    assertNotSignedOut();
-    const hosting = node.spaceHosting;
-    if (hosting !== "not-hosted") return hosting;
-    const session = node.restorableSession;
-    if (session && this.walletSigner) {
-      let signerAddress: string;
-      try {
-        signerAddress = await this.walletSigner.getAddress();
-      } catch (error) {
-        if (this.signOutCount !== signOuts) throw cancellation();
-        throw error;
-      }
-      assertNotSignedOut();
-      if (signerAddress.toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
-    }
-
-    const spaceId = node.spaceId;
-    const existing = this.spaceHostingInFlight;
-    if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
-      return existing.run;
-    }
-
-    const hasCreationPath = this.walletSigner !== undefined &&
-      (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
-    if (!hasCreationPath) return "not-hosted";
-
-    const run = node.ensurePrimarySpaceHosted("not-hosted").then(
-      () => {
-        assertNotSignedOut();
-        return node.spaceHosting;
-      },
-      (error: unknown) => {
-        if (this.signOutCount !== signOuts) throw cancellation();
-        throw error;
-      },
-    );
-    const inFlight = { run, signOuts, spaceId };
-    this.spaceHostingInFlight = inFlight;
-    try {
-      return await run;
-    } finally {
-      if (this.spaceHostingInFlight === inFlight) this.spaceHostingInFlight = undefined;
     }
   }
 
@@ -1517,8 +1475,7 @@ export class TinyCloudWeb {
     disableSubDelegation?: boolean;
     expiryMs?: number;
   }): Promise<PortableDelegation> {
-    const node = await this.ensureNode();
-    return node.createDelegation(params);
+    return this.dispatchCurrentNode((node) => node.createDelegation(params));
   }
 
   /** Create and activate a wallet-rooted delegation for an ephemeral share key. */
@@ -1529,23 +1486,24 @@ export class TinyCloudWeb {
         : never
       : never,
   ): Promise<OwnerDelegationReceipt> {
-    const node = await this.ensureNode();
-    const spaceId = params.spaceId ?? this.spaceId;
-    if (spaceId === undefined) throw new Error("Owner share delegation requires an authenticated space.");
-    if ("permissions" in params) {
+    return this.dispatchCurrentNode((node) => {
+      const spaceId = params.spaceId ?? node.spaceId;
+      if (spaceId === undefined) throw new Error("Owner share delegation requires an authenticated space.");
+      if ("permissions" in params) {
+        return node.createOwnerDelegation({
+          delegateDid: params.delegateDid,
+          permissions: params.permissions!,
+          expiresAt: params.expiresAt,
+          spaceId,
+        });
+      }
       return node.createOwnerDelegation({
         delegateDid: params.delegateDid,
-        permissions: params.permissions!,
+        path: params.path,
+        actions: params.actions,
         expiresAt: params.expiresAt,
         spaceId,
       });
-    }
-    return node.createOwnerDelegation({
-      delegateDid: params.delegateDid,
-      path: params.path,
-      actions: params.actions,
-      expiresAt: params.expiresAt,
-      spaceId,
     });
   }
 
@@ -1553,14 +1511,12 @@ export class TinyCloudWeb {
   async registerPolicy(
     params: Omit<RegisterPolicyV3Input, "nodeOrigin" | "fetch">,
   ): Promise<RegisterPolicyV3Receipt> {
-    const node = await this.ensureNode();
-    return node.registerPolicy(params);
+    return this.dispatchCurrentNode((node) => node.registerPolicy(params));
   }
 
   /** Authorize a short-lived, one-use v3 delivery against the signed envelope and roots. */
   async authorizeShareDeliveryV3(input: Parameters<TinyCloudNode["authorizeShareDeliveryV3"]>[0]): Promise<Awaited<ReturnType<TinyCloudNode["authorizeShareDeliveryV3"]>>> {
-    const node = await this.ensureNode();
-    return node.authorizeShareDeliveryV3(input);
+    return this.dispatchCurrentNode((node) => node.authorizeShareDeliveryV3(input));
   }
 
   /**
@@ -1579,23 +1535,20 @@ export class TinyCloudWeb {
     permissions: PermissionEntry[],
     options?: DelegateToOptions,
   ): Promise<DelegateToResult> => {
-    const node = await this.ensureNode();
-    return node.delegateTo(did, permissions, options);
+    return this.dispatchCurrentNode((node) => node.delegateTo(did, permissions, options));
   };
 
   materializeDelegation = async (
     did: string,
     request?: ComposedManifestRequest,
   ): Promise<DelegateToResult & { target: ResolvedDelegate }> => {
-    const node = await this.ensureNode();
-    return node.materializeDelegation(did, request);
+    return this.dispatchCurrentNode((node) => node.materializeDelegation(did, request));
   };
 
   materializeDelegations = async (
     request?: ComposedManifestRequest,
   ): Promise<Array<DelegateToResult & { target: ResolvedDelegate }>> => {
-    const node = await this.ensureNode();
-    return node.materializeDelegations(request);
+    return this.dispatchCurrentNode((node) => node.materializeDelegations(request));
   };
 
   /**
@@ -1887,17 +1840,11 @@ export class TinyCloudWeb {
   }
 
   async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
-    const signOuts = this.signOutCount;
-    const node = await this.ensureNode();
-    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw new Error("Delegation use was cancelled by sign-out.");
-    await node.useRuntimeDelegation(delegation);
+    return this.dispatchCurrentNode((node) => node.useRuntimeDelegation(delegation));
   }
 
   async useDelegation(delegation: PortableDelegation): Promise<DelegatedAccess> {
-    const signOuts = this.signOutCount;
-    const node = await this.ensureNode();
-    if (this.signOutCount !== signOuts || this.signOutInFlight > 0) throw new Error("Delegation use was cancelled by sign-out.");
-    return node.useDelegation(delegation);
+    return this.dispatchCurrentNode((node) => node.useDelegation(delegation));
   }
 
   async createSubDelegation(
@@ -1916,18 +1863,15 @@ export class TinyCloudWeb {
       }>;
     }
   ): Promise<PortableDelegation> {
-    const node = await this.ensureNode();
-    return node.createSubDelegation(parentDelegation, params);
+    return this.dispatchCurrentNode((node) => node.createSubDelegation(parentDelegation, params));
   }
 
   async revokeDelegation(cid: string): Promise<Result<DelegationRevocationReceipt, DelegationError>> {
-    const node = await this.ensureNode();
-    return node.revokeDelegation(cid);
+    return this.dispatchCurrentNode((node) => node.revokeDelegation(cid));
   }
 
   async checkPermission(path: string, action: string): Promise<Result<boolean, DelegationError>> {
-    const node = await this.ensureNode();
-    return node.checkPermission(path, action);
+    return this.dispatchCurrentNode((node) => node.checkPermission(path, action));
   }
 
   // ===========================================================================
@@ -1936,116 +1880,77 @@ export class TinyCloudWeb {
 
   /**
    * Receive and retrieve data from a native TinyCloud bearer delegation.
-   * Static method — no auth required. Uses browser WASM.
+   * Static method — no sign-in required. Verifies the parent with browser WASM and routes through the owner's registry.
    */
   public static async receiveShare<T = unknown>(
     link: string,
     key?: string,
     options?: { readonly binary?: boolean },
   ): Promise<Result<ShareReceiveResult<T>, DelegationError>> {
-    await WasmInitializer.ensureInitialized();
+    const wasmBindings = new BrowserWasmBindings();
+    await wasmBindings.ensureInitialized();
 
     try {
-      const shareData = decodeShareLink(link);
+      const node = new TinyCloudNode({
+        wasmBindings,
+        registrySequenceStore: createLocalStorageRegistrySequenceStore(),
+        registryCacheStore: createLocalStorageRegistryCacheStore(),
+        newUserHost: null,
+        autoDiscoverLocalNode: false,
+      });
+      const received = await node.sharing.receive(link, {
+        autoSubdelegate: false,
+        useSessionKey: false,
+      });
+      if (received.ok === false) return received;
+      const share = received.data;
 
-      if (!shareData.key || !shareData.key.d) {
-        return {
-          ok: false,
-          error: {
-            code: "INVALID_TOKEN",
-            message: "Share link does not contain a valid private key",
-            service: "delegation",
-          },
-        };
-      }
-
-      const expiry = new Date(shareData.delegation.expiry);
-      if (expiry < new Date()) {
-        return {
-          ok: false,
-          error: {
-            code: "AUTH_EXPIRED",
-            message: "Share link has expired",
-            service: "delegation",
-          },
-        };
-      }
-
-      if (shareData.delegation.isRevoked) {
-        return {
-          ok: false,
-          error: {
-            code: "REVOKED",
-            message: "Share link has been revoked",
-            service: "delegation",
-          },
-        };
-      }
-
-      let authToken = shareData.delegation.authHeader ?? shareData.delegation.cid;
-      if (authToken.startsWith("Bearer ")) {
-        authToken = authToken.slice(7);
-      }
-
-      const session: ServiceSession = {
-        delegationHeader: { Authorization: authToken },
-        delegationCid: shareData.delegation.cid,
-        spaceId: shareData.spaceId,
-        verificationMethod: shareData.keyDid,
-        jwk: shareData.key,
-      };
-
-      // Register delegation with server
-      const delegateResponse = await globalThis.fetch(
-        `${shareData.host}/delegate`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: authToken,
-          },
-        }
+      // receive() has verified the parent CID, signature, space and embedded key.
+      // Its recorded host is never promoted to routing authority.
+      let registeredHost: string | undefined;
+      const delegateResponse = await node.resourceTransport(
+        [{ resource: share.spaceId, access: "read" }],
+        async (target) => {
+          const response = await target.fetch(`${target.url}/delegate`, {
+            method: "POST",
+            headers: { Authorization: share.delegation.authHeader! },
+            redirect: "error",
+          });
+          if (response.ok) registeredHost = target.url;
+          return response;
+        },
       );
-
       if (!delegateResponse.ok) {
         const errorText = await delegateResponse.text();
         return {
-          ok: false as const,
+          ok: false,
           error: {
             code: "DELEGATION_FAILED",
             message: `Failed to register delegation: ${delegateResponse.status} - ${errorText}`,
-            service: "delegation" as const,
+            service: "delegation",
           },
         };
       }
 
-      const context = new ServiceContext({
-        invoke,
-        fetch: globalThis.fetch.bind(globalThis),
-        hosts: [shareData.host],
-      });
-      context.setSession(session);
+      // The public static API accepts full keys, unlike the path-prefixed ShareAccess.
+      const kvResult = await share.kv.get<T>(key ?? share.path, { ...options, prefix: "" });
 
-      const kvService = new KVService({ prefix: "" });
-      kvService.initialize(context);
-
-      const fetchKey = key ?? shareData.path;
-      const kvResult = await kvService.get<T>(fetchKey, options);
-
-      if (kvResult.ok) {
+      if (kvResult.ok === true) {
         return {
           ok: true as const,
           data: {
             data: kvResult.data.data,
-            delegation: shareData.delegation,
-            path: shareData.path,
-            spaceId: shareData.spaceId,
-            host: shareData.host,
+            delegation: share.delegation,
+            path: share.path,
+            spaceId: share.spaceId,
+            host: registeredHost!,
           },
         };
       }
 
-      const errorResult = kvResult as { ok: false; error: { message: string; cause?: Error } };
+      const routed = routingFailure(kvResult.error);
+      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
+      const errorResult = kvResult;
       return {
         ok: false as const,
         error: {
@@ -2056,6 +1961,8 @@ export class TinyCloudWeb {
         },
       };
     } catch (err) {
+      const routed = routingFailure(err);
+      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
       return {
         ok: false,
         error: {

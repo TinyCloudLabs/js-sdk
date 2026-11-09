@@ -551,6 +551,7 @@ export class SpaceService implements ISpaceService {
       const response = await this.fetchFn(`${this.host}/invoke`, {
         method: "POST",
         headers,
+        redirect: "error",
       });
 
       if (!response.ok) {
@@ -709,6 +710,7 @@ export class SpaceService implements ISpaceService {
         method: "POST",
         headers,
         body: JSON.stringify({ name }),
+        redirect: "error",
       });
 
       if (!response.ok) {
@@ -884,6 +886,7 @@ export class SpaceService implements ISpaceService {
         method: "POST",
         headers,
         body: JSON.stringify({ spaceId }),
+        redirect: "error",
       });
 
       if (!response.ok) {
@@ -1027,6 +1030,7 @@ export class SpaceService implements ISpaceService {
           const response = await self.fetchFn(`${self.host}/invoke`, {
             method: "POST",
             headers,
+            redirect: "error",
           });
 
           if (!response.ok) {
@@ -1089,6 +1093,7 @@ export class SpaceService implements ISpaceService {
           const response = await self.fetchFn(`${self.host}/invoke`, {
             method: "POST",
             headers,
+            redirect: "error",
           });
 
           if (!response.ok) {
@@ -1161,6 +1166,7 @@ export class SpaceService implements ISpaceService {
               method: "POST",
               headers,
               body: JSON.stringify({ cid, spaceId }),
+              redirect: "error",
             });
           };
           const response = self.resourceTransport

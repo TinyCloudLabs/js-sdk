@@ -1,11 +1,12 @@
 import "../../operations/test-support/test-bootstrap.mjs";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
+import * as core from "@tinycloud/sdk-core";
 import {
   canonicalizeEncryptionJson,
   pkhDid,
@@ -451,6 +452,109 @@ test("an identity decision retired during registry lookup does not contact a nod
   expect(attempts.every((attempt) => new URL(attempt.url).origin === REGISTRY)).toBe(true);
 });
 
+test("a pending delivery cannot adopt a replacement session while parsing its bearer link", async () => {
+  const { node, attempts, records } = await fixture("registered");
+  const replacement = await signedRestorableSession({
+    privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    abilities: { kv: { "": ["tinycloud.kv/get"] } },
+  });
+  const replacementSigner = new PrivateKeySigner("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  const replacementRecord = await signLocationRecordV2({
+    version: 2,
+    subject: pkhDid(replacement.address, replacement.chainId),
+    nodes: [{ did: OTHER_DID, url: SECOND }],
+    spaces: [{ space: replacement.spaceId.toLowerCase(), nodes: [{ did: OTHER_DID, mode: "read-write" }] }],
+    encryptionNode: OTHER_DID,
+    updated_at: "2026-10-18T00:00:00.000Z",
+    sequence: 1,
+  }, { type: "did:pkh", signMessage: (message) => replacementSigner.signMessage(message) });
+  records.set(registryOwnerKeyV2(replacementRecord.subject).toLowerCase(), replacementRecord);
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const parsingStarted = new Promise<void>((resolve) => { started = resolve; });
+  const parse = core.shortDeliveryLinkBodyCid;
+  const parser = spyOn(core, "shortDeliveryLinkBodyCid").mockImplementation(async (...args) => {
+    const cid = await parse(...args);
+    started();
+    await blocked;
+    return cid;
+  });
+  const pending = node.authorizeShareDeliveryV3(delivery()).then(() => undefined, (error: unknown) => error);
+  try {
+    await parsingStarted;
+    await node.restoreSession({ ...replacement, tinycloudHosts: [SECOND] });
+  } finally {
+    release();
+    parser.mockRestore();
+  }
+  expect(await pending).toBeInstanceOf(Error);
+  expect(attempts.filter((attempt) => attempt.method === "POST")).toEqual([]);
+  expect(attempts.some((attempt) => new URL(attempt.url).origin === SECOND)).toBe(false);
+});
+
+test("legacy location publication cannot adopt a replacement signer after identity lookup", async () => {
+  const { node } = await fixture("registered");
+  const replacement = await signedRestorableSession();
+  const identity = node.activeNodeIdentity.bind(node);
+  let release!: () => void;
+  let started!: () => void;
+  const blocked = new Promise<void>((resolve) => { release = resolve; });
+  const lookedUp = new Promise<void>((resolve) => { started = resolve; });
+  const lookup = spyOn(node, "activeNodeIdentity").mockImplementation(async () => {
+    const target = await identity();
+    started();
+    await blocked;
+    return target;
+  });
+  const publications: Array<{ method: string; url: string }> = [];
+  const fetchFn = (async (input, init) => {
+    publications.push({ method: init?.method ?? "GET", url: String(input) });
+    return init?.method === "PUT"
+      ? Response.json({ record: JSON.parse(String(init.body)) }, { status: 201 })
+      : Response.json({ error: "location record not found" }, { status: 404 });
+  }) as typeof fetch;
+  const pending = node.publishActiveNodeLocation(REGISTRY, fetchFn).then(() => undefined, (error: unknown) => error);
+  try {
+    await lookedUp;
+    await node.restoreSession({ ...replacement, tinycloudHosts: [SECOND] });
+  } finally {
+    release();
+    lookup.mockRestore();
+  }
+  expect(await pending).toBeInstanceOf(Error);
+  expect(publications).toEqual([]);
+});
+
+test("manifest materialization cannot continue its next target under a replacement session", async () => {
+  const { node, proof, attempts, responses } = await fixture("registered");
+  responses.set(`${ROUTED}/delegate`, { status: 200, body: JSON.stringify({ activated: [proof.spaceId], skipped: [] }) });
+  const replacement = await signedRestorableSession({ abilities: { kv: { "": ["tinycloud.kv/get"] } } });
+  const materialize = node.materializeDelegation.bind(node);
+  let replaced = false;
+  const call = spyOn(node, "materializeDelegation").mockImplementation(async (...args) => {
+    const result = await materialize(...args);
+    if (!replaced) {
+      replaced = true;
+      await node.restoreSession({ ...replacement, tinycloudHosts: [SECOND] });
+    }
+    return result;
+  });
+  const request = { delegationTargets: [OTHER_DID, NODE_DID].map((did) => ({
+    did,
+    permissions: [{ service: "tinycloud.kv", path: "", actions: ["tinycloud.kv/get"], space: "default" }],
+    expiryMs: 60_000,
+  })) } as Parameters<TinyCloudNode["materializeDelegations"]>[0];
+  try {
+    const outcome = await node.materializeDelegations(request).then(() => undefined, (error: unknown) => error);
+    expect(replaced).toBe(true);
+    expect(attempts.filter((attempt) => new URL(attempt.url).pathname === "/delegate")).toHaveLength(1);
+    expect(outcome).toBeInstanceOf(Error);
+  } finally {
+    call.mockRestore();
+  }
+});
+
 test("retiring a graph between policy steps prevents the root-bearing POST", async () => {
   const { node, proof, params, attempts } = await fixture("registered");
   const fetchFn = globalThis.fetch;
@@ -725,3 +829,98 @@ test("decrypt POST refuses a 307 before forwarding its signed invocation or ciph
     fixture.stop();
   }
 });
+
+for (const retireDuringSigning of [false, true]) {
+test(retireDuringSigning
+  ? "encryption network creation cannot send after its signing graph is replaced"
+  : "encryption network creation refuses a native 307 before forwarding its signed body", async () => {
+  const wasm = new NodeWasmBindings();
+  const address = await owner.getAddress();
+  const chainId = await owner.getChainId();
+  const subject = pkhDid(address, chainId);
+  const spaceId = wasm.makeSpaceId(address, chainId, "default");
+  const networkId = `urn:tinycloud:encryption:${subject}:default`;
+  const manager = wasm.createSessionManager();
+  const jwk = JSON.parse(manager.jwk("default")!);
+  const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+  const prepared = wasm.prepareSession({
+    abilities: { kv: { "": ["tinycloud.kv/get"] } },
+    rawAbilities: { [networkId]: ["tinycloud.encryption/network.create"] },
+    address, chainId, domain: "network-redirect.test",
+    issuedAt: new Date().toISOString(), expirationTime: expiresAt, spaceId, jwk,
+  });
+  const signature = await owner.signMessage(prepared.siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  const frontRequests: Array<{ authorized: boolean; bodyBytes: number }> = [];
+  const redirectedRequests: Array<{ method: string; bodyBytes: number }> = [];
+  const sink = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(request) {
+      redirectedRequests.push({ method: request.method, bodyBytes: (await request.arrayBuffer()).byteLength });
+      return Response.json({});
+    },
+  });
+  let record: Awaited<ReturnType<typeof signLocationRecordV2>>;
+  const front = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path.startsWith("/v2/locations/")) return Response.json({ record });
+      if (request.method === "GET" && path === "/info") return Response.json({ protocol: wasm.protocolVersion(), nodeId: NODE_DID });
+      if (request.method === "GET" && path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
+      if (request.method === "POST" && path === "/encryption/networks") {
+        frontRequests.push({ authorized: request.headers.has("authorization"), bodyBytes: (await request.arrayBuffer()).byteLength });
+        return new Response(null, { status: 307, headers: { location: `${sink.url.origin}/capture` } });
+      }
+      return new Response("Unexpected owned fixture request", { status: 400 });
+    },
+  });
+  try {
+    record = await signLocationRecordV2({
+      version: 2, subject, nodes: [{ did: NODE_DID, url: front.url.origin }],
+      spaces: [{ space: spaceId.toLowerCase(), nodes: [{ did: NODE_DID, mode: "read-write" }] }],
+      encryptionNode: NODE_DID, updated_at: "2026-10-18T00:00:00.000Z", sequence: 1,
+    }, { type: "did:pkh", signMessage: (message) => owner.signMessage(message) });
+    const node = new TinyCloudNode({ signer: owner, wasmBindings: wasm, tinycloudRegistryUrl: front.url.origin, autoDiscoverLocalNode: false });
+    nodes.push(node);
+    await node.restoreSession({
+      ...session, spaceId, jwk, address, chainId, siwe: prepared.siwe, signature, expiresAt,
+      tinycloudHosts: [front.url.origin],
+    });
+    let outcome: unknown;
+    if (retireDuringSigning) {
+      const replacement = await signedRestorableSession();
+      const sign = crypto.subtle.sign.bind(crypto.subtle);
+      let release!: () => void;
+      let started!: () => void;
+      const blocked = new Promise<void>((resolve) => { release = resolve; });
+      const signingStarted = new Promise<void>((resolve) => { started = resolve; });
+      const signer = spyOn(crypto.subtle, "sign").mockImplementation(async (...args) => {
+        const signed = await sign(...args);
+        started();
+        await blocked;
+        return signed;
+      });
+      const pending = node.createEncryptionNetwork().then(() => undefined, (error: unknown) => error);
+      try {
+        await signingStarted;
+        await node.restoreSession({ ...replacement, tinycloudHosts: [front.url.origin] });
+      } finally {
+        release();
+        signer.mockRestore();
+      }
+      outcome = await pending;
+      expect(frontRequests).toEqual([]);
+    } else {
+      outcome = await node.createEncryptionNetwork().then(() => undefined, (error: unknown) => error);
+      expect(frontRequests).toHaveLength(1);
+      expect(frontRequests[0]!.authorized).toBe(true);
+      expect(frontRequests[0]!.bodyBytes).toBeGreaterThan(0);
+    }
+    expect(redirectedRequests).toEqual([]);
+    expect(outcome).toBeInstanceOf(Error);
+  } finally {
+    await Promise.all([front.stop(true), sink.stop(true)]);
+  }
+});
+}

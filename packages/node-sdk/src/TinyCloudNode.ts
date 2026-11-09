@@ -2478,14 +2478,33 @@ export class TinyCloudNode {
     registryUrl: string,
     fetchFn: typeof fetch = globalThis.fetch.bind(globalThis),
   ) {
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    const session = this.currentTinyCloudSession();
+    if (!session) throw new Error("Node publication requires an authenticated session");
+    const subject = session.verificationMethod.split("#", 1)[0]!;
     const node = await this.activeNodeIdentity();
-    return publishLocationRecord({
+    graph.assertActive();
+    const record = await publishLocationRecord({
       registryUrl,
-      subject: this.credentialHolderDid,
+      subject,
       nodeOrigin: node.origin,
-      signer: { type: "did:key", signBytes: (bytes) => this.signSessionBytes(bytes) },
-      fetch: fetchFn,
+      signer: { type: "did:key", signBytes: async (bytes) => {
+        graph.assertActive();
+        const signature = await signBytesWithJwk(bytes, session.jwk);
+        graph.assertActive();
+        return signature;
+      } },
+      fetch: async (url, init) => {
+        graph.assertActive();
+        const signal = init?.signal ? AbortSignal.any([init.signal, graph.signal]) : graph.signal;
+        const response = await fetchFn(url, { ...init, signal });
+        graph.assertActive();
+        return response;
+      },
     });
+    graph.assertActive();
+    return record;
   }
 
   /**
@@ -6503,11 +6522,16 @@ export class TinyCloudNode {
     /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
     readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
-    assertExpiryWithinTechnicalLimit(new Date(input.expiresAt), "siwe");
-    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
+    const graph = this._serviceGraph;
+    graph.assertActive();
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
+    const transport = this.createResourceTransport(graph, serviceSession);
+    const senderKeyDid = session.verificationMethod.split("#", 1)[0]!;
+    assertExpiryWithinTechnicalLimit(new Date(input.expiresAt), "siwe");
+    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
+    graph.assertActive();
     const idempotencyBytes = new TextEncoder().encode(input.idempotencyKey);
     if (idempotencyBytes.byteLength === 0 || idempotencyBytes.byteLength > 512) {
       throw new Error("Share delivery idempotency key is invalid");
@@ -6516,6 +6540,7 @@ export class TinyCloudNode {
     // Never send the caller's opaque retry key over the wire: it can contain
     // application identifiers and has no protocol meaning beyond this binding.
     const jtiDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", idempotencyBytes));
+    graph.assertActive();
     const body = {
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
@@ -6525,6 +6550,7 @@ export class TinyCloudNode {
       expiresAt: new Date(input.expiresAt).toISOString(),
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
+    graph.assertActive();
     const request = { ...body, requestBodyDigest };
     // The node records this invocation's signer as the admission's senderKeyDid,
     // and the receipt below is bound to (and countersigned by) credentialHolderDid.
@@ -6534,40 +6560,50 @@ export class TinyCloudNode {
     // node now refuses this invocation, where a covering grant used to be tried.
     // Same single-capability binding ordinary KV reads use; serviceSession.spaceId is session.spaceId.
     const authorization = authorizationHeader(this.wasmBindings.invoke(serviceSession, "kv", input.resourcePath, "tinycloud.kv/get"));
-    const response = await this.resourceTransport([{ resource: serviceSession.spaceId, access: "read" }], async (target) => {
+    const response = await transport([{ resource: serviceSession.spaceId, access: "read" }], async (target) => {
       const signed = await target.bindAudience(authorization);
+      graph.assertActive();
       return target.fetch(`${target.url}/policy/v3/deliveries/authorize`, {
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/json", authorization: signed },
         body: canonicalizeEncryptionJson(request),
       });
     });
+    graph.assertActive();
     // 422 (the body did not parse) and 400 (it failed the node's checks) are one refusal with one error.
     if (response.status === 400 || response.status === 422) throw new ShareDeliveryRefusedError();
     if (!response.ok) {
       // The node's reply is part of the message. The whole reply is redacted before it is cut to 512 characters, so a
       // link or key that crosses the cut is replaced too.
       const reply = await response.text().catch(() => response.statusText);
+      graph.assertActive();
       const body = (await withoutShareLink(reply, input.shareUrl)).trim().slice(0, 512);
+      graph.assertActive();
       throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${response.status}${body ? ` - ${body}` : ""}`), { status: response.status });
     }
-    const verified = await verifyShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+    const responseBytes = new Uint8Array(await response.arrayBuffer());
+    graph.assertActive();
+    const verified = await verifyShareDeliveryAuthorizationV3Bytes(responseBytes, {
       request,
       envelope: input.envelope,
       envelopeRef,
-      senderKeyDid: this.credentialHolderDid,
+      senderKeyDid,
       deliveryAudience: input.deliveryAudience,
     });
+    graph.assertActive();
     const requestDigest = new Uint8Array(await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(`${CREDENTIAL_INVITATION_REQUEST_DOMAIN}${canonicalizeEncryptionJson(verified.request as any)}`),
     ));
+    graph.assertActive();
+    const signature = await signBytesWithJwk(requestDigest, session.jwk);
+    graph.assertActive();
     return {
       ...verified,
       proof: {
         alg: "EdDSA",
-        kid: this.credentialHolderDid,
-        signature: base64UrlEncode(await this.signSessionBytes(requestDigest)),
+        kid: senderKeyDid,
+        signature: base64UrlEncode(signature),
       },
     };
   }
@@ -6793,9 +6829,13 @@ export class TinyCloudNode {
   async createEncryptionNetwork(
     name = DEFAULT_ENCRYPTION_NETWORK_NAME,
   ): Promise<NetworkDescriptor> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
+    const session = this.requireEncryptionSession();
     const ownerDid = this.did;
     const networkId = this.getDefaultEncryptionNetworkId(name);
     const destination = await this.encryptionDestination(networkId);
+    graph.assertActive();
     const targetNode = destination.nodeDid;
     const body = {
       name,
@@ -6818,9 +6858,11 @@ export class TinyCloudNode {
       networkId,
       action: NETWORK_CREATE_ACTION,
       facts,
-    });
-    const response = await this._serviceGraph.fetch(`${destination.url}/encryption/networks`, {
+    }, { graph, session });
+    graph.assertActive();
+    const response = await graph.fetch(`${destination.url}/encryption/networks`, {
       method: "POST",
+      redirect: "error",
       headers: {
         Authorization: signed.authorization,
         "Content-Type": "application/json",
@@ -6829,6 +6871,7 @@ export class TinyCloudNode {
         body as unknown as CanonicalizableEncryptionJson,
       ),
     });
+    graph.assertActive();
     // `NetworkAlreadyExists` is the only error this route maps to Conflict
     // (`NetworkNotActive`, the other Conflict in the shared error mapper, is
     // reachable only from the decrypt routes). So a 409 means the network is
@@ -6836,6 +6879,7 @@ export class TinyCloudNode {
     // Read it back rather than failing an otherwise-successful ensure.
     if (response.status === 409) {
       const existing = await this.getEncryptionNetwork(networkId);
+      graph.assertActive();
       if (existing) return existing;
       throw new Error(
         `Encryption network ${networkId} already exists but could not be read back`,
@@ -6845,6 +6889,7 @@ export class TinyCloudNode {
       throw await httpResponseError(response, `Failed to create encryption network ${networkId}`);
     }
     const created = (await response.json()) as { descriptor: NetworkDescriptor };
+    graph.assertActive();
     return created.descriptor;
   }
 
@@ -8340,6 +8385,8 @@ export class TinyCloudNode {
     did: string,
     request: ComposedManifestRequest | undefined = this.capabilityRequest,
   ): Promise<DelegateToResult & { target: ResolvedDelegate }> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (!request) {
       throw new Error(
         "materializeDelegation requires a composed manifest request",
@@ -8354,6 +8401,7 @@ export class TinyCloudNode {
     const result = await this.delegateTo(target.did, target.permissions, {
       expiry: target.expiryMs,
     });
+    graph.assertActive();
     return { ...result, target };
   }
 
@@ -8364,6 +8412,8 @@ export class TinyCloudNode {
   async materializeDelegations(
     request: ComposedManifestRequest | undefined = this.capabilityRequest,
   ): Promise<Array<DelegateToResult & { target: ResolvedDelegate }>> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (!request) {
       throw new Error(
         "materializeDelegations requires a composed manifest request",
@@ -8372,6 +8422,7 @@ export class TinyCloudNode {
     const out: Array<DelegateToResult & { target: ResolvedDelegate }> = [];
     for (const target of request.delegationTargets) {
       out.push(await this.materializeDelegation(target.did, request));
+      graph.assertActive();
     }
     return out;
   }

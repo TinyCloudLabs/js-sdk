@@ -21,7 +21,7 @@ import type {
   ResourceTransport,
   ResourceAccess,
 } from "@tinycloud/sdk-services";
-import { createResourceTransportInvocationFetch } from "@tinycloud/sdk-services";
+import { createResourceTransportInvocationFetch, routingFailure, wrapError } from "@tinycloud/sdk-services";
 import type {
   Result,
   DelegationError,
@@ -743,6 +743,7 @@ export class SharingService implements ISharingService {
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
       const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry, params.allowSubDelegation !== false);
+      if ('ok' in delegationResult && !delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const childDelegationActiveError = this.retiredGraphError();
       if (childDelegationActiveError) return { ok: false, error: childDelegationActiveError };
       const parsed = handleDelegationResult(delegationResult);
@@ -776,6 +777,7 @@ export class SharingService implements ISharingService {
           };
         }
       } catch (err) {
+        if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
         // `onRootDelegationNeeded` re-opens the wallet/OpenKey signing surface
         // mid-compose, long after sign-in. An unanswered or cancelled signature
         // is a completely different problem from "you are not authorized", and
@@ -1017,6 +1019,7 @@ export class SharingService implements ISharingService {
         const register = (fetchFn: FetchFunction, host: string) => fetchFn(`${host}/delegate`, {
           method: "POST",
           headers: { Authorization: wasmResult.delegation },
+          redirect: "error",
         });
         const registerRes = this.resourceTransport
           ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url))
@@ -1077,6 +1080,7 @@ export class SharingService implements ISharingService {
           createdAt: new Date(),
         };
       } catch (err) {
+        if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
         return {
           ok: false,
           error: createError(
@@ -1097,6 +1101,7 @@ export class SharingService implements ISharingService {
       };
 
       const delegationResult = await this.createDelegationFn!(delegationParams);
+      if (!delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const delegationCreationActiveError = this.retiredGraphError();
       if (delegationCreationActiveError) return { ok: false, error: delegationCreationActiveError };
 
@@ -1531,6 +1536,7 @@ export class SharingService implements ISharingService {
         },
       };
     } catch (err) {
+      if (routingFailure(err)) return { ok: false, error: { ...wrapError("delegation", err), service: "delegation" } };
       const retired = this.retiredGraphError();
       if (retired) return { ok: false, error: retired };
       return {
