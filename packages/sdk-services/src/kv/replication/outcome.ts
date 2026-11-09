@@ -1,7 +1,6 @@
 import { ErrorCodes, type Result } from "../../types";
 
 const DEFINITIVE_FAILURES = new Set<string>([
-  ErrorCodes.NODE_BUSY, // the node's 503 busy/unavailable_retryable marker: nothing was applied
   ErrorCodes.AUTH_REQUIRED, ErrorCodes.INVALID_INPUT, ErrorCodes.AUTH_UNAUTHORIZED,
   ErrorCodes.KV_PRECONDITION_FAILED, ErrorCodes.STORAGE_QUOTA_EXCEEDED, ErrorCodes.STORAGE_LIMIT_REACHED,
 ]);
@@ -20,6 +19,6 @@ export function classifyWriteOutcome<T>(
   if (DEFINITIVE_FAILURES.has(code)) return "failed";
   if (meta?.outcome === "batch-unconfirmed") return "ambiguous";
   const status = typeof meta?.status === "number" ? meta.status : undefined;
-  if (status !== undefined && status >= 400 && status < 500) return "failed";
+  if (code === ErrorCodes.NODE_BUSY || (status !== undefined && status >= 400 && status < 500)) return "failed"; // NODE_BUSY: the node's 503 busy marker, nothing applied
   return "ambiguous";
 }
