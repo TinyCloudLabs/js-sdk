@@ -1412,6 +1412,109 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
 }
 }
 
+test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
+  // The loopback node is outside this package's build graph, as above.
+  const hermeticModule = await import(new URL(
+    "./test-support/hermetic-node.mjs",
+    import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  const { app, client, stateDir } = await startHostedMcp({
+    nodeHost: hermetic.host,
+    ownerDids: [hermetic.ownerDid],
+  });
+  const connect = await client.callTool({ name: "tinycloud_connect", arguments: {} });
+  const [tenantId] = await readdir(join(stateDir, "tenants"));
+  const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+  const bootstrapUrl = String(record(connect.structuredContent).approvalUrl);
+  const bootstrap = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, bootstrapUrl),
+    tenantStateRoot,
+    privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await postCallback(app, bootstrapUrl, bootstrap)).toEqual({ status: 200, body: { success: true } });
+  const kvGet = { space: "applications", key: "agents/demo/profile", representation: "json" };
+  const required = record((await client.callTool({ name: "tinycloud_kv_get", arguments: kvGet })).structuredContent);
+  const delegationUrl = String(record(required.approval).url);
+  const redirect = await openKeyRedirect(app, delegationUrl);
+  const approval = await openKeyApprovalBody({ redirect, tenantStateRoot, privateKey: hermetic.ownerPrivateKey });
+  const broader = await openKeyCallbackBody({
+    tenantStateRoot,
+    privateKey: hermetic.ownerPrivateKey,
+    space: "applications",
+    abilities: { kv: { "agents/": ["tinycloud.kv/get"] } },
+  });
+
+  const canary = "approval-secret-canary";
+  const secrets = [
+    canary,
+    String(record(approval.delegationHeader).Authorization),
+    String(approval.signature),
+    String(approval.siwe),
+    String(record(connect.structuredContent).sessionDid),
+  ];
+  const diagnostics: string[] = [];
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+    diagnostics.push(String(chunk));
+    return true;
+  });
+  resources.push(async () => stderr.mockRestore());
+  const refuse = async (body: Record<string, unknown>) => {
+    const state = new URL(delegationUrl).searchParams.get("state")!;
+    const response = await hostedFetch(app, `https://mcp.test/connect/callback?state=${encodeURIComponent(state)}`, {
+      method: "POST",
+      headers: { origin: "https://openkey.test", "content-type": "application/json" },
+      body: JSON.stringify({ ...body, token: `eyJ.${canary}.jwt`, delegation: canary }),
+    });
+    const text = await response.text();
+    for (const secret of secrets) expect(text).not.toContain(secret);
+    return { status: response.status, body: JSON.parse(text) as unknown };
+  };
+  const message = "TinyCloud could not accept this delegation.";
+
+  // The wallet proof no longer verifies when the delegation is projected.
+  const verify = spyOn(TinyCloudNode.prototype, "verifySessionGrant").mockImplementation(() => {
+    throw new Error(`verifier said ${canary}`);
+  });
+  const siwe = await refuse(approval).finally(() => verify.mockRestore());
+  expect(siwe).toEqual({
+    status: 400,
+    body: { error: "siwe_runtime_delegation", code: "DELEGATION_REJECTED", reason: "proof_invalid", message },
+  });
+
+  // The node's `/delegate` re-activation refuses it, quoting the request in its response.
+  const activate = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation").mockRejectedValue(Object.assign(
+    new Error(`Failed to activate runtime permission delegation: 403 ${canary}`),
+    { cause: { success: false, status: 403, error: canary } },
+  ));
+  const activation = await refuse(approval).finally(() => activate.mockRestore());
+  expect(activation).toEqual({
+    status: 400,
+    body: { error: "activation", code: "DELEGATION_REJECTED", reason: "activation_rejected", message },
+  });
+
+  // Correctly signed, but broader than the stored request.
+  expect(await refuse(broader)).toEqual({
+    status: 400,
+    body: { error: "auth_import", code: "DELEGATION_REJECTED", message },
+  });
+
+  expect(diagnostics.filter((line) => line.startsWith("[tinycloud-mcp-http]"))).toEqual([
+    "[tinycloud-mcp-http] connect callback rejected: stage=siwe_runtime_delegation code=DELEGATION_REJECTED reason=proof_invalid detail=none\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=activation code=DELEGATION_REJECTED reason=activation_rejected detail=none\n",
+    "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_REJECTED detail=none\n",
+  ]);
+  for (const secret of secrets) expect(diagnostics.join("")).not.toContain(secret);
+  const additionalPath = join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const storedDelegations = await exists(additionalPath) ? JSON.parse(await readFile(additionalPath, "utf8")) : [];
+  expect(storedDelegations).toEqual([]);
+
+  // The same approval, unrefused, still succeeds.
+  expect(await postCallback(app, delegationUrl, approval)).toEqual({ status: 200, body: { success: true } });
+}, 60_000);
+
 test("a tenant created on the retired default node host is moved to TC_HOST, so its authority approval imports", async () => {
   const outcome = await approveWithStoredHost("https://node.tinycloud.xyz");
   expect(outcome.callback).toEqual({ status: 200, body: { success: true } });

@@ -58,7 +58,8 @@ function approval(permissions: readonly unknown[]): Approval | undefined {
   // A task bundle is exactly the app list plus one app folder; it is "change" only when both entries can write, "read" only when neither can.
   const listAt = kinds.findIndex((kind) => kind?.kind === "discovery");
   const folderAt = kinds.findIndex((kind) => kind?.kind === "app-records");
-  const writes = (index: number) => (permissions[index] as { actions: string[] }).actions.includes("tinycloud.kv/put");
+  // Adding, changing or deleting is a write: a folder entry that can only delete is not a read bundle.
+  const writes = (index: number) => (permissions[index] as { actions: string[] }).actions.some((action) => action === "tinycloud.kv/put" || action === "tinycloud.kv/del");
   const bundle = kinds.length === 2 && listAt >= 0 && folderAt >= 0
     ? writes(listAt) && writes(folderAt) ? "change" : !writes(listAt) && !writes(folderAt) ? "read" : undefined
     : undefined;

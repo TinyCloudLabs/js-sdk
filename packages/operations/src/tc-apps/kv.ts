@@ -2,6 +2,7 @@ import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import type { OperationContext } from "../contract.js";
 import { isOperationErrorCode, nodeRetryOperationError, OperationInvocationError, operationError, storageFullOperationError, type OperationError } from "../errors.js";
 import { authorizationFailure } from "../kv-failure.js";
+import { evaluateOperationAuthority } from "../authority.js";
 import { operationSpaceResolver } from "../secrets.js";
 import { TC_APPS_DISCOVERY_ACTIONS, TC_APPS_RECORDS_ACTIONS } from "../tc-apps.js";
 import { appRoot, staleKey, TC_APPS_DISCOVERY_ROOT } from "./layout.js";
@@ -95,4 +96,10 @@ export function jsonBytes(value: JsonObject): Uint8Array {
 /** Mark derived data stale; a caller with committed writes must retain their outcomes if this throws. */
 export async function markAppsKindStale(kv: AppsKv, app: string, kind: string, at: string): Promise<void> {
   requireKv(await kv.put(staleKey(app, kind), jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
+}
+
+/** Whether the session already holds read access to the app list (a grant reported one action at a time counts); the check that needs it is skipped without it. */
+export function hasDiscoveryAccess(context: OperationContext): boolean {
+  const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
+  return evaluateOperationAuthority(context.runtime!.granted as never, [discoveryPermission(context, ["tinycloud.kv/get"])] as never, resolve).satisfied;
 }

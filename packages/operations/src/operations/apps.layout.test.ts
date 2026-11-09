@@ -72,6 +72,9 @@ describe("personal apps approvals", () => {
       const mixed = [change[0]!, kvScope(SPACE, root, ALL.slice(0, 2))];
       expect(tcAppsApprovalReason(mixed)).not.toContain("add books to it");
       expect(tcAppsApprovalReason(mixed)).toContain("add or change entries in your app list");
+      // A folder entry that can only delete is not a read bundle: the text must not say "It cannot change them".
+      const deleteOnly = [kvScope(SPACE, DISCOVERY, ALL.slice(0, 2)), kvScope(SPACE, root, ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/del"])];
+      expect(tcAppsApprovalReason(deleteOnly)).not.toContain("It cannot change them");
       kv.seed(`${root}catalog`, booksApp);
       kv.seed(`${root}catalog/read`, readKind);
       kv.seed(`${DISCOVERY}books/entry`, entry);
@@ -195,6 +198,22 @@ describe("personal apps records", () => {
       expect((await write(context, [discovery])).output.ops[0]?.outcome).toBe("EXISTS");
     });
   });
+  test("a record is not created in an app that has no discovery entry yet, when the app list is readable", async () => {
+    await fixture(async (kv, context) => {
+      kv.seed(`${root}catalog`, booksApp);
+      kv.seed(`${root}catalog/read`, readKind);
+      const create = [{ op: "put", key: record, value: { data: { title: "Dune" } } }];
+      const early = await write(withGrants(context, [discoveryGrant]), create);
+      expect(early.output.ops[0]?.outcome).toBe("INVALID");
+      expect(early.output.ops[0]?.warnings?.[0]).toContain("discovery entry");
+      expect(kv.values.has(record)).toBe(false);
+      // Without read access to the app list the check is skipped; it never asks for another approval.
+      expect((await write(context, create)).output.ops[0]?.outcome).toBe("ok");
+      kv.values.delete(record);
+      kv.seed(`${DISCOVERY}books/entry`, entry);
+      expect((await write(withGrants(context, [discoveryGrant]), create)).output.ops[0]?.outcome).toBe("ok");
+    });
+  });
   test("keys under the older agent-data folder are refused by read, write and query before any storage or SQL is touched", async () => {
     await fixture(async (kv, context) => {
       const older = `${OLDER_ROOT}todos/todo/open/2026-11-03-buy-milk`;
@@ -203,6 +222,7 @@ describe("personal apps records", () => {
       expect((await write(context, [{ op: "put", key: `${OLDER_ROOT}catalog/todos`, value: { app: "todos" } }])).error.code).toBe("INPUT_INVALID");
       expect((await write(context, [{ op: "put", key: older, value: { data: {} } }])).error.code).toBe("INPUT_INVALID");
       const sql = new FakeSql();
+      // The old `layout` input is gone: a query that still carries it is refused by the strict input schema.
       expect((await definition("query").execute(withSql(context, sql), { layout: "legacy", kinds: [{ app: "todos", kind: "todo" }], sql: "SELECT 1" })).error.code).toBe("INPUT_INVALID");
       expect(kv.reads).toEqual([]);
       expect(kv.writes).toEqual([]);

@@ -8,7 +8,7 @@ import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { appsDatabase, checkCopyKinds, copyPermission, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
 import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
-import { appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, jsonBytes, listAppsKeys, markAppsKindStale, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
+import { appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, jsonBytes, listAppsKeys, markAppsKindStale, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
 import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, type KeyParts } from "../tc-apps/layout.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
@@ -187,6 +187,8 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
   const parsed = WriteInputSchema.safeParse(input);
   if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Every op must have a valid personal-record key and JSON record, catalog or discovery value.", { details: { issues: parsed.error.issues.map(({ path, message }) => ({ path, message })) } }) };
   const kv = appsKv(context);
+  // Without read access to the app list the entry check is skipped rather than asking for another approval.
+  const listReadable = hasDiscoveryAccess(context);
   let timezone: string | null;
   try { timezone = await appsTimezone(context.summary.profile); }
   catch (error) { return { status: "error", error: appsFailure(error) }; }
@@ -198,7 +200,7 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
     const key = op.op === "move" ? op.to : op.key;
     const parts = keyParts(key);
     let outcome: OpOutcome;
-    try { outcome = await writeOne(kv, op, timezone); }
+    try { outcome = await writeOne(kv, op, timezone, listReadable); }
     catch (error) { outcome = { key, outcome: appsFailure(error).code }; }
     ops.push(outcome);
     if (parts.area === "discovery" || !(outcome.outcome === "ok" || outcome.steps?.includes("written"))) continue;
@@ -257,7 +259,7 @@ async function conflict(kv: AppsKv, key: string, outcome: "EXISTS" | "CHANGED" |
   if ("outcome" in current) return { key, outcome: current.outcome === "NOT_FOUND" ? "NOT_FOUND" : "INVALID", ...(current.outcome === "MALFORMED" ? { warnings: ["The stored value is not a JSON object."] } : {}) };
   return { ...current, outcome };
 }
-async function writeOne(kv: AppsKv, op: WriteOp, timezone: string | null): Promise<OpOutcome> {
+async function writeOne(kv: AppsKv, op: WriteOp, timezone: string | null, listReadable: boolean): Promise<OpOutcome> {
   const key = op.op === "move" ? op.to : op.key;
   const parts = keyParts(key);
   if (parts.area === "discovery") return writeDiscovery(kv, op, parts.app);
@@ -268,6 +270,10 @@ async function writeOne(kv: AppsKv, op: WriteOp, timezone: string | null): Promi
     // another app's files can never be edited as a generic app.
     if (!("value" in (await readAppsRecords(kv, [catalogKey(parts.app)]))[0]!)) {
       return { key, outcome: "INVALID", warnings: ["Records can only be changed in an app that has a catalog record."] };
+    }
+    // An app is switched on by its discovery entry: a record written before it would be missing from the app list and from the CLI's view of the app.
+    if (op.op === "put" && op.etag === undefined && listReadable && !("value" in (await readAppsRecords(kv, [discoveryKey(parts.app)]))[0]!)) {
+      return { key, outcome: "INVALID", warnings: [`${parts.app} has no discovery entry yet: write its entry (after its first kind) before its first record.`] };
     }
   }
   if (op.op === "delete") {
