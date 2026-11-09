@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/mcp",
-  "version": "0.10.0-beta.12",
+  "version": "0.10.0-beta.13",
   "description": "TinyCloud delegated operations MCP server",
   "keywords": [
     "tinycloud",
