@@ -126,7 +126,7 @@ jobs:
 
       - name: Install wasm-pack
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Install locked dependencies
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
@@ -431,7 +431,7 @@ jobs:
 
       - name: Install wasm-pack
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Install locked dependencies
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
