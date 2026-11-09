@@ -1100,6 +1100,8 @@ export {
   type NodeNotFoundDecision,
   type OnNodeNotFound,
   type RegistryPolicy,
+  type RegistryRegistrationEvidence,
+  type RegistryRegistrationKind,
   type RegistrySequenceStore,
   type ResolveOwnerHostsOptions,
 } from "./registry-policy";

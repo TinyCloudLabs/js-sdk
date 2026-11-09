@@ -48,6 +48,11 @@
       "import": "./dist/held-credentials/index.js",
       "require": "./dist/held-credentials/index.cjs"
     },
+    "./registry-publication": {
+      "types": "./dist/registry-publication.d.ts",
+      "import": "./dist/registry-publication.js",
+      "require": "./dist/registry-publication.cjs"
+    },
     "./kv-list-matching": {
       "types": "./dist/kv-list-matching/index.d.ts",
       "import": "./dist/kv-list-matching/index.js",
