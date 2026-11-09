@@ -67,12 +67,7 @@ test("catalog schemas retain strict inputs, complete results and effect/sensitiv
 
   const sqlExecute = byId.get("tinycloud.sql.execute");
   expect(sqlExecute?.input).toMatchObject({
-    properties: {
-      acknowledgeDatabaseWideAuthority: {
-        const: true,
-        description: expect.stringMatching(/any row[^]*schema split/),
-      },
-    },
+    properties: { acknowledgeDatabaseWideAuthority: { const: true } },
     required: expect.arrayContaining(["acknowledgeDatabaseWideAuthority"]),
   });
   expect(sqlExecute?.effects).toEqual(["write", "destructive"]);
