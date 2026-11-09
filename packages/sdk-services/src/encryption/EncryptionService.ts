@@ -104,8 +104,10 @@ export interface DecryptTransport {
 export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
-  /** Write TCW2 key wraps. Disabled by default; reads accept both versions. */
+  /** Write TCW2 key wraps. Disabled by default. */
   keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   crypto: EncryptionCrypto;
   signer: DecryptInvocationSigner;
   transport: DecryptTransport;
@@ -207,7 +209,7 @@ export class EncryptionService
   ): Promise<Result<Uint8Array, EncryptionError>> {
     try {
       this.assertActive();
-      const validated = validateEnvelope(this.crypto, envelope);
+      const validated = validateEnvelope(this.crypto, envelope, this._config.requireKeyWrapV2 ?? false);
       if (!validated.ok) return validated;
       if (
         options?.aad !== undefined &&

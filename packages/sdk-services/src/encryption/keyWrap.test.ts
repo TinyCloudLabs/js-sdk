@@ -99,3 +99,27 @@ test("requires canonical header bytes rather than equivalent JSON", () => {
   out.set(bytes, 8); out.set(parsed.nonce, 8 + bytes.length); out.set(parsed.ciphertext, 20 + bytes.length);
   expect(() => readKeyWrapV2(out)).toThrow();
 });
+
+for (const invalid of ["\ud800", "\udc00"]) {
+  for (const field of ["keyPath", "metadataKey", "metadataValue"] as const) {
+    test(`rejects lone surrogate ${invalid.charCodeAt(0).toString(16)} in ${field}`, () => {
+      const changed = { ...context, metadata: { ...context.metadata } };
+      if (field === "keyPath") changed.keyPath = invalid;
+      else changed.metadata = field === "metadataKey" ? { [invalid]: "value" } : { key: invalid };
+      expect(() => sealKeyV2(publicKey, plaintext, changed)).toThrow();
+      const wrapped = sealKeyV2(publicKey, plaintext, context);
+      expect(() => readKeyWrapV2(replaceHeader(wrapped, h => {
+        h.keyPath = changed.keyPath;
+        h.metadata = changed.metadata;
+      }))).toThrow();
+    });
+  }
+}
+
+test("preserves paired Unicode and distinct replacement characters exactly", () => {
+  const unicode = { ...context, keyPath: "share/😀", metadata: { "😀": "é e\u0301 😀 \ufffd" } };
+  const wrapped = sealKeyV2(publicKey, plaintext, unicode);
+  expect(readKeyWrapV2(wrapped).header).toMatchObject(unicode);
+  expect(openKeyV2(secret, wrapped, unicode)).toEqual(plaintext);
+  expect(() => openKeyV2(secret, wrapped, { ...unicode, metadata: { "😀": "é é 😀 \ufffd" } })).toThrow();
+});

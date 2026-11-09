@@ -156,6 +156,8 @@ interface OpenKeyMessageSigner extends OpenKeyConnection {
 export interface Config extends ClientConfig {
   /** Write TCW2 network-key wraps. Disabled by default. */
   keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   /** Refuse explicitly designated legacy plaintext columns. Disabled by default. */
   strictEncryption?: boolean;
   /**
@@ -554,6 +556,7 @@ export class TinyCloudWeb {
 
     const nodeConfig: TinyCloudNodeConfig = {
       keyWrapV2: this.config.keyWrapV2 ?? false,
+      requireKeyWrapV2: this.config.requireKeyWrapV2 ?? false,
       strictEncryption: this.config.strictEncryption ?? false,
       host: this.config.tinycloudHosts?.[0],
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,

@@ -120,6 +120,7 @@ export function encryptToNetwork(
 export function validateEnvelope(
   crypto: EncryptionCrypto,
   envelope: unknown,
+  requireKeyWrapV2 = false,
 ): { ok: true; data: InlineEncryptedEnvelope } | { ok: false; error: EncryptionError } {
   if (envelope === null || typeof envelope !== "object") {
     return {
@@ -201,7 +202,7 @@ export function validateEnvelope(
     };
   }
   try {
-    validateEnvelopeKeyWrap(e);
+    validateEnvelopeKeyWrap(e, requireKeyWrapV2);
   } catch {
     return { ok: false, error: encryptionError({ code: "INVALID_ENVELOPE", message: "Envelope key wrap context is invalid" }) };
   }
@@ -209,9 +210,9 @@ export function validateEnvelope(
 }
 
 /** The node authenticates this header; its signed response binds the exact capsule hash. */
-export function validateEnvelopeKeyWrap(envelope: Pick<InlineEncryptedEnvelope, "alg" | "encryptedSymmetricKey" | "networkId" | "keyPath" | "keyVersion" | "metadata">): void {
+export function validateEnvelopeKeyWrap(envelope: Pick<InlineEncryptedEnvelope, "alg" | "encryptedSymmetricKey" | "networkId" | "keyPath" | "keyVersion" | "metadata">, requireKeyWrapV2 = false): void {
   const wrapped = base64Decode(envelope.encryptedSymmetricKey);
-  assertKeyWrapAlgorithm(wrapped, envelope.alg);
+  assertKeyWrapAlgorithm(wrapped, envelope.alg, requireKeyWrapV2);
   if (envelope.alg === KEY_WRAP_V2_ALG) {
     assertKeyWrapContext(readKeyWrapV2(wrapped).header, {
       purpose: "network-key", networkId: envelope.networkId, keyPath: envelope.keyPath ?? "",

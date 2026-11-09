@@ -34,7 +34,7 @@ export {
 } from "@tinycloud/sdk-services/encryption/named-keys";
 
 interface NodeSigningInternals {
-  readonly config?: { keyWrapV2?: boolean };
+  readonly config?: { keyWrapV2?: boolean; requireKeyWrapV2?: boolean };
   signRawNetworkAuthorization(input: {
     targetNode: string;
     networkId: string;
@@ -47,6 +47,8 @@ interface NodeSigningInternals {
 export interface CreateNamedKeyClientOptions {
   /** Write TCW2 named-key wraps. Disabled by default. */
   keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   /** Network used when a call does not name one. Defaults to the node's default network. */
   networkId?: string;
   /** Override `fetch` (tests). */
@@ -78,6 +80,7 @@ export function createNamedKeyClient(
   if (host === undefined) throw new Error("TinyCloud node host has not been resolved");
   const config: NamedKeyClientConfig = {
     keyWrapV2: options.keyWrapV2 ?? signer.config?.keyWrapV2 ?? false,
+    requireKeyWrapV2: options.requireKeyWrapV2 ?? signer.config?.requireKeyWrapV2 ?? false,
     host,
     crypto: signer.createEncryptionCrypto(),
     fetch: options.fetch ?? globalThis.fetch.bind(globalThis),

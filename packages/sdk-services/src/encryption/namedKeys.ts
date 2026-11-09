@@ -250,6 +250,8 @@ export interface NamedKeyClientConfig {
   crypto: EncryptionCrypto;
   /** Write TCW2 wraps; disabled by default. */
   keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   fetch: typeof fetch;
   /** Network used when a call does not name one. */
   defaultNetworkId: () => string;
@@ -735,6 +737,13 @@ export class NamedKeyClient {
   }
 
   private async decryptRoot(envelope: InlineEncryptedEnvelope): Promise<Uint8Array> {
+    if (this.config.requireKeyWrapV2) {
+      try {
+        validateEnvelopeKeyWrap(envelope, true);
+      } catch (error) {
+        throw new NamedKeyError("INVALID_ENVELOPE", "Envelope key wrap context is invalid", { cause: error });
+      }
+    }
     if (this.config.decryptRoot === undefined) {
       throw new NamedKeyError("DECRYPT_FAILED", "no root-key decrypt path is configured");
     }
@@ -773,7 +782,7 @@ export class NamedKeyClient {
       );
     }
     try {
-      validateEnvelopeKeyWrap(e as unknown as NamedKeyEnvelope);
+      validateEnvelopeKeyWrap(e as unknown as NamedKeyEnvelope, this.config.requireKeyWrapV2 ?? false);
     } catch (error) {
       throw new NamedKeyError("INVALID_ENVELOPE", "Envelope key wrap context is invalid", { cause: error });
     }

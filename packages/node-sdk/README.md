@@ -59,6 +59,8 @@ Network-key writes use `x25519-aes256gcm/v1` by default. Set `keyWrapV2: true` o
 
 TCW2 uses X25519, HKDF-SHA256, and AES-256-GCM with a canonical authenticated header carrying the recipient, purpose, network, exact key path, key version, and metadata. The SDK compares inline metadata and key context to that header; node responses bind the exact requested capsule hash. Readers accept either supported response wrap format independently of the request format. Network descriptors and inline payload schema versions are unchanged; named-key envelopes retain their existing schema.
 
+Set `requireKeyWrapV2: true` on `TinyCloudNode`, `TinyCloudWeb`, `EncryptionServiceConfig`, or a named-key client to reject incoming v1 network-key wraps. This reader policy defaults to false and is independent of `keyWrapV2`; signed receiver responses may still use v1. `createNamedKeyClient(node)` inherits the Node reader policy unless explicitly overridden. TCW2 context strings must contain well-formed Unicode; lone UTF-16 surrogates are rejected rather than replaced.
+
 Column decryption takes an explicit expected format: `encrypted` requires the column marker and complete authenticated frame; `legacy-plaintext` preserves bytes unchanged, including a leading `0x01`. `strictEncryption` defaults to `false` and refuses explicit legacy plaintext when enabled. V1 network wraps always select `encrypted`; missing framing is never treated as plaintext.
 
 Details: TC-2518, TC-2517

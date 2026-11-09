@@ -13,6 +13,7 @@ import { base64Encode, canonicalHashHex, canonicalize, hexEncode, utf8Encode } f
 import { DEFAULT_ENCRYPTION_ALG, DECRYPT_RESULT_TYPE, type DecryptRequestBody, type DecryptResponseBody, type NetworkDescriptor } from "../../sdk-services/src/encryption/types";
 import { KEY_WRAP_V2_ALG, readKeyWrapV2 } from "../../sdk-services/src/encryption/keyWrap";
 import { NamedKeyClient } from "../../sdk-services/src/encryption/namedKeys";
+import { createNamedKeyClient } from "./encryption-keys";
 
 function adapter(strictEncryption = false): EncryptionCrypto {
   const node = new TinyCloudNode({ strictEncryption, wasmBindings: new NodeWasmBindings() });
@@ -20,6 +21,38 @@ function adapter(strictEncryption = false): EncryptionCrypto {
 }
 
 describe("real node key wrapping", () => {
+  test("v1 writer rerolls a reserved-prefix ephemeral public key", () => {
+    const bindings = new NodeWasmBindings();
+    const fromSeed = bindings.vault_x25519_from_seed;
+    const receiver = fromSeed(new Uint8Array(32).fill(9));
+    let attempts = 0;
+    bindings.vault_x25519_from_seed = seed => {
+      const pair = fromSeed(seed);
+      if (attempts++ === 0) pair.publicKey.set(utf8Encode("TCW2"));
+      return pair;
+    };
+    const node = new TinyCloudNode({ wasmBindings: bindings });
+    const crypto: EncryptionCrypto = Reflect.get(node, "createEncryptionCrypto").call(node);
+    const key = new Uint8Array(32).fill(42);
+    const wrapped = crypto.sealToNetworkKey(receiver.publicKey, key);
+    expect(attempts).toBe(2);
+    expect(isKeyWrapV2(wrapped)).toBe(false);
+    expect(crypto.openWithReceiverKey(receiver.privateKey, wrapped)).toEqual(key);
+  });
+
+  for (const requireKeyWrapV2 of [false, true]) {
+    test(`Node forwards reader policy ${requireKeyWrapV2} independently of writer`, () => {
+      const node = new TinyCloudNode({ host: "https://node.test", requireKeyWrapV2, wasmBindings: new NodeWasmBindings() });
+      Reflect.set(node, "requireEncryptionSession", () => ({}));
+      const service = Reflect.get(node, "createEncryptionService").call(node);
+      expect(Reflect.get(service, "_config")).toMatchObject({ requireKeyWrapV2, keyWrapV2: false });
+      const client = createNamedKeyClient(node);
+      expect(Reflect.get(client, "config")).toMatchObject({ requireKeyWrapV2, keyWrapV2: false });
+      expect(Reflect.get(createNamedKeyClient(node, { requireKeyWrapV2: !requireKeyWrapV2 }), "config"))
+        .toMatchObject({ requireKeyWrapV2: !requireKeyWrapV2, keyWrapV2: false });
+    });
+  }
+
   test("opens the legacy fixture with encrypted framing", () => {
     const crypto = adapter();
     const vector = fixture.vectors.find(v => v.version === 1)!;
@@ -99,9 +132,9 @@ describe("service key wrap versions with real crypto", () => {
     return result;
   }
 
-  function service(writerV2 = false, responseV2 = false) {
+  function service(writerV2 = false, responseV2 = false, requireKeyWrapV2 = false) {
     return new EncryptionService({
-      keyWrapV2: writerV2, crypto,
+      keyWrapV2: writerV2, requireKeyWrapV2, crypto,
       node: { fetchByNetworkId: async () => descriptor },
       signer: { signDecryptInvocation: async input => ({
         authorization: "test-authorization", invocationCid: "invocation-test", canonicalBody: canonicalize({ ...input.body }),
@@ -121,6 +154,22 @@ describe("service key wrap versions with real crypto", () => {
       expect(isKeyWrapV2(base64Decode(encrypted.data.encryptedSymmetricKey))).toBe(requestV2);
       const result = await client.decryptEnvelope(encrypted.data, { proofs: ["test-proof"] });
       expect(result).toEqual({ ok: true, data: plaintext });
+    });
+  }
+
+  for (const requireV2 of [false, true]) for (const requestV2 of [false, true]) {
+    test(`service reader policy require=${requireV2}, request v${requestV2 ? 2 : 1}, signed v1 response`, async () => {
+      const writer = service(requestV2);
+      const encrypted = await writer.encryptToNetwork(networkId, plaintext, { metadata });
+      if (!encrypted.ok) throw encrypted.error;
+      const reader = service(false, false, requireV2);
+      const result = await reader.decryptEnvelope(encrypted.data, { proofs: ["test-proof"] });
+      if (requireV2 && !requestV2) {
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe("INVALID_ENVELOPE");
+      } else expect(result).toEqual({ ok: true, data: plaintext });
+      const defaultWrite = await reader.encryptToNetwork(networkId, plaintext, { metadata });
+      expect(defaultWrite.ok && defaultWrite.data.alg).toBe(DEFAULT_ENCRYPTION_ALG);
     });
   }
 
@@ -149,10 +198,10 @@ describe("service key wrap versions with real crypto", () => {
   });
 
   test("named key client keeps its payload schema and supports both wrap writers and response versions", async () => {
-    for (const requestV2 of [false, true]) for (const responseV2 of [false, true]) {
+    for (const requireV2 of [false, true]) for (const requestV2 of [false, true]) for (const responseV2 of [false, true]) {
       const path = "share/test";
       const client = new NamedKeyClient({
-        host: "https://node.test", crypto, keyWrapV2: requestV2, defaultNetworkId: () => networkId,
+        host: "https://node.test", crypto, keyWrapV2: requestV2, requireKeyWrapV2: requireV2, defaultNetworkId: () => networkId,
         signInvocation: async () => ({ authorization: "test", invocationCid: "invocation-test" }),
         fetch: (async (input, init) => {
           if (String(input).endsWith("/info")) return Response.json({ nodeId, features: ["encryption-named-keys-v1"] });
@@ -163,8 +212,27 @@ describe("service key wrap versions with real crypto", () => {
       const envelope = await client.encrypt(path, plaintext, { metadata });
       expect(envelope.v).toBe(2);
       expect(envelope.alg).toBe(requestV2 ? KEY_WRAP_V2_ALG : DEFAULT_ENCRYPTION_ALG);
-      expect(await client.decrypt(envelope)).toEqual(plaintext);
+      if (requireV2 && !requestV2) await expect(client.decrypt(envelope)).rejects.toMatchObject({ code: "INVALID_ENVELOPE" });
+      else expect(await client.decrypt(envelope)).toEqual(plaintext);
       if (requestV2) await expect(client.decrypt({ ...envelope, metadata: {} })).rejects.toMatchObject({ code: "INVALID_ENVELOPE" });
     }
   });
+
+  for (const requireV2 of [false, true]) for (const writerV2 of [false, true]) {
+    test(`named root reader policy require=${requireV2}, wrap v${writerV2 ? 2 : 1}`, async () => {
+      const encrypted = await service(writerV2).encryptToNetwork(networkId, plaintext, { metadata });
+      if (!encrypted.ok) throw encrypted.error;
+      const client = new NamedKeyClient({
+        host: "https://node.test", crypto, requireKeyWrapV2: requireV2,
+        defaultNetworkId: () => networkId, fetch: globalThis.fetch,
+        signInvocation: async () => { throw new Error("root path must use decryptRoot"); },
+        decryptRoot: envelope => service(false, false).decryptEnvelope(envelope, { proofs: ["test-proof"] }),
+      });
+      if (requireV2 && !writerV2) {
+        await expect(client.decrypt(encrypted.data)).rejects.toMatchObject({ code: "INVALID_ENVELOPE" });
+      } else {
+        expect(await client.decrypt(encrypted.data)).toEqual(plaintext);
+      }
+    });
+  }
 });

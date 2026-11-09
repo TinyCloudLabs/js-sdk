@@ -50,12 +50,25 @@ function decode32(value: unknown): Uint8Array {
   return decoded;
 }
 
+/** ES2020-compatible UTF-16 well-formedness check without replacement or allocation. */
+function isWellFormed(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(++i);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  return true;
+}
+
 function validateContext(context: KeyWrapContext): void {
   if ((context.purpose !== "network-key" && context.purpose !== "receiver-key") ||
       typeof context.networkId !== "string" || typeof context.keyPath !== "string" ||
+      !isWellFormed(context.networkId) || !isWellFormed(context.keyPath) ||
       !Number.isSafeInteger(context.keyVersion) || context.keyVersion <= 0 ||
       !context.metadata || typeof context.metadata !== "object" || Array.isArray(context.metadata) ||
-      Object.values(context.metadata).some(value => typeof value !== "string")) {
+      Object.entries(context.metadata).some(([key, value]) => !isWellFormed(key) || typeof value !== "string" || !isWellFormed(value))) {
     throw new Error("Invalid key wrap context");
   }
   if (context.networkId !== "") {
@@ -148,8 +161,9 @@ export function openKeyV2(recipientPrivateKey: Uint8Array, wrapped: Uint8Array, 
 }
 
 /** Match the declared algorithm without falling back after a TCW2 marker. */
-export function assertKeyWrapAlgorithm(wrapped: Uint8Array, alg: string): void {
+export function assertKeyWrapAlgorithm(wrapped: Uint8Array, alg: string, requireV2 = false): void {
   if (alg !== "x25519-aes256gcm/v1" && alg !== KEY_WRAP_V2_ALG) throw new Error("Unsupported key wrap algorithm");
+  if (requireV2 && alg !== KEY_WRAP_V2_ALG) throw new Error("V2 network key wrap required");
   if (isKeyWrapV2(wrapped) !== (alg === KEY_WRAP_V2_ALG)) throw new Error("Key wrap algorithm mismatch");
   if (alg === KEY_WRAP_V2_ALG) readKeyWrapV2(wrapped);
 }

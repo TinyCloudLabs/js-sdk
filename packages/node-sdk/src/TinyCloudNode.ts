@@ -885,6 +885,8 @@ function ownerPermissionsToAbilities(
 export interface TinyCloudNodeConfig {
   /** Write TCW2 network-key wraps. Disabled by default. */
   keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   /** Refuse explicitly designated legacy plaintext columns. Disabled by default. */
   strictEncryption?: boolean;
   /** Hex-encoded private key (with or without 0x prefix). Optional - only needed for wallet mode and signIn() */
@@ -5740,8 +5742,10 @@ export class TinyCloudNode {
       authDecrypt: (key, ciphertext) => wasm.vault_decrypt(key, ciphertext),
       sealToNetworkKey: (networkPublicKey, symmetricKey, options) => {
         if (options?.keyWrapV2) return sealKeyV2(networkPublicKey, symmetricKey, options.context);
-        const seed = wasm.vault_random_bytes(32);
-        const ephemeral = wasm.vault_x25519_from_seed(seed);
+        let ephemeral;
+        do {
+          ephemeral = wasm.vault_x25519_from_seed(wasm.vault_random_bytes(32));
+        } while (isKeyWrapV2(ephemeral.publicKey));
         const shared = wasm.vault_x25519_dh(
           ephemeral.privateKey,
           networkPublicKey,
@@ -5946,6 +5950,7 @@ export class TinyCloudNode {
     };
     return new EncryptionService({
       keyWrapV2: this.config.keyWrapV2 ?? false,
+      requireKeyWrapV2: this.config.requireKeyWrapV2 ?? false,
       resolveTargetNode: async (networkId) => (await this.encryptionDestination(networkId)).nodeDid,
       crypto,
       signer: {
