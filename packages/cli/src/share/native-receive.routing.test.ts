@@ -43,6 +43,8 @@ let createShareAuthorityAdapters: typeof ShareAuthorityAdapterFactory;
 let createHermeticEncryptedNode: typeof HermeticEncryptedNodeFactory;
 let createNativeShare: typeof NativeShareFactory;
 let ShareReceiveError: typeof ShareReceiveErrorType;
+let parseNativeShareUrl: typeof import("@tinycloud/share-sdk").parseNativeShareUrl;
+let defaultHost: string;
 
 function freshPrivateKey(): string {
   for (;;) {
@@ -115,6 +117,30 @@ function nativeReader() {
   return createShareAuthorityAdapters({ profileName: async () => PROFILE_NAME }).nativeReader;
 }
 
+function linkAtHost(share: ShareFixture, host: string): string {
+  const sharing = share.node.owner.sharing;
+  const decoded = sharing.decodeLink(parseNativeShareUrl(share.link));
+  const token = sharing.encodeLink({ ...decoded, host });
+  const link = new URL(share.link);
+  link.hash = new URLSearchParams({ tc1: token }).toString();
+  return link.href;
+}
+
+function readerViaOwnedNode(share: ShareFixture, profile = PROFILE_NAME) {
+  const origins: string[] = [];
+  const reader = createShareAuthorityAdapters({
+    profileName: async () => profile,
+    fetchFn: (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      origins.push(url.origin);
+      const ownedUrl = new URL(`${url.pathname}${url.search}`, share.node.host);
+      // Only the DNS/TLS destination changes; native HTTP still receives the actual options.
+      return fetch(input instanceof Request ? new Request(ownedUrl, input) : ownedUrl, init);
+    },
+  }).nativeReader;
+  return { reader, origins };
+}
+
 beforeAll(async () => {
   for (const key of ENVIRONMENT_KEYS) priorEnvironment.set(key, process.env[key]);
   privateRoot = await mkdtemp(join(tmpdir(), "tc2594-cli16-receive-"));
@@ -131,17 +157,20 @@ beforeAll(async () => {
   delete process.env.TC_HOST;
 
   // Set isolated paths before importing code that resolves profile storage. Details: TC-2594
-  const [profiles, adapters, nodeHelpers, shareSdk] = await Promise.all([
+  const [profiles, adapters, nodeHelpers, shareSdk, constants] = await Promise.all([
     import("../config/profiles.js"),
     import("./adapters.js"),
     import("../../../node-sdk/src/test-support/hermetic-encrypted-node"),
     import("@tinycloud/share-sdk"),
+    import("../config/constants.js"),
   ]);
   ProfileManager = profiles.ProfileManager;
   createShareAuthorityAdapters = adapters.createShareAuthorityAdapters;
   createHermeticEncryptedNode = nodeHelpers.createHermeticEncryptedNode;
   createNativeShare = shareSdk.createNativeShare;
   ShareReceiveError = shareSdk.ShareReceiveError;
+  parseNativeShareUrl = shareSdk.parseNativeShareUrl;
+  defaultHost = constants.DEFAULT_HOST;
 });
 
 afterEach(() => {
@@ -202,4 +231,60 @@ test("refuses a redirected receive without contacting the redirect target Detail
   expect(received).toBe(false);
   expect(requests.some((request) => request.method === "POST" && request.path === "/invoke" && request.authorizationPresent)).toBe(true);
   expect(redirectTarget.requests()).toEqual([]);
+});
+
+test("opens the other first-party hostname through the default profile's server Details: TC-2594", async () => {
+  const share = await createShareFixture();
+  await configureProfile(defaultHost, share.node.ownerDid);
+  const { reader, origins } = readerViaOwnedNode(share);
+  const requestStart = share.node.requestSummary().length;
+  const received = await reader(linkAtHost(share, "https://node.tinycloud.xyz"));
+
+  expect(received.bytes).toEqual(share.bytes);
+  expect(received.filename).toBe(share.filename);
+  expect(origins.every((origin) => origin === defaultHost)).toBe(true);
+  expect(share.node.requestSummary().slice(requestStart).some(
+    (request) => request.method === "POST" && request.path === "/invoke" && request.authorizationPresent,
+  )).toBe(true);
+});
+
+test("does not extend first-party aliases to a third origin, HTTP or a different port Details: TC-2594", async () => {
+  const share = await createShareFixture();
+  await configureProfile(defaultHost, share.node.ownerDid);
+  const { reader, origins } = readerViaOwnedNode(share);
+  const requestStart = share.node.requestSummary().length;
+
+  for (const host of [
+    "https://third-party.example.invalid",
+    "http://node.tinycloud.xyz",
+    "https://node.tinycloud.xyz:8443",
+  ]) {
+    await expect(reader(linkAtHost(share, host))).rejects.toMatchObject({ code: "origin-mismatch" });
+  }
+  expect(origins).toEqual([]);
+  expect(share.node.requestSummary().slice(requestStart)).toEqual([]);
+});
+
+test("does not add first-party aliases to a custom profile's origin Details: TC-2594", async () => {
+  const share = await createShareFixture();
+  await configureProfile(share.node.host, share.node.ownerDid);
+  const { reader, origins } = readerViaOwnedNode(share);
+  const requestStart = share.node.requestSummary().length;
+
+  await expect(reader(linkAtHost(share, "https://node.tinycloud.xyz"))).rejects.toMatchObject({ code: "origin-mismatch" });
+  expect(origins).toEqual([]);
+  expect(share.node.requestSummary().slice(requestStart)).toEqual([]);
+});
+
+test("uses the CLI default for an alias link when the selected profile does not exist Details: TC-2594", async () => {
+  const share = await createShareFixture();
+  const { reader, origins } = readerViaOwnedNode(share, "tc2594-no-profile");
+  const requestStart = share.node.requestSummary().length;
+  const received = await reader(linkAtHost(share, "https://node.tinycloud.xyz"));
+
+  expect(received.bytes).toEqual(share.bytes);
+  expect(origins.every((origin) => origin === defaultHost)).toBe(true);
+  expect(share.node.requestSummary().slice(requestStart).some(
+    (request) => request.method === "POST" && request.path === "/invoke" && request.authorizationPresent,
+  )).toBe(true);
 });

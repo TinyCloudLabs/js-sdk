@@ -66,6 +66,12 @@ import {
   type SharePolicyRootRevocation,
 } from "@tinycloud/share-sdk";
 
+// These two HTTPS origins serve the same node process, database and node DID. Details: TC-2594
+const FIRST_PARTY_RECEIVE_ORIGINS: ReadonlySet<string> = new Set([
+  "https://node.tinycloud.xyz",
+  "https://tee.node.tinycloud.xyz",
+]);
+
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | "tinycloud.kv/list" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
@@ -1171,11 +1177,15 @@ export function createShareAuthorityAdapters(input: {
         keyProvider: new WasmKeyProvider({ sessionManager }),
         registry: new CapabilityKeyRegistry(),
         createKVService: ({ hosts, session, invoke, pathPrefix }) => {
-          if (hosts.length !== 1 || hosts[0] !== receiveOrigin) {
+          const linkOrigin = hosts[0];
+          const firstPartyAlias = linkOrigin !== undefined
+            && FIRST_PARTY_RECEIVE_ORIGINS.has(receiveOrigin)
+            && FIRST_PARTY_RECEIVE_ORIGINS.has(linkOrigin);
+          if (hosts.length !== 1 || (linkOrigin !== receiveOrigin && !firstPartyAlias)) {
             throw new ShareReceiveError("origin-mismatch", originMismatchMessage);
           }
           const kv = new KVService({ prefix: pathPrefix?.replace(/\/$/, "") });
-          kv.initialize(new ServiceContext({ hosts, session, invoke, fetch: receiveFetch }));
+          kv.initialize(new ServiceContext({ hosts: [receiveOrigin], session, invoke, fetch: receiveFetch }));
           return kv;
         },
       });
