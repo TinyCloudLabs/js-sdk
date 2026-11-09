@@ -4791,6 +4791,7 @@ const finalTransportLedger = () => {
   const ledger = { ...structuredClone(shipped), tc2481OfflineReplicaTransport: offlineReplicaTransportAdmission() };
   delete ledger.tc2582PublicSessionKey;
   delete ledger.tc2281OpenKeyConnectedKeyId;
+  delete ledger.tc2594ResourceTransport;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
   ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
   ledger.entries.push({
