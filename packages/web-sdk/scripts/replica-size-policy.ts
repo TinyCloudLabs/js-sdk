@@ -439,6 +439,7 @@ export type Ledger = {
   tc2481OfflineReplicaTransport?: Tc2481RegistryFreshness;
   tc2582PublicSessionKey?: LogoutRatchet;
   tc2281OpenKeyConnectedKeyId?: LogoutRatchet;
+  tc2607CredentialRedirectTerminal?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1046,6 +1047,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2481OfflineReplicaTransport !== undefined) pins.push({ row: "tc2481OfflineReplicaTransport", pin: root.tc2481OfflineReplicaTransport.sourceCommits.at(-1)! });
   if (root.tc2582PublicSessionKey !== undefined) pins.push({ row: "tc2582PublicSessionKey", pin: root.tc2582PublicSessionKey.sourceCommits.at(-1)! });
   if (root.tc2281OpenKeyConnectedKeyId !== undefined) pins.push({ row: "tc2281OpenKeyConnectedKeyId", pin: root.tc2281OpenKeyConnectedKeyId.sourceCommits.at(-1)! });
+  if (root.tc2607CredentialRedirectTerminal !== undefined) pins.push({ row: "tc2607CredentialRedirectTerminal", pin: root.tc2607CredentialRedirectTerminal.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1129,6 +1131,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2481OfflineReplicaTransport", root.tc2481OfflineReplicaTransport?.root.ceiling],
     ["tc2582PublicSessionKey", root.tc2582PublicSessionKey?.root.ceiling],
     ["tc2281OpenKeyConnectedKeyId", root.tc2281OpenKeyConnectedKeyId?.root.ceiling],
+    ["tc2607CredentialRedirectTerminal", root.tc2607CredentialRedirectTerminal?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2864,6 +2867,28 @@ export const approvedTc2281OpenKeyConnectedKeyId: LogoutRatchet = {
   reason: "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first (in popup mode the grant then rejects OPENKEY_CONNECTED_RETRY so the sign popup opens from a fresh click), and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,124 B and index.cjs 1,432,497 B, +260 / +253 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281",
 };
 
+/**
+ * Naomi, TC-2607, 2026-11-09: a credential redirect request the issuer reports as expired, canceled or out of proof
+ * attempts is cleared from storage (PR #894). Root-only: the caps ratchet to the canonical CI bytes with zero
+ * headroom; first-import, activation, worker and gated caps and the ordinary cumulative allowances carry TC-2481
+ * unchanged (a non-replica PR appends no owned-budget entry).
+ */
+export const approvedTc2607CredentialRedirectTerminal: LogoutRatchet = {
+  label: "TC-2607 credential redirect request in a terminal state is cleared, root admission (PR #894)",
+  ruling: "Naomi, TC-2607, 2026-11-09: exact ratchet of the root caps to the true canonical CI measurement on top of the TC-2281 row (#889), zero headroom, no trim. SQLite and PostgreSQL in run 42592736344 at 1b313d83f196dad5455452b3c8171e469a924e89 agree. Bun 1.3.14; rustc 1.99.0.",
+  base: "1a7867986215e7d1af1a4193f42f7802dcb80728",
+  sourceCommits: ["1b313d83f196dad5455452b3c8171e469a924e89"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42592736344",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42592736344/job/129077986799",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42592736344/job/129077987274",
+    ],
+  },
+  root: { delta: { "index.mjs": 41, "index.cjs": 43 }, ceiling: { "index.mjs": 1492165, "index.cjs": 1432540 } },
+  reason: "Non-replica web-sdk fix: a credential redirect request that the issuer reports as expired, canceled or out of proof attempts is removed from storage, so the next sign-in starts a fresh request. Both canonical backends measured index.mjs 1,492,165 B and index.cjs 1,432,540 B, +41 / +43 over the TC-2281 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2607",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -2993,6 +3018,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2481OfflineReplicaTransport: approvedTc2481OfflineReplicaTransport,
   tc2582PublicSessionKey: approvedTc2582PublicSessionKey,
   tc2281OpenKeyConnectedKeyId: approvedTc2281OpenKeyConnectedKeyId,
+  tc2607CredentialRedirectTerminal: approvedTc2607CredentialRedirectTerminal,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3345,6 +3371,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2281OpenKeyConnectedKeyId !== undefined &&
       (!value.tc2582PublicSessionKey || JSON.stringify(value.tc2281OpenKeyConnectedKeyId) !== JSON.stringify(approvedTc2281OpenKeyConnectedKeyId))) {
     throw new Error("Only Naomi's exact TC-2281 root-only ratchet is approved.");
+  }
+  if (value.tc2607CredentialRedirectTerminal !== undefined &&
+      (!value.tc2281OpenKeyConnectedKeyId || JSON.stringify(value.tc2607CredentialRedirectTerminal) !== JSON.stringify(approvedTc2607CredentialRedirectTerminal))) {
+    throw new Error("Only Naomi's exact TC-2607 root-only ratchet is approved.");
   }
 }
 
@@ -3789,6 +3819,14 @@ export function validateTc2281OpenKeyConnectedKeyIdTransition(base?: LogoutRatch
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2281OpenKeyConnectedKeyId) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2281 root ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2607 root admission is introduced once and immutable afterwards. */
+export function validateTc2607CredentialRedirectTerminalTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2607CredentialRedirectTerminal) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2607 root ratchet may be introduced once and cannot change later.");
   }
 }
 

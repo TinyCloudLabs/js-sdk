@@ -41,6 +41,7 @@ import { validateTc2481ColdDeviceRefusalTransition } from "./replica-size-policy
 import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-policy";
 import { validateTc2582PublicSessionKeyTransition } from "./replica-size-policy";
 import { validateTc2281OpenKeyConnectedKeyIdTransition } from "./replica-size-policy";
+import { validateTc2607CredentialRedirectTerminalTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -600,6 +601,13 @@ if (prBaseSha) {
   if (connectedKeyId !== undefined && baseLedger.tc2281OpenKeyConnectedKeyId === undefined &&
       (baseLedger.tc2582PublicSessionKey === undefined || !hasAncestor(repoRoot, connectedKeyId.sourceCommits.at(-1)!))) {
     console.error("The TC-2281 root ratchet requires the merged TC-2582 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2607CredentialRedirectTerminalTransition(baseLedger.tc2607CredentialRedirectTerminal, ledger.tc2607CredentialRedirectTerminal);
+  const redirectTerminal = ledger.tc2607CredentialRedirectTerminal;
+  if (redirectTerminal !== undefined && baseLedger.tc2607CredentialRedirectTerminal === undefined &&
+      (baseLedger.tc2281OpenKeyConnectedKeyId === undefined || !hasAncestor(repoRoot, redirectTerminal.sourceCommits.at(-1)!))) {
+    console.error("The TC-2607 root ratchet requires the merged TC-2281 row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
