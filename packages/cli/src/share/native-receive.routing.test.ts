@@ -216,17 +216,19 @@ test("Native bearer receive refuses an unregistered owner before dispatch; Detai
   expect(unapprovedOrigins).toEqual([]);
 });
 
-test("Native bearer receive refuses a host mismatch without dispatch; Details: TC-2594", async () => {
+test("Native bearer receive ignores a mismatched link host and uses the signed route; Details: TC-2594", async () => {
   if (!fixture || !attackerServer) throw new Error("test fixture is not ready");
   routeRecord = signedLocationRecord;
   const ownerRequestCount = fixture.requests().length;
   const ownerInvocationCount = fixture.invocations().length;
   const attackerRequestCount = attackerRequests.length;
-  const rejected = await readerFor(profileName("mismatch"))(linkWithHost(attackerServer.url.origin)).then(() => false, () => true);
+  const result = await readerFor(profileName("mismatch"))(linkWithHost(attackerServer.url.origin));
 
-  expect(rejected).toBe(true);
-  expect(fixture.requests().slice(ownerRequestCount).some((request) => request.path === "/invoke" && request.authorizationSha256 !== undefined)).toBe(false);
-  expect(fixture.invocations()).toHaveLength(ownerInvocationCount);
+  expect(result.bytes).toEqual(EXPECTED_BYTES);
+  expect(fixture.requests().slice(ownerRequestCount).some((request) => request.path === "/invoke" && request.authorizationSha256 !== undefined)).toBe(true);
+  expect(fixture.invocations().slice(ownerInvocationCount).some((invocation) =>
+    invocation.action === "tinycloud.kv/get" && invocation.path === SHARE_PATH
+  )).toBe(true);
   expect(attackerRequests.slice(attackerRequestCount)).toEqual([]);
   expect(unapprovedOrigins).toEqual([]);
 });

@@ -21,7 +21,7 @@ import type {
   ResourceTransport,
   ResourceAccess,
 } from "@tinycloud/sdk-services";
-import { ResourceNotRoutedError, createResourceTransportInvocationFetch, routingFailure, wrapError } from "@tinycloud/sdk-services";
+import { createResourceTransportInvocationFetch, routingFailure, wrapError } from "@tinycloud/sdk-services";
 import type {
   Result,
   DelegationError,
@@ -1197,17 +1197,6 @@ export class SharingService implements ISharingService {
       ok: false,
       error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
     };
-    const expectedHostOrigin = parseTrustedNodeOrigin(shareData.host);
-    if (!expectedHostOrigin) {
-      return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "Sharing-link host is invalid") };
-    }
-    const shareResourceTransport: ResourceTransport = (resources, send, options) =>
-      resourceTransport(resources, (target) => {
-        if (parseTrustedNodeOrigin(target.url) !== expectedHostOrigin) {
-          throw new ResourceNotRoutedError(shareData.spaceId);
-        }
-        return send(target);
-      }, options);
     if (!autoSubdelegate || !useSessionKey || !this.session) {
       try {
         await this.verifiedReceivedShareResource(shareData);
@@ -1268,7 +1257,7 @@ export class SharingService implements ISharingService {
       hosts: [shareData.host],
       session: shareSession,
       invoke: this.invoke,
-      fetch: createResourceTransportInvocationFetch(shareResourceTransport, shareSession),
+      fetch: createResourceTransportInvocationFetch(resourceTransport, shareSession),
       pathPrefix: shareData.path,
     });
 
