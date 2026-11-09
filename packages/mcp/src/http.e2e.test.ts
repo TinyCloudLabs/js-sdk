@@ -89,7 +89,7 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
-  // Restores the hosted count pin removed in #826 and covers its actual 25-tool matrix.
+  // Restores the hosted count pin removed in #826 and covers its actual 24-tool matrix.
   // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
   expect(tools.tools.map(({ name, annotations }) => [
     name, annotations?.readOnlyHint, annotations?.destructiveHint,

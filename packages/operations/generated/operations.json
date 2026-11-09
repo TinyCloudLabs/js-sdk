@@ -17777,7 +17777,7 @@
       "id": "tinycloud.kv.delete",
       "version": 1,
       "title": "Delete a TinyCloud KV value",
-      "description": "Delete one exact KV key, optionally only when its ETag still matches. For personal records under xyz.tinycloud.tinyapps.<app>/ or xyz.tinycloud.agent-data/, use tinycloud_apps_write.",
+      "description": "Delete one exact KV key, optionally only when its ETag still matches. For personal records under xyz.tinycloud.tinyapps.<app>/, use tinycloud_apps_write.",
       "input": {
         "type": "object",
         "properties": {
@@ -22781,7 +22781,7 @@
       "id": "tinycloud.kv.put",
       "version": 1,
       "title": "Write a TinyCloud KV value",
-      "description": "Create, conditionally replace, or explicitly upsert one exact KV key. For personal records under xyz.tinycloud.tinyapps.<app>/ or xyz.tinycloud.agent-data/, use tinycloud_apps_write.",
+      "description": "Create, conditionally replace, or explicitly upsert one exact KV key. For personal records under xyz.tinycloud.tinyapps.<app>/, use tinycloud_apps_write.",
       "input": {
         "anyOf": [
           {
