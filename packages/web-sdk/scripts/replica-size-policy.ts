@@ -440,6 +440,7 @@ export type Ledger = {
   tc2582PublicSessionKey?: LogoutRatchet;
   tc2281OpenKeyConnectedKeyId?: LogoutRatchet;
   tc2594ResourceTransport?: LogoutRatchet;
+  tc2657RegistryPublication?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1048,6 +1049,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2582PublicSessionKey !== undefined) pins.push({ row: "tc2582PublicSessionKey", pin: root.tc2582PublicSessionKey.sourceCommits.at(-1)! });
   if (root.tc2281OpenKeyConnectedKeyId !== undefined) pins.push({ row: "tc2281OpenKeyConnectedKeyId", pin: root.tc2281OpenKeyConnectedKeyId.sourceCommits.at(-1)! });
   if (root.tc2594ResourceTransport !== undefined) pins.push({ row: "tc2594ResourceTransport", pin: root.tc2594ResourceTransport.sourceCommits.at(-1)! });
+  if (root.tc2657RegistryPublication !== undefined) pins.push({ row: "tc2657RegistryPublication", pin: root.tc2657RegistryPublication.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1132,6 +1134,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2582PublicSessionKey", root.tc2582PublicSessionKey?.root.ceiling],
     ["tc2281OpenKeyConnectedKeyId", root.tc2281OpenKeyConnectedKeyId?.root.ceiling],
     ["tc2594ResourceTransport", root.tc2594ResourceTransport?.root.ceiling],
+    ["tc2657RegistryPublication", root.tc2657RegistryPublication?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2887,6 +2890,23 @@ export const approvedTc2594ResourceTransport: LogoutRatchet = {
   reason: "TC-2594: registry-routed policy, identity, delegation and sharing transports; client-side CACAO verification of received and portable parents. Both canonical backends measured index.mjs 1,495,129 B and index.cjs 1,436,672 B, +3005 / +4175 over TC-2281. The coherent review follow-up binds operations to their initiating authority and preserves routed outcomes. Public-parent verification cannot reuse the private-key persisted-session WASM verifier; the single-chunk contract prevents a lazy-import saving. Admit only these root sizes; no owned-budget entry, cumulative allowance, first-import, activation, worker or gated cap changes.",
 };
 
+/** Naomi, TC-2657: admit only the measured registration-history root growth. */
+export const approvedTc2657RegistryPublication: LogoutRatchet = {
+  label: "TC-2657 explicit publication registration history, root admission (PR #902)",
+  ruling: "Naomi, TC-2657, 2026-11-09: exact root-only ratchet above tc2594ResourceTransport, zero headroom. SQLite and PostgreSQL in run 42697451631 at 4d3c24b325efb9879a18b47e0efe341beb43f314 agree. Bun 1.3.14; rustc 1.99.0. Final pinned CI must confirm the integrated candidate. No non-root cap, owned-budget entry or cumulative allowance change.",
+  base: "e86376ede34be5a34b5ef58c7d43051199fc51b2",
+  sourceCommits: ["4d3c24b325efb9879a18b47e0efe341beb43f314"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42697451631",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42697451631/job/129432981527",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42697451631/job/129432981294",
+    ],
+  },
+  root: { delta: { "index.mjs": 438, "index.cjs": 363 }, ceiling: { "index.mjs": 1495567, "index.cjs": 1437035 } },
+  reason: "TC-2657: explicit legacy-only, signed-v2 and unknown registration provenance preserves history while allowing a first signed publication. The browser-reachable growth is Core registry-policy.ts validation, merge and high-water handling. The publisher remains an opt-in subpath; no Operations, CLI or Node-only module enters the Web root. Both canonical backends measured +438 / +363 bytes above TC-2594. Admit only these root sizes; all non-root caps, cumulative allowances and historical rows remain unchanged.",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3017,6 +3037,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2582PublicSessionKey: approvedTc2582PublicSessionKey,
   tc2281OpenKeyConnectedKeyId: approvedTc2281OpenKeyConnectedKeyId,
   tc2594ResourceTransport: approvedTc2594ResourceTransport,
+  tc2657RegistryPublication: approvedTc2657RegistryPublication,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3373,6 +3394,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2594ResourceTransport !== undefined &&
       (!value.tc2281OpenKeyConnectedKeyId || JSON.stringify(value.tc2594ResourceTransport) !== JSON.stringify(approvedTc2594ResourceTransport))) {
     throw new Error("Only Naomi's exact TC-2594 root-only ratchet is approved.");
+  }
+  if (value.tc2657RegistryPublication !== undefined &&
+      (!value.tc2594ResourceTransport || JSON.stringify(value.tc2657RegistryPublication) !== JSON.stringify(approvedTc2657RegistryPublication))) {
+    throw new Error("Only Naomi's exact TC-2657 root-only ratchet is approved.");
   }
 }
 
@@ -3825,6 +3850,14 @@ export function validateTc2594ResourceTransportTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2594ResourceTransport) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2594 root ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2657 root admission is introduced once and immutable afterwards. */
+export function validateTc2657RegistryPublicationTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2657RegistryPublication) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2657 root ratchet may be introduced once and cannot change later.");
   }
 }
 
