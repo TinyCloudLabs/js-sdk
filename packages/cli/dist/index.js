@@ -31131,7 +31131,7 @@ function shareFilename(value) {
     throw new CLIError(
       "UNSAFE_FILENAME",
       hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
-      8
+      2
     );
   }
 }
@@ -33500,7 +33500,7 @@ function problemError(problems) {
   return new CLIError(
     first.code,
     `folder has ${problems.length} ${noun}: ${listed}${more}`,
-    first.code === "UNSAFE_PATH" ? 8 : 2,
+    2,
     { hint: first.code === "UNSAFE_PATH" ? "Rename these files to plain names without control, invisible or direction-changing characters." : "Symbolic links and special files are never followed or read; copy the real files into the folder." }
   );
 }
@@ -33573,7 +33573,7 @@ function htmlFolderError(error) {
   return new CLIError(
     pathProblem ? "UNSAFE_PATH" : "INVALID_ARGUMENT",
     `folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file}${reference})`}`,
-    pathProblem ? 8 : 2
+    2
   );
 }
 async function jsdomParser() {
@@ -33792,8 +33792,8 @@ function shareCliError(error, operation = "publish") {
   const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
   const known = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 2 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 2 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
     AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
