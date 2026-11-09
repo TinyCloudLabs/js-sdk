@@ -6,11 +6,16 @@ import { createEIO } from "./errors";
 const WAIT_SLICE_MS = 1_000;
 export const DEFAULT_BRIDGE_TIMEOUT_MS = 120_000;
 
-export interface TinyCloudVfsBridgeOptions {
-  /** Total time a single bridge call waits for the worker to answer. */
+interface BridgeTestHooks {
   timeoutMs?: number;
-  /** Replaces the default worker (used for tests). */
   createWorker?: () => Worker;
+}
+
+let testHooks: BridgeTestHooks = {};
+
+/** Internal seam for the package's own tests; not re-exported from the package entry. */
+export function setBridgeTestHooks(hooks: BridgeTestHooks): void {
+  testHooks = hooks;
 }
 
 export class TinyCloudVfsBridgeTimeoutError extends Error {
@@ -46,10 +51,10 @@ export class TinyCloudVfsBridge {
   private readonly worker: Worker;
   private readonly timeoutMs: number;
 
-  constructor(init: TinyCloudVfsWorkerInit, options: TinyCloudVfsBridgeOptions = {}) {
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_BRIDGE_TIMEOUT_MS;
-    if (options.createWorker) {
-      this.worker = options.createWorker();
+  constructor(init: TinyCloudVfsWorkerInit) {
+    this.timeoutMs = testHooks.timeoutMs ?? DEFAULT_BRIDGE_TIMEOUT_MS;
+    if (testHooks.createWorker) {
+      this.worker = testHooks.createWorker();
     } else {
       const specifier = resolveWorkerSpecifier();
       this.worker = typeof specifier === "string"

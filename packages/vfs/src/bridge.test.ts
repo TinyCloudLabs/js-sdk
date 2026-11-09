@@ -1,6 +1,8 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import type { Worker } from "node:worker_threads";
-import { TinyCloudVfsBridge, TinyCloudVfsBridgeTimeoutError } from "./bridge";
+import { TinyCloudVfsBridge, TinyCloudVfsBridgeTimeoutError, setBridgeTestHooks } from "./bridge";
+
+afterEach(() => setBridgeTestHooks({}));
 
 test("a bridge call whose worker never answers fails with a typed timeout", () => {
   let terminated = false;
@@ -12,7 +14,8 @@ test("a bridge call whose worker never answers fails with a typed timeout", () =
   const started = Date.now();
   let caught: unknown;
   try {
-    new TinyCloudVfsBridge({} as never, { timeoutMs: 150, createWorker: () => silentWorker });
+    setBridgeTestHooks({ timeoutMs: 150, createWorker: () => silentWorker });
+    new TinyCloudVfsBridge({} as never);
   } catch (error) {
     caught = error;
   }
