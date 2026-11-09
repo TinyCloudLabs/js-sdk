@@ -101,6 +101,8 @@ The command checks both public server identity surfaces, merges only the selecte
 
 Registration history distinguishes a legacy-only observation from an accepted signed record. Explicit legacy-only history can publish its first signed record, including sequence zero. Accepting a signed record durably promotes that history; it never becomes legacy-only again. Existing untyped history remains unknown rather than being cleared or relabelled, so publication refuses if that history cannot establish whether a signed record was already accepted. Recovery for ambiguous older profiles is not part of this command. Legacy records still do not authorize routing.
 
+Durably confirmed signed history can be reused in memory after a profile commit. A failed history write preserves its numeric bound but never counts as durable confirmation.
+
 After a successful verified publication the CLI saves its signed copy for offline inspection and the bounded outage policy above. If remote publication succeeds but local persistence fails, the error explicitly says the settings were published; it does not pretend that no remote change occurred. Import the SDK's `publishLocationRecordV2` from `@tinycloud/sdk-core/registry-publication`; it is an opt-in entry point, not an eager Web-root export. It returns the verified record and leaves persistence to its caller. Its `onPrepared` callback receives the complete proposed payload and current verified record before signing; returning false cancels without a write.
 
 Details: TC-2657

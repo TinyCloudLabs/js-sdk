@@ -1101,6 +1101,8 @@ export function createProfileRegistryCacheStore(profile: string): RegistryCacheS
 export function createProfileRegistrySequenceStore(profile: string): RegistrySequenceStore {
   type Sequence = { ownerKey: string; sequence: number; kind?: RegistryRegistrationKind };
   const memory = new Map<string, RegistryRegistrationEvidence>();
+  // Only durable signed provenance may be reused after its original profile scope ends.
+  const durablySigned = new Set<string>();
   const rank = (kind: RegistryRegistrationKind): number => kind === "signed-v2" ? 2 : kind === "unknown" ? 1 : 0;
   const remember = (key: string, next: RegistryRegistrationEvidence): void => {
     const previous = memory.get(key);
@@ -1124,17 +1126,22 @@ export function createProfileRegistrySequenceStore(profile: string): RegistrySeq
     return stored === undefined ? undefined : { sequence: stored.sequence, kind: stored.kind ?? "unknown" };
   };
   const getRegistration = async (key: string): Promise<RegistryRegistrationEvidence | undefined> => {
+    const cached = memory.get(key);
+    if (cached?.kind === "signed-v2" && durablySigned.has(key)) return cached;
     const stored = find((await readProfileStore<Sequence>(profile, "registry-sequences")).records, key);
-    if (stored) remember(key, stored);
+    if (stored) {
+      remember(key, stored);
+      if (stored.kind === "signed-v2") durablySigned.add(key);
+    }
     const current = memory.get(key);
-    if (current?.kind === "signed-v2" && stored && stored.kind !== "signed-v2") {
+    if (current?.kind === "signed-v2" && !durablySigned.has(key)) {
       return { sequence: current.sequence, kind: "unknown" };
     }
     return current;
   };
   return {
     async get(key) {
-      return (await getRegistration(key))?.sequence;
+      return memory.get(key)?.sequence ?? (await getRegistration(key))?.sequence;
     },
     getRegistration,
     async set(key, sequence, kind = "signed-v2") {
@@ -1145,17 +1152,18 @@ export function createProfileRegistrySequenceStore(profile: string): RegistrySeq
       }
       // A failed write retains knowledge, but cannot fake a durable promotion.
       remember(key, { sequence, kind });
-      await withRegistryStoreUpdate(profile, "registry-sequences", () =>
-        updateProfileStoreWhileLocked<Sequence, void>(profile, "registry-sequences", (records) => {
+      const stored = await withRegistryStoreUpdate(profile, "registry-sequences", () =>
+        updateProfileStoreWhileLocked<Sequence, RegistryRegistrationEvidence>(profile, "registry-sequences", (records) => {
           const current = find(records, key);
           if (current) remember(key, current);
           const highest = memory.get(key)!;
           return {
             records: current?.sequence === highest.sequence && current.kind === highest.kind ? records
               : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, ...highest }],
-            result: undefined,
+            result: highest,
           };
         }));
+      if (stored.kind === "signed-v2") durablySigned.add(key);
     },
   };
 }

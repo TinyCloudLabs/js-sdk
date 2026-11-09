@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ed25519 } from "@noble/curves/ed25519";
@@ -131,6 +131,26 @@ test("an old untyped profile zero is preserved and cannot be recreated as v1-onl
     await expect(publishLocationRecordV2({ ...fixture.publication, ...stores(profile) })).rejects.toBeInstanceOf(Error);
     expect(await readFile(path, "utf8")).toBe(before);
     expect(await createProfileRegistrySequenceStore(profile).get(fixture.ownerKey)).toBe(0);
+    expect(fixture.signatures()).toBe(0);
+    expect(fixture.writes()).toBe(0);
+  });
+});
+
+test("a failed disk write preserves the numeric bound without claiming durable signed history", async () => {
+  await isolatedProfile(async (profile, fixture) => {
+    const path = profileStorePath(profile, "registry-sequences");
+    await mkdir(path);
+    const sequenceStore = createProfileRegistrySequenceStore(profile);
+    await expect(sequenceStore.set(fixture.ownerKey, 0, "signed-v2")).rejects.toBeInstanceOf(Error);
+    await rm(path, { recursive: true });
+
+    expect(await sequenceStore.get(fixture.ownerKey)).toBe(0);
+    expect(await sequenceStore.getRegistration?.(fixture.ownerKey)).toEqual({ sequence: 0, kind: "unknown" });
+    await expect(publishLocationRecordV2({
+      ...fixture.publication,
+      cacheStore: createProfileRegistryCacheStore(profile),
+      sequenceStore,
+    })).rejects.toBeInstanceOf(Error);
     expect(fixture.signatures()).toBe(0);
     expect(fixture.writes()).toBe(0);
   });
