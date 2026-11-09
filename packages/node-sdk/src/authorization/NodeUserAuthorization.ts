@@ -62,6 +62,7 @@ import {
   CAPABILITIES,
   HOOKS,
   ENCRYPTION,
+  publicJwk,
   type CapabilityPresentationEnvelopeV1,
 } from "@tinycloud/sdk-core";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
@@ -2209,9 +2210,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const presentation = this.buildPresentationEnvelope(options?.reason);
 
     // 3. Delegate signing to OpenKey via the caller-supplied bridge.
-    //    We forward the JWK so the OpenKey server can regenerate a
-    //    narrowed SIWE bound to the same session key when the user
-    //    edits the review — and never a caller-echoed JWK.
+    //    We forward the PUBLIC session key so the OpenKey server can
+    //    regenerate a narrowed SIWE bound to the same session key when the
+    //    user edits the review. The private key never leaves this process.
     //
     //    We forward the TinyCloud host so the widget can bind it into
     //    its authorization context (Sol MAJOR-2). Falls back to the
@@ -2224,7 +2225,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const originalRequest: OpenKeyAuthorizeInput = {
       protocolVersion: 1,
       siwe: prepared.siwe,
-      jwk,
+      jwk: publicJwk(jwk),
       verificationMethod: prepared.verificationMethod,
       host: hostHint,
       keyId: options?.openkeyKeyId,

@@ -303,3 +303,32 @@ test("preparation keeps the active session key available until approval", async 
     expect((web as any).preparedSignIn.request.keyId).not.toBe(activeKey);
   });
 });
+
+const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "k", "oth"];
+
+for (const prepared of [true, false]) {
+  test(`${prepared ? "prepared" : "unprepared"} OpenKey sign-in uses the standard public session key`, async () => {
+    await withNodeFetch(async () => {
+      const sent: object[] = [];
+      const web = await client(async (request) => {
+        const jwk = "jwk" in request ? request.jwk : undefined;
+        if (jwk === null || typeof jwk !== "object" || Array.isArray(jwk)) {
+          throw new Error("Expected a public session key object");
+        }
+        sent.push(structuredClone(jwk));
+        return signedResult(request);
+      }).create();
+      if (prepared) await web.prepareSignIn();
+      await web.signIn();
+      expect(sent.length).toBe(1);
+      const jwk = sent[0]!;
+      expect(PRIVATE_JWK_MEMBERS.some((member) => Object.hasOwn(jwk, member))).toBe(false);
+      expect(Object.keys(jwk).sort()).toEqual(["crv", "kid", "kty", "x"]);
+      expect(Reflect.get(jwk, "kty")).toBe("OKP");
+      expect(Reflect.get(jwk, "crv")).toBe("Ed25519");
+      expect(typeof Reflect.get(jwk, "kid")).toBe("string");
+      const x = Reflect.get(jwk, "x");
+      expect(typeof x === "string" && /^[A-Za-z0-9_-]{43}$/.test(x)).toBe(true);
+    });
+  });
+}
