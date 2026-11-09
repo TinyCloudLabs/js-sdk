@@ -4,8 +4,8 @@ import { isOperationErrorCode, nodeRetryOperationError, OperationInvocationError
 import { authorizationFailure } from "../kv-failure.js";
 import { evaluateOperationAuthority } from "../authority.js";
 import { operationSpaceResolver } from "../secrets.js";
-import { TC_APPS_CATALOG_READ_ACTIONS, TC_APPS_DISCOVERY_ACTIONS, TC_APPS_RECORDS_ACTIONS } from "../tc-apps.js";
-import { appRoot, spaceName, staleKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type Layout } from "./layout.js";
+import { TC_APPS_DISCOVERY_ACTIONS, TC_APPS_RECORDS_ACTIONS } from "../tc-apps.js";
+import { appRoot, staleKey, TC_APPS_DISCOVERY_ROOT } from "./layout.js";
 import { isObject, type JsonObject } from "./records.js";
 
 export interface KvError { readonly code?: string; readonly meta?: Readonly<Record<string, unknown>> }
@@ -19,27 +19,22 @@ export interface AppsKv {
 }
 export type ReadRecord = { key: string; value: JsonObject; etag: string } | { key: string; outcome: "NOT_FOUND" | "MALFORMED" };
 
-export function appsSpace(context: OperationContext, layout: Layout): string {
+/** The owner's applications space: every personal app lives there. */
+export function appsSpace(context: OperationContext): string {
   if (!context.runtime) throw new TypeError("Authenticated operation runtime is unavailable.");
-  return operationSpaceResolver(context.runtime.node, context.summary.space)(spaceName(layout));
+  return operationSpaceResolver(context.runtime.node, context.summary.space)("applications");
 }
-export function appsKv(context: OperationContext, layout: Layout): AppsKv {
-  return (context.runtime!.node as TinyCloudNode).kvForSpace(appsSpace(context, layout)) as unknown as AppsKv;
+export function appsKv(context: OperationContext): AppsKv {
+  return (context.runtime!.node as TinyCloudNode).kvForSpace(appsSpace(context)) as unknown as AppsKv;
 }
 
 /** The connector's permission entries. Each is the whole grant for its scope, so one approval covers every later call. */
 export type AppsPermission = { service: string; space: string; path: string; actions: string[] };
-export function legacyRecordsPermission(context: OperationContext): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context, "legacy"), path: TC_APPS_LEGACY_ROOT, actions: [...TC_APPS_RECORDS_ACTIONS] };
-}
-export function legacyCatalogPermission(context: OperationContext): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context, "legacy"), path: `${TC_APPS_LEGACY_ROOT}catalog/`, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
-}
 export function appRecordsPermission(context: OperationContext, app: string, actions: readonly string[] = TC_APPS_RECORDS_ACTIONS): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context, "new"), path: appRoot(app), actions: [...actions] };
+  return { service: "tinycloud.kv", space: appsSpace(context), path: appRoot(app), actions: [...actions] };
 }
 export function discoveryPermission(context: OperationContext, actions: readonly string[] = TC_APPS_DISCOVERY_ACTIONS): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context, "new"), path: TC_APPS_DISCOVERY_ROOT, actions: [...actions] };
+  return { service: "tinycloud.kv", space: appsSpace(context), path: TC_APPS_DISCOVERY_ROOT, actions: [...actions] };
 }
 
 export function appsFailure(error: unknown): OperationError {
@@ -99,47 +94,12 @@ export function jsonBytes(value: JsonObject): Uint8Array {
 }
 
 /** Mark derived data stale; a caller with committed writes must retain their outcomes if this throws. */
-export async function markAppsKindStale(kv: AppsKv, layout: Layout, app: string, kind: string, at: string): Promise<void> {
-  requireKv(await kv.put(staleKey(layout, app, kind), jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
+export async function markAppsKindStale(kv: AppsKv, app: string, kind: string, at: string): Promise<void> {
+  requireKv(await kv.put(staleKey(app, kind), jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
 }
 
-/** Whether the session already holds read access to the app list (a grant reported one action at a time counts); layout checks that need it are skipped without it. */
+/** Whether the session already holds read access to the app list (a grant reported one action at a time counts); the check that needs it is skipped without it. */
 export function hasDiscoveryAccess(context: OperationContext): boolean {
   const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
   return evaluateOperationAuthority(context.runtime!.granted as never, [discoveryPermission(context, ["tinycloud.kv/get"])] as never, resolve).satisfied;
-}
-/** True when the app's discovery entry exists, i.e. its records now live in the applications space. Best effort: false without access. */
-export async function appHasMoved(context: OperationContext, app: string): Promise<boolean> {
-  if (!hasDiscoveryAccess(context)) return false;
-  const [entry] = await readAppsRecords(appsKv(context, "new"), [`${TC_APPS_DISCOVERY_ROOT}${app}/entry`]);
-  return entry !== undefined && "value" in entry;
-}
-/** True when the older layout already holds this app's catalog record. */
-export async function legacyHasApp(context: OperationContext, app: string): Promise<boolean> {
-  const [record] = await readAppsRecords(appsKv(context, "legacy"), [`${TC_APPS_LEGACY_ROOT}catalog/${app}`]);
-  return record !== undefined && !("outcome" in record && record.outcome === "NOT_FOUND");
-}
-
-/** Whether the session already holds read access to the older layout's catalog (any grant covering it counts). */
-export function hasLegacyCatalogAccess(context: OperationContext): boolean {
-  const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
-  return evaluateOperationAuthority(context.runtime!.granted as never, [legacyCatalogPermission(context)] as never, resolve).satisfied;
-}
-
-/**
- * OpenKey signs one space per delegation, so a call that needs scopes in both spaces asks for one space at a time:
- * the first space not yet fully granted. Once every scope is granted the whole list is returned and the call runs.
- */
-export function oneSpaceAtATime(context: OperationContext, scopes: readonly AppsPermission[]): AppsPermission[] {
-  const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
-  for (const space of new Set(scopes.map((scope) => scope.space))) {
-    const group = scopes.filter((scope) => scope.space === space);
-    if (!evaluateOperationAuthority(context.runtime!.granted as never, group as never, resolve).satisfied) return group;
-  }
-  return [...scopes];
-}
-
-/** Read-only access to the older layout, which is all a move needs there. */
-export function legacyReadPermission(context: OperationContext): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context, "legacy"), path: TC_APPS_LEGACY_ROOT, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
 }

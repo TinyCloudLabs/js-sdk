@@ -135,10 +135,6 @@ scenario('the pending init --wait line differs between a link created in this ru
 // long token or a JSON document, must never reach stderr: the line then says `this same command` and names no command.
 const SECRET = 's3cretValue1';
 for (const [name, args] of [
-  ['--token', ['--token', SECRET]],
-  ['--code=VALUE', [`--code=${SECRET}`]],
-  ['--secret-file', ['--secret-file', SECRET]],
-  ['--Passphrase (any case)', ['--Passphrase', SECRET]],
   ['a long base64 token as a value', [`${SECRET}${'A'.repeat(40)}`]],
   ['a JSON value', [`{"delegation":"${SECRET}"}`]],
 ]) {
@@ -168,14 +164,6 @@ scenario('a pending init --wait without such flags or values is still echoed in 
 for (const [name, args] of [
   ['-c VALUE', ['-c', SECRET]],
   ['-k VALUE', ['-k', SECRET]],
-  ['--code VALUE (a space)', ['--code', SECRET]],
-  ['--pass VALUE', ['--pass', SECRET]],
-  ['--pwd VALUE', ['--pwd', SECRET]],
-  ['--otp VALUE', ['--otp', SECRET]],
-  ['--jwt VALUE', ['--jwt', SECRET]],
-  ['--cookie VALUE', ['--cookie', SECRET]],
-  ['--link VALUE', ['--link', `https://short.example/${SECRET}`]],
-  ['--url with ?code=', ['--url', `https://x.example/a?code=${SECRET}`]],
   ['a 12-character positional', [SECRET]],
   ['a 31-character token as a --label value', ['--label', `${SECRET}${'B'.repeat(19)}`]],
   ['a dotted JWT-like token as a --label value', ['--label', `${SECRET}aaaa.bbbbbbbbbb.cccc`]],

@@ -1,5 +1,20 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.19
+
+### Patch Changes
+
+- c8a7c9b: Exit-code change for scripts: `tinycloud share` now exits 2 (invalid input) instead of 8 for `UNSAFE_FILENAME`, `UNSAFE_PATH` and `OUTPUT_EXISTS`. These refusals cannot change when the same command is retried, and exit 8 stays reserved for pending states (a pending owner approval, `secrets wait`). Scripts that treated 8 from `share` as "retry later" should now treat these three codes as input errors. Nothing is written to stdout for them; the error JSON goes to stderr.
+
+  Details: TC-2609
+
+## 1.7.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [3319ede]
+  - @tinycloud/operations@0.9.0-beta.9
+
 ## 1.7.0-beta.17
 
 ### Patch Changes
