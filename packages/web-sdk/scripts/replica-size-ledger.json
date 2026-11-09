@@ -2772,5 +2772,20 @@
     },
     "root": { "delta": { "index.mjs": 260, "index.cjs": 253 }, "ceiling": { "index.mjs": 1492124, "index.cjs": 1432497 } },
     "reason": "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first (in popup mode the grant then rejects OPENKEY_CONNECTED_RETRY so the sign popup opens from a fresh click), and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,124 B and index.cjs 1,432,497 B, +260 / +253 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281"
+  },
+  "tc2607CredentialRedirectTerminal": {
+    "label": "TC-2607 credential redirect request in a terminal state is cleared, root admission (PR #894)",
+    "ruling": "Naomi, TC-2607, 2026-11-09: exact ratchet of the root caps to the true canonical CI measurement on top of the TC-2281 row (#889), zero headroom, no trim. SQLite and PostgreSQL in run 42592736344 at 1b313d83f196dad5455452b3c8171e469a924e89 agree. Bun 1.3.14; rustc 1.99.0.",
+    "base": "1a7867986215e7d1af1a4193f42f7802dcb80728",
+    "sourceCommits": ["1b313d83f196dad5455452b3c8171e469a924e89"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42592736344",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42592736344/job/129077986799",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42592736344/job/129077987274"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 41, "index.cjs": 43 }, "ceiling": { "index.mjs": 1492165, "index.cjs": 1432540 } },
+    "reason": "Non-replica web-sdk fix: a credential redirect request that the issuer reports as expired, canceled or out of proof attempts is removed from storage, so the next sign-in starts a fresh request. Both canonical backends measured index.mjs 1,492,165 B and index.cjs 1,432,540 B, +41 / +43 over the TC-2281 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2607"
   }
 }
