@@ -45,6 +45,7 @@
     "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
     "tc-2416-one-layout",
+    "tc-2454-sql-write-notice",
     "tc-2461-cors-expose-headers",
     "tc-2481-cold-device-refusal",
     "tc-2481-owner-storage-copy",
