@@ -41,6 +41,7 @@
     "tc-2416-catalog-routing",
     "tc-2416-connect-unavailable",
     "tc-2416-mcp-layout",
+    "tc-2416-one-layout",
     "tc-2481-cold-device-refusal",
     "tc-2481-owner-storage-copy",
     "tc-2481-signed-registry-cache",
@@ -55,6 +56,7 @@
     "tc-2534-device-default-decrypt",
     "tc-2550-device-decrypt-manifest",
     "tc2380-q2",
-    "tidy-names-openkey-grant"
+    "tidy-names-openkey-grant",
+    "vfs-bridge-timeout"
   ]
 }

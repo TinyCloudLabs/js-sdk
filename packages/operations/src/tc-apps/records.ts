@@ -70,7 +70,7 @@ export const WriteInputSchema = z.object({ ops: z.array(z.discriminatedUnion("op
     const target = parseKey(op.op === "move" ? op.to : op.key);
     const from = op.op === "move" ? parseKey(op.from) : undefined;
     if (!target || (op.op === "move" && !from)) return;
-    if (from && (from.layout !== target.layout || from.app !== target.app)) context.addIssue({ code: "custom", path: ["ops", index, "to"], message: "a move stays inside one layout and app" });
+    if (from && from.app !== target.app) context.addIssue({ code: "custom", path: ["ops", index, "to"], message: "a move stays inside one app" });
     const reason = valueSyntax(op.op === "move" ? op.to : op.key, op.value);
     if (reason) context.addIssue({ code: "custom", path: ["ops", index, "value"], message: reason });
   });

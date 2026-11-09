@@ -4,19 +4,19 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OperationDefinition, RuntimeOperationContext } from "../contract.js";
 import { withTinyCloudStateRoot } from "../state.js";
-import { TC_APPS_LEGACY_ROOT as R } from "../tc-apps.js";
+import { appRoot, discoveryKey } from "../tc-apps/layout.js";
 import { appsTimezone } from "../tc-apps/state.js";
 import type { AppsKv, KvResult, KvValue } from "../tc-apps/kv.js";
 import { COPY_DELETE, COPY_INSERT, type AppsDatabase, type CopyRow } from "../tc-apps/copy.js";
-import { appsOperationDefinitions, type ContextOutput, type MoveOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
+import { appsOperationDefinitions, type ContextOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
 
-export const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
-export const NEW_SPACE = SPACE.replace(/:default$/, ":applications");
+export const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications";
+export const FITNESS = appRoot("fitness");
 export const app = { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" };
 export const kind = { app: "fitness", kind: "weight", about: "Body weight", shape: "log", per: "day", v: 1, fields: { kg: "number" }, created: "2026-10-14" };
 export const itemKind = { ...kind, kind: "goal", shape: "item", per: undefined, states: ["open", "done"] };
-export const key = `${R}fitness/weight/2026-10/2026-10-14`;
-type Outputs = { context: ContextOutput; read: ReadOutput; write: WriteOutput; query: QueryOutput; move: MoveOutput };
+export const key = `${FITNESS}weight/2026-10/2026-10-14`;
+type Outputs = { context: ContextOutput; read: ReadOutput; write: WriteOutput; query: QueryOutput };
 export function definition<N extends keyof Outputs>(name: N) {
   const found = appsOperationDefinitions.find((entry) => entry.id === `tinycloud.apps.${name}`);
   if (!found) throw new Error(`Missing ${name}`);
@@ -97,25 +97,24 @@ export class FakeKv implements AppsKv {
     return { ok: true, data: { data: undefined, headers: {} } };
   }
 }
-/** `kv` is the older layout's default space; `applications` is the new layout's space. */
-export async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext, applications: FakeKv) => Promise<void>, timezone: string | null = "Europe/Berlin") {
+/** `kv` is the owner's applications space, seeded with one app, `fitness`, and its `weight` kind. */
+export async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext) => Promise<void>, timezone: string | null = "Europe/Berlin") {
   const root = await mkdtemp(join(tmpdir(), "tc-apps-test-"));
   try {
     await withTinyCloudStateRoot(root, async () => {
       const kv = new FakeKv();
-      const applications = new FakeKv();
-      kv.seed(`${R}catalog/fitness`, app);
-      kv.seed(`${R}catalog/fitness/weight`, kind);
+      kv.seed(`${FITNESS}catalog`, app);
+      kv.seed(`${FITNESS}catalog/weight`, kind);
+      kv.seed(discoveryKey("fitness"), { v: 1, app: "fitness", id: "xyz.tinycloud.tinyapps.fitness", title: "Fitness" });
       const context: RuntimeOperationContext = {
         summary: { profile: "apps", host: "https://node.example", posture: "delegate-session", space: SPACE },
         runtime: { granted: [], node: { kvForSpace: (space: string) => {
           if (space === SPACE) return kv;
-          if (space === NEW_SPACE) return applications;
           throw new Error(`Unexpected space ${space}`);
         } } },
       };
       if (timezone) await appsTimezone("apps", timezone);
-      await run(kv, context, applications);
+      await run(kv, context);
     });
   } finally { await rm(root, { recursive: true, force: true }); }
 }
@@ -168,7 +167,7 @@ export class FakeSql {
 }
 /** Grant the copy's SQL permission(s) (or none) and record which database the operation opens. */
 export function withSql(context: RuntimeOperationContext, sql: FakeSql, granted: boolean | { space: string; path: string } | { space: string; path: string }[] = true): RuntimeOperationContext {
-  const grants = granted === true ? [{ space: SPACE, path: "xyz.tinycloud.agent-data.index" }] : granted === false ? [] : Array.isArray(granted) ? granted : [granted];
+  const grants = granted === true ? [{ space: SPACE, path: `${FITNESS}index` }] : granted === false ? [] : Array.isArray(granted) ? granted : [granted];
   return { ...context, runtime: { ...context.runtime,
     granted: grants.map((grant) => ({ service: "tinycloud.sql", space: grant.space, path: grant.path, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] })),
     node: { ...context.runtime.node as object, sqlForSpace: () => ({ db: (name: string) => { sql.databases.push(name); return sql.handle(); } }) },
@@ -177,5 +176,5 @@ export function withSql(context: RuntimeOperationContext, sql: FakeSql, granted:
 export function withGrants(context: RuntimeOperationContext, granted: unknown[]): RuntimeOperationContext {
   return { ...context, runtime: { ...context.runtime, granted } as RuntimeOperationContext["runtime"] };
 }
-/** The grant an owner who approved the older layout still holds. */
-export const LEGACY_ROOT_GRANT = { service: "tinycloud.kv", space: SPACE, path: R, actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] };
+/** The grant for the fitness app's folder (read, list, add, delete). */
+export const FITNESS_GRANT = { service: "tinycloud.kv", space: SPACE, path: FITNESS, actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] };
