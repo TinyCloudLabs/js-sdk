@@ -91,7 +91,7 @@ tinycloud --profile owner registry show
 
 The preview lists the complete resulting account, server identities, spaces and decryption service, including existing entries that will be kept. A `*` marks an added or changed space. Existing memberships and the decryption service are preserved unless explicitly changed; `--read-only` selects read-only membership for the named server, and `--decryption-server <url>` explicitly selects the decryption service.
 
-**Published settings are public:** anyone who knows the account ID can look up its servers and plaintext space names. Review the preview before approving. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
+**Published settings are public:** anyone who knows the account ID can look up its server addresses and plaintext space names. Review the preview before approving. The confirmation names both explicitly. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
 
 The confirmation includes the public-lookup warning once. The marker legend appears only when a space is marked. If the selected settings are already published, the command says nothing changed and JSON returns `published: true, changed: false`; it sends no additional PUT. A real update returns `changed: true`. Both modes still save the verified local copy, and no-change output keeps the disclosure.
 

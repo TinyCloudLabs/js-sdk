@@ -14,7 +14,7 @@ import { resolveProfilePosture } from "../config/types.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { outputJson, shouldOutputJson } from "../output/formatter.js";
 
-const DISCLOSURE = "Anyone who knows your account ID can look these up.";
+const DISCLOSURE = "Anyone who knows your account ID can look up these server addresses and space names.";
 const EFFECT = "After this, a space that isn't in your storage settings stops with an error instead of using another server.";
 const CONFLICT = "These storage settings changed before they could be published. Run this command again without --yes to review the latest settings.";
 
@@ -64,11 +64,11 @@ export function registerRegistryPublishCommand(registry: Command): void {
     .requiredOption("--server <url>", "Storage server to use for these spaces.")
     .option("--read-only", "Use this server only for reading these spaces.")
     .option("--decryption-server <url>", "Decryption service to use with these storage settings.")
-    .option("--yes", "Publish without asking. Anyone who knows your account ID can look up the servers and spaces you list.")
+    .option("--yes", "Publish without asking. Anyone who knows your account ID can look up the server addresses and space names you list.")
     .action(async (names: string[], options: { server: string; readOnly?: boolean; decryptionServer?: string; yes?: boolean }, command: Command) => {
       try {
         if (!options.yes && (!process.stdin.isTTY || !process.stderr.isTTY || command.optsWithGlobals().json)) {
-          throw new CLIError("CONFIRMATION_REQUIRED", "Publishing lets anyone who knows your account ID look up these servers and space names. Run this in a terminal to review them, or add --yes to publish without asking.");
+          throw new CLIError("CONFIRMATION_REQUIRED", "Publishing lets anyone who knows your account ID look up these server addresses and space names. Run this in a terminal to review them, or add --yes to publish without asking.");
         }
         // Explicit --server must not trigger discovery or a saved-host resolution.
         const context = await ProfileManager.resolveContext({ ...command.optsWithGlobals(), host: options.server }, { storedSession: "unused" });
