@@ -122,6 +122,12 @@ export interface HermeticRequestRecord {
   readonly path: string;
   readonly authorizationSha256?: string;
 }
+/** Method, path, and authorization-presence metadata for loopback requests. */
+export interface HermeticRequestSummary {
+  readonly method: string;
+  readonly path: string;
+  readonly authorizationPresent: boolean;
+}
 
 /** One capability a verified `/invoke` invocation exercised, as decoded to authorize it. */
 export interface HermeticInvocationRecord {
@@ -138,11 +144,12 @@ export function hermeticAuthorizationSha256(authorization: string): string {
 
 class LoopbackEncryptedNode {
   readonly wasm = new NodeWasmBindings();
-  readonly nodePrivateKey = new Uint8Array(32).fill(17);
-  readonly nodeId = didKeyFromPublicKey(ed25519.getPublicKey(this.nodePrivateKey));
-  readonly networkKeyPair = this.wasm.vault_x25519_from_seed(
-    new Uint8Array(32).fill(23),
-  );
+  readonly nodePrivateKey: Uint8Array;
+  readonly nodeId: string;
+  readonly networkKeyPair: { readonly privateKey: Uint8Array; readonly publicKey: Uint8Array };
+  private redirectOnInvokeTo: string | undefined;
+  private readonly recordAuthorizationHashes: boolean;
+  private readonly requestSummaryLog: HermeticRequestSummary[] = [];
   readonly activations = new Set<string>();
   readonly rejectedActivationCids = new Set<string>();
   readonly observed = {
@@ -188,17 +195,35 @@ class LoopbackEncryptedNode {
   /** Compact grants activated through `/delegate`; they authorize their audience's invocations. */
   private readonly activatedGrants: CompactPayload[] = [];
 
-  constructor() {
+  constructor(options: {
+    nodePrivateKey?: Uint8Array;
+    networkSeed?: Uint8Array;
+    recordAuthorizationHashes?: boolean;
+  } = {}) {
+    this.nodePrivateKey = options.nodePrivateKey?.slice() ?? new Uint8Array(32).fill(17);
+    this.nodeId = didKeyFromPublicKey(ed25519.getPublicKey(this.nodePrivateKey));
+    this.networkKeyPair = this.wasm.vault_x25519_from_seed(
+      options.networkSeed?.slice() ?? new Uint8Array(32).fill(23),
+    );
+    this.redirectOnInvokeTo = undefined;
+    this.recordAuthorizationHashes = options.recordAuthorizationHashes ?? true;
     this.server = createServer(async (incoming, outgoing) => {
       try {
         const chunks: Buffer[] = [];
         for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
         const body = Buffer.concat(chunks);
         const authorization = incoming.headers.authorization;
+        const method = incoming.method ?? "GET";
+        const path = new URL(incoming.url ?? "/", "http://loopback").pathname;
+        this.requestSummaryLog.push({
+          method,
+          path,
+          authorizationPresent: typeof authorization === "string",
+        });
         this.requestLog.push({
-          method: incoming.method ?? "GET",
-          path: new URL(incoming.url ?? "/", "http://loopback").pathname,
-          ...(typeof authorization === "string"
+          method,
+          path,
+          ...(typeof authorization === "string" && this.recordAuthorizationHashes
             ? { authorizationSha256: hermeticAuthorizationSha256(authorization) }
             : {}),
         });
@@ -210,6 +235,15 @@ class LoopbackEncryptedNode {
             ...(body.length > 0 ? { body } : {}),
           },
         );
+        if (
+          this.redirectOnInvokeTo !== undefined &&
+          request.method === "POST" &&
+          new URL(request.url).pathname === "/invoke"
+        ) {
+          outgoing.writeHead(307, { location: new URL("/invoke", this.redirectOnInvokeTo).toString() });
+          outgoing.end();
+          return;
+        }
         const response = await this.handle(request);
         if (this.stalledResponses.has(response)) {
           // A 404 whose body never finishes: headers and a first chunk only.
@@ -271,6 +305,13 @@ class LoopbackEncryptedNode {
 
   configureKv(spaceId: string, entries: Readonly<Record<string, unknown>>): void {
     this.kvData.set(spaceId.toLowerCase(), new Map(Object.entries(entries)));
+  }
+  requestSummary(): readonly HermeticRequestSummary[] {
+    return this.requestSummaryLog.map((request) => ({ ...request }));
+  }
+
+  redirectInvocationsTo(target: string | undefined): void {
+    this.redirectOnInvokeTo = target;
   }
 
   provisionKv(spaceId: string): void {
@@ -1057,6 +1098,8 @@ export interface HermeticEncryptedNode {
   }>;
   /** Every HTTP request received so far, in order. */
   requests(): readonly HermeticRequestRecord[];
+  requestSummary(): readonly HermeticRequestSummary[];
+  redirectInvocationsTo(target: string | undefined): void;
   /** Every capability of every verified `/invoke` invocation so far, in order. */
   invocations(): readonly HermeticInvocationRecord[];
   rejectRootRawCidActivations(refuse: boolean): void;
@@ -1121,14 +1164,25 @@ export async function createHermeticEncryptedNode(
     secretPayloadValue?: string;
     secretPresent?: boolean;
     ownerConnectorCapabilities?: boolean;
+    ownerPrivateKey?: string;
+    delegatePrivateKey?: string;
+    nodePrivateKey?: Uint8Array;
+    networkSeed?: Uint8Array;
+    nativeBearerPath?: string;
+    recordAuthorizationHashes?: boolean;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
-  const transport = new LoopbackEncryptedNode();
+  const transport = new LoopbackEncryptedNode({
+    nodePrivateKey: options.nodePrivateKey,
+    networkSeed: options.networkSeed,
+    recordAuthorizationHashes: options.recordAuthorizationHashes,
+  });
   await transport.ready();
-  const ownerRuntime = makeNode(transport.host, OWNER_PRIVATE_KEY, transport.wasm);
+  const ownerPrivateKey = options.ownerPrivateKey ?? OWNER_PRIVATE_KEY;
+  const ownerRuntime = makeNode(transport.host, ownerPrivateKey, transport.wasm);
   const delegateRuntime = makeNode(
     transport.host,
-    DELEGATE_PRIVATE_KEY,
+    options.delegatePrivateKey ?? DELEGATE_PRIVATE_KEY,
     transport.wasm,
     options.delegateSignStrategy,
   );
@@ -1293,7 +1347,7 @@ export async function createHermeticEncryptedNode(
       signature: ownerSession.signature,
       tinycloudHosts: [transport.host],
     },
-    ownerPrivateKey: OWNER_PRIVATE_KEY,
+    ownerPrivateKey,
     ownerDid,
     accountSpaceId,
     applicationsSpaceId,
@@ -1308,6 +1362,8 @@ export async function createHermeticEncryptedNode(
       kvWrites: transport.observed.kvWrites,
     }),
     requests: () => [...transport.requestLog],
+    requestSummary: () => transport.requestSummary(),
+    redirectInvocationsTo: (target) => transport.redirectInvocationsTo(target),
     invocations: () => [...transport.invocationLog],
     rejectRootRawCidActivations: (refuse) => transport.rejectRootRawCidActivations(refuse),
     failDelegate: (status) => transport.failDelegate(status),

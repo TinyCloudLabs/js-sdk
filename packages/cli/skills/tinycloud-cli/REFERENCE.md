@@ -403,6 +403,13 @@ tinycloud share revoke <id>                                               # bear
 tinycloud share history recover [--json]                                  # move an unreadable sender history aside (renamed, never deleted)
 ```
 
+Native bearer links are read only from the active profile's configured TinyCloud node. When no profile exists, receive uses the CLI's configured default node. To receive a link from another server, create a profile for the server you trust and select it for the receive:
+
+```bash
+tinycloud profile create <name> --host <server-url>
+tinycloud --profile <name> share receive <link>
+```
+
 **Artifact versions (pinned shares).** `--artifact <id|new>` stores the file as the next write-once version, `artifacts/<id>/versions/<n>/<file>` plus a `manifest.json` written last (file sha256 and size, parent, `--note`), in the owner's space. The share is pinned to that version: its delegation covers only that file and never carries `put`. Publishing the same bytes again to a bearer link returns the same version; changed content makes the next one. Publishing never overwrites an earlier version, but the node has no write-once ACL for the owner, so the owner (or anyone holding the owner's session) can overwrite a version file afterwards; the CLI will not, and the writes it makes use `If-None-Match: *`. Only addressed artifact shares detect such an overwrite (see Pin below); a bearer artifact share carries no digest and would deliver the new bytes. An addressed share stores ciphertext under a fresh random key each time, so every addressed publish is a new version, and `manifest.json` records only the sha256 of the stored ciphertext, never of the plaintext (an unsalted plaintext hash next to the ciphertext would let a reader of the space confirm a guess). `--artifact new` mints an id. JSON output adds `artifactId`, `version` and `mode` (`pinned`). `--action edit` on an artifact share is refused (a pinned version is read-only). An artifact share takes one file. Every artifact share pins one version; shares that follow later versions are not available yet. Profiles signed in before this feature need `auth login --device --manifest builtin:share-publishing` again, because the manifest now includes `artifacts/`.
 
 ```bash
