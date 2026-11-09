@@ -30,6 +30,7 @@
   },
   "changesets": [
     "courier-unknown-flags",
+    "kv-503-not-applied-failed",
     "openkey-public-session-key",
     "share-permanent-exit-2",
     "signout-local-first-fence",
