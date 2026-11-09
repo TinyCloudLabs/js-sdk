@@ -47,6 +47,9 @@ jobs:
       - name: Version packages
         run: bun changeset version --${{ github.event.inputs.version }}
 
+      - name: Install wasm-pack
+        uses: ./.github/actions/install-wasm-pack
+
       - name: Build packages
         run: bun run build
         env:
