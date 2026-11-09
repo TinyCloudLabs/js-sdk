@@ -170,15 +170,17 @@ test("tc-apps approvals explain exact capabilities and fall back for unrelated p
   const requester = await ownerDid(REQUESTER_KEY);
   await store.initializeTenant("approval-account");
   const records = {
-    service: "tinycloud.kv", space: "default", path: "xyz.tinycloud.agent-data/",
+    service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinyapps.books/",
     actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"],
   };
   const cases = [
     { permissions: [records], matches: true },
-    { permissions: [{ ...records, path: "xyz.tinycloud.agent-data/other/" }], matches: false },
+    { permissions: [{ ...records, path: "xyz.tinycloud.tinyapps.books/other/" }], matches: false },
     { permissions: [{ ...records, space: "other" }], matches: false },
     { permissions: [{ ...records, service: "tinycloud.sql" }], matches: false },
     { permissions: [{ ...records, actions: [...records.actions, "tinycloud.kv/metadata"] }], matches: false },
+    // The older whole-folder grant is no longer one of the connector's own scopes.
+    { permissions: [{ ...records, space: "default", path: "xyz.tinycloud.agent-data/" }], matches: false },
   ];
   for (const [index, { permissions, matches }] of cases.entries()) {
     const result = record(await store.decorateAuthorityResult("approval-account", [requester], {
