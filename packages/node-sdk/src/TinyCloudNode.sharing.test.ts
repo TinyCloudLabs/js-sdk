@@ -876,7 +876,7 @@ describe("TinyCloudNode sharing", () => {
     const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
     const primarySession = { spaceId: SPACE, verificationMethod: "did:key:zPrimary#zPrimary" };
     const grantSession = { spaceId: SPACE, verificationMethod: "did:key:zGrant#zGrant" };
-    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
+    Reflect.set(node, "_restoredTcSession", { spaceId: SPACE, verificationMethod: primarySession.verificationMethod });
     Reflect.set(node, "_serviceContext", { session: primarySession });
     Reflect.set(node, "findGrantForOperations", () => ({ provenance: "delegated", session: grantSession, operations: [] }));
     await expect(node.authorizeShareDeliveryV3({
