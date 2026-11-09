@@ -101,7 +101,7 @@ When no single key can be named, or the client was just connected in popup mode,
 
 `OPENKEY_KEY_MISSING` and `OPENKEY_KEY_AMBIGUOUS`: connect the configured client as the signed-in account
 (`await openkey.connect()`), or sign runtime grants with `tc.setRuntimePermissionSigner(...)`. Connecting it yourself in the
-click that starts sign-in avoids the extra click. A user closing the connect dialog rejects with OpenKey's own error. If
+click that starts sign-in avoids the extra click. A user closing the connect dialog rejects with `@openkey/sdk`'s own plain-object rejection `{ code: "USER_CANCELLED" }` (not an `Error`, and not an `OpenKeySigningKeyError`), so tell it apart from `OPENKEY_CONNECTED_RETRY`, which is an `OpenKeySigningKeyError`. A blocked popup rejects the same way with `{ code: "POPUP_BLOCKED" }`. If
 the session ends or changes (sign-out, another account) while a dialog is open, the grant is cancelled and nothing is
 signed. The two-click flow needs a client that keeps the connect result in `lastAuth`, as `@openkey/sdk` does.
 
