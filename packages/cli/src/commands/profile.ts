@@ -134,12 +134,38 @@ export function registerProfileCommand(program: Command): void {
         const isDefault = profileName === config.defaultProfile;
         const posture = resolveProfilePosture(p);
         const operatorType = resolveProfileOperatorType(p);
+        const profileDetails = {
+          name: p.name,
+          tinycloudRegistryUrl: p.tinycloudRegistryUrl,
+          host: p.host,
+          chainId: p.chainId,
+          spaceName: p.spaceName,
+          did: p.did,
+          sessionDid: p.sessionDid,
+          ownerDid: p.ownerDid,
+          ownerKeyPrimary: p.ownerKeyPrimary,
+          spaceId: p.spaceId,
+          defaultSpace: p.defaultSpace,
+          createdAt: p.createdAt,
+          posture,
+          operatorType,
+          authMethod: p.authMethod,
+          authSignedOut: p.authSignedOut,
+          legacyReplicaCleanup: p.legacyReplicaCleanup,
+          address: p.address,
+          openkeyHost: p.openkeyHost,
+          autoDiscoverLocalNode: p.autoDiscoverLocalNode,
+          localNodeUrl: p.localNodeUrl,
+          localLinkName: p.localLinkName,
+          expectedNodeDid: p.expectedNodeDid,
+          pinnedLocalNodeDids: p.pinnedLocalNodeDids,
+          namedKeys: p.namedKeys,
+          replication: p.replication,
+        };
 
         if (shouldOutputJson()) {
           outputJson({
-            ...p,
-            posture,
-            operatorType,
+            ...profileDetails,
             hasKey,
             hasSession,
             isDefault,
