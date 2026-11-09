@@ -30,6 +30,8 @@ import {
 import { parseNetworkId } from "./networkId";
 import { generateRandomReceiverKey } from "./receiverKey";
 import { openWrappedKey, verifyDecryptResponse } from "./response";
+import { validateEnvelopeKeyWrap } from "./envelope";
+import { KEY_WRAP_V2_ALG, sealKeyV2 } from "./keyWrap";
 import {
   formatKeyResource,
   KEY_BLOCK_ABILITY,
@@ -246,6 +248,8 @@ export interface NamedKeyInvocationInput {
 export interface NamedKeyClientConfig {
   host: string;
   crypto: EncryptionCrypto;
+  /** Write TCW2 wraps; disabled by default. */
+  keyWrapV2?: boolean;
   fetch: typeof fetch;
   /** Network used when a call does not name one. */
   defaultNetworkId: () => string;
@@ -271,6 +275,7 @@ export interface KeyCallOptions {
 }
 
 export interface KeyEncryptOptions extends KeyCallOptions {
+  keyWrapV2?: boolean;
   aad?: Uint8Array;
   metadata?: Record<string, string>;
 }
@@ -664,16 +669,20 @@ export class NamedKeyClient {
     const { crypto } = this.config;
     const symmetricKey = crypto.randomBytes(32);
     const ciphertext = crypto.authEncrypt(symmetricKey, plaintext, options?.aad);
-    const wrapped = crypto.sealToNetworkKey(
-      base64Decode(descriptor.publicEncryptionKey),
-      symmetricKey,
-    );
+    const keyWrapV2 = options?.keyWrapV2 ?? this.config.keyWrapV2 ?? false;
+    const publicKey = base64Decode(descriptor.publicEncryptionKey);
+    const wrapped = keyWrapV2
+      ? sealKeyV2(publicKey, symmetricKey, {
+        purpose: "network-key", networkId: descriptor.networkId, keyPath: descriptor.keyPath,
+        keyVersion: descriptor.keyVersion, metadata: options?.metadata ?? {},
+      })
+      : crypto.sealToNetworkKey(publicKey, symmetricKey);
     const encryptedSymmetricKey = base64Encode(wrapped);
     return {
       v: NAMED_KEY_ENVELOPE_VERSION,
       networkId: descriptor.networkId,
       keyPath: descriptor.keyPath,
-      alg: descriptor.alg ?? DEFAULT_ENCRYPTION_ALG,
+      alg: keyWrapV2 ? KEY_WRAP_V2_ALG : DEFAULT_ENCRYPTION_ALG,
       keyVersion: descriptor.keyVersion,
       encryptedSymmetricKey,
       encryptedSymmetricKeyHash: canonicalHashHex(crypto.sha256, encryptedSymmetricKey),
@@ -763,6 +772,11 @@ export class NamedKeyClient {
         "envelope.encryptedSymmetricKeyHash does not match encryptedSymmetricKey",
       );
     }
+    try {
+      validateEnvelopeKeyWrap(e as unknown as NamedKeyEnvelope);
+    } catch (error) {
+      throw new NamedKeyError("INVALID_ENVELOPE", "Envelope key wrap context is invalid", { cause: error });
+    }
     return e as unknown as NamedKeyEnvelope;
   }
 
@@ -826,7 +840,10 @@ export class NamedKeyClient {
     if (!verified.ok) {
       throw new NamedKeyError("INVALID_RESPONSE", safeEcho(verified.error.message), { cause: verified.error });
     }
-    const symmetricKey = openWrappedKey(crypto, receiverKey.privateKey, verified.data);
+    const symmetricKey = openWrappedKey(crypto, receiverKey.privateKey, verified.data, {
+      purpose: "receiver-key", networkId: body.networkId, keyPath: body.keyPath,
+      keyVersion: body.keyVersion, metadata: {},
+    });
     try {
       return crypto.authDecrypt(
         symmetricKey,

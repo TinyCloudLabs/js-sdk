@@ -120,3 +120,9 @@ export {
   type ReceiverKeyPair,
   type ReceiverKeySigner,
 } from "./types";
+
+export {
+  KEY_WRAP_V2_ALG, sealKeyV2, openKeyV2, readKeyWrapV2, isKeyWrapV2,
+  assertKeyWrapAlgorithm, assertKeyWrapContext, decryptColumn,
+  type KeyWrapContext, type KeyWrapV2Header, type ColumnFormat,
+} from "./keyWrap";

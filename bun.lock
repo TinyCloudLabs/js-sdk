@@ -376,6 +376,9 @@
       "name": "@tinycloud/sdk-services",
       "version": "3.12.0-beta.8",
       "dependencies": {
+        "@noble/ciphers": "1.3.0",
+        "@noble/curves": "^1.9.7",
+        "@noble/hashes": "1.8.0",
         "@tinycloud/bootstrap": "2.8.0",
         "zod": "^3.23.0",
       },

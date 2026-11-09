@@ -104,6 +104,8 @@ export interface DecryptTransport {
 export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
+  /** Write TCW2 key wraps. Disabled by default; reads accept both versions. */
+  keyWrapV2?: boolean;
   crypto: EncryptionCrypto;
   signer: DecryptInvocationSigner;
   transport: DecryptTransport;
@@ -180,7 +182,8 @@ export class EncryptionService
         networkPublicKey,
         plaintext,
         ...(options?.aad !== undefined ? { aad: options.aad } : {}),
-        alg: options?.alg ?? descriptor.alg,
+        keyWrapV2: options?.keyWrapV2 ?? this._config.keyWrapV2 ?? false,
+        ...(options?.alg !== undefined ? { alg: options.alg } : {}),
         keyVersion: options?.keyVersion ?? descriptor.keyVersion,
         ...(options?.metadata !== undefined ? { metadata: options.metadata } : {}),
       });
@@ -359,6 +362,7 @@ export class EncryptionService
         this.crypto,
         receiverKey.privateKey,
         verified.data,
+        { purpose: "receiver-key", networkId: body.networkId, keyPath: body.keyPath ?? "", keyVersion: body.keyVersion, metadata: {} },
       );
       const plaintext = decryptEnvelopeWithKey(
         this.crypto,
