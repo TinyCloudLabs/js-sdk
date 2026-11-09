@@ -42,6 +42,7 @@ import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-
 import { validateTc2582PublicSessionKeyTransition } from "./replica-size-policy";
 import { validateTc2281OpenKeyConnectedKeyIdTransition } from "./replica-size-policy";
 import { validateTc2594ResourceTransportTransition } from "./replica-size-policy";
+import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
@@ -608,6 +609,13 @@ if (prBaseSha) {
   if (resourceTransport !== undefined && baseLedger.tc2594ResourceTransport === undefined &&
       (baseLedger.tc2281OpenKeyConnectedKeyId === undefined || !hasAncestor(repoRoot, resourceTransport.sourceCommits.at(-1)!))) {
     console.error("The TC-2594 root ratchet requires the merged TC-2281 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2657RegistryPublicationTransition(baseLedger.tc2657RegistryPublication, ledger.tc2657RegistryPublication);
+  const registryPublication = ledger.tc2657RegistryPublication;
+  if (registryPublication !== undefined && baseLedger.tc2657RegistryPublication === undefined &&
+      (baseLedger.tc2594ResourceTransport === undefined || !hasAncestor(repoRoot, registryPublication.sourceCommits.at(-1)!))) {
+    console.error("The TC-2657 root ratchet requires the merged TC-2594 row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

@@ -62,6 +62,7 @@ import { validateTc2481OfflineReplicaTransportTransition } from "./replica-size-
 import { approvedTc2582PublicSessionKey, validateTc2582PublicSessionKeyTransition } from "./replica-size-policy";
 import { approvedTc2281OpenKeyConnectedKeyId, validateTc2281OpenKeyConnectedKeyIdTransition } from "./replica-size-policy";
 import { approvedTc2594ResourceTransport, validateTc2594ResourceTransportTransition } from "./replica-size-policy";
+import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 // Historical cases keep the earlier root-only admission and its original cumulative budget.
@@ -71,6 +72,7 @@ delete current.tc2481OfflineReplicaTransport;
 delete current.tc2582PublicSessionKey;
 delete current.tc2281OpenKeyConnectedKeyId;
 delete current.tc2594ResourceTransport;
+delete current.tc2657RegistryPublication;
 current.entries = current.entries.filter((entry) => entry.pr !== "#873");
 current.allowance["index.mjs"] = 388;
 
@@ -4792,6 +4794,7 @@ const finalTransportLedger = () => {
   delete ledger.tc2582PublicSessionKey;
   delete ledger.tc2281OpenKeyConnectedKeyId;
   delete ledger.tc2594ResourceTransport;
+  delete ledger.tc2657RegistryPublication;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
   ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
   ledger.entries.push({
@@ -4951,6 +4954,7 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
   const row = () => structuredClone(approvedTc2281OpenKeyConnectedKeyId);
   const throughTc2281 = copy(shipped);
   delete throughTc2281.tc2594ResourceTransport;
+  delete throughTc2281.tc2657RegistryPublication;
 
   it("is the newest root row, exactly the TC-2582 caps plus the measured delta, with no owned charge", () => {
     expect(() => validateLedger(throughTc2281)).not.toThrow();
@@ -4999,10 +5003,13 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
 });
 
 describe("TC-2594 resource transport root-only admission (#891)", () => {
+  const throughTc2594 = copy(shipped);
+  delete throughTc2594.tc2657RegistryPublication;
+
   it("admits the measured root assets and refuses one additional byte", () => {
-    validateLedger(shipped);
+    validateLedger(throughTc2594);
     for (const [format, measured] of [["index.mjs", 1495129], ["index.cjs", 1436672]] as const) {
-      const ceiling = rootCeilingFor(shipped, format).ceiling;
+      const ceiling = rootCeilingFor(throughTc2594, format).ceiling;
       expect(measured <= ceiling).toBe(true);
       expect(measured + 1 > ceiling).toBe(true);
     }
@@ -5041,5 +5048,51 @@ describe("TC-2594 resource transport root-only admission (#891)", () => {
     expect(() => validateTc2594ResourceTransportTransition(undefined, changed)).toThrow("TC-2594");
     expect(() => validateTc2594ResourceTransportTransition(row, changed)).toThrow("TC-2594");
     expect(() => validateTc2594ResourceTransportTransition(row, undefined)).toThrow("TC-2594");
+  });
+});
+
+describe("TC-2657 explicit publication root-only admission (#902)", () => {
+  it("admits the publication root sizes and refuses one additional byte", () => {
+    validateLedger(shipped);
+    for (const [format, measured] of [["index.mjs", 1495567], ["index.cjs", 1437035]] as const) {
+      const ceiling = rootCeilingFor(shipped, format).ceiling;
+      expect(measured <= ceiling).toBe(true);
+      expect(measured + 1 > ceiling).toBe(true);
+    }
+  });
+
+  it("rejects changed bytes, provenance, non-root buckets and a missing merged prerequisite", () => {
+    const mutations: Array<(row: LogoutRatchet) => void> = [
+      (row) => { row.root.ceiling["index.mjs"]++; },
+      (row) => { row.root.ceiling["index.cjs"]++; },
+      (row) => { row.root.delta["index.mjs"]++; },
+      (row) => { row.base = "0".repeat(40); },
+      (row) => { row.sourceCommits[0] = "0".repeat(40); },
+      (row) => { row.canonicalCI.jobs.pop(); },
+      (row) => { row.ruling += " unapproved headroom"; },
+      (row) => { Object.assign(row, { worker: { delta: 1, ceiling: 777150 } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      mutate(changed.tc2657RegistryPublication!);
+      expect(() => validateLedger(changed)).toThrow("TC-2657");
+    }
+    const missing = copy(shipped);
+    delete missing.tc2594ResourceTransport;
+    expect(() => validateLedger(missing)).toThrow("TC-2657");
+  });
+
+  it("admits its exact transition once and refuses mutation or removal afterwards", () => {
+    const row = structuredClone(shipped.tc2657RegistryPublication!);
+    expect(ancestryPins(shipped, false)).toContainEqual({
+      row: "tc2657RegistryPublication", pin: row.sourceCommits.at(-1)!,
+    });
+    expect(() => validateTc2657RegistryPublicationTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2657RegistryPublicationTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2657RegistryPublicationTransition(undefined, changed)).toThrow("TC-2657");
+    expect(() => validateTc2657RegistryPublicationTransition(row, changed)).toThrow("TC-2657");
+    expect(() => validateTc2657RegistryPublicationTransition(row, undefined)).toThrow("TC-2657");
   });
 });
