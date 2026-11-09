@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { cachingFetch } from "./release-cache-fetch.js";
+import type { FetchLike } from "./node-fetch.js";
 import { buildArchivePins, type UpstreamRelease } from "./node-release-pin.js";
 import { NODE_TARGETS } from "./node-release.js";
 
@@ -14,7 +15,7 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const counting = (responses: Response[]) => {
   const calls: string[] = [];
-  const inner = async (url: string) => { calls.push(url); return responses[Math.min(calls.length - 1, responses.length - 1)]!.clone(); };
+  const inner = (async (url: string) => { calls.push(url); return responses[Math.min(calls.length - 1, responses.length - 1)]!.clone(); }) as unknown as FetchLike;
   return { calls, inner };
 };
 const always = () => true;
