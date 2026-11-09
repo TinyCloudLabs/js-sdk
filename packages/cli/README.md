@@ -93,6 +93,8 @@ The preview lists the complete resulting account, server identities, spaces and 
 
 **Published settings are public:** anyone who knows the account ID can look up its servers and plaintext space names. Review the preview before approving. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
 
+The confirmation includes the public-lookup warning once. The marker legend appears only when a space is marked. If the selected settings are already published, the command says nothing changed and JSON returns `published: true, changed: false`; it sends no additional PUT. A real update returns `changed: true`. Both modes still save the verified local copy, and no-change output keeps the disclosure.
+
 A space absent from a registered account's published settings refuses instead of falling back to another server. Include every space this account needs; existing published spaces not named in this command remain intact. Publication does not create a space, host data, grant permission, or move existing data.
 
 The command checks both public server identity surfaces, merges only the selected memberships, signs with the account's own key, and advances the existing sequence. An agent/session key cannot substitute for the owner's key. Malformed/absent known records, rollback, invalid signatures and conflicting updates refuse without an automatic write retry. After a conflict, run the command again without `--yes` to review fresh settings; `registry show` only reads the saved local copy.

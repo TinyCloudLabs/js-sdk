@@ -36,21 +36,24 @@ async function nodeAt(value: string, option: "--server" | "--decryption-server")
   return { did: info.nodeId, url };
 }
 
-function preview(payload: Readonly<LocationRecordV2Payload>, current: Readonly<LocationRecordV2> | null): void {
+function preview(payload: Readonly<LocationRecordV2Payload>, current: Readonly<LocationRecordV2> | null, includeDisclosure: boolean): void {
   const quote = (value: string) => JSON.stringify(value);
   const nodes = new Map(payload.nodes.map((node) => [node.did, node.url]));
   process.stderr.write(`Account: ${quote(payload.subject)}\nStorage servers:\n`);
   for (const node of payload.nodes) process.stderr.write(`  ${quote(node.url)}, server ID ${quote(node.did)}\n`);
   process.stderr.write("Spaces:\n");
+  let hasChanges = false;
   for (const entry of payload.spaces) {
     const previous = current?.spaces.find(({ space }) => space === entry.space);
     const changed = !previous || JSON.stringify([...previous.nodes].sort((a, b) => a.did.localeCompare(b.did))) !==
       JSON.stringify([...entry.nodes].sort((a, b) => a.did.localeCompare(b.did)));
+    hasChanges ||= changed;
     process.stderr.write(`  ${quote(entry.space)}${changed ? " *" : ""}\n`);
     for (const node of entry.nodes) process.stderr.write(`    ${quote(nodes.get(node.did)!)} (${node.mode === "read-write" ? "read and write" : "read only"})\n`);
   }
-  process.stderr.write("* new or changed\n");
-  process.stderr.write(`Decryption service: ${payload.encryptionNode === null ? "none" : quote(nodes.get(payload.encryptionNode)!)}\n${EFFECT}\n${DISCLOSURE}\n`);
+  if (hasChanges) process.stderr.write("* new or changed\n");
+  process.stderr.write(`Decryption service: ${payload.encryptionNode === null ? "none" : quote(nodes.get(payload.encryptionNode)!)}\n${EFFECT}\n`);
+  if (includeDisclosure) process.stderr.write(`${DISCLOSURE}\n`);
 }
 
 export function registerRegistryPublishCommand(registry: Command): void {
@@ -95,7 +98,7 @@ export function registerRegistryPublishCommand(registry: Command): void {
             ...(encryptionNode === undefined ? {} : { encryptionNode }),
             cacheStore: cache, sequenceStore: sequences,
             onPrepared: async (payload, current) => {
-              preview(payload, current);
+              preview(payload, current, options.yes === true);
               previewShown = true;
               if (options.yes) return true;
               const terminal = createInterface({ input: process.stdin, output: process.stderr });
@@ -106,7 +109,7 @@ export function registerRegistryPublishCommand(registry: Command): void {
               } finally { terminal.close(); }
             },
           });
-          if (!previewShown) preview(record, record);
+          if (!previewShown) preview(record, record, true);
           // Publication has already happened. Report that fact even if local persistence fails.
           const ownerKey = registryOwnerKeyV2(subject);
           try {
@@ -121,10 +124,12 @@ export function registerRegistryPublishCommand(registry: Command): void {
           } catch {
             throw new CLIError("REGISTRY_CACHE_WRITE_FAILED", "Storage settings were published, but this computer couldn't save its copy. Run this command again to save it.");
           }
-          return { published: true, record, disclosure: DISCLOSURE, effect: EFFECT };
+          return { published: true, changed: previewShown, record, disclosure: DISCLOSURE, effect: EFFECT };
         });
         if (shouldOutputJson()) outputJson(result);
-        else process.stdout.write("Published this account's storage settings.\n");
+        else process.stdout.write(result.changed
+          ? "Published this account's storage settings.\n"
+          : "These storage settings are already published. Nothing changed.\n");
       } catch (error) {
         if (error && typeof error === "object" && "status" in error && error.status === 409) return handleError(new CLIError("REGISTRY_CONFLICT", CONFLICT));
         return handleError(error);
