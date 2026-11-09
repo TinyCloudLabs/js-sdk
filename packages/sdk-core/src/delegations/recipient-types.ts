@@ -1,4 +1,4 @@
-import type { FetchFunction, IKVService, InvokeFunction, Result, ServiceError, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
+import type { FetchFunction, IKVService, InvokeFunction, ResourceTransport, Result, ServiceError, ServiceHeaders, ServiceSession } from "@tinycloud/sdk-services";
 import type { ShareAction, ShareCapabilityLike, ShareEnvelopeV2, ShareLinkLocation, ShareResource, ShareRecipientTarget } from "./share-envelope";
 import type { PortableDelegation } from "./portable";
 
@@ -121,6 +121,7 @@ export interface ShareRecipientPolicy {
 export interface ShareRecipientClientOptions {
   readonly trustedOrigins: readonly string[];
   readonly fetch?: FetchFunction;
+  readonly resourceTransport?: ResourceTransport;
   readonly invoke?: InvokeFunction;
   readonly createKVService?: (config: {
     hosts: string[];

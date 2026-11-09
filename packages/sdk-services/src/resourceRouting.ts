@@ -1,16 +1,41 @@
-import type { FetchFunction, FetchResponse, ServiceHeaders } from "./types";
+import type { FetchFunction, FetchResponse, ServiceHeaders, ServiceSession } from "./types";
 
 export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
+export interface ResourceNodeInfo { readonly nodeId: string; readonly features?: unknown }
 export interface ResourceRoutingConfig {
   resolveResource(resource: string, access: ResourceAccess): Promise<readonly ResourceDestination[]>;
   bindAudience(authorization: string, nodeDid: string): Promise<string>;
   /** Defaults to the raw transport's public node identity checks. */
-  verifyDestination?(target: ResourceDestination): Promise<void>;
+  verifyDestination?(target: ResourceDestination): Promise<void | ResourceNodeInfo>;
 }
 
+/** An identity-checked destination bound to one live resource-routing decision. */
+export interface ResourceTransportTarget {
+  readonly url: string;
+  readonly nodeDid: string;
+  readonly fetch: FetchFunction;
+  readonly nodeInfo: ResourceNodeInfo;
+  bindAudience(authorization: string): Promise<string>;
+}
+export interface ResourceTransportOptions {
+  /** CID-only controls are node-local and must not choose among several destinations. */
+  readonly nodeLocal?: boolean;
+  /** An existing node-bound authority must match the resolved destination. */
+  readonly nodeDid?: string;
+  /** A verified imported grant activates its resources independently, not atomically. */
+  readonly independentResources?: boolean;
+  /** Captured, verified share-session key for its own locally created invocations. */
+  readonly invocationSession?: ServiceSession;
+}
+export type ResourceTransport = (
+  resources: readonly { resource: string; access: ResourceAccess }[],
+  send: (target: ResourceTransportTarget) => Promise<FetchResponse>,
+  options?: ResourceTransportOptions,
+) => Promise<FetchResponse>;
+
 /** Compare both public node identity surfaces before sending a capability. */
-export async function verifyResourceDestination(target: ResourceDestination, fetchFn: FetchFunction): Promise<void> {
+export async function verifyResourceDestination(target: ResourceDestination, fetchFn: FetchFunction): Promise<ResourceNodeInfo | undefined> {
   if (!target.nodeDid) return;
   let info: unknown;
   let keys: unknown;
@@ -36,6 +61,7 @@ export async function verifyResourceDestination(target: ResourceDestination, fet
   if (infoDid !== target.nodeDid || keysDid !== target.nodeDid) {
     throw new NodeIdentityMismatchError(target.url, target.nodeDid, infoDid !== target.nodeDid ? infoDid : keysDid);
   }
+  return info as ResourceNodeInfo;
 }
 
 export class NodeNotRespondingError extends Error {
@@ -111,6 +137,19 @@ function authorizationOf(headers: ServiceHeaders | undefined): string | undefine
   return (Array.isArray(headers) ? headers : Object.entries(headers)).find(([name]) => name.toLowerCase() === "authorization")?.[1];
 }
 
+/** Extract the signed resource without inferring an account for node-local names. */
+export function routingResourceOf(uri: string): string {
+  if (uri.startsWith("tinycloud://")) {
+    const resource = uri.slice("tinycloud://".length).split("/", 1)[0];
+    if (resource) return resource;
+  } else if (uri.startsWith("urn:tinycloud:encryption:")) {
+    return uri;
+  } else if (uri.startsWith("tinycloud:")) {
+    return uri.split("/", 1)[0]!;
+  }
+  throw new ResourceNotRoutedError(uri);
+}
+
 function invocationResources(authorization: string): Array<{ resource: string; access: ResourceAccess }> {
   const encoded = authorization.split(".")[1];
   if (!encoded) throw new ResourceNotRoutedError("invalid invocation");
@@ -122,8 +161,7 @@ function invocationResources(authorization: string): Array<{ resource: string; a
   for (const [uri, abilities] of Object.entries(payload.att)) {
     if (typeof abilities !== "object" || abilities === null || Array.isArray(abilities)) throw new ResourceNotRoutedError(uri);
     for (const action of Object.keys(abilities)) {
-      const resource = uri.startsWith("tinycloud:") ? uri.split("/")[0] : uri;
-      if (!resource.startsWith("tinycloud:") && !resource.startsWith("urn:tinycloud:encryption:")) throw new ResourceNotRoutedError(uri);
+      const resource = routingResourceOf(uri);
       // Only named, known read abilities are reads. Unknown abilities must not broaden a read-only membership.
       const read = /^(tinycloud\.(kv\/(get|list|metadata|head|sync)|sql\/(read|export)|duckdb\/(read|describe|export)|capabilities\/read|space\/(list|info)|hooks\/list))$/.test(action);
       const access: ResourceAccess = resource.startsWith("urn:tinycloud:encryption:") ? "encryption" : action === "tinycloud.space/host" ? "host" : read ? "read" : "write";
@@ -134,6 +172,89 @@ function invocationResources(authorization: string): Array<{ resource: string; a
   return resources;
 }
 
+/** Share target selection and read/write outcomes with resource-specific adapters. */
+export async function routeResourceRequest(
+  resources: readonly { resource: string; access: ResourceAccess }[],
+  routing: Pick<ResourceRoutingConfig, "resolveResource">,
+  send: (target: ResourceDestination) => Promise<FetchResponse>,
+  options?: ResourceTransportOptions,
+): Promise<FetchResponse> {
+  if (resources.length === 0) throw new ResourceNotRoutedError("empty request");
+  const routes = await Promise.all(resources.map(({ resource, access }) => routing.resolveResource(resource, access)));
+  if (routes.some((route) => route.length === 0)) throw new ResourceNotRoutedError(resources[routes.findIndex((route) => route.length === 0)].resource);
+  const write = options?.independentResources === true || resources.some(({ access }) => access === "write" || access === "host");
+  let targets: readonly ResourceDestination[];
+  if (options?.independentResources) {
+    targets = routes.flat();
+    const identities = new Map<string, string | undefined>();
+    for (const target of targets) {
+      if (identities.has(target.url) && identities.get(target.url) !== target.nodeDid) throw new ResourceNotRoutedError(target.url);
+      identities.set(target.url, target.nodeDid);
+    }
+  } else {
+    targets = routes[0].filter((target) => routes.every((route) => route.some((other) => other.url === target.url && other.nodeDid === target.nodeDid)));
+    // A single atomic operation cannot be split across different destination sets.
+    if (targets.length === 0 || (write && routes.some((route) => route.length !== targets.length))) throw new ResourceNotRoutedError(resources.map(({ resource }) => resource).join(", "));
+  }
+  targets = targets.filter((target, index) => targets.findIndex((other) => other.url === target.url) === index);
+  if (options?.nodeDid) targets = targets.filter((target) => target.nodeDid === options.nodeDid || target.nodeDid === undefined);
+  if (targets.length === 0 || (options?.nodeLocal && targets.length !== 1)) throw new ResourceNotRoutedError(resources.map(({ resource }) => resource).join(", "));
+  if (!write) {
+    let response: FetchResponse | undefined;
+    let failure: unknown;
+    for (const target of targets) {
+      try {
+        response = await send(target);
+        if (response.ok || response.status !== 404) return response;
+      } catch (error) {
+        if (!(error instanceof NodeNotRespondingError)) throw error;
+        failure = error;
+      }
+    }
+    if (failure) throw new NodeNotRespondingError(targets.map(({ url }) => url), failure);
+    if (response) return response;
+    throw new NodeNotRespondingError(targets.map(({ url }) => url), failure);
+  }
+  const succeeded: string[] = [];
+  const failed: Array<{ url: string; status?: number; cause?: unknown }> = [];
+  let response: FetchResponse | undefined;
+  let failureResponse: FetchResponse | undefined;
+  for (const target of targets) {
+    try {
+      const result = await send(target);
+      if (result.ok) { succeeded.push(target.url); response ??= result; }
+      else { failed.push({ url: target.url, status: result.status }); failureResponse ??= result; }
+    } catch (error) {
+      if (!routingFailure(error) && succeeded.length === 0) throw error;
+      failed.push({ url: target.url, cause: error });
+    }
+  }
+  if (failed.length > 0) {
+    if (succeeded.length > 0 || targets.length > 1) throw new PartialNodeWriteError(succeeded, failed);
+    if (failureResponse) return failureResponse;
+    if (failed[0]?.cause && !(failed[0].cause instanceof NodeNotRespondingError)) throw failed[0].cause;
+    throw new NodeNotRespondingError(targets.map(({ url }) => url), failed[0]?.cause);
+  }
+  return response!;
+}
+
+/** Route only locally generated data invocations through a captured share session. */
+export function createResourceTransportInvocationFetch(transport: ResourceTransport, session: ServiceSession): FetchFunction {
+  return async (url, init) => {
+    const parsed = new URL(url);
+    if (parsed.pathname !== "/invoke") throw new ResourceNotRoutedError(parsed.pathname);
+    const authorization = authorizationOf(init?.headers);
+    if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
+    return transport(invocationResources(authorization), async (target) => {
+      const signed = await target.bindAudience(authorization);
+      const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
+        .filter(([name]) => name.toLowerCase() !== "authorization");
+      headers.push(["Authorization", signed]);
+      return target.fetch(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
+    }, { invocationSession: session });
+  };
+}
+
 /** Route signed /invoke traffic. Non-invocation endpoints retain their own resource-specific adapters. */
 export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: ResourceRoutingConfig): FetchFunction {
   return async (url, init) => {
@@ -142,13 +263,6 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
     const resources = invocationResources(authorization);
-    const routes = await Promise.all(resources.map(({ resource, access }) => routing.resolveResource(resource, access)));
-    if (routes.some((route) => route.length === 0)) throw new ResourceNotRoutedError(resources[routes.findIndex((route) => route.length === 0)].resource);
-    const write = resources.some(({ access }) => access === "write" || access === "host");
-    let targets = routes[0].filter((target) => routes.every((route) => route.some((other) => other.url === target.url && other.nodeDid === target.nodeDid)));
-    // A single atomic invocation cannot be split into capabilities for different node sets.
-    if (targets.length === 0 || (write && routes.some((route) => route.length !== targets.length))) throw new ResourceNotRoutedError(resources.map(({ resource }) => resource).join(", "));
-    targets = targets.filter((target, index) => targets.findIndex((other) => other.url === target.url) === index);
     const send = async (target: ResourceDestination): Promise<FetchResponse> => {
       init?.signal?.throwIfAborted();
       if (routing.verifyDestination) await routing.verifyDestination(target);
@@ -166,42 +280,6 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
         throw new NodeNotRespondingError([target.url], error);
       }
     };
-    if (!write) {
-      let response: FetchResponse | undefined;
-      let failure: unknown;
-      for (const target of targets) {
-        try {
-          response = await send(target);
-          if (response.ok || response.status !== 404) return response;
-        } catch (error) {
-          if (!(error instanceof NodeNotRespondingError)) throw error;
-          failure = error;
-        }
-      }
-      if (failure) throw new NodeNotRespondingError(targets.map(({ url }) => url), failure);
-      if (response) return response;
-      throw new NodeNotRespondingError(targets.map(({ url }) => url), failure);
-    }
-    const succeeded: string[] = [];
-    const failed: Array<{ url: string; status?: number; cause?: unknown }> = [];
-    let response: FetchResponse | undefined;
-    let failureResponse: FetchResponse | undefined;
-    for (const target of targets) {
-      try {
-        const result = await send(target);
-        if (result.ok) { succeeded.push(target.url); response ??= result; }
-        else { failed.push({ url: target.url, status: result.status }); failureResponse ??= result; }
-      } catch (error) {
-        if (!routingFailure(error) && succeeded.length === 0) throw error;
-        failed.push({ url: target.url, cause: error });
-      }
-    }
-    if (failed.length > 0) {
-      if (succeeded.length > 0 || targets.length > 1) throw new PartialNodeWriteError(succeeded, failed);
-      if (failureResponse) return failureResponse;
-      if (failed[0]?.cause && !(failed[0].cause instanceof NodeNotRespondingError)) throw failed[0].cause;
-      throw new NodeNotRespondingError(targets.map(({ url }) => url), failed[0]?.cause);
-    }
-    return response!;
+    return routeResourceRequest(resources, routing, send);
   };
 }

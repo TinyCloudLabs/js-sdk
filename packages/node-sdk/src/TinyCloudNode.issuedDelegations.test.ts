@@ -10,7 +10,7 @@ import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signe
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 
 const HOST = "https://issued.example";
-const NODE_DID = "did:key:z6MkNodeFixtureOnly";
+const NODE_DID = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -36,6 +36,8 @@ describe("TinyCloudNode session-key invocations for issued delegations", () => {
       const url = String(input);
       const headers = new Headers(init?.headers);
       seen.push({ url, authorization: headers.get("authorization") ?? undefined, body: typeof init?.body === "string" ? init.body : undefined });
+      if (/^\/v[12]\/locations\/[^/]+$/.test(new URL(url).pathname)) return Response.json({ error: "location record not found" }, { status: 404 });
+      if (url.endsWith("/.well-known/tinycloud/node-keys")) return Response.json({ nodeDid: NODE_DID });
       if (url.endsWith("/info")) {
         return new Response(JSON.stringify({ nodeId: NODE_DID, features: ["delegation-issued-query-v1"] }), { status: 200 });
       }
@@ -47,7 +49,7 @@ describe("TinyCloudNode session-key invocations for issued delegations", () => {
     }) as unknown as typeof fetch;
 
     const proof = await signedRestorableSession();
-    const node = new TinyCloudNode({ signer: new PrivateKeySigner(PROOF_PRIVATE_KEY), wasmBindings: new NodeWasmBindings() });
+    const node = new TinyCloudNode({ host: HOST, tinycloudRegistryUrl: HOST, signer: new PrivateKeySigner(PROOF_PRIVATE_KEY), wasmBindings: new NodeWasmBindings() });
     await node.restoreSession({ ...proof, tinycloudHosts: [HOST] });
     const sessionDid = node.credentialHolderDid;
     // A SIWE-backed (owner) session carries a verified wallet address; the CLI reads that to refuse the delegate path.

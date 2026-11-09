@@ -37,10 +37,18 @@ afterAll(() => {
   registry?.stop(true);
 });
 
-function withRegistryMetadata(businessFetch: typeof fetch, registryFetch: typeof fetch): typeof fetch {
-  return ((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = input instanceof Request ? input.url : String(input);
-    if (url.startsWith(`${registry.url.origin}/`)) return registryFetch(input, init);
+function withRegistryMetadata(
+  businessFetch: typeof fetch,
+  registryFetch: typeof fetch,
+  identity?: { origin: string; nodeDid: string },
+): typeof fetch {
+  return mock((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === registry.url.origin) return registryFetch(input, init);
+    if (identity && url.origin === identity.origin && (init?.method ?? "GET") === "GET") {
+      if (url.pathname === "/info") return Response.json({ nodeId: identity.nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: identity.nodeDid });
+    }
     return businessFetch(input, init);
   }) as typeof fetch;
 }
@@ -349,7 +357,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
-    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch);
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -457,7 +465,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
         return new Response(`Unauthorized Action: ${networkId} / tinycloud.encryption/decrypt`, { status });
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
-    }) as typeof fetch, originalFetch);
+    }) as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encrypted = await (node as any).createEncryptionService().encryptToNetwork(
@@ -1722,21 +1730,25 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
     await node.restoreSession(proof);
     const bindings = (node as any).wasmBindings;
     const originalInvokeAny = bindings.invokeAny;
-    const queryInvokeAny = mock((..._args: any[]) => ({ Authorization: "restored-query" }));
+    const queryInvokeAny = mock(originalInvokeAny.bind(bindings));
     bindings.invokeAny = queryInvokeAny;
-    (node.delegationManager as any).fetchFn = mock(async () => new Response(JSON.stringify({
-      schemaVersion: 2,
-      items: [],
-    }), { headers: { "content-type": "application/json" } }));
-    const restoredQuery = await node.delegationManager.query();
-    expect(restoredQuery.ok).toBe(true);
-    expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
-      spaceId: node.accountSpaceId,
-      service: "delegation",
-      path: "",
-      action: "tinycloud.delegation/list",
-    }]);
-    bindings.invokeAny = originalInvokeAny;
+    const queryFetch = globalThis.fetch;
+    globalThis.fetch = withRegistryMetadata(mock(async () => Response.json({
+      schemaVersion: 2, items: [],
+    })) as typeof fetch, queryFetch, { origin: "http://127.0.0.1:1", nodeDid: node.did });
+    try {
+      const restoredQuery = await node.delegationManager.query();
+      expect(restoredQuery.ok).toBe(true);
+      expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
+        spaceId: node.accountSpaceId,
+        service: "delegation",
+        path: "",
+        action: "tinycloud.delegation/list",
+      }]);
+    } finally {
+      globalThis.fetch = queryFetch;
+      bindings.invokeAny = originalInvokeAny;
+    }
     expect(node.getVerifiedSessionCapabilities()).toEqual([{
       service: "tinycloud.encryption",
       space: spaceId,
@@ -2261,7 +2273,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
         headers: { "Content-Type": "application/json" },
       }),
     );
-    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch);
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -2376,7 +2388,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
 
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
-    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch);
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();

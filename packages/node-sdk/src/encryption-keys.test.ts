@@ -178,6 +178,8 @@ test("network-admin and key-admin facts hash their sent bodies with the same rul
       expect(new Headers(init?.headers).has("authorization")).toBe(false);
       return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
     }
+    if (url.origin === HOST && url.pathname === "/info") return Response.json({ nodeId: NODE_DID });
+    if (url.origin === HOST && url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     sent.push(String(init?.body));
     return new Response(JSON.stringify({ descriptor: {} }), { status: 200 });
   }) as typeof fetch;

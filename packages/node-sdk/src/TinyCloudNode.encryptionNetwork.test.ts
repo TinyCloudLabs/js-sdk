@@ -4,10 +4,11 @@ import { expect, mock, test } from "bun:test";
 import { authorizationVerdictOf, type ISessionManager, type IWasmBindings } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { ownedNodeMetadata } from "./test-support/restored-policy-node";
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 const HOST = "https://tinycloud.test";
-const NODE_DID = "did:key:z6MkNodeUnderTest111111111111111111111111111";
+const NODE_DID = "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq";
 const DID = `did:pkh:eip155:1:${ADDRESS}`;
 const NETWORK_ID = `urn:tinycloud:encryption:${DID}:default`;
 
@@ -103,7 +104,7 @@ function withRecordedFetch<T>(
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     recorded.push({ method, url });
-    const response = handler(method, url);
+    const response = handler(method, url) ?? ownedNodeMetadata(input, init, HOST, NODE_DID);
     if (!response) throw new Error(`unexpected fetch: ${method} ${url}`);
     return response;
   }) as unknown as typeof fetch;

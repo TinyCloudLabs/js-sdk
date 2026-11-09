@@ -581,6 +581,9 @@ class LoopbackEncryptedNode {
         nodeId: this.nodeId,
       });
     }
+    if (url.pathname === "/.well-known/tinycloud/node-keys" && request.method === "GET") {
+      return this.json({ nodeDid: this.nodeId });
+    }
     if (url.pathname.startsWith("/peer/generate/") && request.method === "GET") {
       return new Response(this.nodeId, {
         headers: { "content-type": "text/plain" },
