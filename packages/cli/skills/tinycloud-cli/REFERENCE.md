@@ -403,7 +403,7 @@ tinycloud share revoke <id>                                               # bear
 tinycloud share history recover [--json]                                  # move an unreadable sender history aside (renamed, never deleted)
 ```
 
-Native bearer links are read only from the active profile's configured TinyCloud node. When no profile exists, receive uses the CLI's configured default node. To receive a link from another server, create a profile for the server you trust and select it for the receive:
+Bearer links are read through the active profile's configured TinyCloud server. When no profile exists, receive uses the CLI's default, `tee.node.tinycloud.xyz`. Links naming `node.tinycloud.xyz` or `tee.node.tinycloud.xyz` work with either server selected; both addresses serve the same TinyCloud node. To receive a link from another server, create a profile for the server you trust and select it for the receive:
 
 ```bash
 tinycloud profile create <name> --host <server-url>
