@@ -43937,8 +43937,154 @@ ${describeStatus(status)}
 init_errors();
 init_formatter();
 import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
+
+// src/commands/registry-publish.ts
+init_profiles();
+init_constants();
+init_types();
+init_errors();
+init_formatter();
+import { createInterface as createInterface7 } from "readline/promises";
+import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
+import {
+  DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
+  exactHttpOrigin,
+  principalDidEquals as principalDidEquals4,
+  registryOwnerKeyV2,
+  verifyRegistryCacheEntry
+} from "@tinycloud/sdk-core";
+import { boundedResponseBytes, publishLocationRecordV2 } from "@tinycloud/sdk-core/registry-publication";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore5, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore5 } from "@tinycloud/operations/state";
+var DISCLOSURE = "Anyone who knows your account ID can look up these server addresses and space names.";
+var EFFECT = "After this, a space that isn't in your storage settings stops with an error instead of using another server.";
+var CONFLICT = "These storage settings changed before they could be published. Run this command again without --yes to review the latest settings.";
+async function nodeAt(value4, option) {
+  const url = exactHttpOrigin(value4, "storage server URL");
+  const unavailable = () => new CLIError("SERVER_IDENTITY_UNAVAILABLE", `Couldn't check this storage server, so nothing was published. Check the ${option} address and try again.`);
+  const invalid4 = () => new CLIError("SERVER_IDENTITY_INVALID", `This doesn't look like a TinyCloud storage server, so nothing was published. Check the ${option} address.`);
+  let response;
+  try {
+    response = await fetch(`${url}/info`, { redirect: "error", signal: AbortSignal.timeout(5e3) });
+  } catch {
+    throw unavailable();
+  }
+  if (!response.ok || response.redirected) throw unavailable();
+  const bytes = await boundedResponseBytes(response, 64 * 1024);
+  if (bytes === null) throw invalid4();
+  let info;
+  try {
+    info = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw invalid4();
+  }
+  if (!info || typeof info !== "object" || !("nodeId" in info) || typeof info.nodeId !== "string") throw invalid4();
+  return { did: info.nodeId, url };
+}
+function preview(payload, current, includeDisclosure) {
+  const quote = (value4) => JSON.stringify(value4);
+  const nodes = new Map(payload.nodes.map((node) => [node.did, node.url]));
+  process.stderr.write(`Account: ${quote(payload.subject)}
+Storage servers:
+`);
+  for (const node of payload.nodes) process.stderr.write(`  ${quote(node.url)}, server ID ${quote(node.did)}
+`);
+  process.stderr.write("Spaces:\n");
+  let hasChanges = false;
+  for (const entry of payload.spaces) {
+    const previous = current?.spaces.find(({ space }) => space === entry.space);
+    const changed = !previous || JSON.stringify([...previous.nodes].sort((a, b) => a.did.localeCompare(b.did))) !== JSON.stringify([...entry.nodes].sort((a, b) => a.did.localeCompare(b.did)));
+    hasChanges ||= changed;
+    process.stderr.write(`  ${quote(entry.space)}${changed ? " *" : ""}
+`);
+    for (const node of entry.nodes) process.stderr.write(`    ${quote(nodes.get(node.did))} (${node.mode === "read-write" ? "read and write" : "read only"})
+`);
+  }
+  if (hasChanges) process.stderr.write("* new or changed\n");
+  process.stderr.write(`Decryption service: ${payload.encryptionNode === null ? "none" : quote(nodes.get(payload.encryptionNode))}
+${EFFECT}
+`);
+  if (includeDisclosure) process.stderr.write(`${DISCLOSURE}
+`);
+}
+function registerRegistryPublishCommand(registry) {
+  registry.command("publish").description("Sign and publish this account's storage settings, so TinyCloud knows which servers to use for your data.").argument("<space...>", "Spaces to include in these storage settings.").requiredOption("--server <url>", "Storage server to use for these spaces.").option("--read-only", "Use this server only for reading these spaces.").option("--decryption-server <url>", "Decryption service to use with these storage settings.").option("--yes", "Publish without asking. Anyone who knows your account ID can look up the server addresses and space names you list.").action(async (names, options, command) => {
+    try {
+      if (!options.yes && (!process.stdin.isTTY || !process.stderr.isTTY || command.optsWithGlobals().json)) {
+        throw new CLIError("CONFIRMATION_REQUIRED", "Publishing lets anyone who knows your account ID look up these server addresses and space names. Run this in a terminal to review them, or add --yes to publish without asking.");
+      }
+      const context2 = await ProfileManager.resolveContext({ ...command.optsWithGlobals(), host: options.server }, { storedSession: "unused" });
+      const result = await ProfileManager.withLock(context2.profile, async () => {
+        const profile = await ProfileManager.getProfile(context2.profile);
+        if (resolveProfilePosture(profile) !== "local-owner-key" || profile.authMethod !== "local" || !profile.privateKey || profile.authSignedOut) {
+          throw new CLIError("AUTH_REQUIRED", "This profile can't sign storage settings for this account. Use a profile that holds the account's own key (signed in with --method local).", ExitCode.AUTH_REQUIRED);
+        }
+        const signer = new PrivateKeySigner2(profile.privateKey);
+        const address = await signer.getAddress();
+        const subject = `did:pkh:eip155:${profile.chainId}:${address}`;
+        if (profile.ownerDid && !principalDidEquals4(profile.ownerDid, subject) || profile.address && profile.address.toLowerCase() !== address.toLowerCase()) {
+          throw new CLIError("AUTH_REQUIRED", "This profile can't sign storage settings for this account. Use a profile that holds the account's own key (signed in with --method local).", ExitCode.AUTH_REQUIRED);
+        }
+        const storage = await nodeAt(options.server, "--server");
+        const encryptionNode = options.decryptionServer === void 0 ? void 0 : await nodeAt(options.decryptionServer, "--decryption-server");
+        const cache5 = createProfileRegistryCacheStore5(context2.profile);
+        const sequences = createProfileRegistrySequenceStore5(context2.profile);
+        let previewShown = false;
+        const record3 = await publishLocationRecordV2({
+          registryUrl: context2.tinycloudRegistryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
+          subject,
+          signer: { type: "did:pkh", signMessage: (message) => signer.signMessage(message) },
+          memberships: names.map((name) => ({
+            space: name.startsWith("tinycloud:") ? name : `tinycloud:pkh:eip155:${profile.chainId}:${address.toLowerCase()}:${name}`,
+            node: storage,
+            mode: options.readOnly ? "read-only" : "read-write"
+          })),
+          ...encryptionNode === void 0 ? {} : { encryptionNode },
+          cacheStore: cache5,
+          sequenceStore: sequences,
+          onPrepared: async (payload, current) => {
+            preview(payload, current, options.yes === true);
+            previewShown = true;
+            if (options.yes) return true;
+            const terminal = createInterface7({ input: process.stdin, output: process.stderr });
+            try {
+              const answer = await terminal.question(`${DISCLOSURE} Publish these storage settings for this account? [y/N] `);
+              if (answer.trim().toLowerCase() !== "y") throw new CLIError("PUBLICATION_CANCELLED", "Nothing was published.");
+              return true;
+            } finally {
+              terminal.close();
+            }
+          }
+        });
+        if (!previewShown) preview(record3, record3, true);
+        const ownerKey = registryOwnerKeyV2(subject);
+        try {
+          await cache5.update(ownerKey, async (previous, revision) => {
+            if (previous) {
+              const accepted = await verifyRegistryCacheEntry(subject, ownerKey, previous);
+              if (accepted.sequence > record3.sequence) return previous;
+            }
+            await sequences.set(ownerKey, record3.sequence);
+            return { ownerKey, responseBody: JSON.stringify({ record: record3 }), fetchedAt: Date.now(), sequence: record3.sequence, revision };
+          });
+        } catch {
+          throw new CLIError("REGISTRY_CACHE_WRITE_FAILED", "Storage settings were published, but this computer couldn't save its copy. Run this command again to save it.");
+        }
+        return { published: true, changed: previewShown, record: record3, disclosure: DISCLOSURE, effect: EFFECT };
+      });
+      if (shouldOutputJson()) outputJson(result);
+      else process.stdout.write(result.changed ? "Published this account's storage settings.\n" : "These storage settings are already published. Nothing changed.\n");
+    } catch (error) {
+      if (error && typeof error === "object" && "status" in error && error.status === 409) return handleError(new CLIError("REGISTRY_CONFLICT", CONFLICT));
+      return handleError(error);
+    }
+  });
+}
+
+// src/commands/registry.ts
 function registerRegistryCommand(program) {
-  program.command("registry").description("See where your data is stored, from the copy saved on this computer").command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did, _options, command) => {
+  const registry = program.command("registry").description("See or publish your storage settings.");
+  registerRegistryPublishCommand(registry);
+  registry.command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did, _options, command) => {
     try {
       const options = command.optsWithGlobals();
       const result = await invokeOperation3("tinycloud.registry.show", 1, {
@@ -48682,7 +48828,7 @@ init_formatter();
 init_errors();
 init_constants();
 init_sdk();
-import { PrivateKeySigner as PrivateKeySigner2 } from "@tinycloud/node-sdk";
+import { PrivateKeySigner as PrivateKeySigner3 } from "@tinycloud/node-sdk";
 async function readStdin5() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -48702,7 +48848,7 @@ function resolvePrivateKey(options) {
   return key;
 }
 async function unlockVault(node, privateKey) {
-  const signer = new PrivateKeySigner2(privateKey);
+  const signer = new PrivateKeySigner3(privateKey);
   const result = await node.vault.unlock(signer);
   if (result && !result.ok) {
     throw cliErrorFromService(result.error);
