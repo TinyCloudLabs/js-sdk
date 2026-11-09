@@ -17,6 +17,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
+import { ownedNodeMetadata, restoredPolicyNode } from "./test-support/restored-policy-node";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
@@ -30,6 +31,8 @@ const WASM_UCAN_RANGE = "Out of valid microsecond-precision range of NumericDate
 
 const PRIVATE_KEY = "1".padStart(64, "0");
 const HOST = "https://node.example";
+const SESSION_SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+const NODE_DID = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
 
 let originalFetch: typeof globalThis.fetch;
 let registry: UnregisteredLocationRegistry;
@@ -48,7 +51,7 @@ function registryMetadata(input: string | URL | Request, init?: RequestInit): Pr
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
-    registryMetadata(input, init) ?? new Response(JSON.stringify({ activated: [], skipped: [] }), {
+    registryMetadata(input, init) ?? ownedNodeMetadata(input, init, HOST, NODE_DID) ?? new Response(JSON.stringify({ activated: [], skipped: [] }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })) as typeof fetch;
@@ -298,7 +301,7 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
     cid: "bafyfake",
     delegateDid: BOB_DID,
     expiry: Math.floor(Date.now() / 1000) + 3600,
-    resources: [{ service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] }],
+    resources: [{ service: "kv", space: SESSION_SPACE, path: "items/", actions: ["tinycloud.kv/get"] }],
   }));
   const prepareSession = mock((config: { spaceId: string }) => ({ siwe: "siwe", spaceId: config.spaceId }));
   const wasm = {
@@ -307,7 +310,7 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
     prepareSession,
     completeSessionSetup: mock((config: { spaceId: string }) => ({ spaceId: config.spaceId, delegationCid: "bafysigned", delegationHeader: { Authorization: "signed.header" } })),
     ensureEip55: (a: string) => a,
-    makeSpaceId: (a: string, c: number, p: string) => `space://${a}:${c}:${p}`,
+    makeSpaceId: (a: string, c: number, p: string) => `tinycloud:pkh:eip155:${c}:${a}:${p}`,
     createDelegation,
     parseRecapFromSiwe: parseRecap,
     parseVerifiedRecapFromSiwe: parseRecap,
@@ -336,7 +339,7 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
         address: "0x0000000000000000000000000000000000000001",
         chainId: 1,
         sessionKey: "default",
-        spaceId: "space://test",
+        spaceId: SESSION_SPACE,
         delegationCid: "bafyparent",
         delegationHeader: { Authorization: "Bearer parent" },
         verificationMethod: "did:key:z6MkTestSession#z6MkTestSession",
@@ -418,7 +421,7 @@ describe("the wallet-signed paths refuse before the wallet is asked", () => {
   const parentOf = (expiry: Date) => ({
     cid: "parent-cid",
     delegationHeader: { Authorization: "parent.header.signature" },
-    spaceId: "space://test",
+    spaceId: SESSION_SPACE,
     path: "docs",
     actions: ["tinycloud.kv/get"],
     expiry,
@@ -484,30 +487,19 @@ describe("the wallet-signed paths refuse before the wallet is asked", () => {
 });
 
 describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", () => {
-  const SPACE = "tinycloud:pkh:eip155:1:0xD559CCd9EB87c530A9a349262669386dE93cf412:applications";
   const SHARE_URL = `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`;
 
-  function deliveryNode() {
+  async function deliveryNode() {
     const requests: Array<Record<string, unknown>> = [];
     globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const metadata = registryMetadata(input, init);
       if (metadata) return metadata;
+      const identity = ownedNodeMetadata(input, init, HOST, NODE_DID);
+      if (identity) return identity;
       requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
-    const wasmBindings = {
-      invoke: () => ({ Authorization: "delivery-invocation" }),
-      ensureEip55: (a: string) => a,
-      createSessionManager: () => ({
-        createSessionKey: (id: string) => id,
-        replaceSessionKey: (_jwk: object, id: string) => id,
-        renameSessionKeyId: () => {},
-        getDID: (id: string) => `did:key:z6MkTest-${id}`,
-        jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
-      }),
-    } as unknown as IWasmBindings;
-    const node = new TinyCloudNode({ host: HOST, tinycloudRegistryUrl: registry.url.origin, wasmBindings });
-    Object.assign(node, { _restoredTcSession: { spaceId: SPACE }, _serviceContext: { session: { spaceId: SPACE } } });
+    const node = await restoredPolicyNode({ host: HOST, registryUrl: registry.url.origin });
     const deliver = (expiresAt: string) =>
       node.authorizeShareDeliveryV3({
         envelope: { version: 3 },
@@ -523,7 +515,7 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
   }
 
   test("a string that is not a date is refused cleanly, with no request sent and no RangeError", async () => {
-    const s = deliveryNode();
+    const s = await deliveryNode();
     const refusal = await s.deliver("tomorrow").catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(Error);
     expect(refusal).not.toBeInstanceOf(RangeError);
@@ -532,13 +524,13 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
   });
 
   test("a year past 9999 is refused with the dated message, with no request sent", async () => {
-    const s = deliveryNode();
+    const s = await deliveryNode();
     await expect(s.deliver("+010000-01-01T00:00:00.000Z")).rejects.toThrow(SIWE_DATED);
     expect(s.requests).toEqual([]);
   });
 
   test("the last second of 9999 is sent, normalised to three-digit milliseconds", async () => {
-    const s = deliveryNode();
+    const s = await deliveryNode();
     await s.deliver("9999-12-31T23:59:59Z").catch(() => undefined);
     expect(s.requests[0]?.expiresAt).toBe("9999-12-31T23:59:59.000Z");
   });

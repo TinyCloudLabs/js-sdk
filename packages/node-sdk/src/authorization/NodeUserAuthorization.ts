@@ -282,6 +282,8 @@ export interface NodeUserAuthorizationConfig {
   spaceCreationHandler?: ISpaceCreationHandler;
   /** Host hints used only for owners absent from both registry namespaces. */
   tinycloudHosts?: string[];
+  /** Constructor-trusted no-entry hosts; Node supplies these separately from restored host data. */
+  registryNoEntryHosts?: readonly string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
   /** Host hints for genuine no-entry onboarding. Never used for registered or unavailable owners. */
@@ -425,6 +427,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly autoCreateSpace: boolean;
   private readonly spaceCreationHandler?: ISpaceCreationHandler;
   private tinycloudHosts?: string[];
+  private readonly registryNoEntryHosts: readonly string[];
   private readonly tinycloudRegistryUrl?: string | null;
   private readonly tinycloudFallbackHosts?: string[] | null;
   private readonly newUserHost?: string | null;
@@ -527,6 +530,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.autoCreateSpace = config.autoCreateSpace ?? false;
     this.spaceCreationHandler = config.spaceCreationHandler;
     this.tinycloudHosts = config.tinycloudHosts;
+    this.registryNoEntryHosts = config.registryNoEntryHosts ?? config.tinycloudHosts ?? [];
     this.tinycloudRegistryUrl = config.tinycloudRegistryUrl;
     this.tinycloudFallbackHosts = config.tinycloudFallbackHosts;
     this.newUserHost = config.newUserHost;
@@ -703,22 +707,27 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /** Refresh the primary space's registry destinations, including after restore. */
-  async ensureTinyCloudHosts(): Promise<void> {
+  async ensureTinyCloudHosts(assertCurrent?: () => void): Promise<void> {
     if (this._address === undefined || this._chainId === undefined) {
       throw new Error("Cannot resolve TinyCloud hosts: sign in or restore a session first.");
     }
-    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId, this._tinyCloudSession?.spaceId);
+    await this.resolveTinyCloudHostsForSignIn(this._address, this._chainId, this._tinyCloudSession?.spaceId, assertCurrent);
   }
 
-  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number, restoredSpaceId?: string): Promise<void> {
+  private async resolveTinyCloudHostsForSignIn(address: string, chainId: number, restoredSpaceId?: string, assertCurrent?: () => void): Promise<void> {
+    assertCurrent?.();
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     const destinations = await this.resolveResourceDestinations(spaceId, "read");
-    for (const destination of destinations) await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+    for (const destination of destinations) {
+      assertCurrent?.();
+      await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+    }
+    assertCurrent?.();
     this.tinycloudHosts = destinations.map(({ url }) => url);
   }
 
-  /** Current full-resource registry routing; saved hosts are only no-entry hints. */
-  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.tinycloudHosts ?? []): Promise<ResourceDestination[]> {
+  /** Current registry routing; mutable restored hosts never supply no-entry authority. */
+  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid
       : parseSpaceUri(resource)?.owner ?? (() => {
@@ -1354,7 +1363,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     };
 
     checkCurrent();
-    await this.ensureTinyCloudHosts();
+    await this.ensureTinyCloudHosts(checkCurrent);
     checkCurrent();
     const host = context?.host ?? this.primaryTinyCloudHost;
     const spaceId = context?.spaceId ?? (typeof targetSpaceId === "string" ? targetSpaceId : this._tinyCloudSession.spaceId);
@@ -1365,7 +1374,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
         checkCurrent();
         try {
           await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
+          checkCurrent();
           const result = await activateSessionWithHost(destination.url, this._tinyCloudSession.delegationHeader, signal);
+          checkCurrent();
           results.push(result.skipped?.includes(spaceId) ? { ...result, success: false, status: 403, error: "The session does not activate the requested space" } : result);
         } catch (error) {
           if (routingFailure(error) || signal?.aborted) throw error;
@@ -1435,8 +1446,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Create a specific space on the server via host delegation.
    * Used for lazy creation of additional spaces (e.g., public).
    */
-  async hostPublicSpace(spaceId: string): Promise<boolean> {
-    return (await this.hostSpace(spaceId)).success;
+  async hostPublicSpace(spaceId: string, signal?: AbortSignal): Promise<boolean> {
+    return (await this.hostSpace(spaceId, undefined, signal)).success;
   }
 
   /**

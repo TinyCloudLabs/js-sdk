@@ -10,6 +10,8 @@ Use resource routing and destination identity checks for policy, delegation, sha
 
 Standalone Core objects and low-level policy functions still trust a host explicitly supplied by the caller; they do not consult the registry without a resource transport callback. Received-share and restored-data destinations require that callback. Node-local resource names without a routing owner are refused by the Node/Web transport rather than mapped to the current account.
 
+Keep new-user onboarding tied to constructor-supplied hosts, independently of restored session hints. Bind hosting and grant activation to the initiating service graph across asynchronous preparation and signing, and refuse HTTP redirects for activation and peer-identity requests.
+
 The unauthenticated, bodyless replication-restoration `/info` hint preflight remains an explicit exception so local replica hydration does not wait for a registry lookup.
 
 Details: TC-2594

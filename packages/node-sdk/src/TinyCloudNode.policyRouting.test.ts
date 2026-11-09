@@ -70,7 +70,7 @@ function delivery() {
 }
 
 async function fixture(mode: "cold" | "registered" | "wrong-identity", options: {
-  replication?: boolean; ambiguous?: boolean; accountRoute?: "routed" | "missing";
+  replication?: boolean; ambiguous?: boolean; accountRoute?: "routed" | "missing"; newUserHost?: string; publicSpace?: boolean;
 } = {}) {
   const { replication = false, ambiguous = false, accountRoute } = options;
   const proof = await signedRestorableSession({
@@ -79,10 +79,15 @@ async function fixture(mode: "cold" | "registered" | "wrong-identity", options: 
       delegation: { "": ["tinycloud.delegation/list", "tinycloud.delegation/status", "tinycloud.delegation/revoke"] },
       space: { "": ["tinycloud.space/host"] },
     },
-    ...(accountRoute ? { ownedSpaceAbilities: { account: {
-      kv: { "": ["tinycloud.kv/get"] },
-      delegation: { "": ["tinycloud.delegation/list", "tinycloud.delegation/revoke"] },
-    } } } : {}),
+    ...(accountRoute || options.publicSpace ? { ownedSpaceAbilities: {
+      ...(accountRoute ? { account: {
+        kv: { "": ["tinycloud.kv/get"] },
+        delegation: { "": ["tinycloud.delegation/list", "tinycloud.delegation/revoke"] },
+      } } : {}),
+      ...(options.publicSpace ? { public: {
+        kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/metadata"] },
+      } } : {}),
+    } } : {}),
   });
   const params = registration(proof);
   const payload: LocationRecordV2Payload = {
@@ -90,6 +95,7 @@ async function fixture(mode: "cold" | "registered" | "wrong-identity", options: 
     spaces: [
       { space: proof.spaceId.toLowerCase(), nodes: [{ did: NODE_DID, mode: "read-write" }, ...(ambiguous ? [{ did: OTHER_DID, mode: "read-write" as const }] : [])] },
       ...(accountRoute === "routed" ? [{ space: proof.spaces!.account!.toLowerCase(), nodes: [{ did: OTHER_DID, mode: "read-write" as const }] }] : []),
+      ...(options.publicSpace ? [{ space: proof.spaces!.public!.toLowerCase(), nodes: [{ did: NODE_DID, mode: "read-write" as const }] }] : []),
     ],
     encryptionNode: NODE_DID, updated_at: "2026-10-18T00:00:00.000Z", sequence: 1,
   };
@@ -116,6 +122,7 @@ async function fixture(mode: "cold" | "registered" | "wrong-identity", options: 
     const identity = url.origin === STALE || url.origin === SECOND || mode === "wrong-identity" ? OTHER_DID : NODE_DID;
     if (url.pathname === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: ["delegation-issued-query-v1"], nodeId: identity });
     if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: identity });
+    if (url.pathname.startsWith("/peer/generate/")) return new Response(identity);
     const response = responses.get(url.href);
     if (response) return new Response(response.body, { status: response.status });
     if (url.pathname === "/policy/v3/enforcer-bindings") {
@@ -133,6 +140,7 @@ async function fixture(mode: "cold" | "registered" | "wrong-identity", options: 
   const profileDir = replication ? await mkdtemp(join(tmpdir(), "policy-preflight-")) : undefined;
   if (profileDir) replicaRoots.push(profileDir);
   const node = new TinyCloudNode({ signer: owner, wasmBindings: new NodeWasmBindings(), tinycloudRegistryUrl: REGISTRY,
+    ...(options.newUserHost ? { newUserHost: options.newUserHost } : {}),
     autoDiscoverLocalNode: false, ...(profileDir ? { replication: { enabled: true, prefixes: ["notes/"],
       mode: "foreground" as const, profileDir,
       storage: createSqliteReplicaStorage({ dir: join(profileDir, "replicas"), guard: async (section) => section() }),
@@ -539,4 +547,111 @@ test("a node-local policy name cannot borrow the receiving account as routing ow
     ...params.policy, contentSource: { kvResource: "tinycloud://applications/kv/route-probe" },
   } })).rejects.toMatchObject({ code: "RESOURCE_NOT_ROUTED" });
   expect(attempts).toEqual([]);
+});
+
+test("authoritative absence uses trusted new-user configuration, never a restored host", async () => {
+  const { node, attempts, records } = await fixture("registered", { newUserHost: ROUTED });
+  records.clear();
+  await node.authorizeShareDeliveryV3(delivery()).catch(() => undefined);
+  expect(attempts.filter(({ method }) => method === "POST").map(({ url }) => url))
+    .toEqual([`${ROUTED}/policy/v3/deliveries/authorize`]);
+  expect(attempts.some(({ url }) => new URL(url).origin === STALE)).toBe(false);
+});
+
+test("issued activation cannot promote a saved host when registration is authoritatively absent", async () => {
+  const { node, attempts, records } = await fixture("registered", { newUserHost: ROUTED });
+  records.clear();
+  await node.delegateTo(OTHER_DID, [{
+    service: "tinycloud.kv", space: "default", path: "route-probe", actions: ["tinycloud.kv/get"],
+  }]).catch(() => undefined);
+  expect(attempts.filter(({ method }) => method === "POST").map(({ url }) => url))
+    .toEqual([`${ROUTED}/delegate`]);
+  expect(attempts.some(({ url }) => new URL(url).origin === STALE)).toBe(false);
+});
+
+test("replacing the graph in an issued grant's prepared hook prevents activation", async () => {
+  const { node, proof, attempts } = await fixture("registered");
+  await node.delegateTo(OTHER_DID, [{
+    service: "tinycloud.kv", space: "default", path: "route-probe", actions: ["tinycloud.kv/get"],
+  }], {
+    onPrepared: () => node.restoreSession({ ...proof, tinycloudHosts: [STALE] }),
+  }).catch(() => undefined);
+  expect(attempts.map(({ method, url }) => ({ method, url }))).toEqual([]);
+});
+
+test("retiring an issued graph during destination verification sends no activation credential", async () => {
+  const { node, proof, attempts } = await fixture("registered");
+  const fetchFn = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const response = await fetchFn(input, init);
+    if (new URL(input instanceof Request ? input.url : String(input)).href === `${ROUTED}/.well-known/tinycloud/node-keys`) {
+      await node.restoreSession({ ...proof, tinycloudHosts: [STALE] });
+    }
+    return response;
+  }) as typeof fetch;
+  await node.delegateTo(OTHER_DID, [{
+    service: "tinycloud.kv", space: "default", path: "route-probe", actions: ["tinycloud.kv/get"],
+  }]).catch(() => undefined);
+  expect(attempts.some(({ url }) => url === `${ROUTED}/.well-known/tinycloud/node-keys`)).toBe(true);
+  expect(attempts.filter(({ authorization }) => authorization !== null).map(({ method, url }) => ({ method, url }))).toEqual([]);
+});
+
+for (const operation of ["wallet-delegation", "wallet-subdelegation"] as const) {
+  test(`retiring the graph while signing ${operation} sends no activation credential`, async () => {
+    const { node, proof, attempts } = await fixture("registered");
+    const grant = shareGrant(proof);
+    const sign = owner.signMessage;
+    let signed = false;
+    owner.signMessage = async (message) => {
+      const signature = await sign.call(owner, message);
+      signed = true;
+      await node.restoreSession({ ...proof, tinycloudHosts: [STALE] });
+      return signature;
+    };
+    try {
+      if (operation === "wallet-delegation") {
+        await node.delegateTo(OTHER_DID, [{
+          service: "tinycloud.kv", space: "default", path: "route-probe", actions: ["tinycloud.kv/get"],
+        }], { forceWalletSign: true }).catch(() => undefined);
+      } else {
+        await node.createSubDelegation(grant.delegation, {
+          path: "route-probe", actions: ["tinycloud.kv/get"], delegateDID: OTHER_DID,
+        }).catch(() => undefined);
+      }
+    } finally {
+      owner.signMessage = sign;
+    }
+    expect(signed).toBe(true);
+    expect(attempts.filter(({ authorization }) => authorization !== null).map(({ method, url }) => ({ method, url }))).toEqual([]);
+  });
+}
+
+test("public-space hosting never promotes a restored host after canonical registration absence", async () => {
+  const { node, proof, attempts, records, responses } = await fixture("registered", { newUserHost: ROUTED, publicSpace: true });
+  records.clear();
+  const receipt = JSON.stringify({ activated: [proof.spaceId, proof.spaces!.public!], skipped: [] });
+  responses.set(`${ROUTED}/delegate`, { status: 200, body: receipt });
+  responses.set(`${STALE}/delegate`, { status: 200, body: receipt });
+  await node.ensurePublicSpace();
+  expect(attempts.filter(({ method }) => method === "POST").map(({ url }) => url))
+    .toEqual([`${ROUTED}/delegate`, `${ROUTED}/delegate`]);
+  expect(attempts.some(({ url }) => new URL(url).origin === STALE)).toBe(false);
+});
+
+test("retiring the public-space graph during identity verification sends no hosting credential", async () => {
+  const { node, proof, attempts, responses } = await fixture("registered", { publicSpace: true });
+  responses.set(`${ROUTED}/delegate`, { status: 200, body: JSON.stringify({ activated: [proof.spaceId, proof.spaces!.public!], skipped: [] }) });
+  const fetchFn = globalThis.fetch;
+  let replaced = false;
+  globalThis.fetch = (async (input, init) => {
+    const response = await fetchFn(input, init);
+    if (!replaced && new URL(input instanceof Request ? input.url : String(input)).href === `${ROUTED}/.well-known/tinycloud/node-keys`) {
+      replaced = true;
+      await node.restoreSession({ ...proof, tinycloudHosts: [STALE] });
+    }
+    return response;
+  }) as typeof fetch;
+  await node.ensurePublicSpace().catch(() => undefined);
+  expect(replaced).toBe(true);
+  expect(attempts.filter(({ authorization }) => authorization !== null).map(({ method, url }) => ({ method, url }))).toEqual([]);
 });

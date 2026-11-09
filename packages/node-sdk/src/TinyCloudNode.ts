@@ -1350,6 +1350,7 @@ export class TinyCloudNode {
 
   private config: TinyCloudNodeConfig;
   private readonly explicitHost?: string;
+  private readonly trustedNoEntryHosts: readonly string[];
   private readonly registryRefreshOwners = new Set<string>();
   private signer: ISigner | null = null;
   private auth: NodeUserAuthorization | null = null;
@@ -1802,9 +1803,9 @@ export class TinyCloudNode {
         assertCurrent();
         const activationSignal = AbortSignal.any([signal, graph.signal]);
         if (primary && primary.delegationCid === session.delegationCid) {
-          return this.activateSignedSession(primary, primary.siwe, host, activationSignal);
+          return this.activateSignedSession(primary, primary.siwe, activationSignal);
         }
-        return this.activateResourceSession(session.delegationHeader, [spaceId], host, activationSignal);
+        return this.activateResourceSession(session.delegationHeader, [spaceId], activationSignal);
       },
     });
     // A session replaced while the read was in flight owns neither answer.
@@ -1961,6 +1962,7 @@ export class TinyCloudNode {
     // loader is registered synchronously; disabled clients do not load replica policy.
     if (config.replication?.enabled) getNodeReplicationLoaders().validateConfig(config.replication);
     this.explicitHost = config.host;
+    this.trustedNoEntryHosts = config.host ? [config.host] : [];
 
     // Store config with default host
     this.config = {
@@ -2249,7 +2251,9 @@ export class TinyCloudNode {
     // verified wallet owner when the requested resource belongs to someone else.
     const session = this.currentTinyCloudSession();
     if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
-    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
+    // Do not let restored authorization hosts become first-use routing authority.
+    const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
+    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, candidates);
     const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
     const resolved = await resolveRegistryResource(subject, resource, access, {
       registryUrl: this.config.tinycloudRegistryUrl,
@@ -2259,7 +2263,8 @@ export class TinyCloudNode {
       onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
-      const hint = noEntryHosts === undefined ? this.explicitHost ?? this.config.host : noEntryHosts[0];
+      // Restored config.host is a hint, never authority for a new registration.
+      const hint = candidates[0];
       const host = hint ?? this.config.newUserHost ??
         (this.config.tinycloudFallbackHosts === undefined ? DEFAULT_HOST : this.config.tinycloudFallbackHosts?.[0]);
       if (!host || (!hint && this.config.newUserHost === null)) throw new NodeNotFoundError(subject, resolved.verdict);
@@ -4353,9 +4358,10 @@ export class TinyCloudNode {
   private registryPolicyConfig(): Pick<
     TinyCloudNodeConfig,
     "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "onNodeNotFound" | "onRegistryFallback"
-  > {
+  > & { registryNoEntryHosts: readonly string[] } {
     const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback } = this.config;
-    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback };
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback,
+      registryNoEntryHosts: this.trustedNoEntryHosts };
   }
 
   /**
@@ -6346,7 +6352,8 @@ export class TinyCloudNode {
     params: CreateOwnerDelegationParams,
     assertActive?: () => void,
   ): Promise<OwnerDelegationReceipt> {
-    const assertOwnerGraphActive = assertActive ?? this._serviceGraph.assertActive.bind(this._serviceGraph);
+    const graph = this._serviceGraph;
+    const assertOwnerGraphActive = assertActive ?? graph.assertActive.bind(graph);
     assertOwnerGraphActive();
     if (!params.delegateDid.startsWith("did:key:")) {
       throw new Error("Owner delegation requires an external did:key audience and bounded capabilities");
@@ -6387,7 +6394,7 @@ export class TinyCloudNode {
     const signature = await this.signer.signMessage(prepared.siwe);
     assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
-    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, host);
+    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
     assertOwnerGraphActive();
     if (!activation.success) {
       throw Object.assign(
@@ -7221,8 +7228,7 @@ export class TinyCloudNode {
   private async activateResourceSession(
     delegationHeader: TinyCloudSession["delegationHeader"],
     resources: Iterable<string>,
-    hostHint: string | undefined,
-    signal?: AbortSignal,
+    signal: AbortSignal = this._serviceGraph.signal,
   ): Promise<SpaceHostResult> {
     const targets = new Map<string, { destination: ResourceDestination; spaces: string[] }>();
     const routedSpaces: string[] = [];
@@ -7233,11 +7239,7 @@ export class TinyCloudNode {
       signal?.throwIfAborted();
       try {
         const encryption = resource.startsWith("urn:tinycloud:encryption:");
-        const destinations = await this.routingDestinations(
-          resource,
-          encryption ? "encryption" : "host",
-          [hostHint ?? this.config.host!],
-        );
+        const destinations = await this.routingDestinations(resource, encryption ? "encryption" : "host");
         if (!encryption && destinations.some(({ nodeDid }) => nodeDid !== undefined)) routedSpaces.push(resource);
         for (const destination of destinations) {
           let target = targets.get(destination.url);
@@ -7264,9 +7266,11 @@ export class TinyCloudNode {
       signal?.throwIfAborted();
       try {
         await verifyResourceDestination(target, globalThis.fetch.bind(globalThis));
+        signal.throwIfAborted();
         const timeout = AbortSignal.timeout(5_000);
         const result = await activateSessionWithHost(target.url, delegationHeader,
-          signal ? AbortSignal.any([signal, timeout]) : timeout);
+          AbortSignal.any([signal, timeout]));
+        signal.throwIfAborted();
         this.throwRegistryRefusal(result.status, result.error ?? "");
         if (result.success) {
           const skipped = result.skipped?.find((space) => spaces.some((expected) => this.spaceIdsEqual(space, expected)));
@@ -7305,13 +7309,12 @@ export class TinyCloudNode {
         ? operation.resource.split("/")[0]!
         : operation.spaceId ?? delegation.spaceId,
     );
-    return this.activateResourceSession(delegation.delegationHeader, resources, delegation.host, signal);
+    return this.activateResourceSession(delegation.delegationHeader, resources, signal);
   }
 
   private activateSignedSession(
     session: Pick<TinyCloudSession, "delegationHeader" | "spaceId">,
     siwe: string,
-    hostHint?: string,
     signal?: AbortSignal,
   ): Promise<SpaceHostResult> {
     const resources = this.parseRecapWithCaveats(siwe).map((entry) =>
@@ -7319,7 +7322,7 @@ export class TinyCloudNode {
         : entry.space.startsWith("tinycloud:") ? entry.space : session.spaceId,
     );
     return this.activateResourceSession(session.delegationHeader,
-      resources.length > 0 ? resources : [session.spaceId], hostHint, signal);
+      resources.length > 0 ? resources : [session.spaceId], signal);
   }
 
   /**
@@ -7726,6 +7729,8 @@ export class TinyCloudNode {
    * space-creation guard.
    */
   async ensurePublicSpace() {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (!this.auth || !this.session || !this.signer) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -7736,8 +7741,10 @@ export class TinyCloudNode {
     }
 
     await this.assertMayCreateSpace(publicSpaceId);
+    graph.assertActive();
     // Create the public space on the server (host SIWE)
-    await (this.auth as NodeUserAuthorization).hostPublicSpace(publicSpaceId);
+    await (this.auth as NodeUserAuthorization).hostPublicSpace(publicSpaceId, graph.signal);
+    graph.assertActive();
 
     // Create a session delegation for the public space using the session key JWK.
     // This mirrors the primary session flow (prepareSession with jwk), ensuring
@@ -7765,13 +7772,15 @@ export class TinyCloudNode {
     });
 
     const signature = await this.signer.signMessage(prepared.siwe);
+    graph.assertActive();
 
     const delegationSession = this.wasmBindings.completeSessionSetup({
       ...prepared,
       signature,
     });
 
-    const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe);
+    const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    graph.assertActive();
 
     if (!activateResult.success) {
       throw Object.assign(
@@ -8386,6 +8395,8 @@ export class TinyCloudNode {
     disableSubDelegation = false,
     requireActivation = false,
   ): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (entries.length === 0) {
       throw new Error(
         "createDelegationViaWasmPath requires a non-empty entries array",
@@ -8508,7 +8519,8 @@ export class TinyCloudNode {
     // a backend calling useDelegation) can find it by CID when building
     // their invoker SIWE. The host validates the UCAN's parent chain
     // (session key → wallet SIWE) to confirm authority.
-    const activateResult = await this.activateRoutedDelegation(delegation);
+    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+    graph.assertActive();
     assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
@@ -8524,6 +8536,8 @@ export class TinyCloudNode {
     disableSubDelegation = false,
     requireActivation = false,
   ): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     this.assertRuntimeGrantCaveatsPreservable(entries, requestedOperations, grant);
     this.assertDelegationCaveatsPreservable(entries);
     const result = this.createDelegationWrapper({
@@ -8556,7 +8570,8 @@ export class TinyCloudNode {
       await onPrepared(delegation);
     }
 
-    const activateResult = await this.activateRoutedDelegation(delegation);
+    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+    graph.assertActive();
     assertDelegationActivated(activateResult, delegation, requireActivation);
 
     return delegation;
@@ -9458,6 +9473,8 @@ export class TinyCloudNode {
     spaceIdOverride?: string;
     includePublicSpace?: boolean;
   }): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     if (params.disableSubDelegation) {
       throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
@@ -9506,6 +9523,7 @@ export class TinyCloudNode {
 
     // Sign the SIWE message with this user's signer
     const signature = await this.signer.signMessage(prepared.siwe);
+    graph.assertActive();
 
     // Complete the session setup
     const delegationSession = this.wasmBindings.completeSessionSetup({
@@ -9514,7 +9532,8 @@ export class TinyCloudNode {
     });
 
     // Activate the delegation with the server
-    const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe);
+    const activateResult = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    graph.assertActive();
 
     if (!activateResult.success) {
       throw Object.assign(
@@ -9558,12 +9577,14 @@ export class TinyCloudNode {
         parents: [session.delegationCid],
       });
       const publicSignature = await this.signer.signMessage(publicPrepared.siwe);
+      graph.assertActive();
       const publicSession = this.wasmBindings.completeSessionSetup({
         ...publicPrepared,
         signature: publicSignature,
       });
 
-      const publicActivateResult = await this.activateSignedSession(publicSession, publicPrepared.siwe);
+      const publicActivateResult = await this.activateSignedSession(publicSession, publicPrepared.siwe, graph.signal);
+      graph.assertActive();
 
       if (publicActivateResult.success) {
         result.publicDelegation = {
@@ -9712,7 +9733,7 @@ export class TinyCloudNode {
     });
 
     // Activate with server
-    const activateResult = await this.activateSignedSession(invokerSession, prepared.siwe, targetHost, graph.signal).catch((error: unknown) => {
+    const activateResult = await this.activateSignedSession(invokerSession, prepared.siwe, graph.signal).catch((error: unknown) => {
       graph.assertActive();
       throw error;
     });
@@ -9800,6 +9821,8 @@ export class TinyCloudNode {
       }>;
     }
   ): Promise<PortableDelegation> {
+    const graph = this._serviceGraph;
+    graph.assertActive();
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
     // Requested resources have no caveat field; a spread argument can still carry one.
     refuseCaveated(params.resources);
@@ -9889,6 +9912,7 @@ export class TinyCloudNode {
 
     // Sign with THIS user's signer
     const signature = await this.signer.signMessage(prepared.siwe);
+    graph.assertActive();
 
     // Complete the session setup
     const subDelegationSession = this.wasmBindings.completeSessionSetup({
@@ -9897,7 +9921,8 @@ export class TinyCloudNode {
     });
 
     // Activate the sub-delegation with the server
-    const activateResult = await this.activateSignedSession(subDelegationSession, prepared.siwe, targetHost);
+    const activateResult = await this.activateSignedSession(subDelegationSession, prepared.siwe, graph.signal);
+    graph.assertActive();
 
     if (!activateResult.success) {
       throw Object.assign(
