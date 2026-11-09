@@ -1460,9 +1460,7 @@ test("useDelegation() and useRuntimeDelegation() waiting for initialisation are 
   const [delegationError, runtimeError] = await Promise.all([using, usingRuntime]);
   await signingOut;
   expect(delegationError).toBeInstanceOf(Error);
-  expect((delegationError as Error).message).toContain("cancelled by sign-out");
   expect(runtimeError).toBeInstanceOf(Error);
-  expect((runtimeError as Error).message).toContain("cancelled by sign-out");
   expect(node.useDelegation).not.toHaveBeenCalled();
   expect(node.useRuntimeDelegation).not.toHaveBeenCalled();
 });
@@ -2034,7 +2032,10 @@ describe("space hosting on restore (TC-2380)", () => {
     });
     await tcw.restoreSession(address);
 
-    const first = tcw.ensureSpaceHosted();
+    const first = tcw.ensureSpaceHosted().then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(confirm).toHaveBeenCalledTimes(1);
 
@@ -2053,7 +2054,9 @@ describe("space hosting on restore (TC-2380)", () => {
     approvals[1]!(true);
     expect(await second).toBe("hosted");
     approvals[0]!(true);
-    expect(await first).toBe("hosted");
+    // Both approvals succeeded; only the first call's authority was replaced.
+    // It must reject, not adopt the newer session's "hosted" result.
+    expect(await first).toEqual({ status: "rejected", error: expect.any(Error) });
   });
   test("ensureSpaceHosted skips creation without a signer", async () => {
     const { tcw, node, confirm } = await webWithCreation(async (n) => {

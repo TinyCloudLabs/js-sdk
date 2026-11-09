@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import type { Result, ServiceError } from "@tinycloud/sdk-services";
+import type { ResourceTransport, Result, ServiceError } from "@tinycloud/sdk-services";
 import { CreateDelegationParamsSchema } from "../delegations/types.schema.js";
 
 // =============================================================================
@@ -76,6 +76,7 @@ export const SpaceServiceConfigSchema = z.object({
   invoke: z.function(),
   /** Optional custom fetch implementation */
   fetch: z.function().optional(),
+  resourceTransport: z.custom<ResourceTransport>((value) => typeof value === "function").optional(),
   /** Optional capability key registry for delegated space discovery */
   capabilityRegistry: z.unknown().optional(),
   /** Factory function to create a space-scoped KV service */

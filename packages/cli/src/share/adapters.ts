@@ -657,6 +657,8 @@ export function createShareAuthorityAdapters(input: {
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
         sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport,
       });
     } catch (error) {
       // The Node answers this only for a root it already holds a signed revocation for (a retry signs a new `revokedAt`).

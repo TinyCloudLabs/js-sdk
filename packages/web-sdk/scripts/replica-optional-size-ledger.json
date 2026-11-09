@@ -327,6 +327,15 @@
       "activation.mjs": 0,
       "activation.cjs": 1,
       "note": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Actual optional deltas are -2/+31/0/+1; only initial CJS cap changes to 68401. The historical four-byte CJS baseline retirement is unchanged: RAW 68405, EFFECTIVE 68401, mandatory DIRECT cap 68401."
+    },
+    {
+      "pr": "#893",
+      "ticket": "TC-2606",
+      "replica.mjs": -5,
+      "replica.cjs": -6,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]
 }

@@ -234,6 +234,13 @@
       "index.mjs": 99,
       "index.cjs": 104,
       "note": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Cumulative ESM is 391 against its former 388 budget: the exact 3-byte increase is explicit; CJS allowance remains 861."
+    },
+    {
+      "pr": "#893",
+      "ticket": "TC-2606",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -2772,5 +2779,20 @@
     },
     "root": { "delta": { "index.mjs": 260, "index.cjs": 253 }, "ceiling": { "index.mjs": 1492124, "index.cjs": 1432497 } },
     "reason": "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first (in popup mode the grant then rejects OPENKEY_CONNECTED_RETRY so the sign popup opens from a fresh click), and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,124 B and index.cjs 1,432,497 B, +260 / +253 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281"
+  },
+  "tc2594ResourceTransport": {
+    "label": "TC-2594 registry-routed control transports and verified share parents, root admission (PR #891)",
+    "ruling": "Naomi, TC-2594, 2026-11-09: exact root-only ratchet above tc2281OpenKeyConnectedKeyId, zero headroom. SQLite and PostgreSQL in run 42605095036 at c5dfe40c3f137ecbbd5faa5cbc6c0c93ecd3927f agree. Bun 1.3.14; rustc 1.99.0. Lower the earlier unmerged row by 163 / 230 bytes after the coherent review follow-up. No non-root cap, owned-budget entry or cumulative allowance change.",
+    "base": "074317b3b4c2034b3bba5186cebb8ae95a72dd01",
+    "sourceCommits": ["c5dfe40c3f137ecbbd5faa5cbc6c0c93ecd3927f"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036/job/129118924270",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036/job/129118924478"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 3005, "index.cjs": 4175 }, "ceiling": { "index.mjs": 1495129, "index.cjs": 1436672 } },
+    "reason": "TC-2594: registry-routed policy, identity, delegation and sharing transports; client-side CACAO verification of received and portable parents. Both canonical backends measured index.mjs 1,495,129 B and index.cjs 1,436,672 B, +3005 / +4175 over TC-2281. The coherent review follow-up binds operations to their initiating authority and preserves routed outcomes. Public-parent verification cannot reuse the private-key persisted-session WASM verifier; the single-chunk contract prevents a lazy-import saving. Admit only these root sizes; no owned-budget entry, cumulative allowance, first-import, activation, worker or gated cap changes."
   }
 }

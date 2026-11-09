@@ -54,7 +54,10 @@ describe("write outcome classifier", () => {
     ["definitive error code", "put", failure(ErrorCodes.KV_PRECONDITION_FAILED), "failed"],
     ["unconfirmed batch", "batchPut", failure(ErrorCodes.NETWORK_ERROR, { outcome: "batch-unconfirmed", status: 200 }), "ambiguous"],
     ["other 4xx", "put", failure(ErrorCodes.NETWORK_ERROR, { status: 422 }), "failed"],
-    ["5xx", "put", failure(ErrorCodes.NODE_BUSY, { status: 503 }), "ambiguous"],
+    ["503 marked not applied", "put", failure(ErrorCodes.NODE_BUSY, { status: 503, retryable: true }), "failed"],
+    ["503 without the marker", "put", failure(ErrorCodes.OUTCOME_UNKNOWN, { status: 503 }), "ambiguous"],
+    ["503 request timeout", "put", failure(ErrorCodes.REQUEST_TIMEOUT, { status: 503 }), "ambiguous"],
+    ["bare 5xx", "put", failure(ErrorCodes.NETWORK_ERROR, { status: 500 }), "ambiguous"],
     ["unknown outcome", "put", failure(ErrorCodes.OUTCOME_UNKNOWN, { status: 500 }), "ambiguous"],
     ["timeout without status", "put", failure(ErrorCodes.TIMEOUT), "ambiguous"],
   ];

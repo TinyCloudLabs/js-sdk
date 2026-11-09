@@ -71,6 +71,7 @@ function nodeAndShareDouble(requests?: string[]): typeof globalThis.fetch {
       return Response.json({ version: "tinycloud.share/config-v2", shareOrigin, registryOrigin: shareOrigin, credentialsOrigin: shareOrigin });
     }
     if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });
+    if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid });
     return Response.json({});
   }, { preconnect: () => undefined }) as typeof globalThis.fetch;
 }
