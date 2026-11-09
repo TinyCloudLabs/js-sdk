@@ -28,6 +28,9 @@ import type { CredentialClient, CredentialInputRequest, CredentialsAcquireOption
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
+/** Issuer request states from which the request cannot resume; a stored redirect continuation in one of them is dropped. */
+const TERMINAL_REQUEST_STATES: Record<string, true> = { expired: true, canceled: true, proof_attempts_exhausted: true };
+
 /** A2.5: the held (account-bound) profile is not for this service. A held requirement or an `account_is_subject` descriptor is refused here. */
 function refuseHeld(requirement: CredentialRequirement, descriptor?: CredentialFlowDescriptor): void {
   if (requirement.profile.id === "tinycloud.email-held/v1" || descriptor?.subjectRelationship === "account_is_subject") throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile is acquired with acquireHeldCredential only");
@@ -205,8 +208,10 @@ export class CredentialsService {
       completed = true; await redirectStore?.clear(); return verified;
     } catch (cause) {
       controller?.fail();
-      if (timed.signal.aborted && timed.signal.reason instanceof CredentialError) throw timed.signal.reason;
-      throw credentialError(cause);
+      const failure = timed.signal.aborted && timed.signal.reason instanceof CredentialError ? timed.signal.reason : credentialError(cause);
+      // A request the issuer reports as expired, canceled or out of proof attempts can never finish; transient errors keep it for the next attempt.
+      if (failure.details.state !== undefined && TERMINAL_REQUEST_STATES[failure.details.state] === true) await redirectStore?.clear();
+      throw failure;
     } finally { surface?.close(); if (completed) await redirectStore?.clear(); timed.clear(); }
   }
 
