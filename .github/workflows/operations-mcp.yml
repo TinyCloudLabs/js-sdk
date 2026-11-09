@@ -105,10 +105,25 @@ jobs:
         run: |
           bun run check:operations-mcp
           bun run --cwd packages/cli check:coverage
+      # The release metadata, checksum file and archives of the pinned node version are cached under a
+      # key made from the pin file, so a warm run makes no request to the node release downloads.
+      - name: Restore node release cache
+        id: node-release-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/node-release-cache
+          key: node-release-${{ hashFiles('packages/cli/src/lib/node-release.json') }}
       - name: Verify node release pin against upstream
         run: bun run --cwd packages/cli check:node-release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          NODE_RELEASE_CACHE_DIR: ${{ runner.temp }}/node-release-cache
+      - name: Save node release cache
+        if: steps.node-release-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/node-release-cache
+          key: node-release-${{ hashFiles('packages/cli/src/lib/node-release.json') }}
       - name: Verify packed Node 20 fixtures
         run: bun run check:operations-mcp-pack
 
