@@ -2757,5 +2757,20 @@
     },
     "root": { "delta": { "index.mjs": 180, "index.cjs": 187 }, "ceiling": { "index.mjs": 1491864, "index.cjs": 1432244 } },
     "reason": "Non-replica security fix: OpenKey sign-in sends only the public session key through one shared allowlist helper. Both canonical backends measured index.mjs 1,491,864 B and index.cjs 1,432,244 B, +180 / +187 over the TC-2481 final caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2582"
+  },
+  "tc2281OpenKeyConnectedKeyId": {
+    "label": "TC-2281 OpenKey runtime-grant signing with the connected keyId, root admission (PR #889)",
+    "ruling": "Naomi, TC-2281, 2026-11-08: SDK passes the connected keyId and connects first, a typed signing-key error, the session-change guard, the popup retry branch, the mode check, the after-sign re-check. Exact ratchet of the root caps to the true canonical CI measurement on top of #888, zero headroom, no trim. SQLite and PostgreSQL in run 42539547964 at 5fe7ff54aa3ee702780bcfb5c69c07b638fecd08 agree. Bun 1.3.14; rustc 1.99.0.",
+    "base": "37320e609ca24b55d4ec67c8ed89fd93095ceb9e",
+    "sourceCommits": ["5fe7ff54aa3ee702780bcfb5c69c07b638fecd08"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42539547964",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42539547964/job/128911191781",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42539547964/job/128911191896"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 260, "index.cjs": 253 }, "ceiling": { "index.mjs": 1492124, "index.cjs": 1432497 } },
+    "reason": "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first (in popup mode the grant then rejects OPENKEY_CONNECTED_RETRY so the sign popup opens from a fresh click), and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,124 B and index.cjs 1,432,497 B, +260 / +253 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281"
   }
 }

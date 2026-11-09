@@ -59,7 +59,8 @@
     "build:e2e-data-proxy": "bun build ./e2e/fixtures/data-proxy-harness-entry.ts --target=browser --format=esm --splitting --outdir=./e2e/.build/data-proxy",
     "build:e2e-prompts-lazy": "bun build ./e2e/fixtures/prompts-lazy-harness-entry.ts --target=browser --format=esm --splitting --outdir=./e2e/.build/prompts-lazy",
     "build:e2e-prefetch": "bun build ./e2e/fixtures/prefetch-harness-entry.ts --target=browser --format=esm --splitting --outdir=./e2e/.build/prefetch",
-    "test:e2e": "bun run build:e2e-ui && bun run build:e2e-storage && bun run build:e2e-prompts && bun run build:e2e-prompts-lazy && bun run build:e2e-prefetch && bun run build:e2e-data-proxy && playwright test -c playwright.e2e.config.ts",
+    "build:e2e-openkey-grant": "bun build ./e2e/fixtures/openkey-runtime-grant-harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/openkey-grant.bundle.js",
+    "test:e2e": "bun run build:e2e-ui && bun run build:e2e-storage && bun run build:e2e-prompts && bun run build:e2e-prompts-lazy && bun run build:e2e-prefetch && bun run build:e2e-data-proxy && bun run build:e2e-openkey-grant && playwright test -c playwright.e2e.config.ts",
     "test": "jest"
   },
   "dependencies": {
