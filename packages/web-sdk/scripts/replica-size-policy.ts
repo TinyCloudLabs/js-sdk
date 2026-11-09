@@ -2850,18 +2850,18 @@ export const approvedTc2582PublicSessionKey: LogoutRatchet = {
  */
 export const approvedTc2281OpenKeyConnectedKeyId: LogoutRatchet = {
   label: "TC-2281 OpenKey runtime-grant signing with the connected keyId, root admission (PR #889)",
-  ruling: "Naomi, TC-2281, 2026-11-08: SDK passes the connected keyId and connects first, a typed signing-key error, the session-change guard. Exact ratchet of the root caps to the true canonical CI measurement on top of #888, zero headroom, no trim. SQLite and PostgreSQL in run 42533686487 at 56ee19e667bf6ac44989c2a303c41e5a0a66a605 agree. Bun 1.3.14; rustc 1.99.0.",
-  base: "57a5cbfcaede94a360c1c59f2aaa021982e0145d",
-  sourceCommits: ["56ee19e667bf6ac44989c2a303c41e5a0a66a605"],
+  ruling: "Naomi, TC-2281, 2026-11-08: SDK passes the connected keyId and connects first, a typed signing-key error, the session-change guard, the popup retry branch, the mode check, the after-sign re-check. Exact ratchet of the root caps to the true canonical CI measurement on top of #888, zero headroom, no trim. SQLite and PostgreSQL in run 42539547964 at 5fe7ff54aa3ee702780bcfb5c69c07b638fecd08 agree. Bun 1.3.14; rustc 1.99.0.",
+  base: "37320e609ca24b55d4ec67c8ed89fd93095ceb9e",
+  sourceCommits: ["5fe7ff54aa3ee702780bcfb5c69c07b638fecd08"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42539547964",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487/job/128893204091",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42533686487/job/128893204240",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42539547964/job/128911191781",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42539547964/job/128911191896",
     ],
   },
-  root: { delta: { "index.mjs": 163, "index.cjs": 145 }, ceiling: { "index.mjs": 1492027, "index.cjs": 1432389 } },
-  reason: "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first, and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,027 B and index.cjs 1,432,389 B, +163 / +145 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281",
+  root: { delta: { "index.mjs": 260, "index.cjs": 253 }, ceiling: { "index.mjs": 1492124, "index.cjs": 1432497 } },
+  reason: "Non-replica web-sdk fix: runtime permission grants sign through OpenKey with the connected account's keyId, connect an unconnected client first (in popup mode the grant then rejects OPENKEY_CONNECTED_RETRY so the sign popup opens from a fresh click), and refuse a missing or ambiguous key with OpenKeySigningKeyError before any sign request. Both canonical backends measured index.mjs 1,492,124 B and index.cjs 1,432,497 B, +260 / +253 over the TC-2582 caps. Admit only those root sizes; no owned-budget entry, allowance, first-import, activation, worker or gated cap changes. Details: TC-2281",
 };
 
 const tc2481WebEvidence = [
