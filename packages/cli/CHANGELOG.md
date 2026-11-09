@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.23
+
+### Patch Changes
+
+- 4ce857f: `tc share receive` now finds the shared space's storage server the same way other commands do.
+
+  Details: TC-2594
+
 ## 1.7.0-beta.22
 
 ### Patch Changes

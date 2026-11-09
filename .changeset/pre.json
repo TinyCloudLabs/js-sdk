@@ -61,6 +61,7 @@
     "tc-2534-device-default-decrypt",
     "tc-2550-device-decrypt-manifest",
     "tc-2594-resource-control-routing",
+    "tc-2594-share-receive-routing",
     "tc2380-q2",
     "tidy-names-openkey-grant",
     "vfs-bridge-timeout"

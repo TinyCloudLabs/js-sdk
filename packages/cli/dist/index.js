@@ -32384,17 +32384,16 @@ function createShareAuthorityAdapters(input = {}) {
         registrySequenceStore: createProfileRegistrySequenceStore2(selectedProfile2),
         tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl
       };
-      sharing = (host) => new TinyCloudNode2({
+      sharing = () => new TinyCloudNode2({
         ...registry,
-        ...host === void 0 ? {} : { host },
+        newUserHost: null,
         autoDiscoverLocalNode: false,
         onRegistryFallback: recordRegistryFallbackWarning
       }).sharing;
     }
     const token = parseNativeShareUrl(link4);
-    const decoded = sharing(void 0).decodeLink(token);
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin2(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const share = sharing();
+    const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
     const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
