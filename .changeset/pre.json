@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "courier-unknown-flags",
     "openkey-public-session-key",
     "signout-local-first-fence",
     "space-hosting-probe-node-sdk",
