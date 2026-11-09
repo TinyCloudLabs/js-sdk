@@ -2868,23 +2868,23 @@ export const approvedTc2281OpenKeyConnectedKeyId: LogoutRatchet = {
 };
 
 /**
- * Naomi, TC-2594, 2026-11-09: exact root-only admission after the canonical attempt-2 measurements.
+ * Naomi, TC-2594, 2026-11-09: exact root-only admission after both final-runtime measurements.
  * Other buckets, historical entries and cumulative allowances remain unchanged.
  */
 export const approvedTc2594ResourceTransport: LogoutRatchet = {
   label: "TC-2594 registry-routed control transports and verified share parents, root admission (PR #891)",
-  ruling: "Naomi, TC-2594, 2026-11-09: exact root-only ratchet above tc2281OpenKeyConnectedKeyId, zero headroom. SQLite and PostgreSQL in run 42568864885 attempt 2 at ecb45be4a65992d3aa28559011a5b7b2cd4b2279 agree. Bun 1.3.14; rustc 1.99.0. No non-root cap, owned-budget entry or cumulative allowance change.",
+  ruling: "Naomi, TC-2594, 2026-11-09: exact root-only ratchet above tc2281OpenKeyConnectedKeyId, zero headroom. SQLite and PostgreSQL in run 42605095036 at c5dfe40c3f137ecbbd5faa5cbc6c0c93ecd3927f agree. Bun 1.3.14; rustc 1.99.0. Lower the earlier unmerged row by 163 / 230 bytes after the coherent review follow-up. No non-root cap, owned-budget entry or cumulative allowance change.",
   base: "074317b3b4c2034b3bba5186cebb8ae95a72dd01",
-  sourceCommits: ["ecb45be4a65992d3aa28559011a5b7b2cd4b2279"],
+  sourceCommits: ["c5dfe40c3f137ecbbd5faa5cbc6c0c93ecd3927f"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42568864885",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42568864885/job/129022017573",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42568864885/job/129022017670",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036/job/129118924270",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42605095036/job/129118924478",
     ],
   },
-  root: { delta: { "index.mjs": 3168, "index.cjs": 4405 }, ceiling: { "index.mjs": 1495292, "index.cjs": 1436902 } },
-  reason: "TC-2594: registry-routed policy, identity, delegation and sharing transports; client-side CACAO verification of received and portable parents. Both canonical backends measured index.mjs 1,495,292 B and index.cjs 1,436,902 B, +3168 / +4405 over TC-2281. Public-parent verification cannot reuse the private-key persisted-session WASM verifier; the single-chunk contract prevents a lazy-import saving. Admit only these root sizes; no owned-budget entry, cumulative allowance, first-import, activation, worker or gated cap changes.",
+  root: { delta: { "index.mjs": 3005, "index.cjs": 4175 }, ceiling: { "index.mjs": 1495129, "index.cjs": 1436672 } },
+  reason: "TC-2594: registry-routed policy, identity, delegation and sharing transports; client-side CACAO verification of received and portable parents. Both canonical backends measured index.mjs 1,495,129 B and index.cjs 1,436,672 B, +3005 / +4175 over TC-2281. The coherent review follow-up binds operations to their initiating authority and preserves routed outcomes. Public-parent verification cannot reuse the private-key persisted-session WASM verifier; the single-chunk contract prevents a lazy-import saving. Admit only these root sizes; no owned-budget entry, cumulative allowance, first-import, activation, worker or gated cap changes.",
 };
 
 const tc2481WebEvidence = [

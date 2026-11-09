@@ -5001,7 +5001,7 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
 describe("TC-2594 resource transport root-only admission (#891)", () => {
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(shipped);
-    for (const [format, measured] of [["index.mjs", 1495292], ["index.cjs", 1436902]] as const) {
+    for (const [format, measured] of [["index.mjs", 1495129], ["index.cjs", 1436672]] as const) {
       const ceiling = rootCeilingFor(shipped, format).ceiling;
       expect(measured <= ceiling).toBe(true);
       expect(measured + 1 > ceiling).toBe(true);
