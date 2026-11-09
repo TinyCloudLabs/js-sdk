@@ -5,13 +5,14 @@
  * built under a runtime grant's session.
  */
 import { mkdtempSync, rmSync } from "node:fs";
-import { describe, expect, test, afterAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { base58btc } from "multiformats/bases/base58";
 
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 // Never touch a real home: point HOME and tool homes at a throwaway dir first.
 const tc1910Home = mkdtempSync("/var/tmp/tc1910.");
@@ -19,7 +20,27 @@ if (!tc1910Home.startsWith("/var/tmp/tc1910.")) throw new Error("test home guard
 for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "COURIER_HOME", "TC_HOME"]) {
   process.env[name] = tc1910Home;
 }
-afterAll(() => rmSync(tc1910Home, { recursive: true, force: true }));
+let registry: UnregisteredLocationRegistry;
+let nodeMetadata: Bun.Server<undefined>;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+  const protocol = new NodeWasmBindings().protocolVersion();
+  nodeMetadata = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (request.method === "GET" && new URL(request.url).pathname === "/info") {
+        return Response.json({ protocol, version: "invocation-signing-fixture", features: [], nodeId: NODE_DID });
+      }
+      return new Response("Unknown fixture request", { status: 400 });
+    },
+  });
+});
+afterAll(() => {
+  nodeMetadata?.stop(true);
+  registry?.stop(true);
+  rmSync(tc1910Home, { recursive: true, force: true });
+});
 
 
 const KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
@@ -96,7 +117,7 @@ async function setup() {
       sql: { "": ["tinycloud.sql/read"] },
     },
   });
-  const node = new TinyCloudNode({ host: "http://127.0.0.1:1", signer, wasmBindings: wasm });
+  const node = new TinyCloudNode({ host: nodeMetadata.url.origin, tinycloudRegistryUrl: registry.url.origin, signer, wasmBindings: wasm });
   await node.restoreSession(base as any);
   return { wasm, node, base, mint, networkId, spaceId };
 }
@@ -190,7 +211,8 @@ describe("invocation signing consistency (TC-1910)", () => {
       rawAbilities: { [networkId]: [CREATE, DECRYPT] },
     });
     const owner = new TinyCloudNode({
-      host: "http://127.0.0.1:1",
+      host: nodeMetadata.url.origin,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(KEY),
       wasmBindings: wasm,
     });
@@ -261,7 +283,7 @@ describe("invocation signing consistency (TC-1910)", () => {
       };
       const service = (node as any).createEncryptionService({
         graph,
-        host: "http://127.0.0.1:1",
+        host: nodeMetadata.url.origin,
         session: base,
         did: node.did,
         address: base.address,

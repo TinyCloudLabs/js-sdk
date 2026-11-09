@@ -20,7 +20,7 @@ import { dropCommittedDelegation } from "./pending-code.js";
 import { carryRefusedDelegation, isPermanentRefusal, markMaybeGranted } from "./refusal.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
-import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, type ApprovalWait } from "./approval-wait.js";
+import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, firstCheckTimeoutMs, type ApprovalWait } from "./approval-wait.js";
 
 interface PendingApproval {
   version: 1;
@@ -357,8 +357,8 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
 }
 
 /** The wait ended with the owner's approval still outstanding: nothing is lost, the same link stays pending. */
-function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CLIError {
-  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
+function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait, created = false): CLIError {
+  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt }, created);
 }
 
 /**
@@ -507,16 +507,27 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       await tryOpenBrowser(entry.approvalUrl);
     }
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
-    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait);
+    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
+    // An approval not yet discovered gets its first check with the full request limit whatever the deadline (see firstCheckTimeoutMs):
+    // the deadline decides only after an answer. An entry that already holds a result reference keeps the old limits and outcomes.
+    let answered = false;
     for (;;) {
+      const firstWait = !answered && entry.resultRef === undefined ? approvalWait : undefined;
       let response: Response;
-      try { response = await post(entry, "discover", signingKey, approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined)); }
-      catch {
+      try { response = await post(entry, "discover", signingKey, firstWait ? firstCheckTimeoutMs(firstWait) : approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined)); }
+      catch (error) {
+        // No answer at all within the first check's full limit: OpenKey is not reachable. That is not "still pending".
+        if (firstWait && error instanceof Error && error.name === "TimeoutError") {
+          // The hint is set here so the generic network hint (about the TinyCloud node profile) is not attached.
+          throw new CLIError("NETWORK_ERROR", `OpenKey did not answer the approval status check within ${Math.round(firstCheckTimeoutMs(firstWait) / 1000)} seconds. The approval request is saved: run the same command again.`, ExitCode.NETWORK_ERROR,
+            { hint: "The saved approval request resumes on the next run; no new link is needed." });
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
+      answered = true;
       if (response.status === 202) {
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;

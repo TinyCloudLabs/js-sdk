@@ -1,3 +1,5 @@
+import { PartialNodeWriteError, routingFailure } from "@tinycloud/sdk-services";
+
 export const OPERATION_ERROR_CODES = [
   "INPUT_INVALID",
   "OPERATION_NOT_FOUND",
@@ -17,6 +19,14 @@ export const OPERATION_ERROR_CODES = [
   "DELEGATION_REJECTED",
   "ENCRYPTION_NETWORK_UNRESOLVED",
   "NODE_UNREACHABLE",
+  "NODE_NOT_RESPONDING",
+  "DECRYPTION_DEPENDENCY_UNAVAILABLE",
+  "NODE_IDENTITY_MISMATCH",
+  "PARTIAL_NODE_WRITE",
+  "RESOURCE_NOT_ROUTED",
+  "REGISTRY_UNAVAILABLE",
+  "NODE_NOT_FOUND",
+  "NODE_REGISTRY_ENTRY_EXISTS",
   "NODE_ERROR",
   "STORAGE_QUOTA_EXCEEDED",
   "KV_NOT_FOUND",
@@ -27,6 +37,8 @@ export const OPERATION_ERROR_CODES = [
   "SQL_EXECUTION_FAILED",
   "SQL_RESULT_LIMIT_EXCEEDED",
   "SQL_VALUE_UNSAFE",
+  "READ_SOURCE_CHANGED",
+  "READ_CONTEXT_MISMATCH",
   "SECRET_READ_FAILED",
   "SECRET_DECRYPT_FAILED",
   "OUTPUT_INVALID",
@@ -91,12 +103,62 @@ export function nodeRetryOperationError(error: unknown): OperationError | undefi
   if (code === "OUTCOME_UNKNOWN") {
     return operationError(
       "NODE_ERROR",
-      "The TinyCloud node may have applied the write; read the data back before retrying.",
+      "The storage server may have applied the write; read the data back before retrying.",
       { retryable: false },
     );
   }
   if (code !== "NODE_BUSY" && code !== "REQUEST_TIMEOUT") return undefined;
-  return operationError("NODE_ERROR", "The TinyCloud node was busy and applied nothing; try again shortly.", { retryable: true });
+  return operationError("NODE_ERROR", "The storage server was busy and applied nothing; try again shortly.", { retryable: true });
+}
+
+const ROUTING_OPERATION_ERRORS: Readonly<Record<NonNullable<ReturnType<typeof routingFailure>>["code"], OperationError>> = {
+  NODE_NOT_RESPONDING: { code: "NODE_NOT_RESPONDING", message: "Your storage server isn't responding. Try again in a minute.", retryable: true },
+  DECRYPTION_DEPENDENCY_UNAVAILABLE: { code: "DECRYPTION_DEPENDENCY_UNAVAILABLE", message: "The decryption service isn't responding. Try again in a minute.", retryable: true },
+  NODE_IDENTITY_MISMATCH: { code: "NODE_IDENTITY_MISMATCH", message: "This storage server isn't the one in your storage settings, so TinyCloud didn't use it.", retryable: false },
+  PARTIAL_NODE_WRITE: { code: "PARTIAL_NODE_WRITE", message: "This didn't finish on every server that needs a copy. Try again.", retryable: false },
+  RESOURCE_NOT_ROUTED: { code: "RESOURCE_NOT_ROUTED", message: "Your storage settings don't say where this data goes.", retryable: false },
+  registry_unavailable: { code: "REGISTRY_UNAVAILABLE", message: "Couldn't get your storage settings. Try again in a few minutes.", retryable: true },
+  node_not_found: { code: "NODE_NOT_FOUND", message: "No storage server is set for this data.", retryable: false },
+  node_registry_entry_exists: { code: "NODE_REGISTRY_ENTRY_EXISTS", message: "That storage server isn't in your storage settings, so it wasn't used.", retryable: false },
+};
+
+function partialRoutingDetails(partial: PartialNodeWriteError) {
+  return {
+    succeeded: partial.succeeded,
+    failed: partial.failed.map(({ url, status, cause }) => {
+      const code = routingFailure(cause)?.code;
+      return { url, ...(status === undefined ? {} : { status }), ...(code === undefined ? {} : { code }) };
+    }),
+  };
+}
+
+/** Preserve routing codes without exposing node response bodies or private causes. */
+export function routingOperationError(error: unknown): OperationError | undefined {
+  const failure = routingFailure(error);
+  if (!failure) return undefined;
+  const projected = ROUTING_OPERATION_ERRORS[failure.code];
+  const message = failure.code === "registry_unavailable" && failure.meta?.reason === "no-saved-settings"
+    ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes."
+    : projected.message;
+  return operationError(projected.code, message, {
+    retryable: projected.retryable,
+    ...(error instanceof PartialNodeWriteError ? { details: partialRoutingDetails(error) } : {}),
+  });
+}
+
+/** Only grant registration may project all-unavailable partials as retryable availability. */
+export function activationRoutingOperationError(error: unknown): OperationError | undefined {
+  if (!(error instanceof PartialNodeWriteError)) return routingOperationError(error);
+  const details = partialRoutingDetails(error);
+  // Retrying the same grant registration is safe: no operation data has been written.
+  const unavailable = details.failed.length > 0 &&
+    details.failed.every(({ code }) => code === "NODE_NOT_RESPONDING");
+  const projected = ROUTING_OPERATION_ERRORS[unavailable ? "NODE_NOT_RESPONDING" : "PARTIAL_NODE_WRITE"];
+  return operationError(projected.code,
+    unavailable ? projected.message : "This permission wasn't saved on every server that needs it. Try again.", {
+      retryable: projected.retryable,
+      details,
+    });
 }
 
 /**

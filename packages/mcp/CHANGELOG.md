@@ -1,5 +1,191 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.12
+
+### Minor Changes
+
+- 3319ede: The hosted personal-records tools use one layout: the owner's `applications` space, one folder per app (`xyz.tinycloud.tinyapps.<app>/`) with a discovery entry, as the `tc-apps` skill puts a new app. They no longer read or write the older `default`-space folder `xyz.tinycloud.agent-data/`, and `tinycloud_apps_move` (and the `tinycloud.apps.move` operation) is removed. Records already saved in the older folder stay where they are, untouched, and are not shown by the chat tools. A new app now needs one OpenKey request (two for the first new app without the `app` input of `tinycloud_apps_context`), because there is no read-only look at the older app list any more.
+
+  What breaks for callers: `tinycloud.apps.query` has no `layout` input; `tinycloud.apps.context` returns `apps` (app, title, copy) and no longer returns `legacy`, `catalog` or each app's `layout`; keys under `xyz.tinycloud.agent-data/` are refused as invalid personal-record keys; the package no longer exports `TC_APPS_LEGACY_ROOT`, `TC_APPS_LEGACY_DATABASE` or `isTcAppsPermission`. The `tinycloud_apps_context` and `tinycloud_apps_query` tools are no longer annotated destructive (neither deletes a record).
+
+  Same-name apps: if the command-line skill created an older-layout app and a chat app then creates an app with the same name, the skill lists the new app (a discovery entry means the new layout) and not the older records of that name. They are not deleted.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- Updated dependencies [3319ede]
+  - @tinycloud/operations@0.9.0-beta.9
+
+## 0.10.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [01f5fb6]
+  - @tinycloud/operations@0.9.0-beta.8
+
+## 0.10.0-beta.10
+
+### Patch Changes
+
+- 2139b24: Send only the public session key to OpenKey during sign-in.
+
+  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+
+  Details: TC-2582
+
+- Updated dependencies [2139b24]
+  - @tinycloud/node-sdk@3.12.0-beta.5
+  - @tinycloud/operations@0.9.0-beta.7
+
+## 0.10.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/operations@0.9.0-beta.6
+  - @tinycloud/node-sdk@3.12.0-beta.4
+
+## 0.10.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/operations@0.9.0-beta.5
+
+## 0.10.0-beta.7
+
+### Patch Changes
+
+- 39b5425: The hosted MCP approval reason no longer ends with "approve only if that is you". It still names the requesting TinyCloud account. The callback already refuses an approval signed by any other account (`approval_owner_mismatch`), so the approver isn't asked to make that check.
+
+  Details: TC-2526
+
+## 0.10.0-beta.6
+
+### Patch Changes
+
+- 951de44: Use client-neutral guidance on unavailable approval links and log approval GET reason codes with the pathname only.
+  Details: TC-2416
+
+## 0.10.0-beta.5
+
+### Minor Changes
+
+- 2a1ac15: The optional personal-app context `app` input accepts `healthlog` and `recipes`. Health Log requests its app-list and database access in one approval, with read-only access when requested. Recipes bundles read access to its notes and requests database reads separately after learning the database name. Tool input descriptions explain `app` and `access`.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- Updated dependencies [2a1ac15]
+- Updated dependencies [2a1ac15]
+  - @tinycloud/operations@0.9.0-beta.4
+
+## 0.10.0-beta.4
+
+### Minor Changes
+
+- b09d4c0: The hosted personal-records tools keep new apps in the owner's `applications` space under `xyz.tinycloud.tinyapps.<app>/`, with a discovery entry, so records saved through the connector match the CLI skill's (`tc-apps` 0.3.10). Apps already in the `default` space under `xyz.tinycloud.agent-data/` stay there until moved. The approval screens change: first use asks for the app list (`xyz.tinycloud.tinyapps.catalog/`); a new app asks for its own folder (`xyz.tinycloud.tinyapps.<app>/`), then for a read-only look at the older catalog (`xyz.tinycloud.agent-data/catalog/`) unless an older grant covers it, because OpenKey signs one space per delegation; later apps ask for their own folder only. The fast copy is one database per app, `xyz.tinycloud.tinyapps.<app>/index`. `tinycloud_apps_query` now needs a `layout` and one app per call; `tinycloud_apps_context` returns `apps` and `legacy`.
+  Details: TC-2416
+
+## 0.10.0-beta.3
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` remain annotated as potentially destructive: context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. They are not read-only. The query accepts one read-only SELECT and does not change canonical records; context only changes the timezone when one is supplied. Only `tinycloud_apps_write` mutates app records.
+  Details: TC-2416
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+  - @tinycloud/operations@0.9.0-beta.3
+
+## 0.9.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+  - @tinycloud/operations@0.8.1-beta.2
+
+## 0.9.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+  - @tinycloud/operations@0.8.1-beta.1
+
+## 0.9.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+  - @tinycloud/operations@0.8.1-beta.0
+
+## 0.9.0
+
+### Minor Changes
+
+- 3b759cf: Add explicit reusable read-only consent for selected KV prefixes and exact SQL databases in one owner space, without widening ordinary exact-key GET or HEAD approval requests.
+
+  Add complete, bounded KV and SQL retrieval through `tinycloud.read` / `tinycloud_read`, with digest-bound byte continuations, provenance, independent recipient authorization, and explicit errors for changed sources or mismatched retrieval contexts. Hosted oversized reads now point callers to the bounded retrieval path. Existing acquisition, query, and response limits remain in place.
+
+  Expose opaque KV listing continuations and return nonretryable input errors for rejected cursors, with restart guidance. Preserve handoff identity when optional SQL options are explicitly undefined. Public ChatGPT tool exposure and the native MCP service's signed capability ceiling remain unchanged.
+
+  Details: TC-1401
+
+- d55eacc: The MCP HTTP endpoint (hosted and self-hosted) now answers calls and CORS preflights from any browser Origin instead of an allowlist. Every call is still authorized only by the OAuth access token in the `Authorization: Bearer` header: a call without a valid token gets 401 with `WWW-Authenticate`, whatever its Origin. Responses carry `Access-Control-Allow-Origin: *` and `Vary: Origin`, never `Access-Control-Allow-Credentials`, and expose only `WWW-Authenticate`; a preflight allows a fixed list of the headers MCP clients send. The `allowedOrigins` config option and the `TC_MCP_ALLOWED_ORIGINS` environment variable are removed: a set `TC_MCP_ALLOWED_ORIGINS` is now ignored, and `allowedOrigins` is removed from the `createHostedMcpApp` config type, so TypeScript callers that set it get a compile error (JavaScript callers' value is ignored). The native-service path still refuses any request that carries an Origin.
+
+  Details: TC-2394
+
+### Patch Changes
+
+- 14be44e: When OpenKey's token introspection cannot answer, the hosted MCP now serves a token that OpenKey confirmed active only for 60 seconds after the confirming question was sent to OpenKey (and until the token expires), counted on a monotonic clock so that a wall-clock step cannot extend it, instead of for the token's whole lifetime. A token revoked during an introspection outage therefore stops working within about 60 seconds, however long the token lives. Tokens OpenKey never confirmed to this server, and tokens answered inactive, are still refused. The 30-second active-answer cache is unchanged.
+
+  Details: TC-2395
+
+- Updated dependencies [dc48089]
+- Updated dependencies [3b759cf]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/operations@0.8.0
+
+## 0.9.0-beta.5
+
+### Minor Changes
+
+- 3b759cf: Add explicit reusable read-only consent for selected KV prefixes and exact SQL databases in one owner space, without widening ordinary exact-key GET or HEAD approval requests.
+
+  Add complete, bounded KV and SQL retrieval through `tinycloud.read` / `tinycloud_read`, with digest-bound byte continuations, provenance, independent recipient authorization, and explicit errors for changed sources or mismatched retrieval contexts. Hosted oversized reads now point callers to the bounded retrieval path. Existing acquisition, query, and response limits remain in place.
+
+  Expose opaque KV listing continuations and return nonretryable input errors for rejected cursors, with restart guidance. Preserve handoff identity when optional SQL options are explicitly undefined. Public ChatGPT tool exposure and the native MCP service's signed capability ceiling remain unchanged.
+
+  Details: TC-1401
+
+### Patch Changes
+
+- Updated dependencies [3b759cf]
+  - @tinycloud/operations@0.8.0-beta.3
+
+## 0.9.0-beta.4
+
+### Minor Changes
+
+- d55eacc: The MCP HTTP endpoint (hosted and self-hosted) now answers calls and CORS preflights from any browser Origin instead of an allowlist. Every call is still authorized only by the OAuth access token in the `Authorization: Bearer` header: a call without a valid token gets 401 with `WWW-Authenticate`, whatever its Origin. Responses carry `Access-Control-Allow-Origin: *` and `Vary: Origin`, never `Access-Control-Allow-Credentials`, and expose only `WWW-Authenticate`; a preflight allows a fixed list of the headers MCP clients send. The `allowedOrigins` config option and the `TC_MCP_ALLOWED_ORIGINS` environment variable are removed: a set `TC_MCP_ALLOWED_ORIGINS` is now ignored, and `allowedOrigins` is removed from the `createHostedMcpApp` config type, so TypeScript callers that set it get a compile error (JavaScript callers' value is ignored). The native-service path still refuses any request that carries an Origin.
+
+  Details: TC-2394
+
 ## 0.8.7-beta.3
 
 ### Patch Changes

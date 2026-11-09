@@ -78,6 +78,8 @@
     { "command": "node health", "status": "legacy" },
     { "command": "node version", "status": "legacy" },
     { "command": "node status", "status": "legacy" },
+    { "command": "registry", "status": "excluded", "reason": "Local signed registry cache command group." },
+    { "command": "registry show [account-id]", "status": "migrated", "operationId": "tinycloud.registry.show", "operationVersion": 1 },
     { "command": "profile", "status": "legacy" },
     { "command": "profile list", "status": "legacy" },
     { "command": "profile create <name>", "status": "legacy" },
@@ -202,6 +204,7 @@
       "command": "apps install <app_id>",
       "status": "excluded",
       "reason": "Local installer: verifies pinned Share bytes, runs pinned DDL, writes knowledge files via SDK KV/SQL; not a shared operation."
-    }
+    },
+    { "command": "bug-report", "status": "excluded", "reason": "Local CLI command that uploads to bug-report intake, with no TinyCloud operation behind it; outside the Operations registry." }
   ]
 }

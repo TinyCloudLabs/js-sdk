@@ -7,12 +7,14 @@ import {
   type ECDH,
 } from "node:crypto";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { deviceRefusal, deviceRefusalMessage } from "../lib/raw-encryption.js";
 import { generateKey, keyToDID } from "./local-key.js";
-import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
+import { validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
   declinedPermissions,
   expiryLimit,
@@ -225,13 +227,15 @@ function deviceAuthRateLimit(response: Response): CLIError {
 }
 
 
-function publicSessionJwk(value: object): object {
-  const publicJwk = publicJwkForDelegation(value);
-  const record = publicJwk as Record<string, unknown>;
-  if (record.kty !== "OKP" || record.crv !== "Ed25519" || typeof record.x !== "string") {
+function publicSessionJwk(value: object): Record<string, string> {
+  let jwk: Record<string, string> = {};
+  try {
+    jwk = publicJwk(value);
+  } catch { /* refused below */ }
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
     throw new Error("CLI session key is not a public Ed25519 JWK");
   }
-  return publicJwk;
+  return jwk;
 }
 
 function publicRelayJwk(value: unknown): DeviceRelayEnvelope["ephemeralPublicJwk"] {
@@ -429,13 +433,12 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) =>
-    permission.service === "tinycloud.encryption" ||
-    permission.space === "secrets" ||
-    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+  // OpenKey's device flow admits one encryption entry, decrypt on the owner's own default network.
+  const refused = deviceRefusal(input.permissions);
+  if (refused !== undefined) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR,
     );
   }

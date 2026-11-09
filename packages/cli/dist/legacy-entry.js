@@ -311,6 +311,197 @@ var init_replication_registry = __esm({
   }
 });
 
+// src/lib/diagnostic-logs.ts
+import { constants as fsConstants2 } from "fs";
+import { mkdir as mkdir2, open as open2, readFile as readFile2, rm as rm2, lstat, writeFile as writeFile2 } from "fs/promises";
+import { join as join2 } from "path";
+function redactDiagnosticText(input) {
+  let text2 = input;
+  let count = 0;
+  const replace = (pattern, replacement) => {
+    text2 = text2.replace(pattern, (...matches) => {
+      count += 1;
+      return typeof replacement === "string" ? replacement : replacement(...matches);
+    });
+  };
+  replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "[ANSI_REMOVED]");
+  replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
+  replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
+  replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
+  replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
+  replace(/\b(?:0x)?[a-f0-9]{64}\b/gi, "[REDACTED_KEY]");
+  replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
+  replace(/\bdid:[a-z0-9]+:[A-Za-z0-9._:%-]+/gi, "[REDACTED_DID]");
+  replace(/\b0x[a-f0-9]{40}\b/gi, "[REDACTED_ADDRESS]");
+  replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
+  replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
+  replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
+  replace(/(--(?:profile|space|user|owner|account|key|name)(?:=|\s+))(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s,;]+)/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*([:=]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`]?))[^\s,"'`}]+["'`]?/gi, (_match, label, separator) => `${label}${separator}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?(?!["'`]\[REDACTED(?:_[A-Z]+)?\]["'`])["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
+  replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");
+  replace(/("(?:name|fullName|user|owner)"\s*:\s*)(?!\[REDACTED(?:_[A-Z]+)?\])"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  return { text: text2, count };
+}
+function redactDiagnosticLog(input) {
+  let count = 0;
+  const lines = [];
+  const redactValue = (value4) => {
+    if (typeof value4 === "string") {
+      const result = redactDiagnosticText(value4);
+      count += result.count;
+      return result.text;
+    }
+    if (Array.isArray(value4)) return value4.map(redactValue);
+    if (value4 && typeof value4 === "object") {
+      const record3 = value4;
+      if (typeof record3.localRedactions === "number" && Number.isFinite(record3.localRedactions)) {
+        count += Math.max(0, record3.localRedactions);
+      }
+      return Object.fromEntries(Object.entries(record3).map(([key, child]) => [key, redactValue(child)]));
+    }
+    return value4;
+  };
+  for (const line of input.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      lines.push(JSON.stringify(redactValue(JSON.parse(line))));
+    } catch {
+      count += 1;
+      lines.push(JSON.stringify({ message: "Malformed CLI log entry omitted", localRedactions: 1 }));
+    }
+  }
+  return { text: `${lines.join("\n")}${input.endsWith("\n") && lines.length ? "\n" : ""}`, count };
+}
+function redactArgs(args) {
+  const values = [];
+  let count = 0;
+  const booleanFlags = /* @__PURE__ */ new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") break;
+    if (!arg.startsWith("-")) continue;
+    const shortFlag = /^-[A-Za-z]/.exec(arg)?.[0];
+    if (shortFlag && arg.length > shortFlag.length) {
+      values.push(`${shortFlag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
+    const equals7 = arg.indexOf("=");
+    const flag = equals7 < 0 ? arg : arg.slice(0, equals7);
+    if (equals7 >= 0) {
+      values.push(`${flag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
+    if (booleanFlags.has(arg)) {
+      values.push(arg);
+      continue;
+    }
+    const next = args[index + 1];
+    if (next && next !== "--" && !booleanFlags.has(next)) {
+      values.push(`${arg}=[REDACTED]`);
+      count += 1;
+      index += 1;
+    } else values.push(arg);
+  }
+  return { values, count };
+}
+function redactDiagnosticEntry(entry) {
+  const command = redactDiagnosticText(entry.command);
+  const args = redactArgs(entry.args);
+  const errorCode2 = entry.errorCode ? redactDiagnosticText(entry.errorCode) : void 0;
+  const errorMessage3 = entry.errorMessage ? redactDiagnosticText(entry.errorMessage) : void 0;
+  return {
+    command: command.text,
+    args: args.values,
+    exitCode: entry.exitCode,
+    ...errorCode2 ? { errorCode: errorCode2.text } : {},
+    ...errorMessage3 ? { errorMessage: errorMessage3.text } : {},
+    cliVersion: entry.cliVersion,
+    nodeVersion: entry.nodeVersion,
+    durationMs: entry.durationMs,
+    localRedactions: command.count + args.count + (errorCode2?.count ?? 0) + (errorMessage3?.count ?? 0)
+  };
+}
+async function recordDiagnosticFailure(error, root) {
+  if (!activeCommand || activeCommand === "bug-report" || activeDisabled || process.env.TINYCLOUD_CLI_LOGS === "0") return;
+  await appendDiagnosticLog({
+    root,
+    entry: {
+      command: activeCommand,
+      args: activeArgs,
+      exitCode: error.exitCode,
+      errorCode: error.code,
+      errorMessage: error.message,
+      cliVersion: activeCliVersion,
+      nodeVersion: process.version,
+      durationMs: Date.now() - activeStartedAt
+    }
+  });
+}
+async function appendDiagnosticLog(options) {
+  if (options.disabled) return;
+  const maximum = options.maxBytes ?? MAX_BYTES;
+  await mkdir2(options.root, { recursive: true, mode: 448 });
+  const path = join2(options.root, FILE_NAME);
+  const line = `${JSON.stringify({ timestamp: (/* @__PURE__ */ new Date()).toISOString(), ...redactDiagnosticEntry(options.entry) })}
+`;
+  const lineBytes = Buffer.byteLength(line);
+  if (lineBytes >= maximum) return;
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    if (current.size + lineBytes > maximum) {
+      const old = await readFile2(path);
+      const tail = old.subarray(Math.max(0, old.length - Math.floor(maximum / 2)));
+      const firstNewline = tail.indexOf(10);
+      await writeFile2(path, firstNewline < 0 ? Buffer.alloc(0) : tail.subarray(firstNewline + 1), { mode: 384 });
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const file = await open2(path, fsConstants2.O_WRONLY | fsConstants2.O_CREAT | fsConstants2.O_APPEND | fsConstants2.O_NOFOLLOW, 384);
+  try {
+    await file.chmod(384);
+    await file.write(line);
+  } finally {
+    await file.close();
+  }
+}
+async function readDiagnosticLogs(root, maxBytes = MAX_BYTES) {
+  const path = join2(root, FILE_NAME);
+  let content;
+  try {
+    const details = await lstat(path);
+    if (details.isSymbolicLink() || !details.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    content = await readFile2(path);
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+  if (content.length <= maxBytes) return content.toString("utf8");
+  const tail = content.subarray(content.length - maxBytes).toString("utf8");
+  const firstNewline = tail.indexOf("\n");
+  return firstNewline < 0 ? "" : tail.slice(firstNewline + 1);
+}
+async function clearDiagnosticLogs(root) {
+  await rm2(join2(root, FILE_NAME), { force: true });
+}
+var FILE_NAME, MAX_BYTES, activeCommand, activeArgs, activeDisabled, activeCliVersion, activeStartedAt;
+var init_diagnostic_logs = __esm({
+  "src/lib/diagnostic-logs.ts"() {
+    "use strict";
+    FILE_NAME = "cli-diagnostics.jsonl";
+    MAX_BYTES = 1024 * 1024;
+    activeArgs = [];
+    activeDisabled = false;
+    activeCliVersion = "unknown";
+    activeStartedAt = Date.now();
+  }
+});
+
 // src/output/safe-text.ts
 function escape(match) {
   return `\\u{${match.codePointAt(0).toString(16)}}`;
@@ -403,6 +594,9 @@ function recordWarnings(warnings) {
   const holder = globalThis;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
+function recordRegistryFallbackWarning(_message, reason = "using_default_node") {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
+}
 function drainWarnings() {
   const holder = globalThis;
   const warnings = holder[PENDING_WARNINGS] ?? [];
@@ -430,9 +624,16 @@ function outputJson(data) {
   process.stdout.write(safeJsonStringify(data, 2) + "\n");
 }
 function warningLine(warnings) {
-  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
-  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`;
+  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
+  const parts = [];
+  if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
+  if (skipped.length > 0) {
+    const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+    const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
+    parts.push(`${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`);
+  }
+  return parts.join(" ");
 }
 function outputError(code5, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
@@ -647,7 +848,7 @@ var init_storage2 = __esm({
 
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
-import { join as join2 } from "path";
+import { join as join3 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
@@ -659,6 +860,7 @@ import {
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
@@ -668,6 +870,15 @@ function approvalPendingOf(error) {
   const { step, of, approvalUrl, expiresAt } = pending;
   if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
   return { step, of, approvalUrl, expiresAt };
+}
+function registryUnavailableError(error) {
+  const failure = routingFailure(error);
+  if (failure?.code !== "registry_unavailable") return void 0;
+  return new CLIError(
+    "REGISTRY_UNAVAILABLE",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't get your storage settings. Try again in a few minutes.",
+    ExitCode.ERROR
+  );
 }
 function cliErrorFromService(error, message = error.message) {
   if (error instanceof CLIError) return error;
@@ -680,6 +891,10 @@ function cliErrorFromService(error, message = error.message) {
   const status = error.status ?? error.statusCode;
   if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
   const verdict = authorizationVerdictOf({ ...error, meta });
+  if (verdict === void 0) {
+    const unavailable = registryUnavailableError(error);
+    if (unavailable) return unavailable;
+  }
   if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
@@ -732,6 +947,8 @@ function wrapError(error) {
   if (verdict === "forbidden") {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
+  const unavailable = registryUnavailableError(error);
+  if (unavailable) return unavailable;
   if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
@@ -779,8 +996,9 @@ function storageFullError(error, progress) {
   const { message, hint } = describeStorageRejection(rejection, progress);
   return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
-function handleError(error) {
+async function handleError(error) {
   const cliError = wrapError(error);
+  await recordDiagnosticFailure(cliError, CONFIG_DIR).catch(() => void 0);
   const pending = approvalPendingOf(cliError);
   if (pending) {
     outputJson({ pending });
@@ -886,7 +1104,7 @@ function capSpecFromAuthMeta(resource, action) {
 function buildNetworkHint() {
   const readHost = (name) => {
     try {
-      const raw = readFileSync(join2(PROFILES_DIR, name, "profile.json"), "utf8");
+      const raw = readFileSync(join3(PROFILES_DIR, name, "profile.json"), "utf8");
       return JSON.parse(raw).host;
     } catch {
       return void 0;
@@ -928,6 +1146,7 @@ var init_errors = __esm({
     "use strict";
     init_replication_registry();
     init_constants();
+    init_diagnostic_logs();
     init_formatter();
     init_safe_text();
     init_storage2();
@@ -2719,10 +2938,28 @@ function isSharePublishingPrefixDecrypt(permission2) {
 function isDeviceDefaultDecrypt(permission2) {
   return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
+function deviceRefusal(entries) {
+  for (const entry of entries) {
+    if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
+    if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
+  }
+  return void 0;
+}
+function deviceRefusalMessage(refused, subject, next) {
+  const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
+  if (refused === "secrets") {
+    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
+  }
+  const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
+  return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
+}
+var DEVICE_DECRYPT_ALLOWED;
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
     init_manifest();
+    init_safe_text();
+    DEVICE_DECRYPT_ALLOWED = 'tinycloud.encryption/decrypt on the default network (space "default", path "")';
   }
 });
 
@@ -2842,8 +3079,8 @@ var init_publishing_manifest = __esm({
 });
 
 // src/lib/permissions.ts
-import { appendFile, chmod, readFile as readFile2 } from "fs/promises";
-import { join as join3 } from "path";
+import { appendFile, chmod, readFile as readFile3 } from "fs/promises";
+import { join as join4 } from "path";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact
@@ -2878,10 +3115,10 @@ function permissionRequestsPath(profile) {
   return sharedAuthRequestsPath(profile);
 }
 function grantHistoryPath(profile) {
-  return join3(profilePath(profile), "auth-grants.jsonl");
+  return join4(profilePath(profile), "auth-grants.jsonl");
 }
 function localGrantArtifactsPath(profile) {
-  return join3(profilePath(profile), "auth-grant-artifacts.json");
+  return join4(profilePath(profile), "auth-grant-artifacts.json");
 }
 function createPermissionRequestArtifact(params) {
   return buildPermissionRequestArtifact({
@@ -2914,7 +3151,7 @@ async function loadLocalGrantArtifacts(profile) {
     if (!await fileExists(path)) return [];
     let parsed;
     try {
-      parsed = JSON.parse(await readFile2(path, "utf8"));
+      parsed = JSON.parse(await readFile3(path, "utf8"));
     } catch {
       return [];
     }
@@ -3042,11 +3279,11 @@ async function readGrantHistory(profile) {
     if (!directory) return [];
     const path = grantHistoryPath(profile);
     if (!await fileExists(path)) return [];
-    const raw = await readFile2(path, "utf8");
+    const raw = await readFile3(path, "utf8");
     return raw.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
   });
 }
-async function parseCapSpec(spec, profile) {
+async function parseCapSpec(spec, profile, options = {}) {
   const firstColon = spec.indexOf(":");
   const lastColon = spec.lastIndexOf(":");
   if (firstColon <= 0 || lastColon <= firstColon) {
@@ -3069,10 +3306,10 @@ async function parseCapSpec(spec, profile) {
   }
   return (await resolvePermissionSpaces([
     { service, space, path, actions }
-  ], profile))[0];
+  ], profile, options))[0];
 }
-async function loadPermissionRequest(source, profile) {
-  const raw = JSON.parse(await readFile2(source, "utf8"));
+async function loadPermissionRequest(source, profile, options = {}) {
+  const raw = JSON.parse(await readFile3(source, "utf8"));
   if (!Array.isArray(raw.permissions)) {
     throw new CLIError(
       "INVALID_PERMISSION_REQUEST",
@@ -3080,7 +3317,7 @@ async function loadPermissionRequest(source, profile) {
       ExitCode.USAGE_ERROR
     );
   }
-  return resolvePermissionSpaces(raw.permissions, profile);
+  return resolvePermissionSpaces(raw.permissions, profile, options);
 }
 async function loadManifestPermissions(source, profile, options = {}) {
   const raw = await loadManifestText(source);
@@ -3089,36 +3326,22 @@ async function loadManifestPermissions(source, profile, options = {}) {
     manifest.permissions = manifest.permissions.filter((entry) => !(entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"));
   }
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
-  if (options.device && typeof manifest.app_id === "string" && (manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") || Array.isArray(manifest.permissions) && manifest.permissions.some((entry) => entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+  if (options.device && typeof manifest.app_id === "string") {
+    const refused = manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") ? "secrets" : deviceRefusal(appManifestEntries(manifest));
+    if (refused !== void 0) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+    }
   }
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest);
-    if (options.device && resolved.resources.some((entry) => entry.service === "tinycloud.encryption" || entry.space === "secrets" || entry.space?.endsWith(":secrets"))) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    const refused = options.device ? deviceRefusal(resolved.resources) : void 0;
+    if (refused !== void 0) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
   if (typeof manifest.app_id === "string") {
-    const permissions = (manifest.permissions ?? []).filter((entry) => entry !== null && typeof entry === "object").map((entry) => {
-      const service = normalizeService(String(entry.service ?? ""));
-      const path = String(entry.path ?? "");
-      const actions = expandActionShortNames(
-        service,
-        Array.isArray(entry.actions) ? entry.actions.map(String) : []
-      );
-      if (isRawEncryptionPermission({ service, path })) {
-        return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
-      }
-      const resolvedPath = entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id);
-      return {
-        service,
-        space: String(manifest.space ?? "applications"),
-        path: resolvedPath,
-        actions,
-        ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
-      };
-    });
+    const permissions = appManifestEntries(manifest);
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
     return resolvePermissionSpaces(permissions, profile, options);
   }
@@ -3127,6 +3350,26 @@ async function loadManifestPermissions(source, profile, options = {}) {
     'Manifest must contain either SDK field "id" or app manifest field "app_id".',
     ExitCode.USAGE_ERROR
   );
+}
+function appManifestEntries(manifest) {
+  return (manifest.permissions ?? []).filter((entry) => entry !== null && typeof entry === "object").map((entry) => appManifestEntry(entry, manifest));
+}
+function appManifestEntry(entry, manifest) {
+  const service = normalizeService(String(entry.service ?? ""));
+  const path = String(entry.path ?? "");
+  const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
+  if (isRawEncryptionPermission({ service, path })) {
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+  }
+  const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
+  const ownSpace = encryption && typeof entry.space === "string" ? entry.space : void 0;
+  return {
+    service,
+    space: ownSpace ?? String(manifest.space ?? "applications"),
+    path: encryption || entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id),
+    actions,
+    ...Array.isArray(entry.caveats) ? { caveats: entry.caveats } : {}
+  };
 }
 async function secretPermissionsFromAppManifest(manifest, profile, requestedOwner) {
   if (manifest.secrets === void 0) {
@@ -3219,6 +3462,10 @@ async function resolvePermissionSpaces(entries, profile, options = {}) {
       continue;
     }
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
+      if (options.device) {
+        resolved.push({ service, space: "default", path: "", actions });
+        continue;
+      }
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }
@@ -3248,14 +3495,14 @@ async function loadManifestText(source) {
     return Buffer.from(source.slice("base64:".length), "base64").toString("utf8");
   }
   if (await fileExists(source)) {
-    return readFile2(source, "utf8");
+    return readFile3(source, "utf8");
   }
   try {
     const decoded = Buffer.from(source, "base64").toString("utf8");
     JSON.parse(decoded);
     return decoded;
   } catch {
-    return readFile2(source, "utf8");
+    return readFile3(source, "utf8");
   }
 }
 function normalizeService(service) {
@@ -3301,6 +3548,7 @@ function serviceFromActions(actions) {
   const first = actions[0] ?? "tinycloud.unknown/read";
   return first.includes("/") ? first.slice(0, first.indexOf("/")) : "tinycloud.unknown";
 }
+var DEVICE_MANIFEST_NEXT;
 var init_permissions = __esm({
   "src/lib/permissions.ts"() {
     "use strict";
@@ -3315,6 +3563,7 @@ var init_permissions = __esm({
     init_caveat_refusal();
     init_publishing_manifest();
     init_types();
+    DEVICE_MANIFEST_NEXT = "Use browser or --paste login for this manifest.";
   }
 });
 
@@ -3385,11 +3634,11 @@ var init_retry_policy = __esm({
 // src/lib/replication-log.ts
 import { CLI_NAME as CLI_NAME5 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
-import { dirname as dirname2, join as join4 } from "path";
+import { dirname as dirname2, join as join5 } from "path";
 function appendReplicationEvent(root, event) {
   mkdirSync(root, { recursive: true, mode: DIR_MODE });
   chmodSync(root, DIR_MODE);
-  const path = join4(root, LOG_FILE);
+  const path = join5(root, LOG_FILE);
   let size = 0;
   try {
     size = statSync(path).size;
@@ -3399,7 +3648,7 @@ function appendReplicationEvent(root, event) {
   const line = `${JSON.stringify(event)}
 `;
   if (size + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-    const rotated = join4(root, ROTATED_LOG_FILE);
+    const rotated = join5(root, ROTATED_LOG_FILE);
     try {
       renameSync(path, rotated);
     } catch (error) {
@@ -3412,7 +3661,7 @@ function appendReplicationEvent(root, event) {
   chmodSync(path, LOG_MODE);
 }
 function replicationLogPath(profileRoot) {
-  return join4(profileRoot, "replication", LOG_FILE);
+  return join5(profileRoot, "replication", LOG_FILE);
 }
 function createReplicationEventSink(profileRoot, options) {
   const pinnedNotices = /* @__PURE__ */ new Set();
@@ -5798,7 +6047,7 @@ function replicaErrorFromService(error, context2, request) {
   if (status !== void 0) {
     return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
   }
-  if (error.code === "NETWORK_ERROR" || /TIMEOUT|ABORT/.test(error.code)) {
+  if (error.code === "registry_unavailable" && reason === "no-saved-settings" || error.code === "NETWORK_ERROR" || error.code === "NODE_NOT_RESPONDING" || /TIMEOUT|ABORT/.test(error.code)) {
     return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context2}: ${error.message}`, detail);
   }
   return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
@@ -6427,7 +6676,7 @@ var init_dist = __esm({
 });
 
 // src/lib/replication-config.ts
-import { join as join5 } from "path";
+import { join as join6 } from "path";
 import { CLI_NAME as CLI_NAME6 } from "@tinycloud/operations/cli-name";
 import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
@@ -6473,8 +6722,8 @@ function createCliReplicationConfig(profile, settings, output2, enabled) {
     grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
     maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
-      dir: join5(root, "replication"),
-      logoutPendingFile: join5(root, REPLICA_LOGOUT_PENDING_FILE),
+      dir: join6(root, "replication"),
+      logoutPendingFile: join6(root, REPLICA_LOGOUT_PENDING_FILE),
       diagnosticFiles: REPLICATION_DIAGNOSTIC_FILES,
       guard: (section) => withProfileLock2(profile, section, { requireProfile: true, timeoutMs: 35e3 })
     }),
@@ -6492,8 +6741,8 @@ var init_replication_config = __esm({
 });
 
 // ../replica/dist/profile-gate.js
-import { mkdir as mkdir2, open as open2, readFile as readFile3, rename as rename2, rm as rm2 } from "fs/promises";
-import { join as join6 } from "path";
+import { mkdir as mkdir3, open as open3, readFile as readFile4, rename as rename2, rm as rm3 } from "fs/promises";
+import { join as join7 } from "path";
 function gatedError(gate, message) {
   return Object.assign(new ReplicaError2(ReplicaErrorCode2.GATED, message, { gate }), { gate });
 }
@@ -6591,7 +6840,7 @@ function isNotFound2(error) {
 async function readStoredState(profileDir) {
   let text2;
   try {
-    text2 = await readFile3(join6(profileDir, REPLICA_GATE_FILE), "utf8");
+    text2 = await readFile4(join7(profileDir, REPLICA_GATE_FILE), "utf8");
   } catch (error) {
     if (isNotFound2(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica gate file cannot be read.");
@@ -6601,7 +6850,7 @@ async function readStoredState(profileDir) {
 async function readDenyFloor(profileDir) {
   let record3;
   try {
-    record3 = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record3 = JSON.parse(await readFile4(join7(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound2(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
@@ -6785,12 +7034,12 @@ var init_profile_gate = __esm({
 // ../replica/dist/sqlite.js
 import { AsyncLocalStorage } from "async_hooks";
 import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync, constants as fsConstants2, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
-import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir3, open as open22, readFile as readFile4, readdir as readdir2, rm as rm3, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
+import { closeSync, constants as fsConstants22, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
+import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir4, open as open22, readFile as readFile5, readdir as readdir2, rm as rm4, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
 import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
 import { constants as fsConstants3 } from "fs";
-import { lstat, open as open3, readdir as readdir3, rmdir, unlink } from "fs/promises";
-import { join as join7, parse, resolve, sep } from "path";
+import { lstat as lstat3, open as open4, readdir as readdir3, rmdir, unlink } from "fs/promises";
+import { join as join8, parse, resolve, sep } from "path";
 function isReplicaError2(error, code5) {
   return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code5 === void 0 || error.code === code5);
 }
@@ -6964,8 +7213,8 @@ async function pathComponents(path) {
   let current = parse(absolute).root;
   const components = [];
   for (const part of ["", ...parts]) {
-    if (part) current = join7(current, part);
-    const details = await lstat(current, { bigint: true });
+    if (part) current = join8(current, part);
+    const details = await lstat3(current, { bigint: true });
     if (details.isSymbolicLink()) throw new Error(`Symlink in replica path: ${current}`);
     if (!details.isDirectory()) throw new Error(`Replica path component is not a directory: ${current}`);
     components.push({ path: current, identity: details });
@@ -6974,10 +7223,10 @@ async function pathComponents(path) {
 }
 async function pinnedDirectory(path, parent, relative = "") {
   const components = process.platform === "linux" ? void 0 : parent?.components ?? await pathComponents(path);
-  const before = await lstat(path, { bigint: true });
+  const before = await lstat3(path, { bigint: true });
   if (before.isSymbolicLink()) throw new Error(`Symlink in replica path: ${path}`);
   if (!before.isDirectory()) throw new Error("Replica directory is not a real directory.");
-  const handle = await open3(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
+  const handle = await open4(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
   try {
     if (!sameFile(before, await handle.stat({ bigint: true }))) {
       throw new Error("Replica directory changed during inspection.");
@@ -6998,14 +7247,14 @@ async function pinnedDirectory(path, parent, relative = "") {
   }
 }
 async function checkDirectory(directory) {
-  const details = await lstat(directory.name, { bigint: true });
+  const details = await lstat3(directory.name, { bigint: true });
   if (!details.isDirectory() || !sameFile(directory.identity, details)) {
     throw new Error(`Replica directory changed: ${directory.relative || directory.name}`);
   }
   if (directory.parent) await checkDirectory(directory.parent);
   else if (directory.components) {
     for (const component of directory.components) {
-      const current = await lstat(component.path, { bigint: true });
+      const current = await lstat3(component.path, { bigint: true });
       if (current.isSymbolicLink() || !current.isDirectory() || !sameFile(component.identity, current)) {
         throw new Error(`Replica path component changed: ${component.path}`);
       }
@@ -7025,8 +7274,8 @@ async function inspect(dir, allowAdapterFence) {
       for (const name of (await readdir3(parent.path)).sort()) {
         await checkDirectory(parent);
         const relative = parent.relative ? `${parent.relative}/${name}` : name;
-        const path = join7(parent.path, name);
-        const details = await lstat(path, { bigint: true });
+        const path = join8(parent.path, name);
+        const details = await lstat3(path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
           throw new Error(`Symlink in replica path: ${relative}`);
         }
@@ -7055,7 +7304,7 @@ async function inspect(dir, allowAdapterFence) {
     await walk(root);
     if (!hasDatabase) {
       unknownPaths.push("replica.db");
-    } else if (!await sourceMirrorSchema(join7(root.path, "replica.db"))) {
+    } else if (!await sourceMirrorSchema(join8(root.path, "replica.db"))) {
       const index = knownEntries.findIndex((entry) => entry.path === "replica.db");
       if (index >= 0) unknownEntries.push(knownEntries.splice(index, 1)[0]);
       unknownPaths.push("replica.db");
@@ -7075,15 +7324,15 @@ async function inspect(dir, allowAdapterFence) {
         if (pathIndex >= 0) unknownPaths.splice(pathIndex, 1);
         continue;
       }
-      const current = await lstat(child.path, { bigint: true });
+      const current = await lstat3(child.path, { bigint: true });
       if (!sameFile(child.identity, current) || fileKind(current) !== child.kind) {
         throw new Error(`Replica child changed during schema inspection: ${child.relative}`);
       }
     }
     for (const name of names) {
       if (root.children.some((child) => child.relative === name)) continue;
-      const path = join7(root.path, name);
-      const details = await lstat(path, { bigint: true });
+      const path = join8(root.path, name);
+      const details = await lstat3(path, { bigint: true });
       if (!/^replica\.db-(?:wal|shm|journal)$/.test(name) || !details.isFile()) {
         throw new Error(`Unexpected replica child during schema inspection: ${name}`);
       }
@@ -7157,7 +7406,7 @@ async function removeSqliteReplicaLayout(dir, options = {}) {
         }
         await options[LAYOUT_FAULTS]?.beforeUnlink?.(child.relative);
         await checkDirectory(directory);
-        const details = await lstat(child.path, { bigint: true });
+        const details = await lstat3(child.path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
           throw new Error(`Symlink in replica path: ${child.relative}`);
         }
@@ -7198,7 +7447,7 @@ async function captureNamedPath(path) {
   return identities;
 }
 async function openVerifiedDatabase(path, opener, options = {}) {
-  const leaf = await open22(path, fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+  const leaf = await open22(path, fsConstants22.O_RDONLY | fsConstants22.O_NOFOLLOW);
   let db;
   try {
     const identity2 = await leaf.stat();
@@ -7327,7 +7576,7 @@ async function unlinkWriterOrphans(root, keep) {
   const touched = /* @__PURE__ */ new Set();
   for (const file of await writerBlobFiles(root)) {
     if (file.hash !== null && keep.has(file.hash)) continue;
-    await rm3(file.path, { force: true });
+    await rm4(file.path, { force: true });
     touched.add(dirname3(file.path));
     removed += 1;
   }
@@ -7340,7 +7589,7 @@ async function unlinkBlobsIn(root, keep) {
     const shardPath = join22(root, shard);
     if (shard === ".tmp") {
       for (const name of await entriesOf(shardPath)) {
-        await rm3(join22(shardPath, name), { force: true });
+        await rm4(join22(shardPath, name), { force: true });
         removed += 1;
       }
       continue;
@@ -7351,7 +7600,7 @@ async function unlinkBlobsIn(root, keep) {
         kept += 1;
         continue;
       }
-      await rm3(join22(shardPath, name), { force: true });
+      await rm4(join22(shardPath, name), { force: true });
       removed += 1;
     }
     if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
@@ -7758,9 +8007,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
         let store;
         let directoryFd;
         try {
-          if (options.create) await mkdir3(dir, { recursive: true, mode: 448 });
+          if (options.create) await mkdir4(dir, { recursive: true, mode: 448 });
           if (process.platform === "linux") {
-            directoryFd = openSync(dir, fsConstants2.O_RDONLY | fsConstants2.O_DIRECTORY | fsConstants2.O_NOFOLLOW);
+            directoryFd = openSync(dir, fsConstants22.O_RDONLY | fsConstants22.O_DIRECTORY | fsConstants22.O_NOFOLLOW);
           }
           const opened = directoryFd === void 0 ? lstatSync(dir, { bigint: true }) : fstatSync(directoryFd, { bigint: true });
           if (!opened.isDirectory() || opened.isSymbolicLink() || options.expectedDirectory && (opened.dev !== BigInt(options.expectedDirectory.dev) || opened.ino !== BigInt(options.expectedDirectory.ino))) {
@@ -7773,9 +8022,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
           const pinnedDir = directoryFd === void 0 ? dir : `/proc/self/fd/${directoryFd}`;
           const dbPath = join22(pinnedDir, "replica.db");
           if (options.create) {
-            await mkdir3(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
+            await mkdir4(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
             await Promise.all([chmod2(pinnedDir, 448), chmod2(join22(pinnedDir, "blobs"), 448), chmod2(join22(pinnedDir, "blobs", ".tmp"), 448)]);
-            const handle = await open22(dbPath, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_RDWR | fsConstants2.O_NOFOLLOW, 384).catch((error) => {
+            const handle = await open22(dbPath, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_RDWR | fsConstants22.O_NOFOLLOW, 384).catch((error) => {
               if (errnoOf(error) === "EEXIST") return null;
               throw error;
             });
@@ -7787,7 +8036,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
               }
             }
           }
-          const leaf = await open22(dbPath, fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+          const leaf = await open22(dbPath, fsConstants22.O_RDONLY | fsConstants22.O_NOFOLLOW);
           let db;
           try {
             const identity2 = await leaf.stat();
@@ -8404,11 +8653,11 @@ CREATE TABLE IF NOT EXISTS grant_install (
           );
           if (exists) continue;
           const shard = join22(this.#pinnedDir, "blobs", hash.slice(0, 2));
-          await mkdir3(shard, { mode: 448 }).catch((error) => {
+          await mkdir4(shard, { mode: 448 }).catch((error) => {
             if (errnoOf(error) !== "EEXIST") throw error;
           });
           const temp = join22(this.#pinnedDir, "blobs", ".tmp", `${hash}.${randomBytes2(6).toString("hex")}`);
-          const handle = await open22(temp, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_WRONLY, 384);
+          const handle = await open22(temp, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_WRONLY, 384);
           try {
             await handle.writeFile(bytes);
             await handle.sync();
@@ -8426,7 +8675,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
           dirs.add(join22(this.#pinnedDir, "blobs"));
         }
         for (const dir of dirs) {
-          const handle = await open22(dir, fsConstants2.O_RDONLY);
+          const handle = await open22(dir, fsConstants22.O_RDONLY);
           try {
             await handle.sync();
           } finally {
@@ -8787,7 +9036,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
       async readContent(hash) {
         if (!isHash(hash)) return void 0;
         try {
-          return new Uint8Array(await readFile4(this.#blobPath(hash)));
+          return new Uint8Array(await readFile5(this.#blobPath(hash)));
         } catch (error) {
           if (errnoOf(error) === "ENOENT") return void 0;
           throw storageError(error, "Reading replica content");
@@ -8874,9 +9123,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
 });
 
 // src/lib/profile-replicas.ts
-import { lstat as lstat3, open as open4, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
+import { lstat as lstat4, open as open5, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
 import { constants as fsConstants4 } from "fs";
-import { dirname as dirname4, join as join8, resolve as resolve3, sep as sep2 } from "path";
+import { dirname as dirname4, join as join9, resolve as resolve3, sep as sep2 } from "path";
 import { ProfileDeletedError as ProfileDeletedError2, profilePath as profilePath3, withProfileLock as withProfileLock3 } from "@tinycloud/operations/state";
 function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
   return new CLIError(
@@ -8888,7 +9137,7 @@ function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
 async function safeReplicaRoot(profile, root, operation = "logout") {
   let rootStats;
   try {
-    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat3(root);
+    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat4(root);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -8906,12 +9155,12 @@ async function safeReplicaRoot(profile, root, operation = "logout") {
   return rootRealPath;
 }
 async function safeReplicaEntry(profile, root, entry, operation = "logout") {
-  const entryPath = join8(root, entry.name);
+  const entryPath = join9(root, entry.name);
   const rootRealPath = await safeReplicaRoot(profile, root, operation);
   if (rootRealPath === null) {
     throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`, operation);
   }
-  const entryStats = await lstat3(entryPath);
+  const entryStats = await lstat4(entryPath);
   if (entry.isSymbolicLink() || entryStats.isSymbolicLink()) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`, operation);
   }
@@ -8926,7 +9175,7 @@ async function safeReplicaEntry(profile, root, entry, operation = "logout") {
 }
 async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatabase = false) {
   const { path, identity: identity2 } = await safeReplicaEntry(profile, root, entry);
-  const handle = await open4(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open5(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinnedEntry = await handle.stat();
     if (pinnedEntry.dev !== identity2.dev || pinnedEntry.ino !== identity2.ino) {
@@ -8942,7 +9191,7 @@ async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatab
   }
 }
 async function pinReplicaRoot(profile, named, operation, allowNamedLogout = false) {
-  const initial = await lstat3(named, { bigint: true }).catch((error) => {
+  const initial = await lstat4(named, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -8953,7 +9202,7 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
   const ancestors = [];
   if (process.platform !== "linux") {
     for (let path = resolve3(named); ; path = dirname4(path)) {
-      const details = await lstat3(path, { bigint: true });
+      const details = await lstat4(path, { bigint: true });
       if (!details.isDirectory() || details.isSymbolicLink()) {
         throw refuseUnsafeReplicaPath(profile, `replica path component "${path}" is not a real directory`, operation);
       }
@@ -8961,17 +9210,17 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
       if (dirname4(path) === path) break;
     }
   }
-  const handle = await open4(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open5(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinned = await handle.stat({ bigint: true });
     const assertNamed = async () => {
       for (const component of ancestors) {
-        const details = await lstat3(component.path, { bigint: true });
+        const details = await lstat4(component.path, { bigint: true });
         if (!details.isDirectory() || details.isSymbolicLink() || details.dev !== component.dev || details.ino !== component.ino) {
           throw refuseUnsafeReplicaPath(profile, `replica path component "${component.path}" changed during cleanup`, operation);
         }
       }
-      const current = await lstat3(named, { bigint: true });
+      const current = await lstat4(named, { bigint: true });
       if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial?.dev || current.ino !== initial?.ino || current.dev !== pinned.dev || current.ino !== pinned.ino) {
         throw refuseUnsafeReplicaPath(profile, "the replicas directory changed during cleanup", operation);
       }
@@ -8990,7 +9239,7 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
 }
 async function withPinnedReplicaForReset(profile, name, action) {
   return withProfileLock3(profile, async () => {
-    const root = join8(profilePath3(profile), "replicas");
+    const root = join9(profilePath3(profile), "replicas");
     const pinned = await pinReplicaRoot(profile, root, "reset");
     if (!pinned) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas.`);
     try {
@@ -8999,7 +9248,7 @@ async function withPinnedReplicaForReset(profile, name, action) {
       if (!entry) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Replica "${name}" was not found.`);
       const { path, identity: initial } = await safeReplicaEntry(profile, fdRoot, entry, "reset");
       const recheck = async () => {
-        const current = await lstat3(path);
+        const current = await lstat4(path);
         if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial.dev || current.ino !== initial.ino) {
           throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" changed during removal`, "reset");
         }
@@ -9084,8 +9333,8 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
   if (inventory.roots.has(relative)) {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" has conflicting recorded identities`);
   }
-  const path = join8(root, entry.name);
-  const info = await lstat3(path, { bigint: true });
+  const path = join9(root, entry.name);
+  const info = await lstat4(path, { bigint: true });
   const kind = info.isDirectory() ? "directory" : info.isSymbolicLink() ? "symlink" : info.isFile() ? "file" : null;
   if (kind === null || process.platform !== "linux" && kind === "symlink") {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" cannot be removed safely`);
@@ -9106,7 +9355,7 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
 async function removeProfileReplicas(profile, options = {}) {
   const inventory = legacyInventory(profile, options);
   return withProfileLock3(profile, async () => {
-    const namedRoot = join8(profilePath3(profile), "replicas");
+    const namedRoot = join9(profilePath3(profile), "replicas");
     const pinned = await pinReplicaRoot(profile, namedRoot, "logout", true);
     if (!pinned) return [];
     const expectedRoot = inventory?.roots.get("replicas");
@@ -9143,7 +9392,7 @@ async function removeProfileReplicas(profile, options = {}) {
         if (inventory) {
           if (layout) assertRecordedChild(profile, entry.name, layout, inventory, false);
           else {
-            const child = await lstat3(inspected.path, { bigint: true });
+            const child = await lstat4(inspected.path, { bigint: true });
             const recorded = inventory.roots.get(`replicas/${entry.name}`);
             if (!recorded || child.dev.toString() !== recorded.dev || child.ino.toString() !== recorded.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed since the recorded inventory`);
@@ -9164,14 +9413,14 @@ async function removeProfileReplicas(profile, options = {}) {
           if (current.identity.dev !== identity2.dev || current.identity.ino !== identity2.ino) {
             throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
           }
-          const handle = await open4(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+          const handle = await open5(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
           try {
             const pinnedEntry = await handle.stat();
             if (pinnedEntry.dev !== identity2.dev || pinnedEntry.ino !== identity2.ino || (await readdir4(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : current.path)).length !== 0) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
             }
             await pinned.assertNamed();
-            const namedEntry = await lstat3(current.path);
+            const namedEntry = await lstat4(current.path);
             if (!namedEntry.isDirectory() || namedEntry.dev !== pinnedEntry.dev || namedEntry.ino !== pinnedEntry.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed at removal`);
             }
@@ -9244,7 +9493,7 @@ async function removeProfileReplicas(profile, options = {}) {
             }
             removed.push(entry.name);
           } catch (error) {
-            const replicaStillExists = await lstat3(join8(root, entry.name)).then(
+            const replicaStillExists = await lstat4(join9(root, entry.name)).then(
               () => true,
               (statError) => statError.code !== "ENOENT"
             );
@@ -9260,7 +9509,7 @@ async function removeProfileReplicas(profile, options = {}) {
         }
         for (const { entry, path, identity: identity2, layout } of unknownRoots) {
           await pinned.assertNamed();
-          const current = await lstat3(path, { bigint: true });
+          const current = await lstat4(path, { bigint: true });
           const kind = current.isDirectory() ? "directory" : current.isSymbolicLink() ? "symlink" : current.isFile() ? "file" : null;
           if (kind !== identity2.kind || current.dev.toString() !== identity2.dev || current.ino.toString() !== identity2.ino || process.platform !== "linux" && kind === "symlink") {
             throw refuseUnsafeReplicaPath(profile, `approved legacy entry "${entry.name}" changed at removal`);
@@ -9312,8 +9561,8 @@ var init_profile_replicas = __esm({
 });
 
 // src/lib/logout-pending.ts
-import { lstat as lstat4, open as open5, readFile as readFile5, rm as rm4 } from "fs/promises";
-import { join as join9 } from "path";
+import { lstat as lstat5, open as open6, readFile as readFile6, rm as rm5 } from "fs/promises";
+import { join as join10 } from "path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE2, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import { namedProfilePath, profilePath as profilePath4 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE2 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -9403,7 +9652,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
     const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-    await rm4(join9(profilePath4(name), "approval-pending.json"), { force: true });
+    await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
     await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
     let failed = false;
     let error;
@@ -9421,7 +9670,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
     }
     if (failed) throw error;
     if (syncDirectory) {
-      const directory = await open5(profilePath4(name), "r");
+      const directory = await open6(profilePath4(name), "r");
       try {
         await directory.sync();
       } finally {
@@ -9438,7 +9687,7 @@ async function finishSignedOutCredentialRemoval(name) {
   if (profile?.authSignedOut !== true) return;
   for (const file of ["session.json", "key.json"]) {
     try {
-      await lstat4(join9(profilePath4(name), file));
+      await lstat5(join10(profilePath4(name), file));
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
       throw error;
@@ -9453,12 +9702,12 @@ async function finishSignedOutCredentialRemoval(name) {
 }
 async function recoverPendingLogout(name) {
   try {
-    await lstat4(join9(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
+    await lstat5(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
   } catch (error) {
     if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
     await finishSignedOutCredentialRemoval(name);
     try {
-      await lstat4(profilePath4(name));
+      await lstat5(profilePath4(name));
     } catch (missing) {
       if (typeof missing === "object" && missing !== null && "code" in missing && missing.code === "ENOENT") return;
       throw missing;
@@ -9470,7 +9719,7 @@ async function recoverPendingLogout(name) {
     if (!profile) {
       for (const child of [REPLICA_GATE_FILE2, "replicas", "replication"]) {
         try {
-          await lstat4(join9(profilePath4(name), child));
+          await lstat5(join10(profilePath4(name), child));
         } catch (childError) {
           if (typeof childError === "object" && childError !== null && "code" in childError && childError.code === "ENOENT") continue;
           throw childError;
@@ -9513,7 +9762,7 @@ async function recoverPendingLogout(name) {
   const report = await ProfileManager.withLock(name, async () => {
     const unreadable = (file) => new CLIError(
       "REPLICA_GATED",
-      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join9(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
+      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join10(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
       ExitCode.ERROR
     );
     try {
@@ -9528,7 +9777,7 @@ async function recoverPendingLogout(name) {
       throw unreadable("session.json");
     }
     if (session) {
-      const marker = await readFile5(join9(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text2) => {
+      const marker = await readFile6(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text2) => {
         try {
           return JSON.parse(text2);
         } catch {
@@ -9591,9 +9840,17 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+function configuredRegistryUrl(contextUrl, profile) {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : void 0;
+}
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -9665,7 +9922,12 @@ async function restoreProfileSessionNode(ctx) {
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -9687,8 +9949,13 @@ async function storedSessionVerifiesLocally(profileName2) {
     const session = await ProfileManager.getSession(profileName2);
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName2);
+    const tinycloudRegistryUrl = configuredRegistryUrl(void 0, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName2),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName2),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -9713,6 +9980,7 @@ async function createSDKInstance(ctx, options) {
     );
   }
   const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key = await ProfileManager.getKey(ctx.profile);
   const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
@@ -9734,7 +10002,11 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -9775,7 +10047,11 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
+    ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -10093,9 +10369,9 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm5 } from "fs/promises";
+import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
@@ -10151,7 +10427,7 @@ var init_profiles = __esm({
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
         const profileDir = profilePath5(name);
-        if (profileDir !== join10(PROFILES_DIR, name)) {
+        if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
         }
@@ -10185,7 +10461,7 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join10(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -10200,25 +10476,25 @@ var init_profiles = __esm({
        */
       static async setProfile(name, data) {
         await _ProfileManager.withLock(name, async () => {
-          await writeJson(join10(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Publish explicit logout provenance (or its verified-login clear) durably under the profile lock. */
       static async setProfileDurable(name, data) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJsonDurable(join10(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJsonDurable(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
        */
       static async profileExists(name) {
-        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join10(directory, "profile.json")) : Promise.resolve(false));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join11(directory, "profile.json")) : Promise.resolve(false));
       }
       /**
        * Returns an array of profile directory names.
@@ -10257,22 +10533,22 @@ var init_profiles = __esm({
             `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME9} profile default <other>\`.`
           );
         }
-        const kind = await lstat5(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
+        const kind = await lstat6(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
           if (error.code === "ENOENT") return "missing";
           throw error;
         });
         if (kind === "missing") return;
         if (kind === "link") {
-          await rm5(profileDir, { force: true });
+          await rm6(profileDir, { force: true });
           return;
         }
         await _ProfileManager.withLock(name, async () => {
           const directory = profilePath5(name);
-          for (const file of ["session.json", "key.json"]) await rm5(join10(directory, file), { force: true });
+          for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm5(join10(directory, entry), { recursive: true, force: true });
+            if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
           }
-          await rm5(join10(directory, "profile.json"), { force: true });
+          await rm6(join11(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
         });
       }
@@ -10283,9 +10559,9 @@ var init_profiles = __esm({
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join10(directory, "profile.json");
+          const profileFile = join11(directory, "profile.json");
           if ((await readJson(profileFile))?.authSignedOut === true) return null;
-          const key = await readJson(join10(directory, "key.json"));
+          const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
       }
@@ -10297,12 +10573,12 @@ var init_profiles = __esm({
       static async setKey(name, jwk) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJson(join10(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
         });
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -10311,7 +10587,7 @@ var init_profiles = __esm({
       static async getSession(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join10(directory, "profile.json");
+          const profileFile = join11(directory, "profile.json");
           if ((await readJson(profileFile))?.authSignedOut === true) return null;
           const session = await readSession(name);
           return (await readJson(profileFile))?.authSignedOut === true ? null : session;
@@ -10337,10 +10613,10 @@ var init_profiles = __esm({
       static async getCacheDir(name) {
         const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
-          const cacheDir = join10(await _ProfileManager.ensureProfileDir(name), "cache");
+          const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
           await chmod3(cacheDir, PRIVATE_DIR_MODE);
-          return alreadyPinned ? cacheDir : join10(namedProfilePath2(name), "cache");
+          return alreadyPinned ? cacheDir : join11(namedProfilePath2(name), "cache");
         });
       }
       // ── Resolution helpers ──────────────────────────────────────────────
@@ -10349,6 +10625,7 @@ var init_profiles = __esm({
        *
        * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
        * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+       * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
        *
        * Local-node discovery (TC-106) only runs when no explicit host was given
        * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -10368,6 +10645,9 @@ var init_profiles = __esm({
         } catch (error) {
           if (error instanceof ProfileSymlinkError2) throw error;
         }
+        const envRegistryUrl = process.env.TC_REGISTRY_URL;
+        const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+        const tinycloudRegistryUrl = typeof envRegistryUrl === "string" && envRegistryUrl.length > 0 ? envRegistryUrl : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0 ? profileRegistryUrl : void 0;
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
         const explicitEnvOff = envReplication === "0" || envReplication === "false" || envReplication === "off";
@@ -10392,6 +10672,7 @@ var init_profiles = __esm({
         return {
           profile,
           host,
+          ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
           verbose: options.verbose ?? false,
           noCache: options.noCache ?? false,
           quiet: options.quiet ?? false,
@@ -16734,7 +17015,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open7(blob, key32) {
+async function open8(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -17151,7 +17432,7 @@ async function openRecordChecked(record3, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open7(body, key);
+    plaintext = await open8(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -17839,11 +18120,11 @@ var init_links = __esm({
 });
 
 // src/lib/browser.ts
-import open10 from "open";
+import open11 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open10(url);
+    launcher = await open11(url);
   } catch {
     return false;
   }
@@ -17956,9 +18237,6 @@ function resolveAppsAgentRequest(options) {
   for (const appId of appIds) {
     if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
   }
-  if (appIds.length > APPS_AGENT_MAX_APPS) {
-    throw usage(`--app can be repeated at most ${APPS_AGENT_MAX_APPS} times; for more apps, ask for read-only access to the whole space (leave --app off).`);
-  }
   if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) {
     throw usage("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
   }
@@ -17991,7 +18269,7 @@ function matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) {
     if (slash < 1 || !isAppId(appId)) return void 0;
     if (!appIds.includes(appId)) appIds.push(appId);
   }
-  if (appIds.length > APPS_AGENT_MAX_APPS || appIds.length > 0 && kvPaths.includes("")) return void 0;
+  if (appIds.length > 0 && kvPaths.includes("")) return void 0;
   for (const mode of ["read", "write"]) {
     if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) continue;
     const expected = appsAgentPermissions(mode, appIds);
@@ -18101,7 +18379,7 @@ function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLi
   );
   return { text: lines.join("\n"), entries: requested, extras };
 }
-var APPS_AGENT_PRESET, APPS_AGENT_SPACE, APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY, APPS_AGENT_MAX_APPS, DAY_MS2, APPS_AGENT_WRITE_FOLDERS, APPS_AGENT_VARIANTS, APPS_AGENT_SCHEMA_DATABASES, SCHEMA_ACTION, ACTION_WORDS, STRUCTURE_ACTIONS, APP_ID, APP_ID_RULE, RAW_ENCRYPTION_SPACE, DID_SHAPE;
+var APPS_AGENT_PRESET, APPS_AGENT_SPACE, APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY, DAY_MS2, APPS_AGENT_WRITE_FOLDERS, APPS_AGENT_VARIANTS, APPS_AGENT_SCHEMA_DATABASES, SCHEMA_ACTION, ACTION_WORDS, STRUCTURE_ACTIONS, APP_ID, APP_ID_RULE, RAW_ENCRYPTION_SPACE, DID_SHAPE;
 var init_apps_agent_preset = __esm({
   "src/lib/apps-agent-preset.ts"() {
     "use strict";
@@ -18114,7 +18392,6 @@ var init_apps_agent_preset = __esm({
     APPS_AGENT_SPACE = "applications";
     APPS_AGENT_EXPIRY_DAYS = 7;
     APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
-    APPS_AGENT_MAX_APPS = 5;
     DAY_MS2 = 864e5;
     APPS_AGENT_WRITE_FOLDERS = ["knowledge/", "prefs/"];
     APPS_AGENT_VARIANTS = {
@@ -18475,6 +18752,9 @@ function isRawCidRevocationPermission(permission2) {
   return permission2.service === "tinycloud.delegation" && permission2.space?.startsWith("urn:cid:") === true && permission2.path === "" && permission2.actions.includes("tinycloud.delegation/revoke");
 }
 function actionTuples(permission2, ownerDid) {
+  if (isDeviceDefaultDecrypt({ ...permission2, space: permission2.space ?? "" })) {
+    return [JSON.stringify([permission2.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission2.actions[0]])];
+  }
   const service = permission2.service.startsWith("tinycloud.") ? permission2.service : `tinycloud.${permission2.service}`;
   const rawEncryption = isVerifiedRawEncryptionPermission(permission2);
   const rawCidRevocation = isRawCidRevocationPermission(permission2);
@@ -18738,17 +19018,17 @@ var init_scoped_login = __esm({
 // src/auth/pending-code.ts
 import { createHash as createHash2 } from "crypto";
 import { constants as fsConstants5 } from "fs";
-import { open as open11, rm as rm6 } from "fs/promises";
-import { join as join13 } from "path";
+import { open as open12, rm as rm7 } from "fs/promises";
+import { join as join14 } from "path";
 import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 function hashOf(code5) {
   return createHash2("sha256").update(code5.trim().toLowerCase()).digest("hex");
 }
 function fileOf(profile) {
-  return join13(profilePath7(profile), FILE);
+  return join14(profilePath7(profile), FILE);
 }
 async function write(profile, records) {
-  if (records.length === 0) await rm6(fileOf(profile), { force: true });
+  if (records.length === 0) await rm7(fileOf(profile), { force: true });
   else await writeJsonDurable(fileOf(profile), { version: 1, records });
 }
 async function live(profile) {
@@ -18756,7 +19036,7 @@ async function live(profile) {
   let records;
   let handle;
   try {
-    handle = await open11(file, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK);
+    handle = await open12(file, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK);
     const info = await handle.stat();
     if (!info.isFile() || info.uid !== process.getuid?.()) return [];
     if ((info.mode & 63) !== 0) await handle.chmod(384).catch(() => void 0);
@@ -18765,7 +19045,7 @@ async function live(profile) {
     records = stored.records.filter((record3) => typeof record3?.codeHash === "string" && Number.isFinite(Date.parse(record3.expiresAt)) && typeof record3.delegation === "object" && record3.delegation !== null);
   } catch (error) {
     const code5 = error.code;
-    if (code5 !== "ENOENT" && code5 !== "ELOOP") await rm6(file, { force: true });
+    if (code5 !== "ENOENT" && code5 !== "ELOOP") await rm7(file, { force: true });
     return [];
   } finally {
     await handle?.close();
@@ -18815,6 +19095,7 @@ var init_pending_code = __esm({
 });
 
 // src/auth/local-key.ts
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore3, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore3 } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes3 } from "crypto";
@@ -18867,6 +19148,10 @@ async function localKeySignIn(options) {
     options.replication !== void 0
   );
   const node = new TinyCloudNode4({
+    registryCacheStore: createProfileRegistryCacheStore3(profile),
+    registrySequenceStore: createProfileRegistrySequenceStore3(profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,
@@ -18904,13 +19189,14 @@ var init_local_key = __esm({
   "src/auth/local-key.ts"() {
     "use strict";
     init_replication_config();
+    init_warnings();
     wasmInitialized = false;
   }
 });
 
 // src/auth/login-commit.ts
-import { lstat as lstat6 } from "fs/promises";
-import { join as join14 } from "path";
+import { lstat as lstat7 } from "fs/promises";
+import { join as join15 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
@@ -19009,7 +19295,7 @@ async function commitLogin(profileName2, snapshot, commit) {
       );
     }
     try {
-      await lstat6(join14(profilePath8(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
+      await lstat7(join15(profilePath8(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
       throw new CLIError(
         "REPLICA_GATED",
         "A durable logout started while sign-in was awaiting approval; no session or key was saved. Finish logout and start a fresh sign-in.",
@@ -19196,6 +19482,7 @@ import {
   createHmac,
   randomBytes as randomBytes4
 } from "crypto";
+import { publicJwk } from "@tinycloud/sdk-core";
 function resolveDeviceApiHost(profile) {
   return process.env.TC_OPENKEY_HOST ?? profile?.openkeyHost;
 }
@@ -19280,12 +19567,15 @@ function deviceAuthRateLimit(response) {
   );
 }
 function publicSessionJwk(value4) {
-  const publicJwk = publicJwkForDelegation(value4);
-  const record3 = publicJwk;
-  if (record3.kty !== "OKP" || record3.crv !== "Ed25519" || typeof record3.x !== "string") {
+  let jwk = {};
+  try {
+    jwk = publicJwk(value4);
+  } catch {
+  }
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
     throw new Error("CLI session key is not a public Ed25519 JWK");
   }
-  return publicJwk;
+  return jwk;
 }
 function publicRelayJwk(value4) {
   if (!value4 || typeof value4 !== "object" || Array.isArray(value4)) throw invalidResponse("OpenKey returned an invalid relay key");
@@ -19410,10 +19700,11 @@ function writeApprovalPrompt(prompt) {
 async function acquireDeviceDelegation(input) {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission2) => permission2.service === "tinycloud.encryption" || permission2.space === "secrets" || permission2.space?.startsWith("tinycloud:") && permission2.space.endsWith(":secrets"))) {
+  const refused = deviceRefusal(input.permissions);
+  if (refused !== void 0) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR
     );
   }
@@ -19432,7 +19723,7 @@ async function acquireDeviceDelegation(input) {
   const relayKey = createECDH("prime256v1");
   relayKey.generateKeys();
   const relayPublicJwk = relayPublicJwkOf(relayKey);
-  const publicJwk = publicSessionJwk(input.jwk);
+  const publicJwk4 = publicSessionJwk(input.jwk);
   let startResponse;
   try {
     startResponse = await fetchFn(`${openkeyHost}/api/device-authorizations`, {
@@ -19446,7 +19737,7 @@ async function acquireDeviceDelegation(input) {
         codeChallenge: digest(codeVerifier),
         relayPublicJwk,
         sessionDid: input.sessionDid,
-        publicJwk,
+        publicJwk: publicJwk4,
         permissions: input.permissions.map(({ service, space, path, actions }) => ({ service, space, path, actions })),
         nodeOrigin,
         shareOrigin,
@@ -19535,7 +19826,7 @@ async function acquireDeviceDelegation(input) {
         sessionDid: input.sessionDid,
         nodeOrigin,
         shareOrigin,
-        publicJwk,
+        publicJwk: publicJwk4,
         key: input.jwk,
         requested: input.permissions,
         expiry,
@@ -19603,6 +19894,7 @@ var init_device_auth = __esm({
     init_constants();
     init_errors();
     init_caveat_refusal();
+    init_raw_encryption();
     init_local_key();
     init_browser_auth();
     init_scoped_login();
@@ -19615,6 +19907,66 @@ var init_device_auth = __esm({
     DEVICE_REASON_MAX_LENGTH = 200;
     P256_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
     P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+  }
+});
+
+// src/auth/next-line.ts
+import { CLI_NAME as CLI_NAME16 } from "@tinycloud/operations/cli-name";
+function safeToEcho(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (isKnown(BOOLEAN_FLAGS, arg)) continue;
+    if (isKnown(VALUE_FLAGS, arg)) {
+      const value4 = argv[index += 1];
+      if (value4 === void 0 || !safeValue(value4)) return false;
+      continue;
+    }
+    if (arg.startsWith("-")) return false;
+    if (!isKnown(WORDS, arg) && !SOURCE_FILE.test(arg)) return false;
+  }
+  return true;
+}
+function readsStdin(argv) {
+  if (argv.includes("--stdin") || argv.includes("--paste") || argv.includes("-")) return true;
+  const grant = argv.findIndex((arg, index) => arg === "auth" && argv[index + 1] === "grant");
+  if (grant === -1) return false;
+  for (let index = grant + 2; index < argv.length; index += 1) {
+    if (isKnown(VALUE_FLAGS, argv[index])) index += 1;
+    else if (!argv[index].startsWith("-")) return false;
+  }
+  return true;
+}
+function approvalNextLine(created, argv = process.argv.slice(2)) {
+  const stdin2 = readsStdin(argv);
+  const command = !stdin2 && argv.length > 0 && safeToEcho(argv) ? `\`${[CLI_NAME16, ...argv.map(shellWord2)].join(" ")}\`` : "this same command";
+  const again = stdin2 ? "again with the same input" : "again";
+  return created ? `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${command} ${again}.` : `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
+}
+var shellWord2, WORDS, VALUE_FLAGS, BOOLEAN_FLAGS, isKnown, SOURCE_FILE, PLAIN_VALUE, LONG_TOKEN, JWT_LIKE, safeValue;
+var init_next_line = __esm({
+  "src/auth/next-line.ts"() {
+    "use strict";
+    shellWord2 = (arg) => /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+    WORDS = { onboard: true, auth: true, grant: true };
+    VALUE_FLAGS = { "--timeout": true, "--profile": true, "-p": true, "--host": true, "-H": true };
+    BOOLEAN_FLAGS = {
+      "--json": true,
+      "--yes": true,
+      "--quiet": true,
+      "-q": true,
+      "--verbose": true,
+      "-v": true,
+      "--no-cache": true,
+      "--no-retry": true,
+      "--replication": true,
+      "--no-replication": true
+    };
+    isKnown = (table, name) => Object.hasOwn(table, name);
+    SOURCE_FILE = /^[A-Za-z0-9._/-]{1,64}\.json$/;
+    PLAIN_VALUE = /^[A-Za-z0-9._:@/+ -]{1,64}$/;
+    LONG_TOKEN = /^[A-Za-z0-9+/_-]{24,}={0,2}$/;
+    JWT_LIKE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*$/;
+    safeValue = (value4) => PLAIN_VALUE.test(value4) && !LONG_TOKEN.test(value4) && !JWT_LIKE.test(value4);
   }
 });
 
@@ -19644,10 +19996,14 @@ function approvalRequestTimeoutMs(wait2, approved) {
   const left = approvalLimitMs(wait2, approved) - (wait2.now ?? Date.now)();
   return Math.min(REQUEST_TIMEOUT_MS2, Math.max(MIN_REQUEST_TIMEOUT_MS2, left));
 }
-function approvalPendingError(pending) {
+function firstCheckTimeoutMs(wait2) {
+  return wait2.requestTimeoutMs ?? REQUEST_TIMEOUT_MS2;
+}
+function approvalPendingError(pending, created = false) {
   return new CLIError(
     "APPROVAL_PENDING",
-    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.`,
+    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.
+${approvalNextLine(created)}`,
     ExitCode.PENDING,
     { pending }
   );
@@ -19656,6 +20012,7 @@ var MAX_APPROVAL_TIMEOUT_MS, APPROVAL_POLL_INTERVAL_MS2, APPROVAL_COLLECT_GRACE_
 var init_approval_wait = __esm({
   "src/auth/approval-wait.ts"() {
     "use strict";
+    init_next_line();
     init_constants();
     init_errors();
     MAX_APPROVAL_TIMEOUT_MS = 9 * 6e4;
@@ -19665,7 +20022,7 @@ var init_approval_wait = __esm({
     REQUEST_TIMEOUT_MS2 = 1e4;
     MIN_REQUEST_TIMEOUT_MS2 = 1e3;
     MIN_SPACE_SETUP_MS = 15e3;
-    APPROVAL_TIMEOUT_OPTION_DESCRIPTION = `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s, and in onboard the next link). On a new account onboard also waits for OpenKey to host the space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if it is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run continues with step 2; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
+    APPROVAL_TIMEOUT_OPTION_DESCRIPTION = `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s, and in onboard the next link). A resumed approval completes one status check of OpenKey whatever the --timeout, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout; if OpenKey does not answer that check at all, the command exits 6 instead of reporting the approval as pending. On a new account onboard also waits for OpenKey to host the space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if it is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run continues with step 2; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
   }
 });
 
@@ -19686,8 +20043,8 @@ __export(approval_request_exports, {
   trackApprovalResult: () => trackApprovalResult
 });
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open12 } from "fs/promises";
-import { join as join15 } from "path";
+import { open as open13 } from "fs/promises";
+import { join as join16 } from "path";
 import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
@@ -19746,7 +20103,7 @@ async function syncCommandFiles(profile, result) {
     throw invalid2("The verified command result and history have not both been saved.");
   }
   for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath10(profile)]) {
-    const handle = await open12(path, "r");
+    const handle = await open13(path, "r");
     try {
       await handle.sync();
     } finally {
@@ -19770,7 +20127,7 @@ async function recoverApprovalCommand(profile, approval, request) {
   const acquired = acquisitions.get(approval);
   if (!acquired) return void 0;
   return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join15(profilePath10(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join16(profilePath10(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -19786,7 +20143,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
   const acquired = acquisitions.get(approval);
   if (!acquired) throw invalid2("Command approval is not tracked.");
   await ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join15(profilePath10(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join16(profilePath10(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -19795,7 +20152,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
       throw invalid2("A different result is already saved for this command.");
     }
     entry.command = { request, result };
-    await writeJsonDurable(join15(profilePath10(profile), STATE_FILE), entries);
+    await writeJsonDurable(join16(profilePath10(profile), STATE_FILE), entries);
     await persistCommandFiles(profile, result);
     acquisitions.set(approval, entry);
   }, { requireProfile: true });
@@ -19825,12 +20182,12 @@ function grantLifetimeSeconds(expiry) {
 async function updatePending(profile, update) {
   await ProfileManager.withLock(profile, async () => {
     const directory = await ProfileManager.ensureProfileDir(profile);
-    const path = join15(directory, STATE_FILE);
+    const path = join16(directory, STATE_FILE);
     await writeJsonDurable(path, update(await readJson(path) ?? []));
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join15(profilePath10(profile), STATE_FILE);
+  const path = join16(profilePath10(profile), STATE_FILE);
   if (!(await readJson(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
     const entries = await readJson(path) ?? [];
@@ -19965,8 +20322,8 @@ function verifyPendingResult(entry, key) {
     throw error;
   }
 }
-function pendingApproval(entry, approvalWait) {
-  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
+function pendingApproval(entry, approvalWait, created = false) {
+  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt }, created);
 }
 function bodyCutOff(error) {
   return error instanceof TypeError || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError" || error.code === "ECONNRESET");
@@ -20095,17 +20452,28 @@ ${entry.approvalUrl}
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }
-    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait);
+    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
+    let answered = false;
     for (; ; ) {
+      const firstWait = !answered && entry.resultRef === void 0 ? approvalWait : void 0;
       let response;
       try {
-        response = await post2(entry, "discover", signingKey, approvalRequestTimeoutMs(approvalWait, entry.resultRef !== void 0));
-      } catch {
+        response = await post2(entry, "discover", signingKey, firstWait ? firstCheckTimeoutMs(firstWait) : approvalRequestTimeoutMs(approvalWait, entry.resultRef !== void 0));
+      } catch (error) {
+        if (firstWait && error instanceof Error && error.name === "TimeoutError") {
+          throw new CLIError(
+            "NETWORK_ERROR",
+            `OpenKey did not answer the approval status check within ${Math.round(firstCheckTimeoutMs(firstWait) / 1e3)} seconds. The approval request is saved: run the same command again.`,
+            ExitCode.NETWORK_ERROR,
+            { hint: "The saved approval request resumes on the next run; no new link is needed." }
+          );
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
+      answered = true;
       if (response.status === 202) {
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
@@ -20195,13 +20563,13 @@ async function completeApprovalResult(profile, delegation) {
         const grants = await loadAdditionalDelegations(profile);
         const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid && item.delegation.siweProof?.siwe === verifiedDelegation.siwe && item.delegation.siweProof?.signature === verifiedDelegation.signature);
         if (stored) {
-          const file = await open12(additionalDelegationsPath3(profile), "r");
+          const file = await open13(additionalDelegationsPath3(profile), "r");
           try {
             await file.sync();
           } finally {
             await file.close();
           }
-          const directory = await open12(profilePath10(profile), "r");
+          const directory = await open13(profilePath10(profile), "r");
           try {
             await directory.sync();
           } finally {
@@ -20277,16 +20645,8 @@ var init_approval_request = __esm({
 });
 
 // src/auth/browser-auth.ts
-import { createInterface } from "readline";
-function publicJwkForDelegation(jwk) {
-  const publicJwk = {};
-  for (const [key, value4] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value4;
-    }
-  }
-  return publicJwk;
-}
+import { publicJwk as publicJwk2 } from "@tinycloud/sdk-core";
+import { createInterface as createInterface2 } from "readline";
 async function startAuthFlow(did, options = {}) {
   assertNoCaveatLimits(options.permissions);
   if (options.paste) {
@@ -20303,7 +20663,7 @@ function buildAuthUrl(did, options = {}) {
   }
   if (options.jwk) {
     const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk))
+      JSON.stringify(publicJwk2(options.jwk))
     ).toString("base64url");
     params.set("jwk", jwkB64);
   }
@@ -20378,7 +20738,7 @@ function validateDelegationCallbackPayload(value4) {
 function assertBoundToKey(parsed, did, localJwk) {
   const delegation = parsed;
   const jwk = delegation?.jwk;
-  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
+  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || "d" in jwk) {
     throw new Error("Delegation is bound to a different CLI key.");
   }
 }
@@ -20387,7 +20747,7 @@ async function delegationFromInput(input, did, options) {
   let parsed;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
-    const localJwk = publicJwkForDelegation(options.jwk);
+    const localJwk = publicJwk2(options.jwk);
     const saved = options.profileName === void 0 ? void 0 : await pendingDelegationFor(options.profileName, trimmed);
     if (saved !== void 0) {
       try {
@@ -20435,7 +20795,7 @@ Open this URL in a browser to authenticate:
 `);
   console.error(`  ${authUrl}
 `);
-  const rl = createInterface({
+  const rl = createInterface2({
     input: process.stdin,
     output: process.stderr
   });
@@ -20473,7 +20833,6 @@ Open this URL in a browser to authenticate:
 function loginCancelled() {
   return new CLIError("CANCELLED", "Interrupted: tc auth login stopped before approval. No session was saved.", ExitCode.CANCELLED);
 }
-var PRIVATE_JWK_FIELDS;
 var init_browser_auth = __esm({
   "src/auth/browser-auth.ts"() {
     "use strict";
@@ -20483,24 +20842,14 @@ var init_browser_auth = __esm({
     init_approval_request();
     init_profiles();
     init_pending_code();
-    PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
-      "d",
-      "p",
-      "q",
-      "dp",
-      "dq",
-      "qi",
-      "oth",
-      "k"
-    ]);
   }
 });
 
 // src/commands/account.ts
 init_profiles();
 init_constants();
-import open6 from "open";
-import { readFile as readFile6 } from "fs/promises";
+import open7 from "open";
+import { readFile as readFile7 } from "fs/promises";
 
 // src/lib/account-access.ts
 init_constants();
@@ -20822,7 +21171,7 @@ function registerAccountCommand(program) {
     billing.command(name).description(`${name === "status" ? "Show" : "Open"} account billing page`).option("--open", "Open account.tinycloud.xyz in your browser").action(async (options) => {
       try {
         if (options.open) {
-          await open6(ACCOUNT_BILLING_URL);
+          await open7(ACCOUNT_BILLING_URL);
         }
         outputJson({ url: ACCOUNT_BILLING_URL, opened: Boolean(options.open) });
       } catch (error) {
@@ -20844,7 +21193,7 @@ function assertOk(result) {
   }
 }
 async function loadManifestSource(source) {
-  const raw = /^https?:\/\//i.test(source) ? await fetchManifest(source) : await readFile6(source, "utf8");
+  const raw = /^https?:\/\//i.test(source) ? await fetchManifest(source) : await readFile7(source, "utf8");
   return JSON.parse(raw);
 }
 async function fetchManifest(source) {
@@ -20889,29 +21238,201 @@ function formatSpace(space) {
   };
 }
 
+// src/commands/bug-report.ts
+init_constants();
+init_errors();
+init_diagnostic_logs();
+import { createReadStream } from "fs";
+import { createInterface } from "readline/promises";
+import { stderr, stdin } from "process";
+var MAX_BODY_BYTES = 256 * 1024;
+var MAX_CONTENT_BYTES = 128 * 1024;
+var ATTACHMENT_URL = "https://bugs.tinycloud.xyz/reports";
+async function readToken(useStdin) {
+  if (useStdin && stdin.isTTY) throw new CLIError("BUG_REPORT_TOKEN_INPUT", "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
+  const token = useStdin ? await new Promise((resolve10) => {
+    const prompt = createInterface({ input: stdin });
+    let settled = false;
+    const finish = (value4) => {
+      if (settled) return;
+      settled = true;
+      prompt.close();
+      resolve10(value4);
+    };
+    prompt.once("line", (line) => finish(line.trim()));
+    prompt.once("close", () => finish(""));
+  }) : process.env.TINYCLOUD_BUG_ATTACH_TOKEN?.trim() ?? "";
+  if (!token) throw new CLIError("BUG_REPORT_TOKEN_MISSING", useStdin ? "No attachment token came in on standard input." : "Give the attachment token by piping it to --token-stdin or setting TINYCLOUD_BUG_ATTACH_TOKEN.");
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CLIError("BUG_REPORT_TOKEN_INVALID", "That attachment token isn't valid. Use the one the bug report returned.");
+  return token;
+}
+async function confirmUpload(summary, content, reportId, io) {
+  if (!io && !stderr.isTTY) throw new CLIError("BUG_REPORT_CONFIRMATION_REQUIRED", "This needs your yes, so run it in a terminal where you can answer.");
+  const input = io ? void 0 : stdin.isTTY ? stdin : createReadStream(process.platform === "win32" ? "CONIN$" : "/dev/tty");
+  const prompt = input ? createInterface({ input, output: stderr }) : void 0;
+  const write2 = io?.write ?? ((text2) => {
+    stderr.write(text2);
+  });
+  const question = io?.question ?? (() => prompt.question(""));
+  try {
+    while (true) {
+      write2(`${summary}
+Send this CLI log to report ${reportId}? Type v to view it first. [y/N/v] `);
+      const answer = (await question()).trim().toLowerCase();
+      if (answer === "v") {
+        write2(`
+--- CLI log ---
+${content}
+--- end CLI log ---
+`);
+        continue;
+      }
+      return /^y(?:es)?$/i.test(answer);
+    }
+  } finally {
+    prompt?.close();
+    if (input && input !== stdin) input.destroy();
+  }
+}
+function tailBytes(text2, maxBytes) {
+  const bytes = Buffer.from(text2, "utf8");
+  if (bytes.length <= maxBytes) return text2;
+  const tail = bytes.subarray(bytes.length - maxBytes).toString("utf8");
+  const firstLine = tail.indexOf("\n");
+  return firstLine < 0 ? "" : tail.slice(firstLine + 1);
+}
+function attachmentError(status, code5) {
+  const messages = {
+    invalid_attach_token: "That attachment token isn't valid or has expired. Trying again with it won't work.",
+    attachment_limit: "This report already has five attachments, the most it can take.",
+    payload_too_large: "The CLI log is larger than the bug service accepts.",
+    unsupported_media_type: "The bug service didn't accept this upload's format. Updating the CLI may fix it.",
+    rate_limited: "The bug service is still busy after one automatic retry. Try again in a few minutes.",
+    intake_busy: "The bug service is full for now. Try again later, not right away; your CLI log stays on this computer.",
+    too_deep: "The bug service didn't accept this upload. Updating the CLI may fix it."
+  };
+  return new CLIError(`BUG_REPORT_${code5.toUpperCase()}`, messages[code5] ?? `The CLI log upload was rejected (${code5}).`, void 0, { status });
+}
+async function attachLogs(reportId, tokenStdin, dependencies) {
+  const output2 = dependencies.write ?? ((text2) => {
+    stderr.write(text2);
+  });
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(reportId)) throw new CLIError("BUG_REPORT_ID_INVALID", "That isn't a report ID. Use the 26-character ID the bug report returned.");
+  const token = await readToken(tokenStdin);
+  const raw = await readDiagnosticLogs(dependencies.root ?? CONFIG_DIR);
+  if (!raw.trim()) throw new CLIError("BUG_REPORT_LOGS_MISSING", "There's no recent CLI log to attach.");
+  let source = tailBytes(raw, MAX_CONTENT_BYTES);
+  let redacted = redactDiagnosticLog(source);
+  const payload = { type: "cli-log", content: redacted.text, name: "tc-debug.log" };
+  if (!payload.content.trim()) throw new CLIError("BUG_REPORT_LOGS_EMPTY", "Nothing is left to attach after sensitive values were removed.");
+  let body = JSON.stringify(payload);
+  while (Buffer.byteLength(body) > MAX_BODY_BYTES) {
+    const smaller = tailBytes(source, Math.floor(Buffer.byteLength(source) * 0.8));
+    if (!smaller || smaller === source) throw new CLIError("BUG_REPORT_LOGS_TOO_LARGE", "The CLI log is too big to attach, even after trimming.");
+    source = smaller;
+    redacted = redactDiagnosticLog(source);
+    payload.content = redacted.text;
+    body = JSON.stringify(payload);
+  }
+  const bytes = Buffer.byteLength(body);
+  const lines = payload.content.split(/\r?\n/).filter(Boolean).length;
+  const lineLabel = lines === 1 ? "line" : "lines";
+  const valueLabel = redacted.count === 1 ? "value" : "values";
+  const summary = `Report ${reportId}: CLI log, ${bytes} bytes, ${lines} ${lineLabel}, ${redacted.count} ${valueLabel} hidden.`;
+  const confirmed = await (dependencies.confirm ?? confirmUpload)(summary, payload.content, reportId);
+  if (!confirmed) {
+    output2("Nothing was sent.\n");
+    return;
+  }
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
+  const endpoint = dependencies.attachmentUrl ?? ATTACHMENT_URL;
+  const sleep = dependencies.sleep ?? ((milliseconds) => new Promise((resolve10) => {
+    setTimeout(resolve10, milliseconds);
+  }));
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetchImpl(`${endpoint}/${reportId}/attachments`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body
+      });
+    } catch {
+      throw new CLIError("BUG_REPORT_UPLOAD_UNKNOWN", "Couldn't confirm the upload finished. You can try once more; the report may then get a second copy.");
+    }
+    if (response.status !== 429 || attempt > 0) break;
+    await response.arrayBuffer();
+    await sleep(6e4);
+  }
+  if (!response.ok) {
+    const receipt2 = await response.json().catch(() => null);
+    const code5 = typeof receipt2?.error?.code === "string" && /^[a-z][a-z0-9_]{1,63}$/i.test(receipt2.error.code) ? receipt2.error.code : `HTTP_${response.status}`;
+    throw attachmentError(response.status, code5);
+  }
+  const receipt = await response.json().catch(() => null);
+  if (!receipt) {
+    output2(`Attached your CLI log to report ${reportId}. The server didn't say how many more values it hid.
+`);
+    return;
+  }
+  const serverCount = Object.values(receipt.redactions ?? {}).reduce((sum, value4) => sum + (Number.isFinite(value4) && value4 > 0 ? value4 : 0), 0);
+  if (serverCount > 0) {
+    const valueLabel2 = serverCount === 1 ? "value" : "values";
+    output2(`Attached your CLI log to report ${reportId}. The server hid ${serverCount} more ${valueLabel2}.
+`);
+  } else {
+    output2(`Attached your CLI log to report ${reportId}.
+`);
+  }
+}
+function registerBugReportCommand(program, dependencies = {}) {
+  const output2 = dependencies.write ?? ((text2) => {
+    stderr.write(text2);
+  });
+  const root = dependencies.root ?? CONFIG_DIR;
+  const command = program.command("bug-report").description("Attach your recent CLI log to a bug report, with sensitive values removed where found").option("--attach <report-id>", "Attach your recent CLI log to this report").option("--token-stdin", "Read the attachment token from standard input").option("--clear-logs", "Delete the CLI log saved on this computer");
+  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete it, run tinycloud bug-report --clear-logs.\n");
+  command.action(async (options) => {
+    try {
+      if (options.clearLogs && options.attach) {
+        throw new CLIError("BUG_REPORT_OPTIONS_CONFLICT", "Choose either --attach or --clear-logs; the CLI log was not changed.");
+      }
+      if (options.clearLogs) {
+        await clearDiagnosticLogs(root);
+        output2("Deleted the CLI log on this computer.\n");
+        return;
+      }
+      if (!options.attach) throw new CLIError("BUG_REPORT_USAGE", "Use `tinycloud bug-report --attach <report-id>` or `tinycloud bug-report --clear-logs`.");
+      await attachLogs(options.attach, options.tokenStdin === true, dependencies);
+    } catch (error) {
+      return (dependencies.handleError ?? handleError)(error);
+    }
+  });
+}
+
 // src/commands/auth.ts
 init_profile_gate();
 init_dist();
 init_profiles();
-import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
 import { spawn } from "child_process";
-import { lstat as lstat7, mkdir as mkdir4, readFile as readFile9, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname6, join as join16 } from "path";
-import { createInterface as createInterface3 } from "readline";
+import { lstat as lstat8, mkdir as mkdir5, readFile as readFile10, writeFile as writeFile3 } from "fs/promises";
+import { dirname as dirname6, join as join17 } from "path";
+import { createInterface as createInterface4 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { namedProfilePath as namedProfilePath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore4, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore4, namedProfilePath as namedProfilePath3, profilePath as profilePath11 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
 init_constants();
 init_errors();
 init_permissions();
-import { readFile as readFile7 } from "fs/promises";
-import { join as join11 } from "path";
+import { readFile as readFile8 } from "fs/promises";
+import { join as join12 } from "path";
 import { principalDidEquals } from "@tinycloud/node-sdk";
 import { additionalDelegationsPath as additionalDelegationsPath2, profilePath as profilePath6 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
@@ -20926,7 +21447,7 @@ function inventoryError(cid, detail) {
 }
 async function optionalFile(path) {
   try {
-    return await readFile7(path, "utf8");
+    return await readFile8(path, "utf8");
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return null;
     throw error;
@@ -20956,9 +21477,9 @@ async function signedGrantOwner(cid, authorization, ownerDid, issuer) {
 async function logoutInventorySnapshot(profileName2) {
   const root = profilePath6(profileName2);
   return JSON.stringify(await Promise.all([
-    optionalFile(join11(root, "auth-grant-artifacts.json")),
+    optionalFile(join12(root, "auth-grant-artifacts.json")),
     optionalFile(additionalDelegationsPath2(profileName2)),
-    optionalFile(join11(root, "auth-grants.jsonl"))
+    optionalFile(join12(root, "auth-grants.jsonl"))
   ]));
 }
 function targetOwner(resources, ownerDid) {
@@ -20987,7 +21508,7 @@ async function planLogoutRevocations(input) {
       foreign.add(cid);
     } else unresolved.add(cid);
   };
-  const artifactText = await optionalFile(join11(root, "auth-grant-artifacts.json"));
+  const artifactText = await optionalFile(join12(root, "auth-grant-artifacts.json"));
   if (artifactText !== null) {
     let records;
     try {
@@ -21024,7 +21545,7 @@ async function planLogoutRevocations(input) {
       unresolved.add(cid);
     }
   }
-  const historyText = await optionalFile(join11(root, "auth-grants.jsonl"));
+  const historyText = await optionalFile(join12(root, "auth-grants.jsonl"));
   if (historyText !== null) {
     for (const line of historyText.split("\n").filter((row) => row.trim().length > 0)) {
       let record3;
@@ -33381,7 +33902,7 @@ async function importAesKey2(key32, usage3) {
     [usage3]
   );
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -33944,7 +34465,7 @@ async function resolveLegacyV2(link5, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open8(sealed, parsed.key32);
+      plaintext = await open9(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -35056,7 +35577,7 @@ function encodeCID22(version, code32, multihash) {
   return bytes3;
 }
 var cidSymbol22 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
-var MAX_CONTENT_BYTES = 100 * 1024 * 1024;
+var MAX_CONTENT_BYTES2 = 100 * 1024 * 1024;
 function historyRecordForPublishedShare(result, now = /* @__PURE__ */ new Date()) {
   const target = result.metadata.target.kind;
   const supplied = result.metadata.recipientMatcher;
@@ -35351,10 +35872,11 @@ init_profiles();
 init_constants();
 init_errors();
 init_session_expired();
-import { chmod as chmod4, link as link2, open as open9, readFile as readFile8, stat as stat4, unlink as unlink4 } from "fs/promises";
-import { dirname as dirname5, join as join12 } from "path";
+init_warnings();
+import { chmod as chmod4, link as link2, open as open10, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
+import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
-import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
@@ -35383,8 +35905,8 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
   const observedProfiles = /* @__PURE__ */ new Set();
   let preparedKeys;
   let preparedKey;
-  const path = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
-  const legacyPath = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
+  const path = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
+  const legacyPath = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
   const b64 = (value4) => Buffer.from(value4).toString("base64url");
   const unb64 = (value4) => {
     if (typeof value4 !== "string" || !/^[A-Za-z0-9_-]+$/.test(value4)) throw new ShareHistoryUnreadableError();
@@ -35420,7 +35942,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
   };
   const readIfPresent = async (file) => {
     try {
-      return await readFile8(file);
+      return await readFile9(file);
     } catch (error) {
       if (error.code === "ENOENT") return void 0;
       throw new ShareHistoryReadError();
@@ -35568,7 +36090,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       await link2(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink4(found.file);
-      const directory = await open9(dirname5(found.file), "r");
+      const directory = await open10(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -35614,7 +36136,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
 }
 async function profileHistoryFileExists(profileName2) {
   const directory = await ProfileManager.getCacheDir(profileName2);
-  for (const file of [join12(directory, SHARE_HISTORY_FILE), join12(directory, SHARE_HISTORY_LEGACY_FILE)]) {
+  for (const file of [join13(directory, SHARE_HISTORY_FILE), join13(directory, SHARE_HISTORY_LEGACY_FILE)]) {
     try {
       await stat4(file);
       return true;
@@ -35671,6 +36193,7 @@ async function assertShareHistoryAllowsKeyDrop(profileName2, action) {
 init_logout_pending();
 init_formatter();
 init_errors();
+init_warnings();
 init_constants();
 init_types();
 init_browser_auth();
@@ -35811,16 +36334,29 @@ init_raw_encryption();
 init_owner_did();
 init_login_commit();
 
+// src/auth/previous-sign-in.ts
+init_refusal();
+init_scoped_login();
+function previousSignInNotice(session, profile) {
+  if (session === null) return void 0;
+  const header = session.delegationHeader;
+  if (typeof session.delegationCid !== "string" && (typeof header !== "object" || header === null)) return void 0;
+  const { state: state2, expiresAt } = storedSessionState(session, profile);
+  if (!sessionStateIsUsable(state2)) return void 0;
+  const cid = delegationCidOf(session);
+  return `The previous sign-in${cid === void 0 ? "" : ` (${cid})`} stays live until ${expiresAt ?? "it expires"} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
+}
+
 // src/auth/prepared-openkey.ts
 init_constants();
 init_errors();
-init_browser_auth();
 init_owner_did();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
 import { createServer } from "http";
-import { createInterface as createInterface2 } from "readline";
-import open13 from "open";
-var MAX_BODY_BYTES = 1024 * 1024;
+import { createInterface as createInterface3 } from "readline";
+import open14 from "open";
+import { publicJwk as publicJwk3 } from "@tinycloud/sdk-core";
+var MAX_BODY_BYTES2 = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
 function invalid3(code5, message) {
   return new CLIError(code5, message, ExitCode.AUTH_REQUIRED);
@@ -35937,13 +36473,13 @@ async function startPreparedOpenKeyHandoff(options) {
     let size = 0;
     request.on("data", (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > MAX_BODY_BYTES2) {
         reply(response, 413, { accepted: false });
         request.destroy();
       } else chunks.push(chunk);
     });
     request.on("end", () => {
-      if (size > MAX_BODY_BYTES || delivered || completed) return;
+      if (size > MAX_BODY_BYTES2 || delivered || completed) return;
       let envelope;
       try {
         envelope = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -36000,13 +36536,13 @@ async function startPreparedOpenKeyHandoff(options) {
     state2.fill(0);
   };
   try {
-    const publicJwk = publicJwkForDelegation(options.prepared.jwk);
+    const sessionJwk = publicJwk3(options.prepared.jwk);
     const payload = {
       transportVersion: 2,
       request: {
         protocolVersion: 1,
         siwe: options.prepared.siwe,
-        jwk: publicJwk,
+        jwk: sessionJwk,
         host: options.prepared.host,
         sessionDid: options.prepared.verificationMethod,
         ...options.prepared.keyId ? { keyId: options.prepared.keyId } : {},
@@ -36023,20 +36559,20 @@ async function startPreparedOpenKeyHandoff(options) {
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try {
-        await open13(url);
+        await open14(url);
       } catch {
         console.error("Could not open browser. Use the printed URL or paste the signed code.");
       }
     }
     if (options.paste || process.stdin.isTTY) {
       console.error("Waiting up to 5 minutes for OpenKey. Paste its one-line signed code here and press Enter if the callback is blocked (Safari may require this).");
-      rl = createInterface2({ input: process.stdin, output: process.stderr });
+      rl = createInterface3({ input: process.stdin, output: process.stderr });
       rl.on("line", (input) => {
         if (delivered || completed || !input.trim()) return;
         let envelope;
         try {
           const code5 = input.trim();
-          if (code5.length > MAX_BODY_BYTES * 2 || !/^[A-Za-z0-9_-]+$/.test(code5) || Buffer.from(code5, "base64url").toString("base64url") !== code5) throw new Error("Invalid code");
+          if (code5.length > MAX_BODY_BYTES2 * 2 || !/^[A-Za-z0-9_-]+$/.test(code5) || Buffer.from(code5, "base64url").toString("base64url") !== code5) throw new Error("Invalid code");
           envelope = JSON.parse(Buffer.from(code5, "base64url").toString("utf8"));
         } catch {
           console.error("Invalid prepared OpenKey paste code. Try again.");
@@ -36099,7 +36635,7 @@ init_types();
 init_constants();
 init_permissions();
 init_sdk();
-import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
 import { TinyCloudNode as TinyCloudNode2 } from "@tinycloud/node-sdk";
 import { DelegationRequestBindingSchema, PermissionEntrySchema } from "@tinycloud/operations/artifacts";
 import {
@@ -36114,7 +36650,7 @@ import {
 // src/lib/revoke-delegation.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME16 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation4 } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer as withoutBearer3 } from "@tinycloud/operations/delegation-binding";
 init_permissions();
@@ -36248,7 +36784,6 @@ async function revokeDelegationOnNode(params) {
     actions: ["tinycloud.delegation/revoke"]
   };
   const rawAuthorityCovered = node.hasRuntimePermissions([revokePermission]);
-  if (!rawAuthorityCovered) await requirePermissionConsent([revokePermission], params.yes);
   let targetFound = params.localTarget?.delegation?.cid === cid;
   let targetSpaceSource = targetFound ? "local-stored-grant" : "node";
   let boundSpace;
@@ -36312,9 +36847,6 @@ async function revokeDelegationOnNode(params) {
         node,
         requested: [revokePermission],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: `Revoke delegation ${cid}`,
-        yes: params.yes,
-        consentAlreadyGiven: true,
         persist: false,
         openKeyAcquisition: params.openKeyAcquisition
       });
@@ -36359,9 +36891,6 @@ async function revokeDelegationOnNode(params) {
           actions: ["tinycloud.delegation/revoke"]
         }],
         expiryOption: REVOKE_AUTHORITY_EXPIRY,
-        reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
-        yes: params.yes,
-        consentAlreadyGiven: true,
         persist: false,
         openKeyAcquisition: params.openKeyAcquisition
       });
@@ -36379,12 +36908,19 @@ async function revokeDelegationOnNode(params) {
         "REVOKE_UNAUTHORIZED",
         "The node rejected this revocation: Unauthorized Revoker.",
         ExitCode.PERMISSION_DENIED,
-        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME16} --profile <profile-name> delegation revoke ${cid}\`.` }
+        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME17} --profile <profile-name> delegation revoke ${cid}\`.` }
       );
     }
     throw cliErrorFromService(result.error);
   }
   return { cid, revoked: true, targetSpaceSource, authorityScopeSource, authorityScopeReason };
+}
+
+// src/lib/yes-flag.ts
+init_formatter();
+var UNNEEDED_YES_DESCRIPTION = "No longer needed; accepted and ignored";
+function noteUnneededYes(yes) {
+  if (yes === true && !shouldOutputJson()) process.stderr.write("--yes is no longer needed and has no effect.\n");
 }
 
 // src/commands/auth-grants.ts
@@ -36462,7 +36998,7 @@ function renderList(result) {
   }
   process.stdout.write(`Profile: ${result.profile}
 `);
-  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME17} delegation revoke ${result.session.cid})
+  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME18} delegation revoke ${result.session.cid})
 ` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.
 `);
@@ -36504,11 +37040,12 @@ function registerAuthGrantsCommand(auth, options = {}) {
         grants: grants2
       });
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
-  grants.command("remove <cid>").description("Remove locally stored grants for exactly this CID; optionally revoke as the owner").option("--revoke", "Revoke on the node before removing local grants").option("--yes", "Skip local-key TTY confirmation", false).action(async (cid, flags, cmd) => {
+  grants.command("remove <cid>").description("Remove locally stored grants for exactly this CID; optionally revoke as the owner").option("--revoke", "Revoke on the node before removing local grants").option("--yes", UNNEEDED_YES_DESCRIPTION, false).action(async (cid, flags, cmd) => {
     try {
+      noteUnneededYes(flags.yes);
       const { ctx, profile } = await localContext(cmd.optsWithGlobals());
       if (flags.revoke && resolveProfilePosture(profile) === "delegate-session") {
         throw new CLIError(
@@ -36542,7 +37079,6 @@ function registerAuthGrantsCommand(auth, options = {}) {
           profile,
           node,
           cid,
-          yes: flags.yes ?? false,
           localTarget,
           openKeyAcquisition: options.openKeyAcquisition
         });
@@ -36560,7 +37096,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
               ExitCode.ERROR,
               {
                 causeCode: cause.code,
-                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME17} --profile ${ctx.profile} auth grants remove ${cid}`
+                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME18} --profile ${ctx.profile} auth grants remove ${cid}`
               }
             );
           }
@@ -36593,7 +37129,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
 `);
       }
     } catch (error) {
-      handleError(error);
+      return handleError(error);
     }
   });
 }
@@ -36607,7 +37143,7 @@ init_formatter();
 init_errors();
 init_constants();
 init_local_key();
-import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
 async function createKeyOnlyProfile(profileName2, host, defaultSpace) {
   await ProfileManager.ensureConfigDir();
   const { jwk, did } = await generateKey2();
@@ -36644,7 +37180,7 @@ function registerInitCommand(program) {
       if (await ProfileManager.profileExists(profileName2)) {
         throw new CLIError(
           "PROFILE_EXISTS",
-          `Profile "${profileName2}" already exists. Use \`${CLI_NAME18} profile delete ${profileName2}\` first or choose a different name.`,
+          `Profile "${profileName2}" already exists. Use \`${CLI_NAME19} profile delete ${profileName2}\` first or choose a different name.`,
           ExitCode.ERROR
         );
       }
@@ -36700,18 +37236,6 @@ function approvalNotices(groups) {
 
 // src/commands/auth.ts
 init_apps_agent_preset();
-
-// src/lib/consent-text.ts
-init_safe_text();
-init_permissions();
-function permissionConsentLine(permission2) {
-  return safeInline(compactPermission(permission2));
-}
-function signExtrasQuestion(count) {
-  return `Sign the ${count} ${count === 1 ? "entry" : "entries"} marked ! above, and the rest of the request? [y/N] `;
-}
-
-// src/commands/auth.ts
 init_named_keys();
 
 // src/auth/replication-login.ts
@@ -36807,7 +37331,7 @@ async function promptAuthMethod() {
   if (!isInteractive()) {
     return "openkey";
   }
-  const rl = createInterface3({
+  const rl = createInterface4({
     input: process.stdin,
     output: process.stderr
   });
@@ -36832,9 +37356,9 @@ async function promptAuthMethod() {
 async function hasGatedReplicaState(profile, name, replicationEnabled) {
   if (replicationEnabled || profile.replication !== void 0) return true;
   const root = profilePath11(name);
-  for (const path of [join16(root, REPLICA_GATE_FILE3), join16(root, REPLICA_LOGOUT_PENDING_FILE4), join16(root, "replication")]) {
+  for (const path of [join17(root, REPLICA_GATE_FILE3), join17(root, REPLICA_LOGOUT_PENDING_FILE4), join17(root, "replication")]) {
     try {
-      await lstat7(path);
+      await lstat8(path);
       return true;
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
@@ -36851,7 +37375,7 @@ async function existingReplicaRoots(profile) {
   const roots = [];
   for (const name of ["replicas", "replication"]) {
     try {
-      await lstat7(join16(profilePath11(profile), name));
+      await lstat8(join17(profilePath11(profile), name));
       roots.push(name);
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
@@ -36879,10 +37403,10 @@ async function preflightLogout(purge, principal, discardLocalChanges) {
 }
 async function logoutGateSnapshot(profile) {
   const files = await Promise.all([REPLICA_GATE_FILE3, REPLICA_DENY_FLOOR_FILE].map(async (name) => {
-    const path = join16(profilePath11(profile), name);
+    const path = join17(profilePath11(profile), name);
     try {
-      const file = await lstat7(path, { bigint: true });
-      return { bytes: await readFile9(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
+      const file = await lstat8(path, { bigint: true });
+      return { bytes: await readFile10(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return null;
       throw error;
@@ -36965,7 +37489,7 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
       "REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED,
-      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME19} auth logout\`.` }
+      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME20} auth logout\`.` }
     );
   }
   const signerDid = addressToDID(
@@ -37009,7 +37533,7 @@ async function revokeForLogout(ctx, discardLocalChanges) {
           "REVOCATION_FAILED",
           `Revocation failed for ${cid}: ${result.error.message}. Session, key, and replica files are retained for retry; local reads stay denied.`,
           ExitCode.ERROR,
-          { cid, hint: `Retry \`${CLI_NAME19} auth logout --revoke\` when the node is available.` }
+          { cid, hint: `Retry \`${CLI_NAME20} auth logout --revoke\` when the node is available.` }
         );
       }
       if (result.data.cid !== cid || result.data.revoked !== true) {
@@ -37028,7 +37552,7 @@ async function revokeForLogout(ctx, discardLocalChanges) {
       "REVOCATION_FAILED",
       `Revocation failed before local logout: ${error instanceof Error ? error.message : String(error)}. Session, key, and replica files are retained for retry; local reads stay denied.`,
       ExitCode.ERROR,
-      { hint: `Retry \`${CLI_NAME19} auth logout --revoke\` when online authority is available.` }
+      { hint: `Retry \`${CLI_NAME20} auth logout --revoke\` when online authority is available.` }
     );
   }
 }
@@ -37093,8 +37617,8 @@ async function finishProfileLogout(ctx, options = {}) {
           let pendingMarker = null;
           let remotePending = false;
           try {
-            const pending = JSON.parse(await readFile9(
-              join16(profilePath11(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
+            const pending = JSON.parse(await readFile10(
+              join17(profilePath11(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
               "utf8"
             ));
             pendingMarker = pending;
@@ -37166,7 +37690,7 @@ async function finishProfileLogout(ctx, options = {}) {
                 });
               } catch (error) {
                 if (pendingMarker?.v === 2 && typeof error === "object" && error !== null && "code" in error && error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
-                  const gatePath = join16(namedProfilePath3(ctx.profile), REPLICA_GATE_FILE3);
+                  const gatePath = join17(namedProfilePath3(ctx.profile), REPLICA_GATE_FILE3);
                   throw new CLIError(
                     "REPLICA_GATED",
                     `A damaged lock file from an interrupted logout; move it aside and re-run \`tc auth logout\`: ${gatePath}. Inspect it first to ensure it is not a valid replacement. ` + (profile.authSignedOut === true ? "The profile is already signed out; credentials remain removed, while replica data and the marker stay intact." : "Credentials and data stay intact; the marker remains and cleanup did not proceed."),
@@ -37227,7 +37751,7 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME19} share publish\``).option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)").option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME20} share publish\``).option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)").option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
@@ -37272,7 +37796,6 @@ function registerAuthCommand(program, options) {
           shareOrigin: DEFAULT_SHARE_ORIGIN,
           permissions: loginPermissions,
           ...options2.expiry === void 0 ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options2.expiry)) },
-          reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
           expectedOwner: owner,
           replaceSession: options2.replaceSession === true,
           persistHost
@@ -37392,7 +37915,7 @@ function registerAuthCommand(program, options) {
         authenticated: false,
         replicasRemoved,
         replicasKept: options2.keepReplicas === true,
-        warning: online ? "The node confirmed revocation of the listed CIDs before local logout." : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME19} delegation revoke <cid>\` to end access now.`,
+        warning: online ? "The node confirmed revocation of the listed CIDs before local logout." : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME20} delegation revoke <cid>\` to end access now.`,
         ...online === void 0 ? {} : {
           revokedCids: online.plan.cids,
           revocationExcluded: online.plan.excluded
@@ -37483,19 +38006,21 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
     `Lifetime of the granted delegation. ms-format string (e.g. "7d", "30m") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.`
-  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile").option("--yes", "Skip local-key TTY confirmation", false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
+  ).option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided").option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent").option("--yes", UNNEEDED_YES_DESCRIPTION, false).option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey").option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)").option(
     "--preset <name>",
     `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`
   ).option(
     "--app <app_id>",
-    `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
+    `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeatable`,
     (value4, previous) => [...previous, value4],
     []
   ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)").action(async (options2, cmd) => {
     try {
+      noteUnneededYes(options2.yes);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, options2.grant ? {} : { storedSession: "unused" });
-      const profile = await ProfileManager.getProfile(ctx.profile);
+      const initialSnapshot = options2.grant ? await readProfileSnapshot(ctx.profile) : void 0;
+      const profile = initialSnapshot?.profile ?? await ProfileManager.getProfile(ctx.profile);
       if (options2.paste && (!options2.grant || options2.device || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--paste requires --grant on an OpenKey owner profile and cannot be combined with --device.", ExitCode.USAGE_ERROR);
       }
@@ -37503,7 +38028,8 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
       }
       const preset = resolveAppsAgentRequest(options2);
-      const requested = preset === void 0 ? await collectRequestedPermissions(options2, ctx.profile) : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
+      const resolutionOptions = { allowLogicalSpaces: true };
+      const requested = preset === void 0 ? await collectRequestedPermissions(options2, ctx.profile, resolutionOptions) : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile, resolutionOptions);
       const expiryOption = preset === void 0 ? parseExpiryOption(options2.expiry) : APPS_AGENT_EXPIRY;
       if (preset !== void 0) process.stderr.write(`
 ${appsAgentScopeNotice(preset.mode, preset.appIds)}
@@ -37528,16 +38054,20 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         await emitPermissionRequestArtifact(artifact, options2.emit);
         return;
       }
-      if (profile.authMethod === "openkey" || options2.device) assertNoCaveatLimits(requested);
-      const node = await ensureAuthenticated(ctx);
-      if (node.hasRuntimePermissions(requested)) {
+      const session = initialSnapshot ? initialSnapshot.session : await ProfileManager.getSession(ctx.profile);
+      const key = initialSnapshot ? initialSnapshot.key : await ProfileManager.getKey(ctx.profile);
+      const keyOnlyOpenKey = !session && profile.authMethod !== "local" && key !== null && !options2.device;
+      if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) assertNoCaveatLimits(requested);
+      await completeApprovalResult(ctx.profile);
+      let node;
+      if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
+      if (node?.hasRuntimePermissions(requested)) {
         outputJson({ changed: false, missing: [], added: [] });
         return;
       }
-      if (profile.authMethod === "openkey" || options2.device) {
-        const key = await ProfileManager.getKey(ctx.profile);
+      if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) {
         if (!key) {
-          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME19} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
+          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME20} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
         }
         const openkeyHost = resolveOpenKeyHost(profile);
         const grants = [];
@@ -37560,27 +38090,23 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         for (const [index, group] of groups.entries()) {
           if (notices) process.stderr.write(`${notices.prompts[index]}
 `);
-          const reason = permissionGrantReason(
-            `Grant requested TinyCloud permissions from \`${CLI_NAME19} auth request --grant\`.`,
-            group
-          );
           const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
+          let bootstrapSessionData;
           const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
             let delegationData;
             if (options2.device) {
-              const approval = await acquireDeviceDelegation({
+              const approval2 = await acquireDeviceDelegation({
                 sessionDid: keyToDID(key),
                 jwk: key,
                 nodeOrigin: ctx.host,
                 shareOrigin: DEFAULT_SHARE_ORIGIN,
                 permissions: request,
                 expiry: parseRequestedExpiry(expiryOption ?? "7d"),
-                reason,
                 expectedOwner: pinnedOwner(profile),
                 openkeyHost: resolveDeviceApiHost(profile)
               });
-              declined.push(...approval.declined);
-              delegationData = approval.session;
+              declined.push(...approval2.declined);
+              delegationData = approval2.session;
             } else {
               delegationData = await startAuthFlow(profile.did, {
                 profileName: ctx.profile,
@@ -37588,7 +38114,6 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 jwk: key,
                 host: ctx.host,
                 permissions: request,
-                reason,
                 openkeyHost,
                 expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
                 noPopup: options2.popup === false,
@@ -37597,11 +38122,33 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
               });
             }
             seen.result = delegationData;
-            return portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
+            const approval = verifyOpenKeyApproval(delegationData, request, ctx.host, proof);
+            if (keyOnlyOpenKey && index === 0) bootstrapSessionData = approval.session;
+            return approval.delegation;
           });
+          if (bootstrapSessionData) {
+            const bootstrapProfile = {
+              ...profile,
+              posture: profile.posture ?? "owner-openkey",
+              sessionDid: profile.sessionDid ?? profile.did,
+              authMethod: "openkey",
+              spaceId: delegation.spaceId,
+              ...typeof bootstrapSessionData.ownerDid === "string" ? { ownerDid: bootstrapSessionData.ownerDid } : {}
+            };
+            await commitLogin(ctx.profile, initialSnapshot, {
+              key,
+              session: bootstrapSessionData,
+              profile: bootstrapProfile,
+              durable: true
+            });
+            await completeApprovalResult(ctx.profile, delegation);
+            node = await ensureAuthenticated(ctx);
+          }
           grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
         }
-        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options2.manifest ? "manifest" : "cli");
+        if (!node) node = await ensureAuthenticated(ctx);
+        const runtimeGrants = keyOnlyOpenKey ? grants.slice(1) : grants;
+        await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, runtimeGrants, options2.manifest ? "manifest" : "cli");
         const delegationCids2 = grants.map(({ delegation }) => delegation.cid);
         const expiry2 = grants.at(-1)?.delegation.expiry.toISOString();
         reportDeclined(declined);
@@ -37615,17 +38162,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         });
         return;
       }
-      if (isInteractive()) {
-        if (!options2.yes) {
-          await confirmPermissionRequest(requested);
-        }
-      } else if (!options2.yes) {
-        throw new CLIError(
-          "CONFIRMATION_REQUIRED",
-          "Local-key permission requests in non-interactive mode require --yes.",
-          ExitCode.USAGE_ERROR
-        );
-      }
+      if (!node) node = await ensureAuthenticated(ctx);
       const delegations = await node.grantRuntimePermissions(
         requested,
         expiryOption !== void 0 ? { expiry: expiryOption } : void 0
@@ -37677,7 +38214,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           kind: parsed.kind,
           requestId: parsed.requestId,
           requested: parsed.requested,
-          next: `${CLI_NAME19} auth retry ${parsed.requestId}`
+          next: `${CLI_NAME20} auth retry ${parsed.requestId}`
         });
         return;
       }
@@ -37803,8 +38340,9 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       return handleError(error);
     }
   });
-  auth.command("grant [request]").description("Grant a TinyCloud permission request artifact to its requester").option("--stdin", "Read the JSON request artifact from stdin").option("--paste", "Read the JSON request artifact from stdin").option("--yes", "Skip local-key TTY confirmation", false).option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (source, options2, cmd) => {
+  auth.command("grant [request]").description("Grant a TinyCloud permission request artifact to its requester").option("--stdin", "Read the JSON request artifact from stdin").option("--paste", "Read the JSON request artifact from stdin").option("--yes", UNNEEDED_YES_DESCRIPTION, false).option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (source, options2, cmd) => {
     try {
+      noteUnneededYes(options2.yes);
       const deadlineMs = options2.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options2.timeout);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -37844,18 +38382,6 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
 ${scope.text}
 
 `);
-      let confirmedExtras = false;
-      if (scope.extras.length > 0 && options2.yes !== true) {
-        if (!process.stdin.isTTY || !process.stderr.isTTY) {
-          throw new CLIError(
-            "CONFIRMATION_REQUIRED",
-            `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,
-            ExitCode.USAGE_ERROR
-          );
-        }
-        await askYesNo(signExtrasQuestion(scope.extras.length), "Grant cancelled. Nothing was signed.");
-        confirmedExtras = true;
-      }
       const resolvedRequest = { ...parsed, requested };
       const node = await ensureAuthenticated(ctx);
       let grant;
@@ -37869,7 +38395,6 @@ ${scope.text}
             parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
             OPENKEY_AGENT_MAX_LIFETIME_MS
           ),
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           exactApproval: true,
           noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
           commandIntent: approvalCommandIntent(parsed),
@@ -37879,7 +38404,7 @@ ${scope.text}
         if (recovered) {
           grant = recovered;
         } else {
-          const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+          const approvalNode = await nodeFromOpenKeyApproval(ctx, approval.session);
           grant = {
             ...await grantAuthRequest(approvalNode, resolvedRequest, {
               expiry: approval.delegation.expiry.getTime() - Date.now()
@@ -37901,9 +38426,7 @@ ${scope.text}
           profile,
           node,
           requested,
-          expiryOption: parsed.requestedExpiry,
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
-          yes: options2.yes === true || confirmedExtras
+          expiryOption: parsed.requestedExpiry
         });
         grant = await grantAuthRequest(node, resolvedRequest);
       }
@@ -38081,8 +38604,8 @@ function describeSession(state2, expiresAt) {
 }
 async function emitPermissionRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir4(dirname6(emitOption), { recursive: true });
-    await writeFile2(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    await mkdir5(dirname6(emitOption), { recursive: true });
+    await writeFile3(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
       path: emitOption,
@@ -38107,7 +38630,7 @@ async function readAuthArtifactSource(source, options) {
   if (source.startsWith("http://") || source.startsWith("https://")) {
     return readUrl(source);
   }
-  return readFile9(source, "utf8");
+  return readFile10(source, "utf8");
 }
 async function readStdin() {
   const chunks = [];
@@ -38300,7 +38823,7 @@ async function acquireOpenKeyApproval(params) {
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME19} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME20} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -38315,7 +38838,7 @@ async function acquireOpenKeyApproval(params) {
       jwk: key,
       host: params.ctx.host,
       permissions: request,
-      reason: permissionGrantReason(params.reason, request),
+      ...params.reason === void 0 ? {} : { reason: params.reason },
       openkeyHost: resolveOpenKeyHost(params.profile),
       expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
       noPopup: params.noPopup,
@@ -38332,9 +38855,16 @@ async function acquireOpenKeyApproval(params) {
     });
   });
 }
-async function nodeFromOpenKeyApproval(host, session) {
+async function nodeFromOpenKeyApproval(ctx, session) {
   const ownerParts = session.ownerDid.split(":");
-  const node = new TinyCloudNode3({ host });
+  const host = ctx.host;
+  const node = new TinyCloudNode3({
+    host,
+    registryCacheStore: createProfileRegistryCacheStore4(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore4(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || ctx.tinycloudRegistryUrl
+  });
   await node.restoreSession({
     delegationHeader: session.delegationHeader,
     delegationCid: session.delegationCid,
@@ -38353,9 +38883,6 @@ async function nodeFromOpenKeyApproval(host, session) {
 async function ensureDelegationAuthority(params) {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return void 0;
   if (params.profile.authMethod === "openkey") assertNoCaveatLimits(params.requested);
-  if (!params.consentAlreadyGiven && (params.persist === false || params.profile.authMethod !== "openkey")) {
-    await requirePermissionConsent(params.requested, params.yes);
-  }
   if (params.profile.authMethod === "openkey") {
     if (params.persist === false) {
       if (params.expiryOption === void 0) {
@@ -38380,7 +38907,7 @@ async function ensureDelegationAuthority(params) {
     if (!key) {
       throw new CLIError(
         "NO_KEY",
-        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME19} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME20} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -38405,7 +38932,7 @@ async function ensureDelegationAuthority(params) {
           jwk: key,
           host: params.ctx.host,
           permissions: request,
-          reason: permissionGrantReason(params.reason, group),
+          ...params.reason === void 0 ? {} : { reason: params.reason },
           openkeyHost,
           expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
           noPopup: params.noPopup
@@ -38454,12 +38981,6 @@ function assertOpenKeyAgentRequest(requested) {
     );
   }
 }
-function permissionGrantReason(context2, permissions) {
-  const first = permissions[0];
-  const summary = first ? compactPermission(first) : "no permissions";
-  const more = permissions.length > 1 ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}` : "";
-  return `${context2} Requested: ${summary}${more}.`;
-}
 function execCapturedCommand(command) {
   return new Promise((resolve10, reject) => {
     const child = spawn(process.execPath, [process.argv[1], ...command.argv], {
@@ -38484,58 +39005,21 @@ function execCapturedCommand(command) {
     });
   });
 }
-async function collectRequestedPermissions(options, profile) {
+async function collectRequestedPermissions(options, profile, resolutionOptions = {}) {
   const permissions = [];
   for (const spec of options.cap ?? []) {
-    permissions.push(await parseCapSpec(spec, profile));
+    permissions.push(await parseCapSpec(spec, profile, resolutionOptions));
   }
   if (options.permission) {
-    permissions.push(...await loadPermissionRequest(options.permission, profile));
+    permissions.push(...await loadPermissionRequest(options.permission, profile, resolutionOptions));
   }
   if (options.manifest) {
-    permissions.push(...await loadManifestPermissions(options.manifest, profile, { device: options.device === true }));
+    permissions.push(...await loadManifestPermissions(options.manifest, profile, {
+      ...resolutionOptions,
+      device: options.device === true
+    }));
   }
   return permissions;
-}
-async function askYesNo(question, cancelMessage) {
-  const rl = createInterface3({
-    input: process.stdin,
-    output: process.stderr
-  });
-  const answer = await new Promise((resolve10) => {
-    rl.question(question, resolve10);
-  });
-  rl.close();
-  if (!/^y(es)?$/i.test(answer.trim())) {
-    throw new CLIError("REQUEST_CANCELLED", cancelMessage, ExitCode.ERROR);
-  }
-}
-async function confirmPermissionRequest(permissions) {
-  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
-  for (const permission2 of permissions) {
-    const dangerous = isDangerousPermission(permission2);
-    const line = `  ${permissionConsentLine(permission2)}`;
-    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
-  }
-  process.stderr.write("\n");
-  await askYesNo("Approve local-key delegation? [y/N] ", "Permission request cancelled.");
-}
-async function requirePermissionConsent(permissions, yes) {
-  if (isInteractive()) {
-    if (!yes) await confirmPermissionRequest(permissions);
-  } else if (!yes) {
-    throw new CLIError(
-      "CONFIRMATION_REQUIRED",
-      "Permission grants in non-interactive mode require --yes.",
-      ExitCode.USAGE_ERROR
-    );
-  }
-}
-function isDangerousPermission(permission2) {
-  if (permission2.path === "" || permission2.path === "/") return true;
-  return permission2.actions.some(
-    (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/schema") || action.endsWith("/del")
-  );
 }
 function parseExpiryOption(raw) {
   if (raw === void 0 || raw === null) return void 0;
@@ -38641,7 +39125,7 @@ async function rotateAuthKey(profileName2, host, options = {}) {
     if (!profile.privateKey) {
       throw new CLIError(
         "LOCAL_OWNER_KEY_REQUIRED",
-        `Profile "${profileName2}" does not have a local owner private key. Run \`${CLI_NAME19} auth login --method local\` first.`,
+        `Profile "${profileName2}" does not have a local owner private key. Run \`${CLI_NAME20} auth login --method local\` first.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -38663,12 +39147,15 @@ async function rotateAuthKey(profileName2, host, options = {}) {
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
     return generateKey2();
   });
+  const previousNotice = previousSignInNotice(await ProfileManager.getSession(profileName2), profile);
   const result = await refreshOpenKeySession(profileName2, host, {
     paste: options.paste,
     noPopup: options.noPopup,
     ...profile.namedKeys === void 0 ? { rotation: { jwk, did } } : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }
   });
   outputRotationResult(result.profile, profileName2, oldDid, "openkey");
+  if (previousNotice !== void 0) process.stderr.write(`${previousNotice}
+`);
 }
 function outputRotationResult(profile, profileName2, oldDid, authMethod) {
   outputJson({
@@ -38692,7 +39179,7 @@ async function persistCurrentLocalSession(profileName2, profile, session, replic
       );
     }
     try {
-      await lstat7(join16(profilePath11(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
+      await lstat8(join17(profilePath11(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
         "A durable logout started while the local grant was in flight; its session and key were not restored.",
@@ -38759,8 +39246,10 @@ async function handleLocalAuth(profileName2, host, options = {}) {
     return localKeySignIn({
       privateKey,
       host,
+      profile: profileName2,
+      tinycloudRegistryUrl: profile?.tinycloudRegistryUrl,
       ...namedKeys === void 0 ? {} : { keyAbilities: keyAbilitiesFor(namedKeys) },
-      ...replication?.prefixes.length ? { profile: profileName2, replication } : {}
+      ...replication?.prefixes.length ? { replication } : {}
     });
   });
   const key = sessionResult.jwk;
@@ -38895,6 +39384,10 @@ async function refreshPreparedOpenKeySession(params) {
     permissions
   }], { includeAccountRegistryPermissions: false });
   const node = new TinyCloudNode3({
+    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
     signer: ownerIdentitySigner(owner),
     capabilityRequest,
@@ -38992,9 +39485,9 @@ function preparedSignInOptions(expiry) {
 }
 var KEYS_APPROVAL_NOTE = (folder) => `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.
 `;
-var keysNotGrantedAfterLogin = (profileName2) => `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME19} --profile ${profileName2} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.
+var keysNotGrantedAfterLogin = (profileName2) => `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME20} --profile ${profileName2} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.
 `;
-var KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME19} keys ensure <folder>/<name>\` again in a minute.
+var KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME20} keys ensure <folder>/<name>\` again in a minute.
 `;
 async function readyNamedKeysNetwork(node) {
   try {
@@ -39025,6 +39518,10 @@ async function refreshPreparedKeysSession(params) {
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName2, "login");
   const node = new TinyCloudNode3({
+    registryCacheStore: createProfileRegistryCacheStore4(profileName2),
+    registrySequenceStore: createProfileRegistrySequenceStore4(profileName2),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || profile.tinycloudRegistryUrl,
     host,
     signer: ownerIdentitySigner(owner),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
@@ -39182,7 +39679,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry: openKeyExpiry,
       // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
       ...plainPasteLink ? { expiryChangeable: true } : {},
-      ...permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
+      ...permissions && options.reason ? { reason: options.reason } : {}
     });
     seen.result = delegationData;
     let sanitizedSession;
@@ -39233,7 +39730,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
 }
 
 // src/commands/completion.ts
-import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
 function registerCompletionCommand(program) {
   const completion = program.command("completion").description("Generate shell completions");
   completion.command("bash").description("Output bash completions").action(() => {
@@ -39250,7 +39747,7 @@ function registerCompletionCommand(program) {
   });
 }
 function generateBashCompletion() {
-  return `# ${CLI_NAME20} bash completion
+  return `# ${CLI_NAME21} bash completion
 _tc_completions() {
   local cur prev commands subcommands
   COMPREPLY=()
@@ -39275,11 +39772,11 @@ _tc_completions() {
     COMPREPLY=( $(compgen -W "\${subcommands}" -- "\${cur}") )
   fi
 }
-complete -F _tc_completions ${CLI_NAME20}
+complete -F _tc_completions ${CLI_NAME21}
 `;
 }
 function generateZshCompletion() {
-  return `#compdef ${CLI_NAME20}
+  return `#compdef ${CLI_NAME21}
 
 _tc() {
   local -a commands
@@ -39304,6 +39801,7 @@ _tc() {
     '--replication[Enable read-through replication]' \\
     '--no-replication[Disable replication]' \\
     '--replication-debug[Write replication diagnostics to stderr]' \\
+    '--no-diagnostic-logs[Don't record a CLI log for this command]' \\
     '1:command:->cmd' \\
     '*::arg:->args'
 
@@ -39330,50 +39828,51 @@ _tc
 `;
 }
 function generateFishCompletion() {
-  return `# ${CLI_NAME20} fish completion
+  return `# ${CLI_NAME21} fish completion
 set -l commands init auth kv space delegation share node profile completion
 
 # Disable file completion by default
-complete -c ${CLI_NAME20} -f
+complete -c ${CLI_NAME21} -f
 
 # Top-level commands
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
-complete -c ${CLI_NAME20} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
+complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
 # Subcommands
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from space" -a "list create info switch"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from node" -a "health version status"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
-complete -c ${CLI_NAME20} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from space" -a "list create info switch"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from node" -a "health version status"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
+complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
 
 # Global options
-complete -c ${CLI_NAME20} -l profile -s p -d "Profile to use"
-complete -c ${CLI_NAME20} -l host -s H -d "TinyCloud node URL"
-complete -c ${CLI_NAME20} -l verbose -s v -d "Enable verbose output"
-complete -c ${CLI_NAME20} -l no-cache -d "Disable caching"
-complete -c ${CLI_NAME20} -l quiet -s q -d "Suppress non-essential output"
-complete -c ${CLI_NAME20} -l replication -d "Enable read-through replication"
-complete -c ${CLI_NAME20} -l no-replication -d "Disable replication"
-complete -c ${CLI_NAME20} -l replication-debug -d "Write replication diagnostics to stderr"
+complete -c ${CLI_NAME21} -l profile -s p -d "Profile to use"
+complete -c ${CLI_NAME21} -l host -s H -d "TinyCloud node URL"
+complete -c ${CLI_NAME21} -l verbose -s v -d "Enable verbose output"
+complete -c ${CLI_NAME21} -l no-cache -d "Disable caching"
+complete -c ${CLI_NAME21} -l quiet -s q -d "Suppress non-essential output"
+complete -c ${CLI_NAME21} -l replication -d "Enable read-through replication"
+complete -c ${CLI_NAME21} -l no-replication -d "Disable replication"
+complete -c ${CLI_NAME21} -l replication-debug -d "Write replication diagnostics to stderr"
+complete -c ${CLI_NAME21} -l no-diagnostic-logs -d "Don't record a CLI log for this command"
 `;
 }
 
 // src/commands/courier.ts
-import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
-var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME21} courier takes no ${CLI_NAME21} options and does not use ${CLI_NAME21} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME21} courier init --host <url>.`;
+import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
+var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME22} courier takes no ${CLI_NAME22} options and does not use ${CLI_NAME22} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME22} courier init --host <url>.`;
 function registerCourierCommand(program) {
-  const courier = program.command("courier").description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME21} courier --help\` (beta)`).argument("[args...]").allowUnknownOption().helpOption(false);
+  const courier = program.command("courier").description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME22} courier --help\` (beta)`).argument("[args...]").allowUnknownOption().helpOption(false);
   courier.action(() => courier.error(TC_OPTIONS_BEFORE_COURIER, { exitCode: 2, code: "tc.courier.options" }));
 }
 
@@ -39413,14 +39912,14 @@ function registerContextCommand(program) {
 }
 
 // src/commands/delegation.ts
-import { createInterface as createInterface4 } from "readline";
+import { createInterface as createInterface5 } from "readline";
 init_profiles();
 init_formatter();
 init_errors();
 init_constants();
 init_sdk();
 init_duration();
-import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
 import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
 async function queryDelegations(node, options, until) {
   const found = [];
@@ -39431,7 +39930,7 @@ async function queryDelegations(node, options, until) {
       if (page.error.code === "PERMISSION_DENIED") {
         throw new CLIError(
           "PERMISSION_DENIED",
-          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME22} auth login\` again to grant it.`,
+          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME23} auth login\` again to grant it.`,
           ExitCode.PERMISSION_DENIED
         );
       }
@@ -39494,7 +39993,7 @@ async function revokeIssuedDelegation(node, ctx, cid) {
       ExitCode.PERMISSION_DENIED,
       {
         status: result.error.meta?.status,
-        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME22} --profile ${ctx.profile} delegation list --granted\`.`
+        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME23} --profile ${ctx.profile} delegation list --granted\`.`
       }
     );
   }
@@ -39511,7 +40010,7 @@ async function confirmCurrentSessionRevoke(yes) {
   }
   process.stderr.write(`${warning}.
 `);
-  const prompt = createInterface4({ input: process.stdin, output: process.stderr });
+  const prompt = createInterface5({ input: process.stdin, output: process.stderr });
   try {
     const answer = await new Promise((resolve10) => prompt.question("Revoke this session? [y/N] ", resolve10));
     if (!/^y(es)?$/i.test(answer.trim())) {
@@ -39627,7 +40126,7 @@ function registerDelegationCommand(program, configuration = {}) {
       return handleError(error);
     }
   });
-  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Confirm revoking the current sign-in session or skip local-key TTY permission confirmation", false).action(async (cid, options, cmd) => {
+  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Confirm revoking the current sign-in session", false).action(async (cid, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -39647,7 +40146,6 @@ function registerDelegationCommand(program, configuration = {}) {
         node,
         profile,
         cid,
-        yes: options.yes === true || Boolean(currentSession),
         openKeyAcquisition: configuration.openKeyAcquisition
       });
       const replicasRemoved = prepared ? await finishProfileLogout(ctx, { online: prepared, expectedSessionCid: cid }) : void 0;
@@ -39670,7 +40168,7 @@ init_errors();
 init_scoped_login();
 init_session_expired();
 init_types();
-import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
 function registerDoctorCommand(program) {
   program.command("doctor").description("Run diagnostic checks").action(async (_options, cmd) => {
     try {
@@ -39702,7 +40200,7 @@ function registerDoctorCommand(program) {
             const profile = await ProfileManager.getProfile(profileName2);
             keyDetail = profile.did ? `${profile.did.slice(0, 20)}...` : "key found";
           } else {
-            keyDetail = `no key \u2014 run ${CLI_NAME23} init`;
+            keyDetail = `no key \u2014 run ${CLI_NAME24} init`;
           }
         } catch {
           keyDetail = "error reading key";
@@ -39724,7 +40222,7 @@ function registerDoctorCommand(program) {
           } else if (state2 === "unverified") {
             sessionDetail = `not usable (no signed OpenKey proof) \u2014 ${signInAgainHint(profileName2, resolveProfilePosture(profile))}`;
           } else {
-            sessionDetail = sessionOk ? "active" : `no session \u2014 run ${CLI_NAME23} auth login`;
+            sessionDetail = sessionOk ? "active" : `no session \u2014 run ${CLI_NAME24} auth login`;
           }
         } catch {
           sessionDetail = "error reading session";
@@ -39752,7 +40250,7 @@ function registerDoctorCommand(program) {
         try {
           const profile = await ProfileManager.getProfile(profileName2);
           spaceOk = Boolean(profile.spaceId);
-          spaceDetail = spaceOk ? `${profile.spaceId.slice(0, 16)}...` : `no space \u2014 run ${CLI_NAME23} space create`;
+          spaceDetail = spaceOk ? `${profile.spaceId.slice(0, 16)}...` : `no space \u2014 run ${CLI_NAME24} space create`;
         } catch {
           spaceDetail = "error checking space";
         }
@@ -39791,7 +40289,7 @@ init_formatter();
 init_errors();
 init_sdk();
 init_theme();
-import { readFile as readFile10, writeFile as writeFile3 } from "fs/promises";
+import { readFile as readFile11, writeFile as writeFile4 } from "fs/promises";
 import { resolve as resolve4 } from "path";
 function registerDuckdbCommand(program) {
   const duckdb = program.command("duckdb").description("DuckDB database operations");
@@ -39905,7 +40403,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve4(options.output);
-      await writeFile3(outputPath, buffer);
+      await writeFile4(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -39921,7 +40419,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       const filePath = resolve4(file);
-      const bytes = new Uint8Array(await readFile10(filePath));
+      const bytes = new Uint8Array(await readFile11(filePath));
       const result = await withSpinner(
         "Importing database...",
         () => node.duckdb.db(options.db).import(bytes)
@@ -39948,10 +40446,10 @@ init_profiles();
 init_errors();
 init_formatter();
 init_publishing_manifest();
-import { CLI_NAME as CLI_NAME24 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME25 } from "@tinycloud/operations/cli-name";
 function registerEnableCommand(program) {
   const enable = program.command("enable").description("Enable a narrowly scoped TinyCloud service");
-  enable.command("share").description(`Approve Share publishing scope through OpenKey device authorization (same as \`${CLI_NAME24} auth login --device --manifest builtin:share-publishing\`). Use a dedicated profile, e.g. \`${CLI_NAME24} init --name publisher --key-only && ${CLI_NAME24} --profile publisher enable share\`; keep existing profiles for their apps.`).option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, command) => {
+  enable.command("share").description(`Approve Share publishing scope through OpenKey device authorization (same as \`${CLI_NAME25} auth login --device --manifest builtin:share-publishing\`). Use a dedicated profile, e.g. \`${CLI_NAME25} init --name publisher --key-only && ${CLI_NAME25} --profile publisher enable share\`; keep existing profiles for their apps.`).option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, command) => {
     try {
       const globalOptions = command.optsWithGlobals();
       const context2 = await ProfileManager.resolveContext(globalOptions, { storedSession: "unused" });
@@ -39960,7 +40458,6 @@ function registerEnableCommand(program) {
         nodeOrigin: context2.host,
         shareOrigin: DEFAULT_SHARE_ORIGIN,
         permissions: sharePublishingPermissions(),
-        reason: "Allow this TinyCloud CLI profile to publish Share links.",
         replaceSession: options.replaceSession === true,
         persistHost: globalOptions.host !== void 0
       });
@@ -39986,7 +40483,7 @@ function registerEnableCommand(program) {
 init_profiles();
 init_constants();
 init_sdk();
-import { CLI_NAME as CLI_NAME25 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
 import { operationSpaceResolver as operationSpaceResolver2 } from "@tinycloud/operations/delegation-binding";
 
 // src/lib/knowledge-input.ts
@@ -40253,7 +40750,7 @@ function registerAppsCommand(program) {
     "after",
     `
 Examples:
-  $ ${CLI_NAME25} apps install xyz.tinycloud.sample.healthlog
+  $ ${CLI_NAME26} apps install xyz.tinycloud.sample.healthlog
 `
   ).action(async (appIdInput, _options, cmd) => {
     try {
@@ -40343,8 +40840,8 @@ function printResult(result) {
 // src/commands/feed.ts
 init_profiles();
 init_sdk();
-import { readFile as readFile12 } from "fs/promises";
-import { join as join18 } from "path";
+import { readFile as readFile13 } from "fs/promises";
+import { join as join19 } from "path";
 import { parseSpaceUri as parseSpaceUri3 } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage,
@@ -40379,7 +40876,7 @@ init_formatter();
 init_errors();
 
 // src/feed/local.ts
-import { chmod as chmod5, mkdir as mkdir5 } from "fs/promises";
+import { chmod as chmod5, mkdir as mkdir6 } from "fs/promises";
 import { dirname as dirname7 } from "path";
 async function openFeedHandoff(path) {
   const bun = "Bun" in globalThis;
@@ -40387,7 +40884,7 @@ async function openFeedHandoff(path) {
   if (!bun && !(major > 22 || major === 22 && minor >= 13)) {
     throw new Error("Feed watch requires Bun or Node.js 22.13+ for its durable SQLite handoff");
   }
-  await mkdir5(dirname7(path), { recursive: true, mode: 448 });
+  await mkdir6(dirname7(path), { recursive: true, mode: 448 });
   const specifier = [bun ? "bun" : "node", "sqlite"].join(":");
   const module = await import(specifier);
   const Database = bun ? module.Database : module.DatabaseSync;
@@ -40545,8 +41042,8 @@ init_errors();
 import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
 import { isUtf8 } from "buffer";
 import { constants } from "fs";
-import { link as link3, lstat as lstat8, open as open14, readFile as readFile11, readlink, realpath as realpath2, rm as rm7, unlink as unlink5 } from "fs/promises";
-import { basename as basename2, dirname as dirname8, join as join17, resolve as resolve5 } from "path";
+import { link as link3, lstat as lstat9, open as open15, readFile as readFile12, readlink, realpath as realpath2, rm as rm8, unlink as unlink5 } from "fs/promises";
+import { basename as basename2, dirname as dirname8, join as join18, resolve as resolve5 } from "path";
 var RawExportRefusal = class extends Error {
 };
 function refuse2(message) {
@@ -40587,7 +41084,7 @@ function claimSourceKey(keys, key) {
 }
 async function assertUnusedOutput(path) {
   try {
-    await lstat8(path);
+    await lstat9(path);
   } catch (error) {
     if (error.code === "ENOENT") return;
     throw error;
@@ -40598,7 +41095,7 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
   let path = directory;
   while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
   for (; ; ) {
-    const entry = await lstat8(path);
+    const entry = await lstat9(path);
     if (!Number.isSafeInteger(entry.uid) || !Number.isSafeInteger(entry.mode) || entry.uid !== uid && entry.uid !== 0) {
       refuse2("Raw export requires directories owned by the effective user or root.");
     }
@@ -40639,7 +41136,7 @@ async function assertTrustedOutputDirectory(directory) {
 }
 async function sidecarRows(options, keys) {
   if (options.sidecarsFile === void 0) return [];
-  const config = JSON.parse(await readFile11(options.sidecarsFile, { encoding: "utf8", signal: options.signal }));
+  const config = JSON.parse(await readFile12(options.sidecarsFile, { encoding: "utf8", signal: options.signal }));
   if (!Array.isArray(config)) refuse2("Raw export sidecar configuration must be an array of explicit source records.");
   const rows = [];
   for (const value4 of config) {
@@ -40650,7 +41147,7 @@ async function sidecarRows(options, keys) {
     const sidecar = value4;
     claimSourceKey(keys, sidecar.sourceKey);
     const path = resolve5(dirname8(options.sidecarsFile), sidecar.path);
-    const data = await readFile11(path, { signal: options.signal });
+    const data = await readFile12(path, { signal: options.signal });
     rows.push(rawRow(sidecar.sourceKey, sidecar.sourceArea, data));
   }
   return rows;
@@ -40658,19 +41155,19 @@ async function sidecarRows(options, keys) {
 async function publishSnapshot(outFile, snapshot, signal) {
   const parentPath = dirname8(outFile);
   await assertTrustedOutputDirectory(parentPath);
-  const parent = await open14(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
-  const temporary = join17(parentPath, `.${basename2(outFile)}.${randomUUID3()}.tmp`);
+  const parent = await open15(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const temporary = join18(parentPath, `.${basename2(outFile)}.${randomUUID3()}.tmp`);
   let created = false;
   try {
     const identity2 = await parent.stat();
     const assertStableParent = async () => {
-      const current = await lstat8(parentPath);
+      const current = await lstat9(parentPath);
       if (!current.isDirectory() || current.dev !== identity2.dev || current.ino !== identity2.ino) {
         refuse2("The raw export output directory changed during publication.");
       }
     };
     await assertStableParent();
-    const file = await open14(temporary, "wx", 384);
+    const file = await open15(temporary, "wx", 384);
     created = true;
     try {
       await file.chmod(384);
@@ -40687,7 +41184,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
     await assertStableParent();
     await parent.sync();
   } finally {
-    if (created) await rm7(temporary, { force: true }).catch(() => void 0);
+    if (created) await rm8(temporary, { force: true }).catch(() => void 0);
     await parent.close();
   }
 }
@@ -41131,7 +41628,7 @@ function agentOptions(command) {
 async function readPrivatePayload(file) {
   if (file === void 0) return void 0;
   try {
-    const parsed = feedResponsePayloadSchema2.safeParse(JSON.parse(await readFile12(file, "utf8")));
+    const parsed = feedResponsePayloadSchema2.safeParse(JSON.parse(await readFile13(file, "utf8")));
     if (!parsed.success) throw new Error("Invalid payload envelope");
     return parsed.data;
   } catch {
@@ -41183,7 +41680,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       }
       let bundle;
       try {
-        bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile12(options.file)));
+        bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile13(options.file)));
       } catch {
         throw cliErrorFromService({ code: "INVALID_INPUT", message: "Could not read a valid prepared feed bundle file" });
       }
@@ -41223,7 +41720,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
   agentOptions(feed.command("publish").description("Agent: publish an immutable card issuance")).requiredOption("--file <path>", "Card JSON file").action(async (options, command) => {
     try {
       const { output: output2 } = await context(command);
-      const card = feedCardSchema2.parse(JSON.parse(await readFile12(options.file, "utf8")));
+      const card = feedCardSchema2.parse(JSON.parse(await readFile13(options.file, "utf8")));
       outputJson(value3(await publishFeedCard(output2, card)));
     } catch (error) {
       return handleError(error);
@@ -41234,7 +41731,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       const { output: output2, responses } = await context(command);
       let response;
       try {
-        const parsed = newFeedResponseSchema2.safeParse(JSON.parse(await readFile12(options.file, "utf8")));
+        const parsed = newFeedResponseSchema2.safeParse(JSON.parse(await readFile13(options.file, "utf8")));
         if (!parsed.success) throw new Error("Invalid response header");
         response = parsed.data;
       } catch {
@@ -41251,7 +41748,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       const { output: output2, responses } = await context(command);
       let message;
       try {
-        const parsed = newFeedMessageSchema2.safeParse(JSON.parse(await readFile12(options.file, "utf8")));
+        const parsed = newFeedMessageSchema2.safeParse(JSON.parse(await readFile13(options.file, "utf8")));
         if (!parsed.success) throw new Error("Invalid message header");
         message = parsed.data;
       } catch {
@@ -41266,7 +41763,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
   agentOptions(feed.command("handling").description("Agent: append response acknowledgement or outcome without changing owner responses")).requiredOption("--file <path>", "Handling JSON including full response and card identities").action(async (options, command) => {
     try {
       const { output: output2 } = await context(command);
-      const handling = feedHandlingSchema.parse(JSON.parse(await readFile12(options.file, "utf8")));
+      const handling = feedHandlingSchema.parse(JSON.parse(await readFile13(options.file, "utf8")));
       outputJson(value3(await recordFeedHandling(output2, handling)));
     } catch (error) {
       return handleError(error);
@@ -41321,7 +41818,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       }
       const { profile, node, space, responses, resources } = await context(command);
       const directory = await ProfileManager.ensureProfileDir(profile.profile);
-      local = await openFeedHandoff(options.handoff ?? join18(directory, `feed-${options.agent}.sqlite`));
+      local = await openFeedHandoff(options.handoff ?? join19(directory, `feed-${options.agent}.sqlite`));
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
       const runner = [argv[0], ...argv.slice(1)];
@@ -41350,7 +41847,7 @@ init_constants();
 init_profiles();
 init_apps_agent_preset();
 import { invokeOperation as invokeOperation2 } from "@tinycloud/operations";
-import { CLI_NAME as CLI_NAME26 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 init_permissions();
 init_errors();
 init_formatter();
@@ -41453,7 +41950,7 @@ function knowledgeFailure(result, profile, appId) {
     case "error": {
       if (result.error.code === "SESSION_NOT_FOUND" || result.error.code === "PROFILE_POSTURE_NOT_ALLOWED" && result.context.posture === "unauthenticated") {
         return new CLIError("AUTH_REQUIRED", "Not signed in to TinyCloud.", ExitCode.AUTH_REQUIRED, {
-          hint: `Sign in with: ${CLI_NAME26} --profile ${result.context.profile} auth login`
+          hint: `Sign in with: ${CLI_NAME27} --profile ${result.context.profile} auth login`
         });
       }
       if (result.error.code === "NODE_UNREACHABLE") {
@@ -41483,11 +41980,11 @@ function knowledgeFailure(result, profile, appId) {
   }
 }
 function missingGrantHint(profile, appId) {
-  const request = `${CLI_NAME26} --profile ${profile} auth request`;
+  const request = `${CLI_NAME27} --profile ${profile} auth request`;
   const lines = appId === void 0 ? [
     `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (read-only, all installed apps)`,
     `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
-    "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for up to 5)."
+    "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for more apps)."
   ] : [
     `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and tables of ${appId})`,
     `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}:${appId}/knowledge/:get,list --emit req.json   (only ${appId}'s knowledge)`,
@@ -41496,23 +41993,23 @@ function missingGrantHint(profile, appId) {
   return [
     "Ask the owner for a grant, narrowest first. Create the request:",
     ...lines,
-    `The owner runs \`${CLI_NAME26} auth grant req.json > grant.json\`; then import the result with \`${CLI_NAME26} --profile ${profile} auth import grant.json\`.`
+    `The owner runs \`${CLI_NAME27} auth grant req.json > grant.json\`; then import the result with \`${CLI_NAME27} --profile ${profile} auth import grant.json\`.`
   ].join("\n");
 }
 
 // src/commands/kv.ts
-import { readFile as readFile13 } from "fs/promises";
+import { readFile as readFile14 } from "fs/promises";
 
 // src/lib/private-output.ts
 init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID4 } from "crypto";
-import { lstat as lstat9, open as open15, rename as rename3, rm as rm8 } from "fs/promises";
-import { basename as basename3, dirname as dirname9, join as join19 } from "path";
+import { lstat as lstat10, open as open16, rename as rename3, rm as rm9 } from "fs/promises";
+import { basename as basename3, dirname as dirname9, join as join20 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
-    const destination = await lstat9(path);
+    const destination = await lstat10(path);
     if (!destination.isFile()) {
       throw new CLIError("INVALID_ARGUMENT", `${label} "${path}" must be a regular file, not a symlink, directory, or device.`, ExitCode.USAGE_ERROR);
     }
@@ -41520,7 +42017,7 @@ async function validatePrivateOutput(path, label = "output") {
     if (error?.code !== "ENOENT") throw error;
   }
   try {
-    const parent = await lstat9(dirname9(path));
+    const parent = await lstat10(dirname9(path));
     if (!parent.isDirectory()) {
       throw new CLIError("INVALID_ARGUMENT", `${label} "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
     }
@@ -41532,10 +42029,10 @@ async function validatePrivateOutput(path, label = "output") {
 async function writePrivateOutput(path, value4, label = "output") {
   await validatePrivateOutput(path, label);
   const parentPath = dirname9(path);
-  const temp = join19(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
+  const temp = join20(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
   let created = false;
   try {
-    const handle = await open15(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open16(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value4);
@@ -41545,12 +42042,12 @@ async function writePrivateOutput(path, value4, label = "output") {
     }
     await rename3(temp, path);
   } catch (error) {
-    if (created) await rm8(temp, { force: true }).catch(() => void 0);
+    if (created) await rm9(temp, { force: true }).catch(() => void 0);
     const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open15(parentPath, "r");
+    const parent = await open16(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -41663,7 +42160,7 @@ function registerKvCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = await readFile13(options.file);
+        putValue = await readFile14(options.file);
       } else if (options.stdin) {
         putValue = await readStdin2();
       } else {
@@ -41812,9 +42309,9 @@ init_formatter();
 init_errors();
 init_sdk();
 init_named_keys();
-import { readFile as readFile14 } from "fs/promises";
+import { readFile as readFile15 } from "fs/promises";
 import { NamedKeyError, createNamedKeyClient } from "@tinycloud/node-sdk/encryption-keys";
-import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
 async function readStdin3() {
   const chunks = [];
   for await (const chunk of process.stdin) {
@@ -41823,7 +42320,7 @@ async function readStdin3() {
   return Buffer.concat(chunks);
 }
 async function readInput(file) {
-  return file === void 0 ? readStdin3() : readFile14(file);
+  return file === void 0 ? readStdin3() : readFile15(file);
 }
 function cliErrorFromNamedKey(error, command, path) {
   if (!(error instanceof NamedKeyError)) return error;
@@ -41838,7 +42335,7 @@ function cliErrorFromNamedKey(error, command, path) {
     case "KEY_NOT_FOUND":
       return new CLIError(
         "NOT_FOUND",
-        command === "decrypt" ? "The key this envelope needs doesn't exist on this node, so it can't be decrypted here." : `There's no key at ${path} yet. Create it with \`${CLI_NAME27} keys ensure ${path}\`.`,
+        command === "decrypt" ? "The key this envelope needs doesn't exist on this node, so it can't be decrypted here." : `There's no key at ${path} yet. Create it with \`${CLI_NAME28} keys ensure ${path}\`.`,
         ExitCode.NOT_FOUND
       );
     case "KEY_BLOCKED":
@@ -41848,7 +42345,7 @@ function cliErrorFromNamedKey(error, command, path) {
   }
   if (error.status === 401 || error.status === 403) {
     return new CLIError("PERMISSION_DENIED", error.message, ExitCode.PERMISSION_DENIED, {
-      hint: `Sign in with \`${CLI_NAME27} auth login --keys <folder>\` for this key's folder.`
+      hint: `Sign in with \`${CLI_NAME28} auth login --keys <folder>\` for this key's folder.`
     });
   }
   return new CLIError(error.code, error.message, error.status === void 0 ? ExitCode.ERROR : ExitCode.NODE_ERROR);
@@ -41868,7 +42365,7 @@ async function grantedPrefix(deps, profileName2) {
   if (keys === void 0) {
     throw new CLIError(
       "KEYS_NOT_GRANTED",
-      `Profile "${profileName2}" can't use named keys yet. Sign in with \`${CLI_NAME27} --profile ${profileName2} auth login --keys <folder>\`.`,
+      `Profile "${profileName2}" can't use named keys yet. Sign in with \`${CLI_NAME28} --profile ${profileName2} auth login --keys <folder>\`.`,
       ExitCode.PERMISSION_DENIED
     );
   }
@@ -41878,7 +42375,7 @@ function assertInGrantedPrefix(prefix, path, profileName2) {
   if (!keyPathInPrefix(prefix, path)) {
     throw new CLIError(
       "KEY_OUTSIDE_GRANTED_PREFIX",
-      `Key "${path}" is outside the folder "${prefix}/" this sign-in covers. To use it, sign in with \`${CLI_NAME27} --profile ${profileName2} auth login --method local --keys <folder>\`.`,
+      `Key "${path}" is outside the folder "${prefix}/" this sign-in covers. To use it, sign in with \`${CLI_NAME28} --profile ${profileName2} auth login --method local --keys <folder>\`.`,
       ExitCode.PERMISSION_DENIED
     );
   }
@@ -41906,7 +42403,7 @@ var defaultDeps = {
 };
 function registerKeysCommand(program, deps = defaultDeps) {
   const { outputJson: outputJson2, handleError: handleError2 } = deps;
-  const keys = program.command("keys").description(`Named encryption keys (sign in with \`${CLI_NAME27} auth login --keys <folder>\` first)`);
+  const keys = program.command("keys").description(`Named encryption keys (sign in with \`${CLI_NAME28} auth login --keys <folder>\` first)`);
   keys.command("ensure <path>").description("Create the named key if it doesn't exist yet, then show it").action(async (path, _options, cmd) => {
     try {
       const ctx = await deps.resolveContext(cmd.optsWithGlobals());
@@ -41984,16 +42481,16 @@ init_errors();
 init_constants();
 init_theme();
 import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
-import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile15 } from "fs/promises";
+import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
+import { readFile as readFile16 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
   const manifest = program.command("manifest").description("Inspect TinyCloud app manifests");
   manifest.command("resolve <source>").description("Resolve a manifest file or URL to its effective space, paths, and DB basenames").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME28} manifest resolve ./manifest.json
-  $ ${CLI_NAME28} manifest resolve https://app.example.com/manifest.json --json
+  $ ${CLI_NAME29} manifest resolve ./manifest.json
+  $ ${CLI_NAME29} manifest resolve https://app.example.com/manifest.json --json
 
 What it shows:
   - app_id, name, manifest_version
@@ -42003,7 +42500,7 @@ What it shows:
 
 This command is read-only and does NOT contact the node \u2014 it just resolves
 the manifest against the active profile's address/chain so you know which
-\`--space\` and \`--db\` values to pass to other ${CLI_NAME28} commands.
+\`--space\` and \`--db\` values to pass to other ${CLI_NAME29} commands.
 `).action(async (source, _options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -42072,7 +42569,7 @@ ${theme.heading("SQL databases")}
 `);
         }
         process.stdout.write(theme.muted(`
-Use with: ${CLI_NAME28} sql query --space ${spaceName} --db <db> "..."
+Use with: ${CLI_NAME29} sql query --space ${spaceName} --db <db> "..."
 `));
       }
       if (permissions.length > 0) {
@@ -42099,7 +42596,7 @@ async function loadManifestSource2(source) {
     }
     return response.text();
   }
-  return readFile15(source, "utf8");
+  return readFile16(source, "utf8");
 }
 function prefixWithAppId(path, appId) {
   const slash = path.indexOf("/");
@@ -42192,7 +42689,7 @@ init_browser_auth();
 init_scoped_login();
 init_approval_request();
 init_approval_wait();
-import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME30 } from "@tinycloud/operations/cli-name";
 init_constants();
 init_profiles();
 init_types();
@@ -42222,13 +42719,13 @@ var ONBOARD_STEPS = [
   }
 ];
 function registerOnboardCommand(program) {
-  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
+  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
     try {
       const deadlineMs = options.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options.timeout);
       if (options.timeout !== void 0 && typeof options.code === "string" && options.code.trim() !== "") {
         throw new CLIError(
           "INVALID_OPTIONS",
-          `--code and --timeout cannot be used together: running the command again would send the same code to the next approval step. Run \`${CLI_NAME29} onboard --code <code>\` without --timeout.`,
+          `--code and --timeout cannot be used together: running the command again would send the same code to the next approval step. Run \`${CLI_NAME30} onboard --code <code>\` without --timeout.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -42239,7 +42736,7 @@ function registerOnboardCommand(program) {
       if (resolveProfilePosture(profile) !== "owner-openkey") {
         throw new CLIError(
           "PROFILE_NOT_ONBOARDABLE",
-          `Profile "${ctx.profile}" doesn't sign in with OpenKey, so onboarding can't use it. Run \`${CLI_NAME29} --profile <new name> onboard\` instead.`,
+          `Profile "${ctx.profile}" doesn't sign in with OpenKey, so onboarding can't use it. Run \`${CLI_NAME30} --profile <new name> onboard\` instead.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -42258,8 +42755,7 @@ function registerOnboardCommand(program) {
           noPopup: true,
           ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } },
           onApprovalRequest: ({ approvalUrl }) => {
-            console.error(`${flow.reason}
-Approve in OpenKey (open the complete link):
+            console.error(`Approve in OpenKey (open the complete link):
 ${approvalUrl}
 ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
           }
@@ -42267,13 +42763,11 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
       };
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         currentStep = index + 1;
-        const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
         const session2 = await ProfileManager.getSession(ctx.profile);
         if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
           const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
             permissions: step.permissions,
             expiry: ONBOARD_EXPIRY,
-            reason,
             persistHost: globalOpts.host !== void 0,
             openKeyAcquisition: acquire,
             ...created === void 0 ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }
@@ -42293,8 +42787,6 @@ ${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an 
           node: await ensureAuthenticated(ctx),
           requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
           expiryOption: ONBOARD_EXPIRY,
-          reason,
-          yes: true,
           exactApproval: true,
           openKeyAcquisition: acquire
         });
@@ -42324,8 +42816,8 @@ init_constants();
 init_local_key();
 init_theme();
 init_types();
-import { CLI_NAME as CLI_NAME30 } from "@tinycloud/operations/cli-name";
-import { createInterface as createInterface5 } from "readline";
+import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
+import { createInterface as createInterface6 } from "readline";
 function registerProfileCommand(program) {
   const profile = program.command("profile").description("Profile management");
   profile.command("list").description("List all profiles").action(async (_options, cmd) => {
@@ -42376,7 +42868,7 @@ function registerProfileCommand(program) {
       return handleError(error);
     }
   });
-  profile.command("create <name>").description("Create a new profile").option("--host <url>", "TinyCloud node URL").option(
+  profile.command("create <name>").description("Create a new profile").option("--host <url>", "TinyCloud node URL").option("--registry-url <url>", "TinyCloud location registry URL").option(
     "--posture <posture>",
     `Profile posture: ${CLI_PROFILE_POSTURES.join(", ")}. Defaults to owner-openkey.`
   ).option(
@@ -42386,6 +42878,7 @@ function registerProfileCommand(program) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
+      const tinycloudRegistryUrl = options.registryUrl?.length ? options.registryUrl : void 0;
       const posture = parseProfilePosture(options.posture);
       const operatorType = parseOperatorType(options.operator);
       if (await ProfileManager.profileExists(name)) {
@@ -42403,9 +42896,18 @@ function registerProfileCommand(program) {
         sessionDid: did,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         posture,
-        operatorType
+        operatorType,
+        ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl }
       });
-      outputJson({ profile: name, did, host, posture, operatorType, created: true });
+      outputJson({
+        profile: name,
+        did,
+        host,
+        ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
+        posture,
+        operatorType,
+        created: true
+      });
     } catch (error) {
       return handleError(error);
     }
@@ -42435,6 +42937,7 @@ function registerProfileCommand(program) {
         process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}
 `);
         process.stdout.write(formatField("Host", p.host) + "\n");
+        process.stdout.write(formatField("Registry URL", p.tinycloudRegistryUrl ?? null) + "\n");
         process.stdout.write(formatField("DID", p.did) + "\n");
         process.stdout.write(formatField("Session DID", p.sessionDid ?? null) + "\n");
         process.stdout.write(formatField("Posture", posture) + "\n");
@@ -42468,9 +42971,9 @@ profile at command time. Precedence for every kv/sql command:
   explicit --space flag  >  profile defaultSpace  >  primary space.
 
 Examples:
-  $ ${CLI_NAME30} profile set-default-space applications
-  $ ${CLI_NAME30} profile set-default-space applications --profile cli-test
-  $ ${CLI_NAME30} profile set-default-space --unset
+  $ ${CLI_NAME31} profile set-default-space applications
+  $ ${CLI_NAME31} profile set-default-space applications --profile cli-test
+  $ ${CLI_NAME31} profile set-default-space --unset
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -42482,7 +42985,7 @@ Examples:
       if (!options.unset && (name === void 0 || name === "")) {
         throw new CLIError(
           "USAGE_ERROR",
-          `Provide a space name (e.g. \`${CLI_NAME30} profile set-default-space applications\`) or pass --unset.`,
+          `Provide a space name (e.g. \`${CLI_NAME31} profile set-default-space applications\`) or pass --unset.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -42503,7 +43006,7 @@ Examples:
   profile.command("delete <name>").description("Delete a profile").action(async (name, _options, cmd) => {
     try {
       if (isInteractive()) {
-        const rl = createInterface5({ input: process.stdin, output: process.stderr });
+        const rl = createInterface6({ input: process.stdin, output: process.stderr });
         const answer = await new Promise((resolve10) => {
           rl.question(`Delete profile "${name}"? This cannot be undone. [y/N] `, resolve10);
         });
@@ -42541,11 +43044,11 @@ function parseOperatorType(raw) {
 
 // src/commands/replica.ts
 init_profile_replicas();
-import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants6 } from "fs";
-import { mkdir as mkdir6, open as open16, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat10 } from "fs/promises";
-import { basename as basename4, dirname as dirname10, join as join20, resolve as resolve6 } from "path";
+import { mkdir as mkdir7, open as open17, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat11 } from "fs/promises";
+import { basename as basename4, dirname as dirname10, join as join21, resolve as resolve6 } from "path";
 
 // src/lib/replication-report.ts
 function percentile(values, fraction) {
@@ -42683,11 +43186,11 @@ var EXIT_BY_CODE = {
 var READ_FAILURE = {
   absent: { code: "KEY_ABSENT", exit: ExitCode.NOT_FOUND, what: "is not in the replica (the replica covers its whole prefix)" },
   deleted: { code: "KEY_DELETED", exit: ExitCode.NOT_FOUND, what: "was deleted at the source" },
-  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME31} replica sync` },
+  content_missing: { code: "CONTENT_MISSING", exit: ExitCode.NOT_FOUND, what: `is known but its content has not been fetched yet; run ${CLI_NAME32} replica sync` },
   coverage_incomplete: {
     code: "COVERAGE_INCOMPLETE",
     exit: ExitCode.NOT_FOUND,
-    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME31} replica sync`
+    what: `is not in the replica, which has not finished its first sync; run ${CLI_NAME32} replica sync`
   },
   not_covered: { code: "NOT_COVERED", exit: ExitCode.USAGE_ERROR, what: "is outside the replica's prefix" }
 };
@@ -42720,7 +43223,7 @@ async function replicaNames(profile) {
       if (entry.isSymbolicLink()) throw localPathChanged(profile);
       if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
       const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
-        const database = await lstat10(join20(directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat11(join21(directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -42744,7 +43247,7 @@ async function withReplicaRoot(profile, action, create5 = false) {
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
-      await mkdir6(join20(directory, "replicas"), { mode: 448 }).catch((error) => {
+      await mkdir7(join21(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -42770,7 +43273,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create5) {
       await recheckRoot();
-      await mkdir6(join20(root, name), { mode: 448 }).catch((error) => {
+      await mkdir7(join21(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -42781,7 +43284,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
       async (_directory, path, expectedDirectory, recheckChild) => {
         await recheckRoot();
         await recheckChild();
-        const database = await lstat10(join20(_directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat11(join21(_directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -42805,7 +43308,7 @@ async function existingReplicaName(profile, option) {
   const names = await replicaNames(profile);
   if (names.length === 1) return names[0];
   if (names.length === 0) {
-    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME31} replica sync --prefix <prefix>`);
+    throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, `Profile "${profile}" has no replicas. Create one with: ${CLI_NAME32} replica sync --prefix <prefix>`);
   }
   throw new CLIError("USAGE_ERROR", `Profile "${profile}" has several replicas (${names.join(", ")}); pass --replica <name>.`, ExitCode.USAGE_ERROR);
 }
@@ -42913,9 +43416,9 @@ async function storedGrants(profile) {
 function grantHint(space, prefix) {
   return [
     "A replica needs a device grant with get and sync on its prefix:",
-    `  device: ${CLI_NAME31} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
-    `  owner:  ${CLI_NAME31} auth grant req.json > grant.json`,
-    `  device: ${CLI_NAME31} auth import grant.json`
+    `  device: ${CLI_NAME32} auth request --cap tinycloud.kv:${space}:${prefix}:get,list,metadata,sync --expiry 30d --emit req.json`,
+    `  owner:  ${CLI_NAME32} auth grant req.json > grant.json`,
+    `  device: ${CLI_NAME32} auth import grant.json`
   ].join("\n");
 }
 function resolveSpace(input, prefix, grants) {
@@ -43006,13 +43509,13 @@ function describeStatus(status) {
     formatField("Size", formatBytes(status.bytes)),
     formatField("Grant", status.device.delegationCid),
     formatField("Last error", status.lastError ? `${status.lastError.code}: ${status.lastError.message}` : null),
-    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME31} replica command retries` : null)
+    formatField("Purge", status.purgePending ? `incomplete: content files remain; the next ${CLI_NAME32} replica command retries` : null)
   ].join("\n");
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve6(path);
-  const temp = join20(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
-  const handle = await open16(temp, fsConstants6.O_CREAT | fsConstants6.O_EXCL | fsConstants6.O_WRONLY, 384);
+  const temp = join21(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
+  const handle = await open17(temp, fsConstants6.O_CREAT | fsConstants6.O_EXCL | fsConstants6.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -43050,18 +43553,18 @@ function localPathChanged(profile) {
   return new ProfileSymlinkError3(profile, "its local replica files contain a symlink or changed while reading");
 }
 async function assertNamedLocalEntry(profile, path, expected, kind) {
-  const current = await lstat10(path, { bigint: true }).catch(() => null);
+  const current = await lstat11(path, { bigint: true }).catch(() => null);
   if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
-  const path = join20(parent, name);
-  const before = await lstat10(path, { bigint: true }).catch((error) => {
+  const path = join21(parent, name);
+  const before = await lstat11(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
-  const handle = await open16(path, fsConstants6.O_RDONLY | fsConstants6.O_DIRECTORY | fsConstants6.O_NOFOLLOW).catch((error) => {
+  const handle = await open17(path, fsConstants6.O_RDONLY | fsConstants6.O_DIRECTORY | fsConstants6.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -43083,14 +43586,14 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   }
 }
 async function readReportFile(profile, parent, name) {
-  const path = join20(parent, name);
-  const before = await lstat10(path, { bigint: true }).catch((error) => {
+  const path = join21(parent, name);
+  const before = await lstat11(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
-  const handle = await open16(path, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW).catch((error) => {
+  const handle = await open17(path, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -43170,7 +43673,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
     (options, cmd) => run(async () => {
       const profile = await profileName(cmd);
       if (options.purge) {
-        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME31} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
+        throw new CLIError("REPORT_READ_ONLY", `Replica report is read-only. To remove a named local replica, run ${CLI_NAME32} replica reset --replica <name> --purge; flag-owned purge has no equivalent yet (TC-1309).`, ExitCode.USAGE_ERROR);
       }
       if (options.clearPending) {
         throw new CLIError("REPORT_READ_ONLY", "Clearing pending replica writes has no equivalent yet; see TC-1309 for a safe replacement command.", ExitCode.USAGE_ERROR);
@@ -43272,7 +43775,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
               if (differs !== void 0) {
                 throw new ReplicaError(
                   ReplicaErrorCode.CONFIG_MISMATCH,
-                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME31} replica reset --replica ${name} --purge first.`
+                  `Replica ${name} already follows ${differs}. Use another --replica name, or ${CLI_NAME32} replica reset --replica ${name} --purge first.`
                 );
               }
             }
@@ -43430,6 +43933,50 @@ ${describeStatus(status)}
   );
 }
 
+// src/commands/registry.ts
+init_errors();
+init_formatter();
+import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
+function registerRegistryCommand(program) {
+  program.command("registry").description("See where your data is stored, from the copy saved on this computer").command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did, _options, command) => {
+    try {
+      const options = command.optsWithGlobals();
+      const result = await invokeOperation3("tinycloud.registry.show", 1, {
+        ...options.profile ? { profile: options.profile } : {},
+        allowOwnerProfile: true
+      }, did === void 0 ? {} : { did });
+      if (result.status !== "ok") {
+        if (result.status === "error") throw new CLIError(result.error.code, result.error.message);
+        throw new CLIError("REGISTRY_UNAVAILABLE", "Couldn't read the storage settings saved on this computer.");
+      }
+      if (shouldOutputJson()) {
+        outputJson(result.output);
+        return;
+      }
+      const value4 = result.output;
+      const quote = (text2) => JSON.stringify(text2);
+      const ageDivisor = value4.ageMs < 6e4 ? 1e3 : value4.ageMs > 72e5 ? 36e5 : 6e4;
+      const ageUnit = ageDivisor === 1e3 ? "second" : ageDivisor === 6e4 ? "minute" : "hour";
+      const ageCount = Math.floor(value4.ageMs / ageDivisor);
+      process.stdout.write(`Account: ${quote(value4.owner)}
+Version: ${value4.sequence}
+Saved: ${ageCount} ${ageUnit}${ageCount === 1 ? "" : "s"} ago
+`);
+      const nodes = new Map(value4.nodes.map((node) => [node.did, node.url]));
+      for (const space of value4.spaces) {
+        process.stdout.write(`Space: ${quote(space.space)}
+`);
+        for (const node of space.nodes) process.stdout.write(`  ${quote(nodes.get(node.did))} (${node.mode === "read-write" ? "read and write" : "read only"}), server ID ${quote(node.did)}
+`);
+      }
+      process.stdout.write(`Decryption service: ${value4.encryptionNode === null ? "none" : `${quote(nodes.get(value4.encryptionNode))}, ID ${quote(value4.encryptionNode)}`}
+`);
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+}
+
 // src/commands/secrets.ts
 init_profiles();
 init_formatter();
@@ -43437,12 +43984,12 @@ init_theme();
 init_errors();
 init_warnings();
 init_constants();
-import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile16 } from "fs/promises";
-import { join as join21 } from "path";
+import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
+import { readFile as readFile17 } from "fs/promises";
+import { join as join23 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
-import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
+import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
@@ -43509,7 +44056,7 @@ function runProbeChild(request, options = {}) {
     const child = spawn4(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let outcome;
     let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
+    let stderr2 = Buffer.alloc(0);
     let exited = false;
     let stopping = false;
     let graceTimer;
@@ -43537,7 +44084,7 @@ function runProbeChild(request, options = {}) {
       signal?.removeEventListener("abort", onAbort);
       if (outcome === void 0) {
         const envelope = stdout.length > 0 && stdout.length <= MAX_PROBE_LINE_BYTES ? parseStatusEnvelope(stdout.toString("utf8")) : void 0;
-        outcome = envelope !== void 0 ? { kind: "ok", envelope } : probeFailed(stderr.toString("utf8"));
+        outcome = envelope !== void 0 ? { kind: "ok", envelope } : probeFailed(stderr2.toString("utf8"));
       }
       resolve10(outcome);
     };
@@ -43554,8 +44101,8 @@ function runProbeChild(request, options = {}) {
       }
     });
     child.stderr?.on("data", (chunk) => {
-      stderr = Buffer.concat([stderr, chunk]);
-      if (stderr.length > MAX_STDERR_BYTES) stderr = stderr.subarray(stderr.length - MAX_STDERR_BYTES);
+      stderr2 = Buffer.concat([stderr2, chunk]);
+      if (stderr2.length > MAX_STDERR_BYTES) stderr2 = stderr2.subarray(stderr2.length - MAX_STDERR_BYTES);
     });
     child.on("error", () => {
       settle({ kind: "probe_failed" });
@@ -43564,12 +44111,12 @@ function runProbeChild(request, options = {}) {
     child.on("close", finish);
   });
 }
-function probeFailed(stderr) {
-  const code5 = childErrorCode(stderr);
+function probeFailed(stderr2) {
+  const code5 = childErrorCode(stderr2);
   return code5 === void 0 ? { kind: "probe_failed" } : { kind: "probe_failed", childErrorCode: code5 };
 }
-function childErrorCode(stderr) {
-  const lines = stderr.split("\n");
+function childErrorCode(stderr2) {
+  const lines = stderr2.split("\n");
   for (let start = lines.length - 1; start >= 0; start -= 1) {
     if (!lines[start].startsWith("{")) continue;
     try {
@@ -43690,7 +44237,7 @@ init_safe_text();
 // src/lib/secrets-wait.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
 var WAIT_BACKOFF_MS = [3e3, 4500, 6750, 10125];
 var WAIT_STEADY_INTERVAL_MS = 15e3;
 var DEFAULT_WAIT_TIMEOUT = "5m";
@@ -43698,7 +44245,7 @@ var MAX_WAIT_TIMEOUT_MS = 9 * 6e4;
 var MAX_CONSECUTIVE_FAILURES = 5;
 var TIMEOUT_RE = /^(0|\d+s|\d+m)$/;
 var RETRYABLE_STATUS_ERRORS = { NODE_UNREACHABLE: true, NODE_ERROR: true };
-var EXPLICIT_KEY_HINT = `${CLI_NAME32} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME32} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
+var EXPLICIT_KEY_HINT = `${CLI_NAME33} secrets wait never signs in, and an explicit private key has no stored session. Use a local profile signed in once with ${CLI_NAME33} --profile <profile> auth login --method local, without TC_PRIVATE_KEY.`;
 function abortableSleep(ms2, signal) {
   return new Promise((resolve10) => {
     if (signal.aborted) {
@@ -43734,7 +44281,7 @@ async function runSecretsWait(request, deps) {
   let step = 0;
   const cancelled = () => new CLIError(
     "CANCELLED",
-    `Interrupted: ${CLI_NAME32} secrets wait stopped before the secrets were ready.`,
+    `Interrupted: ${CLI_NAME33} secrets wait stopped before the secrets were ready.`,
     ExitCode.CANCELLED,
     progress === void 0 ? {} : { progress }
   );
@@ -43878,13 +44425,13 @@ function statusError(error, profile, warnings) {
   if (error.code === "AUTH_REQUIRED" || error.code === "SESSION_NOT_FOUND") {
     const recovery = recoveryOf(error, "sign_in");
     if (recovery !== void 0) {
-      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with ${CLI_NAME32} auth login, then retry.`;
+      const hint = recovery.command !== void 0 ? `Sign in once with: ${recovery.command}, then retry.` : `Sign in to profile "${profile}" once with ${CLI_NAME33} auth login, then retry.`;
       return new CLIError("AUTH_REQUIRED", error.message, ExitCode.AUTH_REQUIRED, { hint, recovery, ...extra });
     }
   }
   if (error.code === "PROFILE_MIGRATION_REQUIRED") {
     const recovery = recoveryOf(error, "complete_migration");
-    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run ${CLI_NAME32} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
+    const hint = recovery?.command !== void 0 ? `Run ${recovery.command} once to finish this profile's one-time upgrade, then retry wait.` : `Run ${CLI_NAME33} auth caps once with profile "${profile}" to finish its one-time upgrade, then retry wait.`;
     return new CLIError("PROFILE_MIGRATION_REQUIRED", error.message, ExitCode.ERROR, {
       hint,
       ...recovery === void 0 ? {} : { recovery },
@@ -44011,7 +44558,7 @@ function resolveSecretListPrefix(options = {}) {
 }
 function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join21(home, ".tinycloud", "profiles");
+  return join23(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
@@ -44065,8 +44612,6 @@ async function runSecretOperation(params) {
       node: params.node,
       requested,
       expiryOption: void 0,
-      reason: secretPermissionReason(params.action, params.name),
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
       openKeyAcquisition: params.openKeyAcquisition
@@ -44074,13 +44619,9 @@ async function runSecretOperation(params) {
   );
   return runSecretOperationAttempt(params.label, params.operation);
 }
-function secretPermissionReason(action, name) {
-  const target = name ? ` secret "${name}"` : " secrets";
-  return `Allow \`${CLI_NAME33} secrets ${action}${name ? ` ${name}` : ""}\` to access${target} with the required TinyCloud permissions.`;
-}
 function assertOwnerApprovalPossible(profileName2, profile, action, name, missing = []) {
   if (profile.authMethod !== "openkey" || process.stdin.isTTY || process.stderr.isTTY) return;
-  const command = `${CLI_NAME33} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
+  const command = `${CLI_NAME34} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
     action === "get" ? missing.length > 0 && missing.every((permission2) => permission2.service === "tinycloud.encryption" && Array.isArray(permission2.actions) && permission2.actions.length > 0 && permission2.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName2}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
@@ -44091,7 +44632,7 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
   );
 }
 function scopedSecretLoginHint(profileName2) {
-  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME33} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
+  return `Have the owner approve a scoped login whose manifest names the secret: ${CLI_NAME34} --profile ${profileName2} auth login --method openkey --paste --manifest <manifest.json>. Pass the owner's code on stdin, newline-terminated.`;
 }
 async function runSecretOperationAttempt(label, operation) {
   try {
@@ -44152,7 +44693,7 @@ async function canonicalSecretGet(params, collect) {
   };
   const invoke = async () => collect(await withSpinner(
     params.label,
-    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation3("tinycloud.secrets.get", 1, target, input)
+    () => auth?.privateKey ? invokeSecretsGetWithLocalAuthorityRetry(target, input) : invokeOperation4("tinycloud.secrets.get", 1, target, input)
   ));
   let first = await invoke();
   if (first.status === "error" && first.error.code === "SESSION_NOT_FOUND" && auth?.privateKey === void 0) {
@@ -44188,8 +44729,6 @@ async function canonicalSecretGet(params, collect) {
       node,
       requested: first.missing,
       expiryOption: void 0,
-      reason: secretPermissionReason("get", params.name),
-      yes: true,
       force: true,
       anchorSpace: params.space ?? SECRETS_SPACE2,
       openKeyAcquisition: params.openKeyAcquisition
@@ -44225,8 +44764,11 @@ ${message}`,
           "AUTH_REQUIRED",
           "Not signed in to TinyCloud.",
           ExitCode.AUTH_REQUIRED,
-          { hint: `Sign in with: ${CLI_NAME33} --profile ${result.context.profile} auth login` }
+          { hint: `Sign in with: ${CLI_NAME34} --profile ${result.context.profile} auth login` }
         );
+      }
+      if (result.error.code === "NODE_NOT_RESPONDING" || result.error.code === "DECRYPTION_DEPENDENCY_UNAVAILABLE") {
+        throw new CLIError(result.error.code, result.error.message, ExitCode.NETWORK_ERROR);
       }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
@@ -44374,7 +44916,7 @@ function permissionsFromDelegation2(delegation) {
 }
 async function loadDelegationCandidates(source) {
   try {
-    const raw = JSON.parse(await readFile16(source, "utf8"));
+    const raw = JSON.parse(await readFile17(source, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code !== "ENOENT") {
@@ -44393,8 +44935,8 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join21(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile16(importedPath, "utf8"));
+    const importedPath = join23(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile17(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -44724,7 +45266,7 @@ function argvAfterSeparator(cmd) {
   return void 0;
 }
 function secretRunPlan(cmd, operands, maps) {
-  const usage3 = `${CLI_NAME33} secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`;
+  const usage3 = `${CLI_NAME34} secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`;
   const after = argvAfterSeparator(cmd);
   if (after === void 0 || after.length > operands.length) {
     throw new CLIError("USAGE_ERROR", `Put the command after \`--\`: ${usage3}`, ExitCode.USAGE_ERROR);
@@ -44784,7 +45326,7 @@ function exitAsCommand(outcome, program) {
     return process.exit(128 + (osConstants.signals[outcome.signal] ?? 0));
   }
   const reason = outcome.errno === "ENOENT" ? "command not found" : outcome.errno === "EACCES" ? "permission denied" : `cannot run (${outcome.errno ?? "unknown error"})`;
-  process.stderr.write(`${CLI_NAME33} secrets run: ${safeInline(program)}: ${reason}
+  process.stderr.write(`${CLI_NAME34} secrets run: ${safeInline(program)}: ${reason}
 `);
   return process.exit(outcome.errno === "ENOENT" ? 127 : 126);
 }
@@ -44849,7 +45391,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
           name: "Encryption network",
           ok: false,
           detail: `${networkName} not found`,
-          hint: `${CLI_NAME33} secrets network init ${networkName}`
+          hint: `${CLI_NAME34} secrets network init ${networkName}`
         }
       ];
       let secret;
@@ -44895,7 +45437,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
             name: "Secret access",
             ok: false,
             detail: notFound ? `${resolved.permissionPaths.vault} not found` : result.error.message,
-            hint: notFound ? local ? `${CLI_NAME33} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `${CLI_NAME33} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
+            hint: notFound ? local ? `${CLI_NAME34} secrets put ${resolved.name}${formatSecretScopeFlag(scopeOptions)} --stdin` : `${CLI_NAME34} secrets request ${resolved.name}${formatSecretScopeFlag(scopeOptions)}` : `Ask the owner profile to grant ${secretCapabilityAction("get")} and ${SECRET_DECRYPT_CAPABILITY}.`
           });
         }
       } else {
@@ -45043,7 +45585,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        secretValue = await readFile16(options.file, "utf-8");
+        secretValue = await readFile17(options.file, "utf-8");
       } else if (options.stdin) {
         secretValue = (await readStdin4()).toString("utf-8");
       } else {
@@ -45134,7 +45676,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       if (effectiveLocal(profile, options)) {
         throw new CLIError(
           "LOCAL_OWNER_PROFILE",
-          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME33} secrets put NAME --stdin instead of requesting them.`,
+          `Profile "${ctx.profile}" uses a local key, which owns its secrets: store them with ${CLI_NAME34} secrets put NAME --stdin instead of requesting them.`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -45237,7 +45779,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
     try {
       const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
       const privateKey = process.env.TC_PRIVATE_KEY;
-      const result = await invokeOperation3("tinycloud.secrets.status", 1, {
+      const result = await invokeOperation4("tinycloud.secrets.status", 1, {
         profile: ctx.profile,
         host: ctx.host,
         allowOwnerProfile: true,
@@ -45257,7 +45799,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 import { Option } from "commander";
-import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME35 } from "@tinycloud/operations/cli-name";
 init_duration();
 init_errors();
 import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/operations/state";
@@ -45353,9 +45895,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants as constants2 } from "fs";
-import { lstat as lstat11, mkdir as mkdir7, mkdtemp, open as open17, readFile as readFile17, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm9, unlink as unlink7 } from "fs/promises";
+import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open18, readFile as readFile18, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm10, unlink as unlink7 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
-import { basename as basename5, join as join23, resolve as resolve7, sep as sep3 } from "path";
+import { basename as basename5, join as join24, resolve as resolve7, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -45400,7 +45942,7 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const path = resolve7(input);
   const info = await stat6(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile17(path));
+  const bytes = new Uint8Array(await readFile18(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
@@ -45409,9 +45951,9 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join23(current, segment) : join23(current, segment);
+    current = current === sep3 ? join24(current, segment) : join24(current, segment);
     try {
-      const info = await lstat11(current);
+      const info = await lstat12(current);
       if (info.isSymbolicLink()) {
         const canonical = await realpath3(current);
         if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
@@ -45419,8 +45961,8 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir7(current, { mode: 448 });
-      const created = await lstat11(current);
+      await mkdir8(current, { mode: 448 });
+      const created = await lstat12(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
@@ -45429,31 +45971,31 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve7(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open17(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open18(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath3(outputDirectory);
-  const outputPath = join23(stableDirectory, safeName);
+  const outputPath = join24(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat6(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join23(stableDirectory, ".tinycloud-share-stage-"));
-  const stagingInfo = await lstat11(stagingDirectory);
+  const stagingDirectory = await mkdtemp(join24(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingInfo = await lstat12(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join23(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
+  const stagingPath = join24(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
     await assertStableDirectory();
     try {
-      const existing = await lstat11(outputPath);
+      const existing = await lstat12(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open17(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
+    handle = await open18(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -45475,10 +46017,10 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink7(temporaryPath);
     } catch {
     }
-    await rm9(stagingDirectory, { recursive: true, force: true });
+    await rm10(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join23(outputDirectory, safeName);
+  return join24(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -45486,8 +46028,8 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants3, existsSync as existsSync2 } from "fs";
-import { lstat as lstat12, open as open18, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
-import { basename as basename6, dirname as dirname11, isAbsolute, join as join24, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
+import { lstat as lstat13, open as open19, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
+import { basename as basename6, dirname as dirname11, isAbsolute, join as join25, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -45841,9 +46383,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open19 = html.indexOf("<", index);
-    if (open19 === -1) return;
-    index = open19 + 1;
+    const open20 = html.indexOf("<", index);
+    if (open20 === -1) return;
+    index = open20 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -46429,7 +46971,7 @@ async function linuxDescriptorPath(fd) {
 async function parentChainIsRealDirectories(root, path) {
   let current = dirname11(path);
   while (current !== root && isWithinFolder(root, current)) {
-    const info = await lstat12(current);
+    const info = await lstat13(current);
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
     current = dirname11(current);
   }
@@ -46442,9 +46984,9 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
   let before;
   try {
     await hooks.beforeOpen?.();
-    before = await lstat12(path);
+    before = await lstat13(path);
     await hooks.afterLstat?.();
-    handle = await open18(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
+    handle = await open19(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -46482,7 +47024,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.afterRead?.();
     if (byDescriptor === void 0) {
       try {
-        const again = await lstat12(path);
+        const again = await lstat13(path);
         if (again.isSymbolicLink() || again.dev !== info.dev || again.ino !== info.ino || !await parentChainIsRealDirectories(root, path)) return problem(CHANGED);
       } catch (error) {
         if (isRaceError(error)) return problem(CHANGED);
@@ -46499,11 +47041,11 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   try {
     await hooks.beforeOpen?.();
-    const before = await lstat12(absolute);
+    const before = await lstat13(absolute);
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open18(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
+    const handle = await open19(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -46517,7 +47059,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
       const real = await realpath4(absolute);
       if (real !== absolute || absolute !== root && !isWithinFolder(root, real)) return problem("symbolic link");
       const entries = await readdir7(absolute, { withFileTypes: true });
-      const after = await lstat12(absolute);
+      const after = await lstat13(absolute);
       if (after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) return problem(CHANGED);
       if (absolute !== root && !await parentChainIsRealDirectories(root, absolute)) return problem(CHANGED);
       return { entries };
@@ -46560,7 +47102,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join24(absolute, entry.name);
+      const child = join25(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -46719,7 +47261,7 @@ function shareCliError(error, operation = "publish") {
       "SHARE_HISTORY_UNREADABLE",
       "sender history cannot be read with the current session key",
       1,
-      { hint: `Run \`${CLI_NAME34} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
+      { hint: `Run \`${CLI_NAME35} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
     );
   }
   if (error instanceof ShareRevocationIncompleteError) {
@@ -46735,12 +47277,12 @@ function shareCliError(error, operation = "publish") {
     const profileName2 = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName2 === void 0 ? "" : `--profile ${profileName2} `;
-    const loginHint = localKey ? `\`${CLI_NAME34} ${profileHint}auth login --method local\`` : `\`${CLI_NAME34} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME34} ${profileHint}enable share\`)`;
+    const loginHint = localKey ? `\`${CLI_NAME35} ${profileHint}auth login --method local\`` : `\`${CLI_NAME35} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME35} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName2 === void 0 ? "this session" : `profile ${profileName2}'s session`;
       return new CLIError(
         "PERMISSION_DENIED",
-        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME34} init --name publisher --key-only && ${CLI_NAME34} --profile publisher enable share\``,
+        `${holder} carries signed restrictions (caveats) on the authority an anyone-with-link share needs, so it cannot create the share link; nothing was shared. Approve Share publishing without restrictions on a new, dedicated profile (any unused name): \`${CLI_NAME35} init --name publisher --key-only && ${CLI_NAME35} --profile publisher enable share\``,
         5
       );
     }
@@ -46800,7 +47342,7 @@ function shareCliError(error, operation = "publish") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
     if (failure.kind === "decrypt-not-held") {
-      return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME34} auth login --paste --manifest builtin:share-publishing`, 5);
+      return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME35} auth login --paste --manifest builtin:share-publishing`, 5);
     }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
@@ -46836,13 +47378,13 @@ function shareCliError(error, operation = "publish") {
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
   const mapped = typeof nodeCode === "string" && known[nodeCode] !== void 0 ? known[nodeCode] : known[message];
-  const classified = mapped === void 0 ? classifyShareFailure(error, `\`${CLI_NAME34} auth login\``) : void 0;
+  const classified = mapped === void 0 ? classifyShareFailure(error, `\`${CLI_NAME35} auth login\``) : void 0;
   if (classified !== void 0) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
-function inputUrl(value4, stdin) {
-  if (stdin || value4 === "-") return readBoundedUrlStdin();
+function inputUrl(value4, stdin2) {
+  if (stdin2 || value4 === "-") return readBoundedUrlStdin();
   if (value4 === void 0 || value4.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
   return Promise.resolve(value4);
 }
@@ -46851,8 +47393,8 @@ function assertTrustedShareOrigin(link5, expectedOrigin) {
     throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
   }
 }
-async function inspectShareInputOnce(value4, stdin, expectedOrigin, dependencies = {}) {
-  const link5 = stdin || value4 === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value4, false);
+async function inspectShareInputOnce(value4, stdin2, expectedOrigin, dependencies = {}) {
+  const link5 = stdin2 || value4 === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value4, false);
   try {
     parseNativeShareUrl(link5);
   } catch {
@@ -47250,10 +47792,10 @@ init_constants();
 init_sdk();
 init_host();
 init_theme();
-import { CLI_NAME as CLI_NAME35 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME36 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
-import { mkdir as mkdir8, writeFile as writeFile4 } from "fs/promises";
+import { mkdir as mkdir9, writeFile as writeFile5 } from "fs/promises";
 import { dirname as dirname12 } from "path";
 function didWithoutFragment2(did) {
   const fragment = did.indexOf("#");
@@ -47297,7 +47839,7 @@ function registerSpaceCommand(program) {
       } else {
         const profile = await ProfileManager.getProfile(ctx.profile);
         const cap = "tinycloud.kv:account:spaces/:get,list";
-        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME35} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME35} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
+        const hint = resolveProfilePosture(profile) === "delegate-session" ? `Ask the space owner to grant it. Create the request with: ${CLI_NAME36} --profile ${ctx.profile} auth request --cap ${cap} --emit` : `Grant it to this session with: ${CLI_NAME36} --profile ${ctx.profile} auth request --grant --cap ${cap}. The default OpenKey owner sign-in covers only the default space, so it includes neither.`;
         throw new CLIError(
           "PERMISSION_DENIED",
           `Listing spaces needs tinycloud.kv/get and tinycloud.kv/list on the account space's spaces/ registry (${accountSpaceId ?? ACCOUNT_REGISTRY_SPACE}), or tinycloud.space/list. This session holds neither.`,
@@ -47334,10 +47876,10 @@ function registerSpaceCommand(program) {
 
 A delegate cannot host a space \u2014 only its owner (root authority) can. This
 emits a tinycloud.host.request artifact naming the space and its owner so you
-can hand it to the owner; they run \`${CLI_NAME35} space host <name>\` and confirm.
+can hand it to the owner; they run \`${CLI_NAME36} space host <name>\` and confirm.
 
 If you ARE the owner of the resolved space, this refuses and tells you to host
-it directly with \`${CLI_NAME35} space host <name>\` (no request needed).
+it directly with \`${CLI_NAME36} space host <name>\` (no request needed).
 `).action(async (name, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
@@ -47348,7 +47890,7 @@ it directly with \`${CLI_NAME35} space host <name>\` (no request needed).
       if (await isRootAuthority(spaceId, ctx.profile)) {
         throw new CLIError(
           "ALREADY_ROOT_AUTHORITY",
-          `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME35} space host ${spaceName}`,
+          `You are the owner of ${spaceId}. Host it directly: ${CLI_NAME36} space host ${spaceName}`,
           ExitCode.USAGE_ERROR
         );
       }
@@ -47410,8 +47952,8 @@ it directly with \`${CLI_NAME35} space host <name>\` (no request needed).
 }
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir8(dirname12(emitOption), { recursive: true });
-    await writeFile4(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    await mkdir9(dirname12(emitOption), { recursive: true });
+    await writeFile5(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
       path: emitOption,
@@ -47434,8 +47976,8 @@ init_sdk();
 init_space();
 init_host();
 init_theme();
-import { CLI_NAME as CLI_NAME36 } from "@tinycloud/operations/cli-name";
-import { writeFile as writeFile5 } from "fs/promises";
+import { CLI_NAME as CLI_NAME37 } from "@tinycloud/operations/cli-name";
+import { writeFile as writeFile6 } from "fs/promises";
 import { resolve as resolve9 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
@@ -47458,12 +48000,12 @@ database for simple apps, or pass --db to target a named database. Pass
 --space to target a non-primary space (e.g. the manifest "applications" space).
 
 Common workflows:
-  $ ${CLI_NAME36} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ ${CLI_NAME36} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
-  $ ${CLI_NAME36} sql query "SELECT id, body FROM notes ORDER BY id"
-  $ ${CLI_NAME36} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
-  $ ${CLI_NAME36} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
-  $ ${CLI_NAME36} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME37} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME37} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["ship docs"]'
+  $ ${CLI_NAME37} sql query "SELECT id, body FROM notes ORDER BY id"
+  $ ${CLI_NAME37} sql query "SELECT * FROM events WHERE type = ?" --db analytics --params '["signup"]'
+  $ ${CLI_NAME37} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME37} sql export --db analytics --output analytics.db
 
 Commands:
   query     Read rows with SELECT statements
@@ -47480,10 +48022,10 @@ Tips:
   sql2.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME36} sql query "SELECT * FROM notes ORDER BY id"
-  $ ${CLI_NAME36} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
-  $ ${CLI_NAME36} sql query "SELECT count(*) AS total FROM events" --db analytics --json
-  $ ${CLI_NAME36} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
+  $ ${CLI_NAME37} sql query "SELECT * FROM notes ORDER BY id"
+  $ ${CLI_NAME37} sql query "SELECT * FROM notes WHERE id = ?" --params '[42]'
+  $ ${CLI_NAME37} sql query "SELECT count(*) AS total FROM events" --db analytics --json
+  $ ${CLI_NAME37} sql query "SELECT count(*) FROM conversation" --space applications --db xyz.tinycloud.listen/conversations
 
 Output:
   Human output is formatted as a table. Piped output or --json returns
@@ -47524,11 +48066,11 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
   sql2.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME36} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
-  $ ${CLI_NAME36} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
-  $ ${CLI_NAME36} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
-  $ ${CLI_NAME36} sql execute "DROP TABLE old_notes" --db archive
-  $ ${CLI_NAME36} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
+  $ ${CLI_NAME37} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
+  $ ${CLI_NAME37} sql execute "INSERT INTO notes (body) VALUES (?)" --params '["first note"]'
+  $ ${CLI_NAME37} sql execute "UPDATE notes SET body = ? WHERE id = ?" --params '["edited", 1]'
+  $ ${CLI_NAME37} sql execute "DROP TABLE old_notes" --db archive
+  $ ${CLI_NAME37} sql execute "DELETE FROM conversation WHERE id = ?" --space applications --db xyz.tinycloud.listen/conversations --params '["abc"]'
 
 Output:
   Returns JSON with the changed row count and last inserted row id when available.
@@ -47557,9 +48099,9 @@ Output:
   sql2.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME36} sql export
-  $ ${CLI_NAME36} sql export --db analytics --output analytics.db
-  $ ${CLI_NAME36} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
+  $ ${CLI_NAME37} sql export
+  $ ${CLI_NAME37} sql export --db analytics --output analytics.db
+  $ ${CLI_NAME37} sql export --space applications --db xyz.tinycloud.listen/conversations --output listen.db
 
 Output:
   Writes the database file locally and returns JSON with the path and size.
@@ -47579,7 +48121,7 @@ Output:
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve9(options.output);
-      await writeFile5(outputPath, buffer);
+      await writeFile6(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -47592,19 +48134,19 @@ Output:
   sql2.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
 
 Examples:
-  $ ${CLI_NAME36} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
+  $ ${CLI_NAME37} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
                 --to-db xyz.tinycloud.listen/conversations \\
                 --space applications --dry-run
-  $ ${CLI_NAME36} sql copy --from-space applications --from-db com.foo/data \\
+  $ ${CLI_NAME37} sql copy --from-space applications --from-db com.foo/data \\
                 --to-space applications --to-db com.bar/data \\
                 --table conversation --table participant
 
 Notes:
   - Refuses to run when (resolved space, db) is identical for source and destination.
-  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME36} sql execute\`)
+  - Does NOT create destination tables. Run the target app once (or use \`${CLI_NAME37} sql execute\`)
     to materialize the schema before copying.
   - One row at a time; suitable for small/medium datasets. Large copies should
-    use \`${CLI_NAME36} sql export\` + bulk import.
+    use \`${CLI_NAME37} sql export\` + bulk import.
   - Authorization: the active session/delegation must cover sql/read on source
     AND sql/write on destination. Otherwise the relevant operation will fail.
 `).action(async (options, cmd) => {
@@ -47704,7 +48246,7 @@ init_errors();
 init_formatter();
 init_theme();
 init_permissions();
-import { CLI_NAME as CLI_NAME37 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME38 } from "@tinycloud/operations/cli-name";
 import {
   NodeWasmBindings as NodeWasmBindings2
 } from "@tinycloud/node-sdk";
@@ -47978,7 +48520,7 @@ function formatStatus(summary) {
   lines.push(`Default profile: ${theme.value(summary.defaultProfile)}`);
   lines.push("");
   if (summary.profiles.length === 0) {
-    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME37} init`));
+    lines.push(theme.muted(`No profiles configured. Run: ${CLI_NAME38} init`));
     return `${lines.join("\n")}
 `;
   }
@@ -48134,7 +48676,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile18 } from "fs/promises";
+import { readFile as readFile19 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -48196,7 +48738,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile18(options.file));
+        putValue = new Uint8Array(await readFile19(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
@@ -48311,7 +48853,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile19 } from "fs/promises";
+import { readFile as readFile20 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -48416,7 +48958,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile19(options.file, "utf-8");
+        varValue = await readFile20(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {
@@ -48470,6 +49012,7 @@ function registerTinyCloudCommands(program) {
   registerShareCommand(program);
   registerNodeCommand(program);
   registerProfileCommand(program);
+  registerRegistryCommand(program);
   registerCompletionCommand(program);
   registerVaultCommand(program);
   registerSecretsCommand(program);
@@ -48484,6 +49027,7 @@ function registerTinyCloudCommands(program) {
   registerUpgradeCommand(program);
   registerStatusCommand(program);
   registerAccountCommand(program);
+  registerBugReportCommand(program);
 }
 export {
   registerTinyCloudCommands

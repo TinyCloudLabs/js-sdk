@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // A long-lived writer (as an MCP server is) that takes the profile lock once,
 // stays alive, and takes it again when told. Each outcome ("ok" or the error
 // code) is written to `<signals>/first` and `<signals>/second`. With a third

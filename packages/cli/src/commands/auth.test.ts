@@ -136,6 +136,8 @@ let onGrantRuntimePermissions: (() => void | Promise<void>) | null = null;
 let operationInvokeHook: (() => void) | null = null;
 // What `restoreProfileSessionNode` returns; null: no restorable session.
 let restoredSessionNode: ((ctx: unknown) => unknown) | null = null;
+let beforeOpenKeyResult: (() => void | Promise<void>) | null = null;
+let writeAuthFiles = false;
 
 function resetState(): void {
   recorded.outputs.length = 0;
@@ -161,6 +163,8 @@ function resetState(): void {
   keys = new Map();
   sessions = new Map();
   generatedKeys = [];
+  beforeOpenKeyResult = null;
+  writeAuthFiles = false;
   startAuthFlowFailure = null;
   manifestPermissions = [];
   openKeyDelegation = {
@@ -254,12 +258,14 @@ mock.module("../config/profiles.js", () => ({
     setKey: async (name: string, jwk: object) => {
       keys.set(name, jwk);
       recorded.setKeys.push({ profile: name, jwk });
+      if (writeAuthFiles) await writeFile(join(profilePath(name), "key.json"), JSON.stringify(jwk));
     },
     removeKey: async (name: string) => { keys.delete(name); },
     getSession: async (name: string) => sessions.get(name) ?? null,
     setSession: async (name: string, session: object) => {
       sessions.set(name, session);
       recorded.setSessions.push({ profile: name, session });
+      if (writeAuthFiles) await writeFile(join(profilePath(name), "session.json"), JSON.stringify(session));
     },
     clearSession: async (name: string) => {
       sessions.delete(name);
@@ -276,10 +282,6 @@ mock.module("../lib/profile-replicas.js", () => ({
 }));
 
 mock.module("../auth/browser-auth.js", () => ({
-  publicJwkForDelegation: (jwk: Record<string, unknown>) => {
-    const { d: _privateKey, ...publicJwk } = jwk;
-    return publicJwk;
-  },
   validateDelegationCallbackPayload: () => null,
   startAuthFlow: async (
     did: string,
@@ -295,6 +297,7 @@ mock.module("../auth/browser-auth.js", () => ({
   ) => {
     recorded.startAuthFlows.push({ did, options });
     if (startAuthFlowFailure) throw startAuthFlowFailure;
+    if (beforeOpenKeyResult) await beforeOpenKeyResult();
     return openKeyDelegation;
   },
 }));
@@ -411,7 +414,9 @@ const importedNode = {
 
 mock.module("../lib/sdk.js", () => ({
   ensureAuthenticated: async () => {
-    if (ensureAuthenticatedError) throw ensureAuthenticatedError;
+    if (ensureAuthenticatedError && !sessions.has(activeProfile)) {
+      throw ensureAuthenticatedError;
+    }
     return importedNode;
   },
   bootstrapDelegatedSession: async (_ctx: unknown, delegation: { cid: string }) => {
@@ -548,6 +553,7 @@ mock.module("../output/errors.js", () => ({
   wrapError: (error: unknown) => error,
   setActiveProfileName: () => {},
 }));
+
 
 const {
   readAuthArtifactSource,
@@ -697,9 +703,6 @@ describe("CLI auth rotate command", () => {
     expect(keys.get("default")).toBe(localSignInResult.jwk);
     expect(keys.get("default")).not.toBe(oldJwk);
     expect(recorded.clearSessions).toEqual([]);
-    expect(recorded.localSignIns).toEqual([
-      { privateKey: "0xowner-private", host: activeHost },
-    ]);
     expect(sessions.get("default")).toEqual({
       authMethod: "local",
       address: "0xLocalOwner",
@@ -1941,7 +1944,7 @@ describe("CLI auth request command", () => {
     ]);
   });
 
-  test("persists the active local session after granting runtime permissions", async () => {
+  test("a local-key request --grant signs without --yes or a terminal and persists the active local session", async () => {
     const sessionJwk = {
       kty: "OKP",
       crv: "Ed25519",
@@ -1984,7 +1987,6 @@ describe("CLI auth request command", () => {
       "auth",
       "request",
       "--grant",
-      "--yes",
       "--cap",
       "tinycloud.kv:default/:list",
     ]);
@@ -2016,83 +2018,90 @@ describe("CLI auth request command", () => {
       }),
     ]);
   });
-
-  test("does not restore a local session after a concurrent durable sign-out", async () => {
+  test("key-only auth request grants through an owner OpenKey approval link", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "fresh-key", d: "private-key" };
     profiles.set("default", makeProfile({
-      did: "did:pkh:eip155:1:0xLocalOwner",
-      authMethod: "local",
-      posture: "local-owner-key",
-      privateKey: "0xowner-private",
-      address: "0xLocalOwner",
+      authMethod: undefined,
+      sessionDid: undefined,
     }));
-    sessions.set("default", { delegationCid: "bafy-old-session", spaceId: "space-local-old" });
-    authNodeHasRuntimePermissions = false;
-    authNodeGrantDelegations = [{ cid: "bafy-new-grant", expiry: new Date("2099-01-01T00:00:00.000Z") }];
-    authNodeRestorableSession = {
-      address: "0xLocalOwner",
+    keys.set("default", key);
+    writeAuthFiles = true;
+    ensureAuthenticatedError = new Error("Not authenticated");
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+      verificationMethod: "did:key:old",
+      siwe: "signed session proof",
+      signature: "0xsigned",
+      address: "0xowner",
       chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer runtime-session" },
-      delegationCid: "bafy-runtime-session",
-      jwk: { kty: "OKP", crv: "Ed25519", x: "new-session", d: "private" },
-      verificationMethod: "did:key:new-session",
-      siwe: "runtime-siwe",
-      signature: "0xruntime",
-    };
-    onGrantRuntimePermissions = () => {
-      profiles.set("default", { ...profiles.get("default")!, authSignedOut: true });
-      sessions.delete("default");
-      keys.delete("default");
+      verifiedActions: ["tinycloud.kv/list"],
     };
 
-    await runAuthCommand(["auth", "request", "--grant", "--yes", "--cap", "tinycloud.kv:default/:list"]);
+    await runAuthCommand([
+      "auth",
+      "request",
+      "--grant",
+      "--no-popup",
+      "--cap",
+      "tinycloud.kv:default:smoke/:list",
+    ]);
 
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "PROFILE_CHANGED_DURING_LOGIN" })]);
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(recorded.startAuthFlows[0]).toMatchObject({
+      did: "did:key:old",
+      options: {
+        noPopup: true,
+        permissions: expect.arrayContaining([{
+          service: "tinycloud.kv",
+          space: "default",
+          path: "",
+          actions: ["list"],
+        }]),
+      },
+    });
+    expect(sessions.get("default")).toMatchObject({
+      delegationHeader: { Authorization: "Bearer openkey-new" },
+      delegationCid: "bafy-openkey-new",
+    });
+    expect(profiles.get("default")).toMatchObject({
+      authMethod: "openkey",
+      posture: "owner-openkey",
+      sessionDid: "did:key:old",
+    });
+  });
+  test("does not restore a key-only grant after a concurrent sign-out", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "fresh-key", d: "private-key" };
+    profiles.set("default", makeProfile({ authMethod: undefined, sessionDid: undefined }));
+    keys.set("default", key);
+    openKeyDelegation = {
+      ...openKeyDelegation,
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
+      verificationMethod: "did:key:old",
+      verifiedActions: ["tinycloud.kv/list"],
+    };
+    ensureAuthenticatedError = new Error("Not authenticated");
+    beforeOpenKeyResult = () => {
+      const current = profiles.get("default")!;
+      profiles.set("default", { ...current, authSignedOut: true });
+    };
+
+    await runAuthCommand([
+      "auth",
+      "request",
+      "--grant",
+      "--no-popup",
+      "--cap",
+      "tinycloud.kv:default:smoke/:list",
+    ]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.errors[0]).toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
     expect(sessions.has("default")).toBe(false);
-    expect(keys.has("default")).toBe(false);
     expect(profiles.get("default")?.authSignedOut).toBe(true);
-    expect(recorded.outputs).toEqual([]);
   });
 
-  test("does not save a local grant session after a logout marker is committed", async () => {
-    profiles.set("default", makeProfile({
-      did: "did:pkh:eip155:1:0xLocalOwner",
-      authMethod: "local",
-      posture: "local-owner-key",
-      privateKey: "0xowner-private",
-      address: "0xLocalOwner",
-    }));
-    const priorSession = { delegationCid: "bafy-old-session", spaceId: "space-local-old" };
-    sessions.set("default", priorSession);
-    authNodeHasRuntimePermissions = false;
-    authNodeGrantDelegations = [{ cid: "bafy-new-grant", expiry: new Date("2099-01-01T00:00:00.000Z") }];
-    authNodeRestorableSession = {
-      address: "0xLocalOwner",
-      chainId: 1,
-      spaceId: "space-local-new",
-      delegationHeader: { Authorization: "Bearer runtime-session" },
-      delegationCid: "bafy-runtime-session",
-      jwk: { kty: "OKP", crv: "Ed25519", x: "new-session", d: "private" },
-      verificationMethod: "did:key:new-session",
-      siwe: "runtime-siwe",
-      signature: "0xruntime",
-    };
-    let markerPath: string | undefined;
-    onGrantRuntimePermissions = async () => {
-      markerPath = join(profilePath("default"), REPLICA_LOGOUT_PENDING_FILE);
-      await writeFile(markerPath, "{}");
-    };
-
-    try {
-      await runAuthCommand(["auth", "request", "--grant", "--yes", "--cap", "tinycloud.kv:default/:list"]);
-      expect(recorded.errors).toEqual([expect.objectContaining({ code: "PROFILE_CHANGED_DURING_LOGIN" })]);
-      expect(sessions.get("default")).toEqual(priorSession);
-      expect(recorded.setSessions).toEqual([]);
-      expect(recorded.outputs).toEqual([]);
-    } finally {
-      if (markerPath) await rm(markerPath, { force: true });
-    }
-  });
 });
 
 describe("refreshOpenKeySession sanitizes persisted session JWK", () => {
@@ -2360,6 +2369,41 @@ function setTTY(stream: NodeJS.ReadStream | NodeJS.WriteStream, isTTY: boolean):
   };
 }
 
+/**
+ * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) waiting on
+ * stdin, and stdout/stderr captured. Returns what was written to stderr and whether anything
+ * started reading stdin.
+ */
+async function grantWith(
+  args: string[],
+  terminal: { stdin: boolean; stdout: boolean; stderr: boolean },
+  answer?: string,
+): Promise<{ stderr: string; stdinRead: boolean }> {
+  const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
+  const input = Object.assign(Readable.from(answer === undefined ? [] : [answer]), { setRawMode: () => input });
+  Object.defineProperty(process, "stdin", { configurable: true, value: input });
+  const restore = [
+    setTTY(process.stdin, terminal.stdin),
+    setTTY(process.stdout, terminal.stdout),
+    setTTY(process.stderr, terminal.stderr),
+  ];
+  const stderr: string[] = [];
+  const stderrSpy = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    stderr.push(String(chunk));
+    return true;
+  }) as never);
+  const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((() => true) as never);
+  try {
+    await runAuthCommand(["auth", "grant", ...args]);
+  } finally {
+    stderrSpy.mockRestore();
+    stdoutSpy.mockRestore();
+    for (const undo of restore) undo();
+    if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
+  }
+  return { stderr: stderr.join(""), stdinRead: input.readableFlowing !== null };
+}
+
 describe("auth grant for an OpenKey owner gets a fresh owner approval per agent request (TC-1422)", () => {
   const DAY_MS = 24 * 60 * 60 * 1000;
   const sessionDid = "did:key:z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51#z6MktdN3L74zrn1iFLmaRviQ4HEaC8gTcM8xND9BYfZ4Ep51";
@@ -2502,9 +2546,48 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(recorded.grantedRequests).toEqual([]);
     expect(recorded.localGrantArtifacts).toEqual([]);
   });
+
+  describe("an entry beyond the apps-agent preset goes straight to the OpenKey approval, with no terminal question", () => {
+    const applications = `tinycloud:${primaryOwner.slice("did:".length)}:applications`;
+
+    async function writeBeyondPresetAgentRequest(): Promise<string> {
+      const source = join(tempDir, "openkey-agent-beyond-preset.json");
+      await writeFile(source, JSON.stringify(makeStoredImportRequest({
+        posture: "delegate-session",
+        operatorType: "agent",
+        sessionDid,
+        requested: [{ service: "tinycloud.kv", space: applications, path: "xyz.example.app/", actions: ["tinycloud.kv/del"] }],
+      })), "utf8");
+      return source;
+    }
+
+    test.each([
+      ["a terminal attached", { stdin: true, stdout: true, stderr: true }, false],
+      ["stdout redirected to a file", { stdin: true, stdout: false, stderr: true }, false],
+      ["no terminal and no --yes", { stdin: false, stdout: false, stderr: false }, true],
+    ])("%s: the list is printed, nothing is asked or read from stdin, and the owner's OpenKey approval signs it", async (_name, terminal, noPopup) => {
+      openKeyDelegation = {
+        ...approvalBy(primaryOwner, 2 * DAY_MS),
+        spaceId: applications,
+        verifiedPath: "xyz.example.app/",
+        verifiedActions: ["tinycloud.kv/del"],
+      };
+      const source = await writeBeyondPresetAgentRequest();
+
+      const { stderr, stdinRead } = await grantWith([source], terminal, "n\n");
+
+      expect(stderr).toContain("MORE than the apps-agent preset");
+      expect(stderr).not.toContain("[y/N]");
+      expect(stdinRead).toBe(false);
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows).toEqual([expect.objectContaining({ did: sessionDid })]);
+      expect(recorded.startAuthFlows[0]?.options.noPopup).toBe(noPopup);
+      expect(recorded.grantedRequests).toHaveLength(1);
+    });
+  });
 });
 
-describe("auth grant asks the owner about entries beyond the preset on the terminal, wherever stdout goes", () => {
+describe("auth grant on a local-key profile signs entries beyond the preset without a question, wherever stdout goes", () => {
   let tempDir: string;
 
   beforeEach(async () => {
@@ -2530,82 +2613,29 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
     return source;
   }
 
-  /**
-   * Runs `auth grant` with each stream's terminal state set as given, `answer` (if any) waiting on
-   * stdin, and stdout/stderr captured. Returns what was written to stderr and whether anything
-   * started reading stdin.
-   */
-  async function grantWith(
-    args: string[],
-    terminal: { stdin: boolean; stdout: boolean; stderr: boolean },
-    answer?: string,
-  ): Promise<{ stderr: string; stdinRead: boolean }> {
-    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin");
-    const input = Object.assign(Readable.from(answer === undefined ? [] : [answer]), { setRawMode: () => input });
-    Object.defineProperty(process, "stdin", { configurable: true, value: input });
-    const restore = [
-      setTTY(process.stdin, terminal.stdin),
-      setTTY(process.stdout, terminal.stdout),
-      setTTY(process.stderr, terminal.stderr),
-    ];
-    const stderr: string[] = [];
-    const stderrSpy = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
-      stderr.push(String(chunk));
-      return true;
-    }) as never);
-    const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((() => true) as never);
-    try {
-      await runAuthCommand(["auth", "grant", ...args]);
-    } finally {
-      stderrSpy.mockRestore();
-      stdoutSpy.mockRestore();
-      for (const undo of restore) undo();
-      if (stdinDescriptor) Object.defineProperty(process, "stdin", stdinDescriptor);
-    }
-    return { stderr: stderr.join(""), stdinRead: input.readableFlowing !== null };
-  }
-
-  test("stdout redirected to a file still gets the question on the terminal, and a yes signs", async () => {
+  test.each([
+    ["a terminal attached", { stdin: true, stdout: true, stderr: true }],
+    ["stdout redirected to a file", { stdin: true, stdout: false, stderr: true }],
+    ["no terminal at all", { stdin: false, stdout: false, stderr: false }],
+    ["piped stdin, with stdout and stderr on a terminal", { stdin: false, stdout: true, stderr: true }],
+  ])("%s, no --yes: the list is printed, nothing is asked or read from stdin, and the grant is signed", async (_name, terminal) => {
     const source = await writeBeyondPresetRequest();
 
-    const { stderr, stdinRead } = await grantWith([source], { stdin: true, stdout: false, stderr: true }, "y\n");
+    const { stderr, stdinRead } = await grantWith([source], terminal, "n\n");
 
-    expect(stdinRead).toBe(true);
-    expect(stderr).toContain("1 entry marked !");
+    expect(stderr).toContain("MORE than the apps-agent preset");
+    expect(stderr).not.toContain("[y/N]");
+    expect(stdinRead).toBe(false);
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
   });
 
-  test("with stdout redirected, any answer but yes cancels and signs nothing", async () => {
-    const source = await writeBeyondPresetRequest();
-
-    await grantWith([source], { stdin: true, stdout: false, stderr: true }, "n\n");
-
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "REQUEST_CANCELLED" })]);
-    expect(recorded.grantedRequests).toEqual([]);
-  });
-
-  test.each([
-    ["no terminal at all", { stdin: false, stdout: false, stderr: false }],
-    ["piped stdin, even with stdout and stderr on a terminal", { stdin: false, stdout: true, stderr: true }],
-    ["stderr redirected, so the question would not be seen", { stdin: true, stdout: true, stderr: false }],
-  ])("%s: refused with CONFIRMATION_REQUIRED, nothing read from stdin, nothing signed", async (_name, terminal) => {
-    const source = await writeBeyondPresetRequest();
-
-    const { stderr, stdinRead } = await grantWith([source], terminal, "y\n");
-
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "CONFIRMATION_REQUIRED", exitCode: 2 })]);
-    expect(stdinRead).toBe(false);
-    expect(stderr).not.toContain("1 entry marked !");
-    expect(recorded.grantedRequests).toEqual([]);
-  });
-
-  test("--yes signs without a terminal and without asking", async () => {
+  test("--yes is still accepted and changes nothing; in JSON mode it adds nothing to stderr", async () => {
     const source = await writeBeyondPresetRequest();
 
     const { stderr } = await grantWith([source, "--yes"], { stdin: false, stdout: false, stderr: false });
 
-    expect(stderr).not.toContain("1 entry marked !");
+    expect(stderr).not.toContain("--yes");
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
   });

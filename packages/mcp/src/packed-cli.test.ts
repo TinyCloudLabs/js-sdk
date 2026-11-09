@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyFile, cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageDirectory = new URL("..", import.meta.url).pathname;
@@ -26,35 +25,38 @@ test("packed ESM and CJS CLI entrypoints print the metadata version directly", a
 test("packed ESM and CJS resolve the exact nested operations catalog", async () => {
   const fixture = await mkdtemp(join(packageDirectory, ".packed-layout-"));
   fixtures.push(fixture);
-  const mcpDist = join(fixture, "node_modules/@tinycloud/mcp/dist");
+  const mcpDirectory = join(fixture, "node_modules/@tinycloud/mcp");
   const operationsDirectory = new URL("../../operations", import.meta.url).pathname;
-  const nestedOperations = join(fixture, "node_modules/@tinycloud/mcp/node_modules/@tinycloud/operations");
+  const nestedOperations = join(mcpDirectory, "node_modules/@tinycloud/operations");
   const hoistedOperations = join(fixture, "node_modules/@tinycloud/operations");
-  await Promise.all([
-    mkdir(mcpDist, { recursive: true }),
-    mkdir(join(nestedOperations, "generated"), { recursive: true }),
-    mkdir(join(hoistedOperations, "generated"), { recursive: true }),
-  ]);
-  await Promise.all([
-    copyFile(join(packageDirectory, "dist/tools.js"), join(mcpDist, "tools.js")),
-    copyFile(join(packageDirectory, "dist/tools.cjs"), join(mcpDist, "tools.cjs")),
-    copyFile(join(operationsDirectory, "package.json"), join(nestedOperations, "package.json")),
-    copyFile(
-      join(operationsDirectory, "generated/operations.json"),
-      join(nestedOperations, "generated/operations.json"),
-    ),
-    cp(join(operationsDirectory, "dist"), join(nestedOperations, "dist"), { recursive: true }),
-    writeFile(join(hoistedOperations, "package.json"), JSON.stringify({
-      name: "@tinycloud/operations",
-      type: "module",
-      exports: { "./operations.json": "./generated/operations.json" },
-    })),
-    writeFile(
-      join(hoistedOperations, "generated/operations.json"),
-      JSON.stringify({ operations: [] }),
-    ),
-  ]);
 
+  for (const [source, destination] of [
+    [packageDirectory, mcpDirectory],
+    [operationsDirectory, nestedOperations],
+  ]) {
+    await mkdir(destination, { recursive: true });
+    const packed = Bun.spawnSync([
+      "npm", "pack", "--ignore-scripts", "--json", "--pack-destination", fixture,
+    ], { cwd: source });
+    expect(packed.exitCode).toBe(0);
+    const [{ filename }] = JSON.parse(new TextDecoder().decode(packed.stdout)) as Array<{ filename: string }>;
+    const extracted = Bun.spawnSync([
+      "tar", "-xzf", join(fixture, filename!), "--strip-components=1", "-C", destination,
+    ]);
+    expect(extracted.exitCode).toBe(0);
+  }
+
+  // A valid but empty hoisted catalog must never replace MCP's nested dependency.
+  await mkdir(join(hoistedOperations, "generated"), { recursive: true });
+  await writeFile(join(hoistedOperations, "package.json"), JSON.stringify({
+    name: "@tinycloud/operations",
+    type: "module",
+    exports: { "./operations.json": "./generated/operations.json" },
+  }));
+  await writeFile(
+    join(hoistedOperations, "generated/operations.json"),
+    JSON.stringify({ stableErrors: [], operations: [] }),
+  );
   const probe = join(fixture, "probe.mjs");
   await writeFile(probe, `
 import { createRequire } from "node:module";
@@ -81,11 +83,13 @@ process.stdout.write(JSON.stringify(tools));
     tinycloud_auth_status: "tinycloud.auth.status",
     tinycloud_auth_capabilities: "tinycloud.auth.capabilities",
     tinycloud_auth_request: "tinycloud.auth.request",
+    tinycloud_auth_read_scope: "tinycloud.auth.read_scope",
     tinycloud_auth_import: "tinycloud.auth.import",
     tinycloud_account_spaces_list: "tinycloud.account.spaces.list",
     tinycloud_account_applications_list: "tinycloud.account.applications.list",
     tinycloud_kv_list: "tinycloud.kv.list",
     tinycloud_kv_get: "tinycloud.kv.get",
+    tinycloud_read: "tinycloud.read",
     tinycloud_kv_head: "tinycloud.kv.head",
     tinycloud_kv_put: "tinycloud.kv.put",
     tinycloud_kv_delete: "tinycloud.kv.delete",
@@ -99,20 +103,13 @@ process.stdout.write(JSON.stringify(tools));
   };
   for (const format of ["esm", "cjs"] as const) {
     const result = Bun.spawnSync([
-      nodeBinary,
-      probe,
-      format,
-      join(mcpDist, `tools.${format === "esm" ? "js" : "cjs"}`),
+      nodeBinary, probe, format, join(mcpDirectory, `dist/tools.${format === "esm" ? "js" : "cjs"}`),
     ]);
     expect(new TextDecoder().decode(result.stderr)).toBe("");
     expect(result.exitCode).toBe(0);
-    const tools = JSON.parse(new TextDecoder().decode(result.stdout)) as Array<{
-      name: string;
-      title: string;
-    }>;
-    expect(tools).toHaveLength(19);
-    expect(tools.map((tool) => tool.title)).toEqual(
-      tools.map((tool) => titlesByOperation.get(operationByTool[tool.name]!)!),
-    );
+    const tools = JSON.parse(new TextDecoder().decode(result.stdout));
+    expect(tools).toEqual(Object.entries(operationByTool).map(([name, operationId]) => ({
+      name, title: titlesByOperation.get(operationId),
+    })));
   }
-});
+}, 30_000);

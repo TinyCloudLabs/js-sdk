@@ -26,6 +26,8 @@ jobs:
     name: Run web-sdk test files
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
     steps:
       - uses: actions/checkout@v4
 
@@ -101,7 +103,7 @@ jobs:
 
       - name: Install wasm-pack
         if: steps.gate.outputs.run == 'true'
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Install locked dependencies
         if: steps.gate.outputs.run == 'true'
@@ -144,7 +146,7 @@ jobs:
             reason="${skip[$file]:-}"
             if [[ -z "$reason" ]]; then
               echo "::group::$file"
-              if ! bun test "./$file" 2>&1 | tee "$log"; then
+              if ! bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test "./$file" 2>&1 | tee "$log"; then
                 failed+=("$file")
                 echo "::error title=web-sdk test failed::$file"
               elif grep -Eq '\b0 pass\b' "$log" && grep -Eq '\b[1-9][0-9]* skip\b' "$log"; then
@@ -177,7 +179,7 @@ jobs:
       - name: Run browser smoke tests
         if: steps.gate.outputs.run == 'true'
         working-directory: packages/web-sdk
-        run: bun run test:e2e
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun run test:e2e
 
       - name: Save Rust/Cargo cache
         if: steps.gate.outputs.run == 'true' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))

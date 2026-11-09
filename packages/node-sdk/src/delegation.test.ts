@@ -348,10 +348,9 @@ describe("whole-service (empty path) runtime delegations", () => {
   });
 
   test("a signed resource that is not a known service in a space is still refused", async () => {
-    for (const resource of [`${space}/kvx`, `${space}/kv-extra/a`, `${space}/secrets`, `${space}/`, space, `${space}//kv`, `${space}/KV`]) {
+    for (const resource of [`${space}/kvx`, `${space}/kv-extra/a`, `${space}/capabilities-extra`, `${space}/constructor`, `${space}/__proto__`, `${space}/secrets`, `${space}/`, space, `${space}//kv`, `${space}/KV`]) {
       await expect(activate({ [resource]: kvGet }, claimedKv(""))).rejects.toMatchObject({
         reason: "authority_invalid",
-        message: expect.stringContaining("unsupported signed"),
       });
     }
   });

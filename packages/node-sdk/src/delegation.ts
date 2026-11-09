@@ -6,6 +6,7 @@ import {
   PermissionEntry,
   principalDidEquals,
 } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 
 /**
  * A portable delegation that can be transported between users.
@@ -123,11 +124,18 @@ export interface RuntimeDelegationActivator {
   useRuntimeDelegation(delegation: PortableDelegation): Promise<void>;
   useDelegation?(delegation: PortableDelegation): Promise<unknown>;
   getRuntimePermissionDelegations(): PortableDelegation[];
+  /** Called only with the verified effective authority of an installed delegation. */
+  refreshRegistryForCapabilities?(permissions: readonly PermissionEntry[]): void;
   /**
    * Verify a wallet-signed session grant issued to this runtime's live session
    * key. Required to activate a CACAO grant; compact UCANs do not use it.
    */
   verifySessionGrant?(grant: SessionGrantProof): VerifiedSessionGrant;
+  /** A verified full-resource registry host; undefined retains no-entry host binding. */
+  resolveRegisteredDelegationHost?(
+    permissions: readonly PermissionEntry[],
+    noEntryHost: string,
+  ): Promise<string | undefined>;
 }
 
 /** The installed authority returned by {@link activateValidatedRuntimeDelegation}. */
@@ -250,6 +258,7 @@ const SERVICE_BY_SHORT_NAME: Record<string, string> = {
   sql: "tinycloud.sql",
   duckdb: "tinycloud.duckdb",
   hooks: "tinycloud.hooks",
+  capabilities: "tinycloud.capabilities",
 };
 
 function authorizationWithoutBearer(authorization: string): string {
@@ -426,14 +435,14 @@ function signedAuthorityFromCompactUcan(
     }
 
     // `<space>/kv` (no trailing slash) is the whole service in the space: path "".
-    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/(kv|sql|duckdb|hooks)(?:\/|$)(.*)$/.exec(resource);
-    if (!match) {
+    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/([^/]+)(?:\/|$)(.*)$/.exec(resource);
+    if (!match || !Object.prototype.hasOwnProperty.call(SERVICE_BY_SHORT_NAME, match[3]!)) {
       throw new Error(
         `Validated runtime delegation has an unsupported signed resource '${resource}'.`,
       );
     }
     const [, policySpace, nativeSpace, shortService, path] = match;
-    // The pattern admits only the four services in SERVICE_BY_SHORT_NAME.
+    // One explicit allowlist defines supported services; namespaces are not open-ended.
     const service = SERVICE_BY_SHORT_NAME[shortService!]!;
     permissions.push(...groupedSignedEntries(
       service,
@@ -640,6 +649,9 @@ function resourcesMatch(
  * `options.authorize`, when given, sees the signed capabilities before
  * anything is activated or installed; returning `false` refuses the
  * delegation.
+ *
+ * Typed routing failures propagate unchanged; they do not invalidate the
+ * signed authority or require another approval.
  */
 export async function activateValidatedRuntimeDelegation(
   node: RuntimeDelegationActivator,
@@ -649,13 +661,8 @@ export async function activateValidatedRuntimeDelegation(
     authorize?: (effectivePermissions: readonly PermissionEntry[]) => boolean;
   },
 ): Promise<ValidatedRuntimeDelegation> {
-  const host = normalizedHost(options.host);
-  if (delegation.host !== undefined && normalizedHost(delegation.host) !== host) {
-    reject(
-      "host_mismatch",
-      `Runtime delegation host '${delegation.host}' does not match expected host '${options.host}'.`,
-    );
-  }
+  let host = normalizedHost(options.host);
+  const differentHost = delegation.host !== undefined && normalizedHost(delegation.host) !== host;
   if (!(delegation.expiry instanceof Date) || Number.isNaN(delegation.expiry.getTime())) {
     reject("authority_invalid", "Runtime delegation has an invalid expiry.");
   }
@@ -703,6 +710,13 @@ export async function activateValidatedRuntimeDelegation(
   }
   if (options.authorize !== undefined && !options.authorize(signed.permissions)) {
     throw new Error("Runtime delegation is not authorized for this runtime.");
+  }
+  if (differentHost) {
+    const registeredHost = await node.resolveRegisteredDelegationHost?.(signed.permissions, host);
+    if (registeredHost === undefined) {
+      reject("host_mismatch", `Runtime delegation host '${delegation.host}' does not match expected host '${options.host}'.`);
+    }
+    host = normalizedHost(registeredHost);
   }
   const previouslyInstalled = node
     .getRuntimePermissionDelegations()
@@ -760,6 +774,7 @@ export async function activateValidatedRuntimeDelegation(
       await node.useRuntimeDelegation(installedCandidate);
     }
   } catch (error) {
+    if (routingFailure(error)) throw error;
     reject(
       activationRejectionReason(error),
       error instanceof Error ? error.message : String(error),
@@ -786,6 +801,7 @@ export async function activateValidatedRuntimeDelegation(
       "Runtime delegation activation installed authority that differs from the validated authority.",
     );
   }
+  node.refreshRegistryForCapabilities?.(signed.permissions);
 
   return {
     cid,

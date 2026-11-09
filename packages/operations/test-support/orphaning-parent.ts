@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // The intermediate parent of parent-watch.test.ts: starts the command it is
 // given, prints that child's PID and lives until the child exits. The test
 // SIGKILLs it to orphan the child. The child's stderr is this process's own,
