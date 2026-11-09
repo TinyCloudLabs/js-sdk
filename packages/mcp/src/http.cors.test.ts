@@ -33,7 +33,7 @@ test("a call from any Origin without a token is a 401 bearer challenge, never a 
     expect(challenge).toMatch(/^Bearer /);
     expect(challenge).toContain('resource_metadata="https://mcp.test/.well-known/oauth-protected-resource/mcp"');
     expectNoCredentialedCors(response);
-    expect(response.headers.get("access-control-expose-headers")?.toLowerCase()).toBe("www-authenticate");
+    expect(exposedHeaders(response)).toContain("www-authenticate");
   }
 });
 
@@ -93,6 +93,41 @@ test("a preflight from any Origin is answered without a token, allows a fixed he
       "mcp-method", "mcp-name", "mcp-protocol-version", "mcp-session-id",
     ]);
     expectNoCredentialedCors(response);
+  }
+});
+
+test("a browser client can read the session and protocol-version headers, on the preflight and on real responses", async () => {
+  const { app, signToken } = await hostedApp();
+  const token = await signToken();
+  const wanted = ["mcp-protocol-version", "mcp-session-id", "www-authenticate"];
+  const preflight = await app.fetch(mcpRequest({
+    method: "OPTIONS",
+    origin: "https://claude.ai",
+    headers: { "access-control-request-method": "POST", "access-control-request-headers": "authorization, content-type, mcp-session-id" },
+  }));
+  expect(exposedHeaders(preflight)).toEqual(wanted);
+
+  const initialize = await app.fetch(new Request("https://mcp.test/mcp", {
+    method: "POST",
+    headers: {
+      host: "mcp.test",
+      origin: "https://claude.ai",
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "browser-test", version: "1.0.0" } },
+    }),
+  }));
+  expect(initialize.status).toBe(200);
+  expect(exposedHeaders(initialize)).toEqual(wanted);
+  // Whatever MCP header the server sets on this response must be one a script is allowed to read.
+  for (const name of initialize.headers.keys()) {
+    if (name.startsWith("mcp-")) expect(exposedHeaders(initialize)).toContain(name);
   }
 });
 
@@ -207,4 +242,8 @@ async function serveJwks(jwk: object): Promise<string> {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("JWKS server did not start.");
   return `http://127.0.0.1:${address.port}/jwks`;
+}
+
+function exposedHeaders(response: Response): string[] {
+  return (response.headers.get("access-control-expose-headers") ?? "").split(",").map((name) => name.trim().toLowerCase()).sort();
 }
