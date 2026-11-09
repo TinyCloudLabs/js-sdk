@@ -31952,7 +31952,9 @@ function createShareAuthorityAdapters(input = {}) {
         issuerDid: node.credentialHolderDid,
         nodeAudience: activeNode.nodeDid,
         reason: "share revoked",
-        sign: (digest) => node.signSessionBytes(digest)
+        sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport
       });
     } catch (error) {
       if (!(error instanceof Error && "status" in error && error.status === 409 && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
