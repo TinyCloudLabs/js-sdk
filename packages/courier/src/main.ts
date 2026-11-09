@@ -1,4 +1,5 @@
 import { parseArgs, type ParsedArgs } from './args.js';
+import { assertKnownFlags } from './flags.js';
 import { pendingNextLine } from './next-line.js';
 import { CourierError, CourierPending, EXIT_PENDING, errInfo } from './errors.js';
 import {
@@ -170,6 +171,7 @@ export async function run(argv: string[]): Promise<void> {
 
   // Strip the command word so commands see their own positionals.
   const sub: ParsedArgs = { ...args, positional: args.positional.slice(1) };
+  assertKnownFlags(command, sub);
 
   switch (command) {
     case 'init': return cmdInit(sub);
