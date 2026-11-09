@@ -9,11 +9,12 @@ import { chmod, link, open, readFile, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
-import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
+import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
 import { writeJsonAtomic } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   ArtifactError,
   artifactVersionFilePath,
@@ -26,7 +27,7 @@ import {
 import {
   createNativeShare,
   parseNativeShareUrl,
-  SHARE_PUBLISH_RESULT_VERSION,
+  ShareReceiveError,
   prepareAddressedShare,
   type PreparedAddressedShare,
   publishAddressedShare,
@@ -64,6 +65,7 @@ import {
   type AddressedSharePublishOptions,
   type SharePolicyRootRevocation,
 } from "@tinycloud/share-sdk";
+
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | "tinycloud.kv/list" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
@@ -537,8 +539,8 @@ export function createShareAuthorityAdapters(input: {
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
   /** The CLI revokes every root; it never leaves one live. */
   readonly revokePolicyRoot?: (request: SharePolicyRootRevocation) => Promise<void>;
-  /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
-  readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
+  /** Receive-only sharing service for an in-process deployment or tests. */
+  readonly nativeSharing?: () => TinyCloudNode["sharing"];
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -1133,12 +1135,52 @@ export function createShareAuthorityAdapters(input: {
     revokePolicyRoot: revokeRoot,
   };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
-    const { TinyCloudNode } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host: string | undefined) => new TinyCloudNode({ ...(host === undefined ? {} : { host }), autoDiscoverLocalNode: false }).sharing);
     const token = parseNativeShareUrl(link);
-    const decoded = sharing(undefined).decodeLink(token) as { readonly host?: unknown };
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    let sharing: TinyCloudNode["sharing"];
+    if (input.nativeSharing !== undefined) {
+      sharing = input.nativeSharing();
+    } else {
+      const profile = await profileName();
+      let receiveOrigin = DEFAULT_HOST;
+      try {
+        receiveOrigin = canonicalOrigin((await ProfileManager.getProfile(profile)).host, "profile node origin");
+      } catch (error) {
+        if (!(error instanceof CLIError && error.code === "PROFILE_NOT_FOUND")) throw error;
+      }
+      const originMismatchMessage = `This link is for a storage server your profile doesn't use. If you trust it, create a profile for it with \`${CLI_NAME} profile create <name> --host <server-url>\`, then run \`${CLI_NAME} --profile <name> share receive <link>\`.`;
+      // Keep the Node SDK/WASM lazy; public-share inspection and non-native receive do not need it.
+      const {
+        CapabilityKeyRegistry,
+        KVService,
+        NodeWasmBindings,
+        ServiceContext,
+        SharingService,
+        WasmKeyProvider,
+      } = await import("@tinycloud/node-sdk");
+      const wasm = new NodeWasmBindings();
+      const sessionManager = wasm.createSessionManager();
+      const receiveFetch: typeof globalThis.fetch = (request, init) => {
+        const url = request instanceof Request ? request.url : request.toString();
+        if (new URL(url).origin !== receiveOrigin) throw new ShareReceiveError("origin-mismatch", originMismatchMessage);
+        return fetchFn(request, { ...init, redirect: "error" });
+      };
+      sharing = new SharingService({
+        hosts: [receiveOrigin],
+        invoke: wasm.invoke,
+        fetch: receiveFetch,
+        keyProvider: new WasmKeyProvider({ sessionManager }),
+        registry: new CapabilityKeyRegistry(),
+        createKVService: ({ hosts, session, invoke, pathPrefix }) => {
+          if (hosts.length !== 1 || hosts[0] !== receiveOrigin) {
+            throw new ShareReceiveError("origin-mismatch", originMismatchMessage);
+          }
+          const kv = new KVService({ prefix: pathPrefix?.replace(/\/$/, "") });
+          kv.initialize(new ServiceContext({ hosts, session, invoke, fetch: receiveFetch }));
+          return kv;
+        },
+      });
+    }
+    const received = await sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get<Uint8Array>("", { binary: true }) : undefined;
     // The owner Node answers a revoked link's read with `401 - delegation-revoked: <cid>`.
     const failure = !received.ok ? received.error : value !== undefined && !value.ok ? value.error : undefined;
