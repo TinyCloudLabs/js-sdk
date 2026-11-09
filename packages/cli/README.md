@@ -79,6 +79,29 @@ With no saved storage settings, an unreachable registry refuses secrets routing 
 
 Details: TC-2481
 
+## Publish storage settings explicitly
+
+Sign-in does not publish a signed v2 storage-settings record. A newly signed-in account with no registry entry has no verified settings to reuse during an outage. To opt in, use a profile signed in with `--method local` and explicitly list the spaces and server:
+
+```bash
+tinycloud --profile owner registry publish default secrets --server https://your-storage-server.example
+tinycloud --profile owner --json registry publish applications --server https://your-storage-server.example --yes
+tinycloud --profile owner registry show
+```
+
+The preview lists the complete resulting account, server identities, spaces and decryption service, including existing entries that will be kept. A `*` marks an added or changed space. Existing memberships and the decryption service are preserved unless explicitly changed; `--read-only` selects read-only membership for the named server, and `--decryption-server <url>` explicitly selects the decryption service.
+
+**Published settings are public:** anyone who knows the account ID can look up its servers and plaintext space names. Review the preview before approving. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
+
+A space absent from a registered account's published settings refuses instead of falling back to another server. Include every space this account needs; existing published spaces not named in this command remain intact. Publication does not create a space, host data, grant permission, or move existing data.
+
+The command checks both public server identity surfaces, merges only the selected memberships, signs with the account's own key, and advances the existing sequence. An agent/session key cannot substitute for the owner's key. Malformed/absent known records, rollback, invalid signatures and conflicting updates refuse without an automatic write retry. After a conflict, run the command again without `--yes` to review fresh settings; `registry show` only reads the saved local copy.
+
+After a successful verified publication the CLI saves its signed copy for offline inspection and the bounded outage policy above. If remote publication succeeds but local persistence fails, the error explicitly says the settings were published; it does not pretend that no remote change occurred. The SDK's `publishLocationRecordV2` returns the verified record and leaves persistence to its caller. Its `onPrepared` callback receives the complete proposed payload and current verified record before signing; returning false cancels without a write.
+
+Details: TC-2657
+
+
 ## Quick Start
 
 ```bash

@@ -1111,6 +1111,8 @@ export {
   verifyLocationRecordV2,
 } from "./location";
 export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
+export { publishLocationRecordV2, type PublishLocationRecordV2Options } from "./registry-publication";
+export { boundedResponseBytes } from "./location";
 export { resolveRegistryResource } from "./registry-policy";
 
 export {
