@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Command } from "commander";
-import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { TinyCloudNode } from "../../../operations/test-support/auth-runtime.ts";
 import { invokeOperation } from "@tinycloud/operations";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 
