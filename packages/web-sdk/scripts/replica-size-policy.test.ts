@@ -2940,8 +2940,6 @@ delete tc2043Ledger.tc2242PathBoundShares;
 delete tc2043Ledger.tc2276SignedExpiry;
 delete tc2043Ledger.tc2276TechnicalLimits;
 delete tc2043Ledger.tc2418AbortListenerCleanup;
-delete tc2043Ledger.tc2691HostExpiryWorker;
-delete tc2043Ledger.tc2691HostExpiryReplicaWorker;
 delete tc2043Ledger.tc2691HostExpiry;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
@@ -4486,38 +4484,33 @@ describe("TC-858 squash-proof ancestry pins", () => {
 
 describe("host SIWE expiry (TC-2691) exact stable-line admissions", () => {
   const before = copy(current);
-  delete before.tc2691HostExpiryWorker;
-  delete before.tc2691HostExpiryReplicaWorker;
   delete before.tc2691HostExpiry;
 
-  it("admits exactly the approved ESM root and carries the CJS ceiling unchanged", () => {
+  it("admits exactly the approved CI root bytes with zero headroom in either format", () => {
     validateLedger(current);
-    expect(rootCeilingFor(current, "index.mjs").ceiling).toBe(1479048);
-    expect(1479049 > rootCeilingFor(current, "index.mjs").ceiling).toBe(true);
-    expect(rootCeilingFor(current, "index.cjs").ceiling).toBe(1421238);
-    expect(current.tc2691HostExpiry!.root.delta["index.cjs"]).toBe(0);
+    expect(rootCeilingFor(current, "index.mjs").ceiling).toBe(1479183);
+    expect(1479184 > rootCeilingFor(current, "index.mjs").ceiling).toBe(true);
+    expect(rootCeilingFor(current, "index.cjs").ceiling).toBe(1421693);
+    expect(1421694 > rootCeilingFor(current, "index.cjs").ceiling).toBe(true);
+    expect(current.tc2691HostExpiry!.root.delta).toEqual({ "index.mjs": 468, "index.cjs": 455 });
+    expect(current.tc2691HostExpiry!.canonicalCI.jobs).toEqual(["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870/job/129622759743"]);
     expect(current.tc2691HostExpiry!.reason).toContain("1478751 vs 1478715");
   });
 
-  it("admits only the exact worker bytes and refuses the next byte", () => {
-    expect(MAX_WORKER_GZIP_BYTES).toBe(776636);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(770515);
-    expect(776637 > current.tc2691HostExpiryWorker!.worker.ceiling).toBe(true);
-    expect(770516 > current.tc2691HostExpiryReplicaWorker!.replicaWorker.ceiling).toBe(true);
+  it("retains the original worker ceilings without a hosting allowance", () => {
+    expect(MAX_WORKER_GZIP_BYTES).toBe(776561);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(770494);
   });
 
-  for (const key of ["tc2691HostExpiryWorker", "tc2691HostExpiryReplicaWorker", "tc2691HostExpiry"] as const) {
+  for (const key of ["tc2691HostExpiry"] as const) {
     it(`${key} rejects changed provenance, extra buckets, another byte and a missing predecessor`, () => {
       const mutations = [
         (row: NonNullable<Ledger[typeof key]>) => { row.base = "0".repeat(40); },
         (row: NonNullable<Ledger[typeof key]>) => { row.sourceCommits[0] = "0".repeat(40); },
         (row: NonNullable<Ledger[typeof key]>) => { row.canonicalCI.run = "unreviewed"; },
         (row: NonNullable<Ledger[typeof key]>) => { Object.assign(row, { firstImport: { ceiling: 1 } }); },
-        (row: NonNullable<Ledger[typeof key]>) => {
-          if ("worker" in row) row.worker.ceiling++;
-          else if ("replicaWorker" in row) row.replicaWorker.ceiling++;
-          else row.root.ceiling["index.mjs"]++;
-        },
+        (row: NonNullable<Ledger[typeof key]>) => { row.root.ceiling["index.mjs"]++; },
+        (row: NonNullable<Ledger[typeof key]>) => { row.root.ceiling["index.cjs"]++; },
       ];
       for (const mutate of mutations) {
         const changed = copy(current);
