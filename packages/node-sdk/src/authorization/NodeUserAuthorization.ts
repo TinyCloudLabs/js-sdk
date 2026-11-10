@@ -62,6 +62,7 @@ import {
   CAPABILITIES,
   HOOKS,
   ENCRYPTION,
+  publicJwk,
   type CapabilityPresentationEnvelopeV1,
 } from "@tinycloud/sdk-core";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
@@ -71,6 +72,7 @@ import type { ReplicationOptions } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
 import { refuseCaveated } from "./caveatRefusal";
+import { withHostExpiry } from "./hostSiwe";
 import {
   SignStrategy,
   SignRequest,
@@ -1327,14 +1329,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const peerId = await fetchPeerId(host, spaceId, signal);
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage({
+    const now = new Date();
+    const hostSiwe = this.wasm.generateHostSIWEMessage({
       address: this._address,
       chainId: this._chainId,
       domain: this.domain,
-      issuedAt: new Date().toISOString(),
+      issuedAt: now.toISOString(),
       spaceId,
       peerId,
     });
+    const siwe = withHostExpiry(hostSiwe, now, EXPIRY.HOSTING_YEARS, this.siweConfig?.expirationTime);
 
     if (signal?.aborted) throw signal.reason;
     const signing = this.signMessage(siwe, purpose);
@@ -2209,9 +2213,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const presentation = this.buildPresentationEnvelope(options?.reason);
 
     // 3. Delegate signing to OpenKey via the caller-supplied bridge.
-    //    We forward the JWK so the OpenKey server can regenerate a
-    //    narrowed SIWE bound to the same session key when the user
-    //    edits the review — and never a caller-echoed JWK.
+    //    We forward the PUBLIC session key so the OpenKey server can
+    //    regenerate a narrowed SIWE bound to the same session key when the
+    //    user edits the review. The private key never leaves this process.
     //
     //    We forward the TinyCloud host so the widget can bind it into
     //    its authorization context (Sol MAJOR-2). Falls back to the
@@ -2224,7 +2228,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const originalRequest: OpenKeyAuthorizeInput = {
       protocolVersion: 1,
       siwe: prepared.siwe,
-      jwk,
+      jwk: publicJwk(jwk),
       verificationMethod: prepared.verificationMethod,
       host: hostHint,
       keyId: options?.openkeyKeyId,

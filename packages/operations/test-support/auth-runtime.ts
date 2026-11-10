@@ -6,6 +6,9 @@ import {
 } from "../src/state.js";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
+// Export the dependency instance used by operations so conformance spies target
+// the same Node SDK module as the runtime under test.
+export { TinyCloudNode } from "@tinycloud/node-sdk";
 export interface StoredRuntimeDelegation {
   readonly cid: string;
   readonly spaceId: string;

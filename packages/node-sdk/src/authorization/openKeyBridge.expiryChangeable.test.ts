@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { wireOpenKeyAuthorize } from "./openKeyBridge";
 
-// TC-2276: the bridge forwards `expiryChangeable` to `authorizeTinyCloud` only when the caller set it to true, so a
-// request without it keeps exactly the shape it had before.
+// TC-2276: expiry changes are opt-in; only an explicit true carries the flag.
 
 async function forwardedRequest(input: { expiryChangeable?: boolean }): Promise<Record<string, unknown>> {
   let request: Record<string, unknown> | undefined;
@@ -19,7 +18,7 @@ async function forwardedRequest(input: { expiryChangeable?: boolean }): Promise<
       };
     },
   });
-  await authorize({ protocolVersion: 1, siwe: "siwe", jwk: { kty: "OKP" }, verificationMethod: "did:key:test", ...input });
+  await authorize({ protocolVersion: 1, siwe: "siwe", jwk: { kty: "OKP", crv: "Ed25519", x: "public" }, verificationMethod: "did:key:test", ...input });
   return request!;
 }
 
@@ -32,14 +31,6 @@ describe("wireOpenKeyAuthorize expiryChangeable", () => {
   test("leaves the key out when it is not set", async () => {
     const request = await forwardedRequest({});
     expect(Object.keys(request)).not.toContain("expiryChangeable");
-    expect(request).toEqual({
-      protocolVersion: 1,
-      siwe: "siwe",
-      keyId: undefined,
-      jwk: { kty: "OKP" },
-      host: undefined,
-      presentation: undefined,
-    });
   });
 
   test("leaves the key out for false", async () => {

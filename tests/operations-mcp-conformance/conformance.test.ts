@@ -2,7 +2,6 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { invokeOperation } from "@tinycloud/operations";
 import { secretCapabilityAction } from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
@@ -12,6 +11,7 @@ import { canonicalMcpAdapterResult } from "../../packages/mcp/src/results.ts";
 import {
   createAuthRuntimeFixture,
   persistRuntimeDelegations,
+  TinyCloudNode,
   type AuthRuntimeFixture,
 } from "../../packages/operations/test-support/auth-runtime.ts";
 import {

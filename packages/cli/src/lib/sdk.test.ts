@@ -61,6 +61,14 @@ mock.module("@tinycloud/node-sdk", () => ({
       restoreCalls.push({ jwk: args.jwk });
     }
   },
+  REPLICA_LOGOUT_PENDING_FILE: "replica-logout-pending.json",
+  createProfileReplicaPurge() {
+    throw new Error("replica purge is not used in these non-replication SDK tests");
+  },
+  logoutPrincipalDigest() {
+    throw new Error("logout principal hashing is not used in these non-replication SDK tests");
+  },
+  RESTORED_GATE_MESSAGE: "replication restore is not used in these non-replication SDK tests",
   sqliteReplicaStorage() {
     throw new Error("replication storage is not used in these non-replication SDK tests");
   },

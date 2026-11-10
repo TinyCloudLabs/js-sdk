@@ -126,6 +126,8 @@ export {
   type PkhDidParts,
 } from "./identity";
 
+export { publicJwk } from "./jwk";
+
 export {
   HOLDER_KEY_BINDING_PRESENTATION_SCHEMA,
   LISTEN_SQL_STATEMENT_CATALOG,

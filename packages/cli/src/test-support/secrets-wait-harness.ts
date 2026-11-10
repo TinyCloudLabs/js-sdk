@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { NodeWasmBindings } from "@tinycloud/node-sdk";
 import {
-  additionalDelegationsPath,
   profileConfigPath,
   profilePath,
-  sessionPath,
+  updateProfileStore,
   withTinyCloudStateRoot,
   writeJsonAtomic,
+  writeSession,
 } from "@tinycloud/operations/state";
 
 /** `bin/tc`; spawned tests need a fresh `bun run --cwd packages/cli build`. */
@@ -109,20 +109,25 @@ export async function writeDelegateProfile(
       operatorType: "agent",
       authMethod: "openkey",
     });
-    if (options.session !== false) await writeJsonAtomic(sessionPath(name), session);
+    if (options.session !== false) await writeSession(name, session);
     if (options.grant !== undefined) {
-      await writeJsonAtomic(additionalDelegationsPath(name), [{
-        delegation: options.grant,
-        permissions: [],
-        authorityRequest: { requestId: "req_fixture_plan", requested: hermetic.permissions },
-      }]);
+      await updateProfileStore(name, "additional-delegations", () => ({
+        records: [{
+          delegation: options.grant,
+          permissions: [],
+          authorityRequest: { requestId: "req_fixture_plan", requested: hermetic.permissions },
+        }],
+        result: undefined,
+      }));
     }
   });
 }
 
 /** Write raw stored-grant records (e.g. an unbound compact record that needs the migration). */
 export async function writeStoredGrants(home: string, name: string, records: readonly unknown[]): Promise<void> {
-  await withTinyCloudStateRoot(home, () => writeJsonAtomic(additionalDelegationsPath(name), records));
+  await withTinyCloudStateRoot(home, () =>
+    updateProfileStore(name, "additional-delegations", () => ({ records, result: undefined }))
+  );
 }
 
 /** An owner-openkey profile holding the owner's stored session; `grant` is stored as a cli-grant. */
@@ -146,14 +151,17 @@ export async function writeOwnerOpenKeyProfile(
       operatorType: "human",
       authMethod: "openkey",
     });
-    if (options.session !== false) await writeJsonAtomic(sessionPath(name), session);
+    if (options.session !== false) await writeSession(name, session);
     if (options.grant !== undefined) {
-      await writeJsonAtomic(additionalDelegationsPath(name), [{
-        delegation: options.grant,
-        permissions: [],
-        authorityRequest: { requestId: "req_cli_grant", requested: hermetic.permissions },
-        authorityRequestAudit: { source: "cli-grant", recordedAt: "2026-07-15T00:00:00.000Z", note: "fixture" },
-      }]);
+      await updateProfileStore(name, "additional-delegations", () => ({
+        records: [{
+          delegation: options.grant,
+          permissions: [],
+          authorityRequest: { requestId: "req_cli_grant", requested: hermetic.permissions },
+          authorityRequestAudit: { source: "cli-grant", recordedAt: "2026-07-15T00:00:00.000Z", note: "fixture" },
+        }],
+        result: undefined,
+      }));
     }
   });
 }
@@ -190,7 +198,7 @@ export async function writeCompactSessionProfileWithoutOwner(
       authMethod: "openkey",
     });
     await writeJsonAtomic(join(profilePath(name), "key.json"), jwk);
-    await writeJsonAtomic(sessionPath(name), {
+    await writeSession(name, {
       delegationHeader: imported.delegation.delegationHeader,
       delegationCid: imported.delegation.cid,
       spaceId: imported.spaceId,
@@ -223,7 +231,7 @@ export async function writeLocalOwnerProfile(
       privateKey: hermetic.ownerPrivateKey,
       address: session.address,
     });
-    if (options.session === true) await writeJsonAtomic(sessionPath(name), session);
+    if (options.session === true) await writeSession(name, session);
   });
 }
 

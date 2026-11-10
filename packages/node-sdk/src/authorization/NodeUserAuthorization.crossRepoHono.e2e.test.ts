@@ -60,6 +60,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
@@ -368,7 +369,7 @@ suite(
     const prepRes = await harnessPost("/api/delegate/authorize-sign-prepare", {
       keyId,
       siwe: preparation.prepared.siwe,
-      jwk: preparation.prepared.jwk,
+      jwk: publicJwk(preparation.prepared.jwk),
       host,
     });
     expect(prepRes.status).toBe(200);
@@ -438,7 +439,7 @@ suite(
     const prepRes = await harnessPost("/api/delegate/authorize-sign-prepare", {
       keyId,
       siwe: preparation.prepared.siwe,
-      jwk: preparation.prepared.jwk,
+      jwk: publicJwk(preparation.prepared.jwk),
       host,
     });
     expect(prepRes.status).toBe(200);
