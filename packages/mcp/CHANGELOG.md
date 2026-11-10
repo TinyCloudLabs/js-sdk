@@ -5,6 +5,7 @@
 ### Patch Changes
 
 - Updated dependencies
+  - @tinycloud/node-sdk@3.11.2
   - @tinycloud/operations@0.8.1
 
 ## 0.9.0
