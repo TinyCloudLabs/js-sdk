@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Command } from "commander";
@@ -42,6 +42,7 @@ async function recordPrivateDiagnostic(): Promise<void> {
 describe("tinycloud bug-report --attach", () => {
   test("a declined confirmation sends no request and does not expose local secrets", async () => {
     await recordPrivateDiagnostic();
+    delete process.env.TINYCLOUD_BUG_ATTACH_TOKEN;
     const stored = await readFile(diagnosticLogPath(root), "utf8");
     expect(stored).not.toContain("sam@example.com");
     expect(stored).not.toContain("did:key:z6Mkabc123");
@@ -68,17 +69,20 @@ describe("tinycloud bug-report --attach", () => {
       server.stop(true);
     }
   });
-  test("the owner can view the redacted CLI log before declining", async () => {
+  test("the redacted CLI log is emitted before the send question", async () => {
     const shown: string[] = [];
-    const answers = ["v", "n"];
-    let prompts = 0;
+    let shownWhenAsked = "";
     const accepted = await confirmUpload("Report summary", "safe CLI log line", REPORT_ID, {
       write: (text) => shown.push(text),
-      question: async () => { prompts += 1; return answers.shift() ?? ""; },
+      question: async () => {
+        shownWhenAsked = shown.join("");
+        return "n";
+      },
     });
     expect(accepted).toBe(false);
-    expect(prompts).toBe(2);
-    expect(shown.join("")).toContain("safe CLI log line");
+    expect(shownWhenAsked).toContain("safe CLI log line");
+    expect(shownWhenAsked).toContain("Report summary");
+    expect(shown.join("").indexOf("safe CLI log line")).toBeLessThan(shown.join("").indexOf("Report summary"));
   });
   test("summary includes the correct line and redaction counts", async () => {
     await appendDiagnosticLog({
@@ -178,6 +182,7 @@ describe("tinycloud bug-report --attach", () => {
     expect(help).toContain("--attach <report-id>");
     expect(help).toContain("--token-stdin");
     expect(help).toContain("--clear-logs");
+    expect(help).toContain("--confirm <hash>");
 
     const globalHelp = spawnSync(process.execPath, ["run", entry, "--help"], options);
     expect(globalHelp.status).toBe(0);
@@ -188,11 +193,13 @@ describe("tinycloud bug-report --attach", () => {
     [null, "BUG_REPORT_TOKEN_MISSING"],
     ["bad", "BUG_REPORT_TOKEN_INVALID"],
   ] as const)("reports token input failures with the appropriate code (%s)", async (token, code) => {
+    await recordPrivateDiagnostic();
     if (token === null) delete process.env.TINYCLOUD_BUG_ATTACH_TOKEN;
     else process.env.TINYCLOUD_BUG_ATTACH_TOKEN = token;
     const program = new Command();
     registerBugReportCommand(program, {
       root,
+      confirm: async () => true,
       write: () => undefined,
       handleError: async (error: unknown): Promise<never> => { throw error; },
     });
@@ -488,5 +495,173 @@ describe("tinycloud bug-report --attach", () => {
     } finally {
       server.stop(true);
     }
+  });
+
+  test("non-interactive attach stages owner-only review without needing a token", async () => {
+    await recordPrivateDiagnostic();
+    delete process.env.TINYCLOUD_BUG_ATTACH_TOKEN;
+    let requests = 0;
+    const output: string[] = [];
+    const register = (program: Command) => registerBugReportCommand(program, {
+      root,
+      interactive: false,
+      fetchImpl: async () => { requests += 1; return Response.json({}); },
+      write: (text: string) => output.push(text),
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    const program = new Command();
+    register(program);
+    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    const tokenStdinProgram = new Command();
+    register(tokenStdinProgram);
+    await tokenStdinProgram.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--token-stdin"], { from: "node" });
+    expect(requests).toBe(0);
+    const receipt = output.join("");
+    const savedPath = / to (\S+) \(\d+ bytes/.exec(receipt)?.[1];
+    expect(savedPath).toBeDefined();
+    const hash = /[0-9a-f]{32}/.exec(receipt)?.[0];
+    const fileHash = /-([0-9a-f]{32})\.json$/.exec(savedPath!)?.[1];
+    expect(hash).toBe(fileHash);
+    const info = await stat(savedPath!);
+    expect(info.isFile()).toBe(true);
+    expect(info.mode & 0o777).toBe(0o600);
+    expect(/\((\d+) bytes,/.exec(receipt)?.[1]).toBe(String(info.size));
+    const saved = await readFile(savedPath!, "utf8");
+    const payload = JSON.parse(saved) as { type: string; content: string; name: string };
+    expect(payload).toMatchObject({ type: "cli-log", name: "tc-debug.log" });
+    expect(payload.content).not.toContain("sam@example.com");
+    expect(payload.content).not.toContain(TOKEN);
+  });
+
+  test("--confirm uploads the saved file bytes and preserves them after a failed upload", async () => {
+    await recordPrivateDiagnostic();
+    const output: string[] = [];
+    const stage = new Command();
+    registerBugReportCommand(stage, {
+      root,
+      interactive: false,
+      write: (text: string) => output.push(text),
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await stage.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    const savedPath = / to (\S+) \(\d+ bytes/.exec(output.join(""))![1]!;
+    const saved = await readFile(savedPath);
+    const hash = /^[0-9A-HJKMNP-TV-Z]{26}-([0-9a-f]{32})\.json$/.exec(savedPath.split("/").pop()!)?.[1];
+    expect(hash).toBeDefined();
+
+    const failed = new Command();
+    registerBugReportCommand(failed, {
+      root,
+      fetchImpl: async () => { throw new Error("synthetic network failure"); },
+      write: () => undefined,
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await expect(failed.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash!], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_UPLOAD_UNKNOWN" });
+    expect((await readFile(savedPath)).equals(saved)).toBe(true);
+
+    const bodies: Buffer[] = [];
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      fetchImpl: async (_url: string | URL | Request, init?: RequestInit) => {
+        bodies.push(Buffer.from(init?.body as Uint8Array));
+        return Response.json({ redactions: {} }, { status: 201 });
+      },
+      write: (text: string) => output.push(text),
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash!], { from: "node" });
+    await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash!], { from: "node" });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]!.equals(saved)).toBe(true);
+  });
+
+
+  test("--confirm refuses when the reviewed file changed, an unknown hash, or no review exists", async () => {
+    await recordPrivateDiagnostic();
+    const output: string[] = [];
+    let requests = 0;
+    const register = (program: Command) => registerBugReportCommand(program, {
+      root,
+      interactive: false,
+      fetchImpl: async () => { requests += 1; return Response.json({}); },
+      write: (text: string) => output.push(text),
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    const stage = new Command();
+    register(stage);
+    await stage.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    const savedPath = / to (\S+) \(\d+ bytes/.exec(output.join(""))![1]!;
+    const hash = /-([0-9a-f]{32})\.json$/.exec(savedPath)![1]!;
+    await writeFile(savedPath, JSON.stringify({ type: "cli-log", content: "tampered", name: "tc-debug.log" }), { mode: 0o600 });
+
+    const changed = new Command();
+    register(changed);
+    await expect(changed.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_REVIEW_CHANGED" });
+    await rm(savedPath);
+    const outsideFile = join(root, "outside-review.json");
+    await writeFile(outsideFile, "synthetic reviewed content");
+    await symlink(outsideFile, savedPath);
+    const symlinkReview = new Command();
+    register(symlinkReview);
+    await expect(symlinkReview.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_REVIEW_MISSING" });
+    expect(requests).toBe(0);
+
+    const unknown = new Command();
+    register(unknown);
+    await expect(unknown.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", "f".repeat(32)], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_REVIEW_MISSING" });
+
+    const otherReport = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    const wrongReport = new Command();
+    register(wrongReport);
+    await expect(wrongReport.parseAsync(["node", "tinycloud", "bug-report", "--attach", otherReport, "--confirm", hash], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_REVIEW_MISSING" });
+
+    const emptyRoot = await mkdtemp(join(tmpdir(), "tc-bug-report-empty-"));
+    try {
+      const missing = new Command();
+      registerBugReportCommand(missing, {
+        root: emptyRoot,
+        write: () => undefined,
+        handleError: async (error: unknown): Promise<never> => { throw error; },
+      });
+      await expect(missing.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID, "--confirm", hash], { from: "node" }))
+        .rejects.toMatchObject({ code: "BUG_REPORT_REVIEW_MISSING" });
+    } finally {
+      await rm(emptyRoot, { recursive: true, force: true });
+    }
+    expect(requests).toBe(0);
+  });
+
+  test("a storage failure while saving the reviewed log sends nothing and reports it", async () => {
+    await recordPrivateDiagnostic();
+    await writeFile(join(root, "bug-report-reviews"), "occupied");
+    let requests = 0;
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      interactive: false,
+      fetchImpl: async () => { requests += 1; return Response.json({}); },
+      write: () => undefined,
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await expect(program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_REVIEW_SAVE_FAILED" });
+    expect(requests).toBe(0);
+  });
+
+  test("--confirm without --attach refuses with the usage error", async () => {
+    const program = new Command();
+    registerBugReportCommand(program, {
+      root,
+      write: () => undefined,
+      handleError: async (error: unknown): Promise<never> => { throw error; },
+    });
+    await expect(program.parseAsync(["node", "tinycloud", "bug-report", "--confirm", "0".repeat(32)], { from: "node" }))
+      .rejects.toMatchObject({ code: "BUG_REPORT_USAGE" });
   });
 });
