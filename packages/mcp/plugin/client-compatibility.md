@@ -58,7 +58,7 @@ these clients was signed in or exercised by this draft's checks.
 | Client | Custom/local connection requirements | Official distribution or remaining work |
 | --- | --- | --- |
 | ChatGPT | Custom remote `/mcp`, OAuth discovery, resource-bound authorization code + S256; [OpenAI authentication contract](https://developers.openai.com/plugins/build/auth). | Stage only the restricted `/chatgpt/mcp` package. [Submission](https://developers.openai.com/plugins/deploy/submission) requires domain verification, authenticated hosted-tool scan, populated dedicated review account, five positive and three negative cases, and walkthrough. [Annotations](https://developers.openai.com/plugins/plugin-guidelines) already have a source implementation; portal acceptance is unverified. |
-| Claude | Public HTTPS remote MCP, OAuth, titles and effect annotations; [custom connection](https://support.claude.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp). The [auth contract](https://claude.com/docs/connectors/building/authentication) requires a 401 challenge, exact resource path, primary issuer first, S256, form-urlencoded token exchange and public-client refresh rotation; Claude appends `offline_access` when authorization metadata advertises it. Discovery is observed; exchange/rotation are untested here. | [Directory submission](https://claude.com/docs/connectors/building/submission) additionally needs listing/privacy/support material, populated reviewer account and real tool checks. Directory policy review below remains unresolved; custom compatibility is not directory approval. Claude Code is the CLI-capable route, not the Claude app connector. |
+| Claude | Public HTTPS remote MCP, OAuth, titles and effect annotations; [custom connection](https://support.claude.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp). The [auth contract](https://claude.com/docs/connectors/building/authentication) requires a 401 challenge, exact resource path, primary issuer first, S256, form-urlencoded token exchange and public-client refresh rotation; Claude appends `offline_access` when authorization metadata advertises it. Discovery is observed; exchange/rotation are untested here. | [Directory submission](https://claude.com/docs/connectors/building/submission) additionally needs listing/privacy/support material, populated reviewer account and real tool checks. Custom compatibility is not directory approval. Claude Code is the CLI-capable route, not the Claude app connector. |
 | Cursor | [MCP contract](https://cursor.com/docs/mcp): Streamable HTTP URL, PKCE, RFC 9728 discovery, RFC 8707 resource, public DCR without a secret. Refresh requires a returned refresh token; `offline_access` can be necessary. CLI-capable Cursor may use TinyCloud CLI instead. | Custom `mcp.json` is not a Cursor Marketplace listing. No marketplace entry, client registration or authenticated check is supplied here. |
 | Gemini | [Custom app](https://support.google.com/gemini/answer/17209137) adds an MCP URL; DCR avoids manually supplied OAuth credentials. Its account/region restrictions are client-side availability, not server-protocol failures. | [Google Connected Apps](https://developers.google.com/connected-apps/gpc/perform-the-steps) uses user-delegated authorization code, CIMD-first/DCR fallback, app-specific callbacks, domain verification, authenticated tool sync and a seeded review account with 2FA disabled. No console access or challenge token is available in this draft. |
 | Grok | [Custom MCP connector](https://docs.x.ai/grok/connectors) accepts a public server URL and required authentication, then discovers tools. Business/Enterprise provisioning is admin-controlled. | Built-in connectors and the connector catalog are different routes; custom MCP support is not TinyCloud catalog inclusion. No Grok login or official catalog submission was performed. |
@@ -78,57 +78,14 @@ private `/mcp` service still offers its broader authorized tool set. This
 existing isolation is not a claim that either surface passed directory review.
 No tool was removed or relabeled by this draft.
 
-## Review-sensitive requirements, not speculative auth changes
+Directory submissions have extra reviewer-account, domain-verification and policy requirements; they are tracked internally in TC-1360.
 
-- **Reviewer access is not ready:** OpenAI's [submission requirements](https://developers.openai.com/plugins/deploy/submission)
-  require immediate access without MFA approval, email/SMS codes, magic links or
-  private networking; its [guidelines](https://developers.openai.com/plugins/plugin-guidelines)
-  additionally request a login and password for a populated review account.
-  The source assessment at pinned OpenKey commit
-  [`cc5d159dc9903085f6c20d4c1c700eee4d7f79ed`](https://github.com/TinyCloudLabs/openkey/blob/cc5d159dc9903085f6c20d4c1c700eee4d7f79ed/apps/api/src/auth.ts#L264-L267)
-  found passwords disabled, with [primary passkey and email-OTP methods](https://github.com/TinyCloudLabs/openkey/blob/cc5d159dc9903085f6c20d4c1c700eee4d7f79ed/apps/api/src/auth.ts#L317-L368).
-  Email OTP conflicts with OpenAI's explicit no-email-code rule; a primary
-  passkey avoids that ceremony but is not a verified store-accepted remote
-  reviewer credential. No ready, zero-change reviewer path is established.
-- **Keep store rules distinct:** Google's [review-account requirement](https://developers.google.com/connected-apps/gpc/perform-the-steps)
-  specifies seeded credentials with 2FA disabled; it does not establish
-  OpenAI's blanket prohibition on primary email OTP or passkeys. Google's
-  acceptance of either remains unverified. Claude requires a standard populated
-  test account. Source-supported authentication is not deployed configuration
-  or store acceptance.
-- **Approval before action:** Sam must authorize external store contact before
-  requesting an exception or an approved passwordless review procedure. Possible
-  paths are an accepted seeded passwordless account, an accepted ordinary
-  user-authorized OAuth review connection, or reviewer-held passkey enrollment
-  with agreed custody/logistics. Each remains unverified. An isolated
-  production-equivalent review account/deployment improves data isolation but
-  does not solve login or establish store acceptance. If existing methods cannot
-  be accepted, any auth-sensitive change requires separate explicit approval and
-  Bobbie review, not a review-only bypass or weaker normal sign-in. OAuth client
-  secrets, userless client-credentials tokens and preauthorized bearer handoffs
-  are not substitutes for an authenticated reviewer account. No credentials,
-  auth change, account provisioning or external contact is supplied by this draft.
 - **Domain verification:** OpenAI's `/.well-known/openai-apps-challenge` returns
   the portal's exact token as plain text. Google's
   `/.well-known/google-connected-apps` returns direct HTTP 200 JSON with a
   `verification_tokens` array. These are distinct contracts. Do not publish fake
   tokens, overwrite an existing challenge or add a placeholder verification route.
   Authorized portal-generated values and domain ownership are prerequisites.
-- **Policy:** [Anthropic Software Directory Policy](https://support.claude.com/en/articles/13145358-anthropic-software-directory-policy)
-  §1.G prohibits profile-building from conversation content or cross-session
-  behavioral changes; §2.F prohibits dynamically fetching behavioral instructions
-  for execution. Review requested personal-record storage, knowledge/rules tools
-  and persistent-context messaging against those clauses. This is an unresolved
-  policy assessment, not a compatibility fix or a finding that all record storage
-  is prohibited. OpenAI's [guidelines](https://developers.openai.com/plugins/plugin-guidelines)
-  separately restrict credentials and require purpose-limited inputs and privacy
-  disclosures; broad private `/mcp` secrets tools must not be inferred to belong
-  in an approved public listing.
-- **Existing work:** Track per-client execution in TC-1360, OpenKey CIMD in
-  TC-1649, confidential clients in TC-2165, and public ChatGPT resource/callback
-  work in TC-2107. TC-1366/TC-2170 cover existing approval-design context.
-  Their issue descriptions and historical results are not fresh live proof.
-  Keep TC-2196 and TinyChat #609 intact. No duplicate auth implementation is proposed.
 
 ## Smallest next checks
 
