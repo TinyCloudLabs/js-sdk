@@ -938,7 +938,6 @@ export {
   composeManifestRequest,
   expandActionShortNames,
   expandPermissionEntries,
-  expandRuntimePermissionEntries,
   expandDelegationPermissionEntries,
   expandPermissionEntry,
   loadManifest,

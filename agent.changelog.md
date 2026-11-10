@@ -14,6 +14,12 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   `layout` input are removed with no compatibility path. `agent.dev.md` says not to
   reintroduce them.
 
+## 2026-11-07
+
+- Share publishing no longer creates the share key: removed the runtime
+  exact Share-key consent route and share-prefix `key.create`; the node records
+  the key at policy registration.
+
 ## 2026-11-03
 
 - TC-2416: context accepts Health Log and Recipes catalog slugs, bundling

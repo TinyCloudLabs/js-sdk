@@ -191,9 +191,8 @@ const node = {
       };
     },
   },
-  // The named-key client the producer uses (TC-2242): a v2 envelope, wrapped to the share's own key.
+  // The named-key client the producer uses (TC-2242): a v2 envelope, wrapped to the share key's public key.
   keys: {
-    createKey: async (keyPath: string, options: { readonly networkId: string }) => ({ networkId: options.networkId, keyPath, state: "active", keyVersion: 1 }),
     encrypt: async (keyPath: string, _bytes: Uint8Array, options: { readonly networkId: string }) => {
       encryptions += 1;
       return {

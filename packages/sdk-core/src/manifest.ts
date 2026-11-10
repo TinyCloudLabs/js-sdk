@@ -547,10 +547,6 @@ function expandEncryptionPermissionEntry(
       normalizedActions.push("tinycloud.encryption/network.revoke");
       continue;
     }
-    if (sharePrefix && (action === "key.create" || action === "tinycloud.encryption/key.create")) {
-      normalizedActions.push("tinycloud.encryption/key.create");
-      continue;
-    }
     if (action.includes("/")) {
       throw new ManifestValidationError(
         `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`,
@@ -569,25 +565,8 @@ function expandEncryptionPermissionEntry(
       seen.add(a);
     }
   }
-  if (
-    sharePrefix &&
-    dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt" && action !== "tinycloud.encryption/key.create")
-  ) {
-    throw new ManifestValidationError("share prefix only supports decrypt and key.create");
-  }
-  // `key.create` on the share prefix lets the owner create the per-share keys, so the prefix must parse as a CANONICAL prefix resource (the
-  // owner DID in the node's canonical spelling: EIP-55 address, no `0X`, no leading-zero chain id, no extra segments), the one form the node accepts.
-  if (dedupedActions.includes("tinycloud.encryption/key.create")) {
-    let canonical = false;
-    try {
-      const parsed = parseEncryptionResource(entry.path);
-      canonical = parsed.kind === "prefix" && parsed.network === "default" && parsed.prefix === "share";
-    } catch {
-      canonical = false;
-    }
-    if (!canonical) {
-      throw new ManifestValidationError("share prefix key.create requires the canonical owner address (EIP-55 checksummed) on the default network");
-    }
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("share prefix only supports decrypt");
   }
   // Encryption resources are network-scoped, not space-scoped. We
   // always emit the synthetic "encryption" space label so manifest
@@ -615,52 +594,6 @@ export function expandPermissionEntries(
   entries: readonly PermissionEntry[],
 ): PermissionEntry[] {
   return entries.flatMap(expandPermissionEntry);
-}
-
-/**
- * Expand runtime permission requests without admitting named keys into static
- * manifests. A Share key may be created only on the authenticated owner's
- * default network, at one exact share/<id> path.
- */
-export function expandRuntimePermissionEntries(
-  entries: readonly PermissionEntry[],
-  ownerDid?: string,
-): PermissionEntry[] {
-  return entries.flatMap((entry) => {
-    // A key.create on the share PREFIX is a sign-in (manifest) capability only; a runtime request names one exact key.
-    if (entry.service === ENCRYPTION_PERMISSION_SERVICE && typeof entry.path === "string" && entry.path.endsWith("/share/") &&
-      Array.isArray(entry.actions) && entry.actions.some((action) => action === "key.create" || action === "tinycloud.encryption/key.create")) {
-      throw new ManifestValidationError("runtime Share key creation requires the current owner's exact default/share/<id> key and key.create only");
-    }
-    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
-      typeof entry.path !== "string" || !entry.path.includes("/") ||
-      entry.path.endsWith("/share/")) {
-      return expandPermissionEntry(entry);
-    }
-    let resource;
-    let ownerNetwork;
-    try {
-      resource = parseEncryptionResource(entry.path);
-      if (typeof ownerDid !== "string" || ownerDid.length === 0) throw new Error("missing owner");
-      ownerNetwork = parseEncryptionResource(`urn:tinycloud:encryption:${ownerDid}:default`);
-    } catch {
-      throw new ManifestValidationError("runtime Share key creation requires a canonical current-owner key resource");
-    }
-    if (resource.kind !== "key" || resource.networkId !== ownerNetwork.networkId ||
-      !/^share\/[^/]+$/.test(resource.path) ||
-      (entry.space !== undefined && entry.space !== ENCRYPTION_MANIFEST_SPACE) ||
-      !Array.isArray(entry.actions) || entry.actions.length === 0 ||
-      entry.actions.some((action) => action !== "key.create" && action !== "tinycloud.encryption/key.create")) {
-      throw new ManifestValidationError("runtime Share key creation requires the current owner's exact default/share/<id> key and key.create only");
-    }
-    return [{
-      ...entry,
-      space: ENCRYPTION_MANIFEST_SPACE,
-      path: `${resource.networkId}/${resource.path}`,
-      actions: ["tinycloud.encryption/key.create"],
-      skipPrefix: true,
-    }];
-  });
 }
 
 /** Expand exact named-key decrypt entries for child delegations only. */
