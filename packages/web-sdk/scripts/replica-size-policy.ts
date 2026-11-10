@@ -442,6 +442,7 @@ export type Ledger = {
   tc2594ResourceTransport?: LogoutRatchet;
   tc2657RegistryPublication?: LogoutRatchet;
   tc2518KeyWrap?: LogoutRatchet;
+  tc2687PublishedSignIn?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1052,6 +1053,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2594ResourceTransport !== undefined) pins.push({ row: "tc2594ResourceTransport", pin: root.tc2594ResourceTransport.sourceCommits.at(-1)! });
   if (root.tc2657RegistryPublication !== undefined) pins.push({ row: "tc2657RegistryPublication", pin: root.tc2657RegistryPublication.sourceCommits.at(-1)! });
   if (root.tc2518KeyWrap !== undefined) pins.push({ row: "tc2518KeyWrap", pin: root.tc2518KeyWrap.sourceCommits.at(-1)! });
+  if (root.tc2687PublishedSignIn !== undefined) pins.push({ row: "tc2687PublishedSignIn", pin: root.tc2687PublishedSignIn.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1138,6 +1140,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2594ResourceTransport", root.tc2594ResourceTransport?.root.ceiling],
     ["tc2657RegistryPublication", root.tc2657RegistryPublication?.root.ceiling],
     ["tc2518KeyWrap", root.tc2518KeyWrap?.root.ceiling],
+    ["tc2687PublishedSignIn", root.tc2687PublishedSignIn?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2927,6 +2930,23 @@ export const approvedTc2518KeyWrap: LogoutRatchet = {
   reason: "TC-2518: key wrap v2 envelope + reader policy pulls @noble/ciphers AES-GCM/GHASH and @noble/hashes HKDF plus the v2 codec through the sdk-services root/encryption entries (new Noble modules: 61,205 B before tree-shaking/minification; X25519/SHA-256 were already reached). Local master-to-candidate gzip +19,222 B ESM / +12,957 B CJS; these exact ceilings are +19,101 / +12,982 above TC-2657. No other bucket or historical row changes.",
 };
 
+/** Naomi, TC-2687: admit only the measured shared sign-in scope guards. */
+export const approvedTc2687PublishedSignIn: LogoutRatchet = {
+  label: "TC-2687 published sign-in scope guards, root admission (PR #910)",
+  ruling: "Naomi, TC-2687, 2026-11-10: exact root-only ratchet above tc2518KeyWrap, zero headroom. SQLite and PostgreSQL in run 42731390477 at 5f271e52ab9a90abc239c7d13e7e91891f6b6928 agree on 1514830 / 1450177 B. Bun 1.3.14; rustc 1.99.0. Final pinned CI must confirm the integrated candidate. No other cap, owned-budget entry or cumulative allowance change.",
+  base: "bc53babbc99eb6b644bf3c79622cee421fbcb874",
+  sourceCommits: ["5f271e52ab9a90abc239c7d13e7e91891f6b6928"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42731390477",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42731390477/job/129550021993",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42731390477/job/129550022168",
+    ],
+  },
+  root: { delta: { "index.mjs": 162, "index.cjs": 160 }, ceiling: { "index.mjs": 1514830, "index.cjs": 1450177 } },
+  reason: "TC-2687: Node's shared registered-scope eligibility helper and optional bootstrap, secrets, account-sync and implicit encryption guards. No new imports or dependencies; only root admission changes.",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3059,6 +3079,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2594ResourceTransport: approvedTc2594ResourceTransport,
   tc2657RegistryPublication: approvedTc2657RegistryPublication,
   tc2518KeyWrap: approvedTc2518KeyWrap,
+  tc2687PublishedSignIn: approvedTc2687PublishedSignIn,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3423,6 +3444,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2518KeyWrap !== undefined &&
       (!value.tc2657RegistryPublication || JSON.stringify(value.tc2518KeyWrap) !== JSON.stringify(approvedTc2518KeyWrap))) {
     throw new Error("Only Naomi's exact TC-2518 root-only ratchet is approved.");
+  }
+  if (value.tc2687PublishedSignIn !== undefined &&
+      (!value.tc2518KeyWrap || JSON.stringify(value.tc2687PublishedSignIn) !== JSON.stringify(approvedTc2687PublishedSignIn))) {
+    throw new Error("Only Naomi's exact TC-2687 root-only ratchet is approved.");
   }
 }
 
@@ -3891,6 +3916,14 @@ export function validateTc2518KeyWrapTransition(base?: LogoutRatchet, current?: 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2518KeyWrap) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2518 root ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2687 root admission is introduced once and immutable afterwards. */
+export function validateTc2687PublishedSignInTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2687PublishedSignIn) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2687 root ratchet may be introduced once and cannot change later.");
   }
 }
 
