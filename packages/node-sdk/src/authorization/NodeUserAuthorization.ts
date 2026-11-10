@@ -72,6 +72,7 @@ import type { ReplicationOptions } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
 import { refuseCaveated } from "./caveatRefusal";
+import { withHostExpiry } from "./hostSiwe";
 import {
   SignStrategy,
   SignRequest,
@@ -1328,14 +1329,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const peerId = await fetchPeerId(host, spaceId, signal);
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage({
+    const now = new Date();
+    const hostSiwe = this.wasm.generateHostSIWEMessage({
       address: this._address,
       chainId: this._chainId,
       domain: this.domain,
-      issuedAt: new Date().toISOString(),
+      issuedAt: now.toISOString(),
       spaceId,
       peerId,
     });
+    const siwe = withHostExpiry(hostSiwe, now, EXPIRY.HOSTING_YEARS, this.siweConfig?.expirationTime);
 
     if (signal?.aborted) throw signal.reason;
     const signing = this.signMessage(siwe, purpose);

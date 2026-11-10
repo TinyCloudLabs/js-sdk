@@ -1,3 +1,4 @@
+import { HOST_SIWE } from "./test-support/host-siwe";
 /**
  * The space-creation guard at TinyCloudNode's automatic hosting paths (TC-1443):
  * account bootstrap, `ensureOwnedSpaceHostedById` (sign-in's secrets space,
@@ -68,7 +69,7 @@ function wasmBindings(): IWasmBindings {
     createDelegation: async () => {
       throw new Error("not used");
     },
-    generateHostSIWEMessage: () => "host siwe",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
     vault_encrypt: () => new Uint8Array(),
@@ -203,6 +204,7 @@ for (const [site, create] of sites) {
     await create(owner);
 
     expect(owner.hostDelegations.length).toBeGreaterThan(0);
+    expect(owner.signatures.some((message) => message.startsWith(`${HOST_SIWE}\nExpiration Time: `))).toBe(true);
     expect(owner.registryLookups).toEqual([]);
   });
 
@@ -213,6 +215,7 @@ for (const [site, create] of sites) {
       await create(owner);
 
       expect(owner.hostDelegations.length).toBeGreaterThan(0);
+      expect(owner.signatures.some((message) => message.startsWith(`${HOST_SIWE}\nExpiration Time: `))).toBe(true);
       restoreFetch?.();
     }
   });
@@ -228,7 +231,7 @@ for (const [site, create] of sites) {
       await expect(create(owner)).rejects.toBeInstanceOf(refusal);
 
       expect(owner.hostDelegations).toEqual([]);
-      expect(owner.signatures).toEqual([]);
+      expect(owner.signatures.some((message) => message.startsWith(HOST_SIWE))).toBe(false);
       expect(owner.registryLookups).toHaveLength(1);
       restoreFetch?.();
     }
