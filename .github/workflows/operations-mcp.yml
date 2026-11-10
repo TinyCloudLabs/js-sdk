@@ -175,6 +175,7 @@ jobs:
             [packages/cli/src/commands/agent-grant.timeout.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml; TC-2299"
             [packages/cli/src/commands/delegation-revoke-lookup.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/src/commands/share-history-revoke.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
+            [packages/cli/src/commands/share-publish-dist.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/test/replica.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/test/replication-flag.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/test/secrets-wait.e2e.test.ts]="needs a live node; run by replica-e2e.yml"

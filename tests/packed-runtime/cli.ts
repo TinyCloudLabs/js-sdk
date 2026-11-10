@@ -64,6 +64,10 @@ export async function verifyPackedCliRuntime(): Promise<void> {
       expect(built).not.toContain("Dynamic require");
       expect(built).not.toContain("__require2");
       expect(legacyBuilt).toContain("tinycloud.secrets.get");
+      // 1.6.3 shipped a bundler-renamed SHARE_PUBLISH_RESULT_VERSION2 while the
+      // native publish use stayed unbound; the artifact must bind the name.
+      expect(built).not.toMatch(/\bSHARE_PUBLISH_RESULT_VERSION\d+\b/);
+      expect(built).toMatch(/\b(?:const|var|let)\s+SHARE_PUBLISH_RESULT_VERSION\s*=/);
 
       const home = join(smokeDirectory, "home");
       const profileDirectory = join(home, ".tinycloud/profiles/default");
