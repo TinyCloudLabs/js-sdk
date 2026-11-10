@@ -2581,5 +2581,14 @@
     "worker": { "delta": 22, "ceiling": 776561 },
     "replicaWorker": { "delta": 27, "ceiling": 770494 },
     "reason": "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276."
+  },
+  "tc2691HostExpiry": {
+    "label": "host SIWE expiry (TC-2691)",
+    "ruling": "Naomi approval relayed by Bobbie, 2026-11-10: exact stable-line root ceilings 1479183 ESM / 1421693 CJS gzip bytes from CI run 42753620870 job 129622759743, zero headroom. Node 22 / Bun 1.3.14 / rustc 1.99.0, source-WASM build.",
+    "base": "96591b2df98a6694f0ace827d67b67368c500d3c",
+    "sourceCommits": ["cf3918d1cdbd5c43a230a318df09dcbe4fd616a4"],
+    "canonicalCI": { "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870", "jobs": ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870/job/129622759743"] },
+    "root": { "delta": { "index.mjs": 468, "index.cjs": 455 }, "ceiling": { "index.mjs": 1479183, "index.cjs": 1421693 } },
+    "reason": "Stable host SIWE expiry builder and its authorization import seam: canonical CI measures 1479183 ESM / 1421693 CJS gzip bytes, +468 / +455 above the prior root caps. The released 3.11.1 base already measured 36 B over the ESM cap locally (1478751 vs 1478715). No optional, gated, cumulative or worker allowance changes."
   }
 }

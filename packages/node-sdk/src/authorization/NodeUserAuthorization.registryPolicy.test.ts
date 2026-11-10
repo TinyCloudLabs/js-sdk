@@ -1,3 +1,4 @@
+import { HOST_SIWE } from "../test-support/host-siwe";
 /**
  * Registry policy at sign-in routing and the space-creation guard (TC-1443).
  *
@@ -127,7 +128,7 @@ function wasmBindings(): IWasmBindings {
     createDelegation: async () => {
       throw new Error("not used");
     },
-    generateHostSIWEMessage: () => "host siwe",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
     vault_encrypt: () => new Uint8Array(),

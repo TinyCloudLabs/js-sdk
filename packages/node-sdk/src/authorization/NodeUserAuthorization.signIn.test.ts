@@ -1,3 +1,4 @@
+import { HOST_SIWE } from "../test-support/host-siwe";
 import { afterEach, expect, test } from "bun:test";
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
@@ -122,7 +123,7 @@ function createWasmBindings(captured: Array<Record<string, unknown>>): IWasmBind
     createDelegation: async () => {
       throw new Error("not used");
     },
-    generateHostSIWEMessage: () => "",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
     vault_encrypt: () => new Uint8Array(),
