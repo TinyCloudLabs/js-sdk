@@ -1,5 +1,13 @@
 # @tinycloud/operations
 
+## 0.8.1
+
+### Patch Changes
+
+- Update `@tinycloud/node-sdk` and `@tinycloud/sdk-core` dependencies to 3.11.2.
+
+  Details: TC-2709
+
 ## 0.8.0
 
 ### Minor Changes
