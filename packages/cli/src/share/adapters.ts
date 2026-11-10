@@ -27,6 +27,7 @@ import {
 import {
   createNativeShare,
   parseNativeShareUrl,
+  SHARE_PUBLISH_RESULT_VERSION,
   ShareReceiveError,
   prepareAddressedShare,
   type PreparedAddressedShare,

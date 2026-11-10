@@ -304,6 +304,13 @@ jobs:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/cli/src/commands/share-history-revoke.e2e.test.ts
 
+      - name: tc share publish and receive through the packed dist, against the node
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          CLI_NODE_BINARY: node
+        run: bun test --max-concurrency=1 packages/cli/src/commands/share-publish-dist.e2e.test.ts
+
       # tests/cli suites that talk to a node through TC_TEST_SERVER (tests/cli/setup.ts).
       # Each step starts its own loopback node from the pinned binary, waits for
       # /version, runs one file and stops the node (.github/scripts/run-cli-node-suite.sh).
