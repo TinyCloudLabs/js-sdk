@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
+import { TinyCloudNode as PackageNode, NodeWasmBindings as PackageWasm } from "@tinycloud/node-sdk";
+import type { PersistedSessionData } from "@tinycloud/sdk-core";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
 
@@ -97,12 +99,13 @@ const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
 const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinycloud/node-sdk");
-async function persistedRealSession(host: string) {
+async function persistedRealSession(host: string, privateKey = PROOF_PRIVATE_KEY) {
   const proof = await signedRestorableSession({
+    privateKey,
     abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
   });
   const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+  const signer = new PrivateKeySigner(privateKey);
   const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
   const persisted = {
     address: proof.address,
@@ -215,6 +218,203 @@ describe("signOut ends the session locally first (TC-2379)", () => {
     await tcw.signOut();
 
     expect(storage.exists(address)).toBe(false);
+  });
+
+  test("the Node package invalidates a Web-owned adapter before a hung cleanup or storage read", async () => {
+    const backend = memoryBackend();
+    const { persisted, address } = await persistedRealSession("https://owned-prefix.test");
+    const storage = new BrowserSessionStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const node = new PackageNode({
+      host: "https://owned-prefix.test", tinycloudRegistryUrl: null,
+      wasmBindings: new PackageWasm(), sessionStorage: storage, autoBootstrapAccount: false,
+    });
+    await node.restoreSession(restoreDataFromPersisted(persisted));
+    const cleanup = Promise.withResolvers<void>();
+    (node as any).accountRegistryTail = cleanup.promise;
+    storage.load = () => new Promise(() => undefined);
+    const signingOut = node.signOut();
+    signingOut.catch(() => undefined);
+    try {
+      // No await: registration must cross the actual package entry point, not merely a local helper.
+      expect(backend.getItem(`tinycloud:session:${address.toLowerCase()}`) === null).toBe(true);
+      const reloaded = await reloadedWeb(backend);
+      expect((await reloaded.tcw.restoreSession(address)).status).toBe("missing");
+    } finally {
+      cleanup.resolve();
+      // Do not strand the baseline's conditional read when the new assertion fails.
+      delete storage.load;
+    }
+  });
+
+  test("a delayed old save cannot resurrect a retired login or overwrite a replacement", async () => {
+    const backend = memoryBackend();
+    const { persisted, address } = await persistedRealSession("https://owned-retirement.test");
+    const storage = new BrowserSessionStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const node = new PackageNode({
+      host: "https://owned-retirement.test", tinycloudRegistryUrl: null,
+      wasmBindings: new PackageWasm(), sessionStorage: storage, autoBootstrapAccount: false,
+    });
+    await node.restoreSession(restoreDataFromPersisted(persisted));
+    await node.signOut();
+    const fresh = await persistedRealSession("https://owned-retirement.test");
+    const replacement = new BrowserSessionStorage({ storage: backend });
+    await replacement.save(address, fresh.persisted);
+    const refused = await Promise.resolve().then(() => storage.save(address, persisted))
+      .then(() => false, (error) => error instanceof Error);
+    expect(refused).toBe(true);
+    expect((await replacement.load(address))?.signature === fresh.persisted.signature).toBe(true);
+  });
+
+  test("repeating a pending sign-out cannot clear another account's new active session", async () => {
+    const backend = memoryBackend();
+    const { tcw, node, storage, persisted } = await signedInWeb("https://repeat-owner.test", backend);
+    const cleanup = Promise.withResolvers<void>();
+    (node as any).accountRegistryTail = cleanup.promise;
+    const first = tcw.signOut();
+    first.catch(() => undefined);
+    const proof = await signedRestorableSession({ privateKey: "1".padStart(64, "0") });
+    const other = {
+      ...persisted, address: proof.address, chainId: proof.chainId,
+      sessionKey: JSON.stringify(proof.jwk), siwe: proof.siwe, signature: proof.signature,
+      tinycloudSession: {
+        delegationHeader: proof.delegationHeader, delegationCid: proof.delegationCid,
+        spaceId: proof.spaceId, verificationMethod: proof.verificationMethod,
+      },
+    };
+    await storage.save(proof.address, other);
+    const second = tcw.signOut();
+    second.catch(() => undefined);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await storage.load(proof.address))?.signature === proof.signature).toBe(true);
+      expect(storage.activeAddress() === proof.address.toLowerCase()).toBe(true);
+    } finally {
+      cleanup.resolve();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
+  test("the separately required Node package preserves legacy conditional-clear compatibility", async () => {
+    const backend = memoryBackend();
+    const { persisted, address } = await persistedRealSession("https://core-fallback.test");
+    const storage = new BrowserSessionStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const node = new TinyCloudNode({
+      host: "https://core-fallback.test", tinycloudRegistryUrl: null,
+      wasmBindings: new NodeWasmBindings(), sessionStorage: storage, autoBootstrapAccount: false,
+    });
+    await node.restoreSession(restoreDataFromPersisted(persisted));
+    await node.signOut();
+    expect((await storage.load(address)) === null).toBe(true);
+    const fresh = await persistedRealSession("https://core-fallback.test");
+    await storage.save(address, fresh.persisted);
+    expect((await storage.load(address))?.signature === fresh.persisted.signature).toBe(true);
+  });
+
+  test("a backend that silently retains the auth record reports incomplete removal while restore stays suppressed", async () => {
+    const backend = { ...memoryBackend(), removeItem: () => undefined };
+    const { persisted, address } = await persistedRealSession("https://unconfirmed-clear.test");
+    const storage = new BrowserSessionStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const node = new PackageNode({
+      host: "https://unconfirmed-clear.test", tinycloudRegistryUrl: null,
+      wasmBindings: new PackageWasm(), sessionStorage: storage, autoBootstrapAccount: false,
+    });
+    await node.restoreSession(restoreDataFromPersisted(persisted));
+    const error = await node.signOut().then(() => undefined, (failure) => failure);
+    expect(error instanceof Error).toBe(true);
+    expect(backend.getItem(`tinycloud:session:${address.toLowerCase()}`) !== null).toBe(true);
+    const fresh = await reloadedWeb(backend);
+    expect((await fresh.tcw.restoreSession(address)).status).toBe("missing");
+  });
+
+  test("default persistence reports unavailable storage without claiming a physical erase", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: undefined });
+    try {
+      const { node, persisted, address } = await persistedRealSession("https://unavailable-storage.test");
+      await node.restoreSession(restoreDataFromPersisted(persisted));
+      const client = new TinyCloudWeb({});
+      await (client as any)._initPromise;
+      (client as any)._node = node;
+      const error = await client.signOut().then(() => undefined, (failure: unknown) => failure);
+      expect(error instanceof Error).toBe(true);
+      expect(client.session() === undefined).toBe(true);
+      const fresh = new TinyCloudWeb({});
+      await (fresh as any)._initPromise;
+      expect((await fresh.restoreSession(address)).status).toBe("storage-unavailable");
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
+  });
+
+  test("repeating sign-out while only the Web adapter clear is pending preserves another account", async () => {
+    const backend = memoryBackend();
+    const { persisted, address } = await persistedRealSession("https://web-clear-tail.test");
+    const storage = new BrowserSessionStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const clearing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let clears = 0;
+    const legacy = {
+      save: (owner: string, data: PersistedSessionData) => storage.save(owner, data),
+      load: (owner: string) => storage.load(owner),
+      clear: async (owner: string) => {
+        if (++clears === 2) { clearing.resolve(); await release.promise; }
+        await storage.clear(owner);
+      },
+      exists: (owner: string) => storage.exists(owner),
+      isAvailable: () => storage.isAvailable(),
+      activeAddress: () => storage.activeAddress(),
+    };
+    const node = new PackageNode({
+      host: "https://web-clear-tail.test", tinycloudRegistryUrl: null,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new PackageWasm(), sessionStorage: legacy, autoBootstrapAccount: false,
+    });
+    await node.restoreSession(restoreDataFromPersisted(persisted));
+    const client = new TinyCloudWeb({ sessionStorage: legacy });
+    await (client as any)._initPromise;
+    (client as any)._node = node;
+    const first = client.signOut();
+    first.catch(() => undefined);
+    const nodeFinished = node.signOut();
+    await clearing.promise;
+    await nodeFinished;
+    const other = await persistedRealSession("https://web-clear-tail.test", "1".padStart(64, "0"));
+    await storage.save(other.address, other.persisted);
+    const second = client.signOut();
+    second.catch(() => undefined);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await storage.load(other.address))?.signature === other.persisted.signature).toBe(true);
+      expect(storage.activeAddress() === other.address.toLowerCase()).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, second]);
+    }
+  });
+
+  test("walletless sign-out uses the verified restored proof to preserve a newer same-account login", async () => {
+    const backend = memoryBackend();
+    const old = await persistedRealSession("https://walletless-own.test");
+    const next = await persistedRealSession("https://walletless-own.test");
+    const storage = new BrowserSessionStorage({ storage: backend });
+    await storage.save(old.address, next.persisted);
+    const node = new PackageNode({
+      host: "https://walletless-own.test", tinycloudRegistryUrl: null,
+      wasmBindings: new PackageWasm(), sessionStorage: storage, autoBootstrapAccount: false,
+    });
+    await node.restoreSession(restoreDataFromPersisted(old.persisted));
+    const client = new TinyCloudWeb({ sessionStorage: storage });
+    await (client as any)._initPromise;
+    (client as any)._node = node;
+    await client.signOut();
+    expect((await storage.load(old.address))?.signature === next.persisted.signature).toBe(true);
+    expect(storage.activeAddress() === old.address.toLowerCase()).toBe(true);
   });
 });
 

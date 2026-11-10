@@ -41,6 +41,12 @@ This is a client cache: a node that performs online registry admission still nee
 Details: TC-2481
 
 
+## Sign-out and session storage
+
+`signOut(): Promise<void>` coordinates the session-storage and replica lifecycles. Storage failures reject the call; replica recovery markers remain until local-copy erase is confirmed. A resolved sign-out alone does not certify that the replica was purged.
+
+Custom and native adapters retain the existing `ISessionStorage` contract. Their completion acknowledges their own storage operation, not deletion of a separate identity provider's credentials or a cross-process atomic operation. Provider sign-out and native boot handling remain the provider's responsibility.
+
 ## Signed SIWE metadata
 
 Set `siweConfig.resources` to `urn:tinycloud:recipients:<base64url>` URI strings to include a recipients declaration in the signed SIWE. The payload uses only unpadded base64url characters (`A–Z`, `a–z`, `0–9`, `_`, `-`). Node-sdk inserts these URIs immediately before the original ReCap resource, which remains last. Ordinary sign-in, external/OpenKey preparation, and bootstrap sessions use the same insertion path; completion and session storage retain the signed message unchanged.

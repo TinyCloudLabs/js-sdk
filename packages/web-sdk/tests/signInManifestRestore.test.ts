@@ -679,7 +679,8 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
   } finally {
     globalThis.fetch = originalRestoreFetch;
   }
-  const tcw = new TinyCloudWeb({});
+  // This fixture checks in-memory authority, not an unavailable browser persistence backend.
+  const tcw = new TinyCloudWeb({ persistSession: false });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
 
@@ -760,8 +761,9 @@ test("signOut then signIn uses a fresh wallet SIWE even if another tab restores 
     expect(signedMessages).toHaveLength(1);
     await web.signOut();
     expect(sessionStorage.exists(address)).toBe(false);
-    // Another tab can still have a copy; explicit logout must not restore it on this client.
-    await sessionStorage.save(address, original!);
+    await expect(Promise.resolve().then(() => sessionStorage.save(address, original!))).rejects.toBeInstanceOf(Error);
+    // Simulate a legacy tab writing raw bytes without participating in the owned-storage fence.
+    backend.setItem(`tinycloud:session:${address.toLowerCase()}`, JSON.stringify(original));
     const separatePage = new TinyCloudWeb({
       provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
       includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
@@ -769,8 +771,8 @@ test("signOut then signIn uses a fresh wallet SIWE even if another tab restores 
     });
     (separatePage as any).wasmBindings = wasm;
     const restored = await separatePage.restoreSession(address);
-    if (restored.status !== "restored") throw restored.error ?? new Error(restored.status);
-    expect((await web.restoreSession(address)).status).toBe("restore-failed");
+    expect(restored.status).toBe("missing");
+    expect((await web.restoreSession(address)).status).toBe("missing");
     expect(signedMessages).toHaveLength(1);
     const next = await web.signIn();
     expect(next.address).toBe(address);
@@ -1210,8 +1212,8 @@ test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale a
   const outcomes = await Promise.allSettled([first, second]);
 
   expect(outcomes[0].status).toBe("rejected");
-  expect(storage.exists(address)).toBe(true);
-  expect(storage.exists(otherAddress)).toBe(false);
+  expect(backend.getItem(blockedKey) !== null).toBe(true);
+  expect(storage.activeAddress()).toBe(otherAddress.toLowerCase());
   expect((await tcw.restoreSession(address)).status).toBe("restore-failed");
   expect(tcw.session()).toBeUndefined();
 });

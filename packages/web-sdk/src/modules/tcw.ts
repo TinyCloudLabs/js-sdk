@@ -38,6 +38,7 @@ import {
   type LocalCopyPurgeFailedEvent,
 } from "./replica-wiring";
 import {
+  invalidateOwnSession,
   IKVService,
   ISQLService,
   IDuckDbService,
@@ -410,6 +411,7 @@ export class TinyCloudWeb {
   /** The signer set with `setRuntimePermissionSigner`, with the session it was set for. */
   private runtimeSigner?: { readonly signer: RuntimePermissionSigner; readonly address: string; readonly signOuts: number };
   private signOutInFlight = 0;
+  private signOutOperation?: { node?: TinyCloudNode; remote?: Promise<void>; result: Promise<void> };
   private persistedRestoreBlocked = false;
   private signOutCleanupFailed = false;
   private remoteSignOutTimeoutMs = 3000;
@@ -908,6 +910,7 @@ export class TinyCloudWeb {
     const refused = () => ({ status: "restore-failed" as const, error: new Error("Session restore was cancelled by sign-out.") });
     if (this.signOutInFlight > 0) return refused();
     if (this.persistedRestoreBlocked) {
+      if (this.signOutCleanupFailed) return refused();
       try {
         const restoreAddress = await this.resolveRestoreAddress(address);
         if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
@@ -1278,52 +1281,72 @@ export class TinyCloudWeb {
    * session. Afterwards accessors return `undefined` and service calls remain
    * unavailable until a fresh sign-in; prior persisted sessions cannot restore.
    */
-  signOut = async (): Promise<void> => {
-    // The persisted entry is keyed by the live session's address; read it
-    // before the node ends the session, without awaiting first.
-    const liveAddress = this._node?.address;
-    const ownSignature = this._node?.session?.signature;
-    const pendingAddresses = this.pendingRestoreAddresses.size
-      ? [...this.pendingRestoreAddresses.keys()]
-      : undefined;
-    this.signOutCount++;
-    closeActiveModal();
-    this.runtimeSigner = undefined;
-    this.spaceHostingInFlight = undefined;
-    this.invalidatePreparedSignIn();
-    this.signOutInFlight++;
-    this.persistedRestoreBlocked = true;
-    // The node retires the session's authority before its first await. Its remote cleanup can hang on a
-    // revoked grant, so it is awaited only after local state is gone, and only for a short while.
-    const remote = this._node?.signOut();
-    remote?.catch(() => undefined);
-    let cleaned = false;
+  signOut = (): Promise<void> => {
     try {
-      try {
-        this.resetSessionScopedCaches();
-        this._credentialsService = undefined;
-        this._shareReceiverService = undefined;
-        this._sessionRestoreStatus = "idle";
-        this.uiClient.reset();
-        const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
-        if (address) await this.clearOwnPersistedSession(address, ownSignature);
-        for (const pendingAddress of pendingAddresses ?? []) {
-          if (pendingAddress !== address) await this.clearPersistedSession(pendingAddress);
-        }
-        cleaned = true;
-      } finally {
-        if (!cleaned) this.signOutCleanupFailed = true;
+      const node = this._node;
+      // Capture before asking the node to retire authority, including when checking a prior operation.
+      const liveAddress = node?.address;
+      const ownSignature = node?.session?.signature ?? node?.restorableSession?.signature;
+      const pendingAddresses = this.pendingRestoreAddresses.size
+        ? [...this.pendingRestoreAddresses.keys()]
+        : undefined;
+      const prior = this.signOutOperation;
+      let remote: Promise<void> | undefined;
+      if (prior && prior.node === node) {
+        if (this.signOutInFlight > 0) return prior.result;
+        remote = node?.signOut();
+        if (node && remote === prior.remote) return prior.result;
       }
-      if (remote) {
-        let timer: ReturnType<typeof setTimeout> | undefined;
+      this.signOutCount++;
+      closeActiveModal();
+      this.runtimeSigner = undefined;
+      this.spaceHostingInFlight = undefined;
+      this.invalidatePreparedSignIn();
+      this.signOutInFlight++;
+      this.persistedRestoreBlocked = true;
+      remote ??= node?.signOut();
+      remote?.catch(() => undefined);
+      const result = (async () => {
+        let cleaned = false;
         try {
-          await Promise.race([remote, new Promise<void>((resolve) => { timer = setTimeout(resolve, this.remoteSignOutTimeoutMs); })]);
+          try {
+            this.resetSessionScopedCaches();
+            this._credentialsService = undefined;
+            this._shareReceiverService = undefined;
+            this._sessionRestoreStatus = "idle";
+            this.uiClient.reset();
+            const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
+            if (address) await this.clearOwnPersistedSession(address, ownSignature);
+            for (const pendingAddress of pendingAddresses ?? []) {
+              if (pendingAddress !== address) await this.clearPersistedSession(pendingAddress);
+            }
+            cleaned = true;
+          } finally {
+            if (!cleaned) this.signOutCleanupFailed = true;
+          }
+          if (remote) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([remote, new Promise<void>((resolve) => { timer = setTimeout(resolve, this.remoteSignOutTimeoutMs); })]);
+            } finally {
+              clearTimeout(timer);
+            }
+          }
         } finally {
-          clearTimeout(timer);
+          this.signOutInFlight--;
         }
-      }
-    } finally {
-      this.signOutInFlight--;
+      })();
+      this.signOutOperation = { node, remote, result };
+      // A failed node result can precede its cleanup. Repeated calls compare the node's operation identity
+      // rather than resolving a new active address and clearing somebody else's session.
+      void Promise.all([result, remote]).then(() => {
+        if (this.signOutOperation?.result === result) this.signOutOperation = undefined;
+      }, () => {
+        if (!remote && this.signOutOperation?.result === result) this.signOutOperation = undefined;
+      });
+      return result;
+    } catch (error) {
+      return Promise.reject(error);
     }
   };
 
@@ -1335,9 +1358,13 @@ export class TinyCloudWeb {
   private async clearOwnPersistedSession(address: string, ownSignature: string | undefined): Promise<void> {
     const storage: FenceCapableStorage | undefined = this.sessionStorage;
     if (!storage) return;
+    if (ownSignature !== undefined) {
+      const owned = invalidateOwnSession(storage, address, ownSignature);
+      if (owned !== undefined) return owned;
+    }
     let fenceError: unknown;
     if (ownSignature !== undefined) {
-      const stored = await storage.load(address).catch(() => null);
+      const stored = await storage.load(address);
       if (stored !== null && stored.signature !== ownSignature) return;
       try {
         storage.markSignedOut?.(address, ownSignature);
@@ -1750,7 +1777,8 @@ export class TinyCloudWeb {
       this.signOutCount === signOuts &&
       this.signOutInFlight === 0
     ) {
-      await rememberRuntimeGrants(store, address, result.delegations);
+      await rememberRuntimeGrants(store, address, result.delegations,
+        () => this.signOutCount === signOuts && this.signOutInFlight === 0 && this._node?.address === address);
     }
     return { approved: result.approved };
   }

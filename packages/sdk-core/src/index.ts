@@ -412,6 +412,9 @@ export {
   validatePersistedSessionData,
 } from "./storage";
 
+// Internal Node/Web package wiring; not a supported storage-provider capability.
+export { registerOwnedSessionStorage, invalidateOwnSession } from "./session-retirement";
+
 // User authorization interface and types
 export {
   IUserAuthorization,
