@@ -1428,7 +1428,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
             peerId,
           },
     );
-    const siwe = withHostExpiry(hostSiwe, now, this.siweConfig?.expirationTime);
+    const siwe = withHostExpiry(hostSiwe, now, EXPIRY.HOSTING_YEARS, this.siweConfig?.expirationTime);
 
     checkCurrent();
     const signing = this.signMessage(siwe, purpose);

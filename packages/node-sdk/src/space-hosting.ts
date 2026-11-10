@@ -3,7 +3,6 @@
  * creates a primary space that is not hosted. Both are loaded on first use, so
  * browser bundles carry them as a separate file rather than in their root.
  */
-import { EXPIRY } from "@tinycloud/sdk-core";
 import type { ISpaceCreationHandler, SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
 import type { FetchFunction, InvokeAnyEntry, ServiceHeaders } from "@tinycloud/sdk-services";
 import type { SpaceHosting } from "./authorization/NodeUserAuthorization";
@@ -266,7 +265,7 @@ export async function createPrimarySpace({
 }
 
 /** Add the bounded host lifetime before any wallet signature. */
-export function withHostExpiry(siwe: string, now: Date, requestedExpiry?: string): string {
+export function withHostExpiry(siwe: string, now: Date, hostingYears: number, requestedExpiry?: string): string {
   if (/[\r\u0085\u2028\u2029]/.test(siwe)) {
     throw new Error("Host SIWE contains an unsupported line separator");
   }
@@ -284,7 +283,7 @@ export function withHostExpiry(siwe: string, now: Date, requestedExpiry?: string
   const ceiling = new Date(now);
   const day = ceiling.getUTCDate();
   ceiling.setUTCDate(1);
-  ceiling.setUTCFullYear(ceiling.getUTCFullYear() + EXPIRY.HOSTING_YEARS);
+  ceiling.setUTCFullYear(ceiling.getUTCFullYear() + hostingYears);
   const lastDay = new Date(Date.UTC(ceiling.getUTCFullYear(), ceiling.getUTCMonth() + 1, 0)).getUTCDate();
   ceiling.setUTCDate(Math.min(day, lastDay));
   const requested = requestedExpiry === undefined ? ceiling.getTime() : Date.parse(requestedExpiry);
