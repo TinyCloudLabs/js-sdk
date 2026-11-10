@@ -45,6 +45,14 @@ Set `siweConfig.resources` to `urn:tinycloud:recipients:<base64url>` URI strings
 
 These resources do not add permissions. Other schemes, percent encoding, escape sequences and literal controls are not accepted in this option. The generated statement and ReCap remain unchanged; `siweConfig.statement` does not replace the generated statement. Omitting resources or passing an empty array leaves the prepared message unchanged.
 
+## Space-hosting lifetime
+
+Node and browser SDKs sign space-hosting delegations with an expiration one UTC calendar year after creation (February 29 becomes February 28). `EXPIRY.HOSTING_YEARS` in `@tinycloud/sdk-core` defines this tier. `siweConfig.expirationTime` can request a shorter lifetime; later values are clamped to the hosting tier. Invalid or elapsed values are refused before signing.
+
+Hosting registration persists independently of this grant's lifetime. Existing hosted-space checks do not automatically renew the grant; normal data operations use their own active session authority.
+
+Details: TC-2691
+
 ## `@tinycloud/node-sdk/credential-pending-store`
 
 File-backed pending store for the email-proof flow. It keeps one file per request under `<home>/credentials/`, named by a hash of the request id. The directory is created with mode 0700 and each file with mode 0600. Permissions and ownership are re-checked on every read. Only a `home` that is itself a symlink is refused; ancestors of `home` may be symlinks, but `realpath(home)` must be owned by the current user. Unsafe files are left in place and reported as an error.

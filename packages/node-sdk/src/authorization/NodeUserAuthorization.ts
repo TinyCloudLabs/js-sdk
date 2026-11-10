@@ -96,6 +96,7 @@ import {
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
+import { withHostExpiry } from "./hostSiwe";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
 
@@ -1400,18 +1401,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
     checkCurrent();
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage(
+    const now = new Date();
+    const hostSiwe = this.wasm.generateHostSIWEMessage(
       context && siweParameters
         ? siweParameters(peerId)
         : {
             address,
             chainId,
             domain: this.domain,
-            issuedAt: new Date().toISOString(),
+            issuedAt: now.toISOString(),
             spaceId,
             peerId,
           },
     );
+    const siwe = withHostExpiry(hostSiwe, now, this.siweConfig?.expirationTime);
 
     checkCurrent();
     const signing = this.signMessage(siwe, purpose);

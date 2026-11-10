@@ -1,3 +1,4 @@
+import { HOST_SIWE } from "./test-support/host-siwe";
 import { afterEach, expect, jest, test } from "bun:test";
 import { createPrimarySpace } from "./space-hosting";
 import type { SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
@@ -95,7 +96,7 @@ test("sign-out during host signing prevents the delegation POST and hosting reco
     },
   };
   const wasmBindings = {
-    generateHostSIWEMessage: () => "host SIWE",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     prepareSession: () => { sessionSiweCalls++; throw new Error("unexpected session SIWE"); },
     createSessionManager: () => ({
@@ -167,7 +168,7 @@ test("replacing the restored session during confirmation rejects without signing
     wasmBindings: {
       generateHostSIWEMessage: (fields: Record<string, unknown>) => {
         hostAddresses.push(String(fields.address));
-        return "host SIWE";
+        return HOST_SIWE;
       },
       siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
       prepareSession: () => { sessionSiweCalls++; throw new Error("unexpected session SIWE"); },

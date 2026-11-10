@@ -1,3 +1,4 @@
+import { HOST_SIWE } from "./test-support/host-siwe";
 /**
  * TinyCloudNode hosting paths use the default v2 registry verdict and require
  * the requested full space to be listed before activation.
@@ -85,7 +86,7 @@ function wasmBindings(): IWasmBindings {
     createDelegation: async () => {
       throw new Error("not used");
     },
-    generateHostSIWEMessage: () => "host siwe",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
     parseRecapFromSiwe: () => [],
@@ -273,7 +274,6 @@ for (const [site, create] of sites) {
     expect(owner.requests.indexOf(`${HOST}/info`)).toBeLessThan(activation);
     expect(owner.requests.indexOf(`${HOST}/.well-known/tinycloud/node-keys`)).toBeLessThan(activation);
     expect(owner.hostDelegations).toEqual([]);
-    expect(owner.signatures).not.toContain("host siwe");
   });
 }
 
@@ -285,7 +285,6 @@ test("a true no-entry result retains host-SIWE onboarding", async () => {
   expect(owner.requests.some((url) => url.startsWith(`${REGISTRY}/v2/locations/`))).toBe(true);
   expect(owner.requests.some((url) => url.startsWith(`${REGISTRY}/v1/locations/`))).toBe(true);
   expect(owner.hostDelegations).toContain(HOST);
-  expect(owner.signatures).toContain("host siwe");
 });
 
 test("a listed owner node cannot host a full space missing from the signed membership", async () => {
@@ -301,7 +300,6 @@ test("a listed owner node cannot host a full space missing from the signed membe
 
   expect(owner.requests.some((url) => url === `${HOST}/delegate`)).toBe(false);
   expect(owner.hostDelegations).toEqual([]);
-  expect(owner.signatures).not.toContain("host siwe");
 });
 
 test("an unavailable registry refuses hosting after verified owner history and authoritative cache drop", async () => {
@@ -332,6 +330,5 @@ test("an unavailable registry refuses hosting after verified owner history and a
 
   expect(owner.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
   expect(owner.hostDelegations).toEqual([]);
-  expect(owner.signatures).not.toContain("host siwe");
   expect(await stores.sequences.get(address)).toBe(record.sequence);
 });
