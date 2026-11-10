@@ -104,7 +104,7 @@ async function saveReviewedLog(root: string, reportId: string, body: Buffer): Pr
   const directory = join(root, REVIEW_DIR_NAME);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const directoryInfo = await lstat(directory);
-  if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw new Error("Reviewed CLI log directory is not a regular directory.");
+  if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw new Error("Couldn't save the CLI log on this computer, so nothing was sent. Try again.");
   await chmod(directory, 0o700);
   const path = join(directory, `${reportId}-${hash}.json`);
   const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o600);
@@ -121,6 +121,10 @@ function missingReviewError(reportId: string): CLIError {
   return new CLIError("BUG_REPORT_REVIEW_MISSING", `There's no reviewed CLI log with that hash, so nothing was sent. Run tinycloud bug-report --attach ${reportId} first.`);
 }
 
+function reviewReadError(reportId: string): CLIError {
+  return new CLIError("BUG_REPORT_REVIEW_READ_FAILED", `Couldn't read the saved CLI log, so nothing was sent. Run tinycloud bug-report --attach ${reportId} to save it again.`);
+}
+
 // Returns the saved request bytes only when they still hash to the reviewed identity.
 async function readReviewedLog(root: string, reportId: string, hash: string): Promise<Buffer> {
   if (!REVIEW_HASH_PATTERN.test(hash)) throw missingReviewError(reportId);
@@ -132,7 +136,7 @@ async function readReviewedLog(root: string, reportId: string, hash: string): Pr
     if (error instanceof CLIError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") throw missingReviewError(reportId);
-    throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "The reviewed CLI log file could not be read, so nothing was sent.");
+    throw reviewReadError(reportId);
   }
   const path = join(directory, `${reportId}-${hash}.json`);
   let file;
@@ -141,19 +145,19 @@ async function readReviewedLog(root: string, reportId: string, hash: string): Pr
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") throw missingReviewError(reportId);
-    throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "The reviewed CLI log file could not be read, so nothing was sent.");
+    throw reviewReadError(reportId);
   }
   let body: Buffer;
   try {
     const details = await file.stat();
     if (!details.isFile()) throw missingReviewError(reportId);
     if ((details.mode & 0o777) !== 0o600) {
-      throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "The reviewed CLI log file permissions changed, so nothing was sent.");
+      throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", `The saved CLI log's permissions changed, so nothing was sent. Run tinycloud bug-report --attach ${reportId} to save it again.`);
     }
     body = await file.readFile();
   } catch (error) {
     if (error instanceof CLIError) throw error;
-    throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "The reviewed CLI log file could not be read, so nothing was sent.");
+    throw reviewReadError(reportId);
   } finally {
     await file.close();
   }
@@ -248,7 +252,7 @@ async function attachLogs(reportId: string, tokenStdin: boolean, confirmHash: st
   try {
     saved = await saveReviewedLog(root, reportId, Buffer.from(body, "utf8"));
   } catch {
-    throw new CLIError("BUG_REPORT_REVIEW_SAVE_FAILED", "The reviewed CLI log could not be saved on this computer, so nothing was sent.");
+    throw new CLIError("BUG_REPORT_REVIEW_SAVE_FAILED", "Couldn't save the CLI log on this computer, so nothing was sent. Try again.");
   }
   output(`Nothing was sent. Saved the CLI log for report ${reportId} to ${saved.path} (${bytes} bytes, ${redacted.count} ${valueLabel} hidden). Read it, then send it with: tinycloud bug-report --attach ${reportId} --confirm ${saved.hash}\n`);
 }

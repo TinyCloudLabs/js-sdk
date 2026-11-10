@@ -19,7 +19,7 @@ computer with owner-only access and prints a 32-character review hash. Nothing
 is sent until you read the saved log and run the command again with
 `--confirm <hash>`. The review hash is tied to both the report and saved bytes;
 if the file changes, the CLI refuses to send it. Sensitive values are removed
-where found, and the summary reports `1 value hidden` when one value is found.
+where found.
 
 The package exposes `tinycloud` as its preferred command and keeps `tc` as a
 deprecated compatibility alias at the same entry. Both names accept the same
