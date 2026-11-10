@@ -2977,12 +2977,12 @@ export const approvedTc2691HostExpiryReplicaWorker: NonNullable<Ledger["tc2691Ho
 
 export const approvedTc2691HostExpiry: LogoutRatchet = {
   label: "host SIWE expiry (TC-2691)",
-  ruling: "Naomi approval relayed by Bobbie, 2026-11-10: exact root ceilings 1514883 / 1450184 gzip bytes, zero headroom. Bun 1.3.14 / rustc 1.99.0, locked source-WASM rebuild.",
-  base: "b0511a328b6a6ebf36095a96d3c9b011f2686007",
-  sourceCommits: ["30aac85edf109fbff501995d656c22c337d47836"],
-  canonicalCI: { run: "local pinned source-WASM measurement at 30aac85edf109fbff501995d656c22c337d47836; CI confirmation pending", jobs: [] },
-  root: { delta: { "index.mjs": 53, "index.cjs": 7 }, ceiling: { "index.mjs": 1514883, "index.cjs": 1450184 } },
-  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam. Final root gzip bytes 1514883 / 1450184 (+53 / +7 above tc2687PublishedSignIn); no optional, gated or cumulative allowance changes.",
+  ruling: "Naomi approval relayed by Bobbie, 2026-11-10; Bobbie authorized exact remeasurement after the import-seam fix: root ceilings 1514897 / 1450224 gzip bytes, zero headroom. Node 22 / Bun 1.3.14 / rustc 1.99.0, source-WASM rebuild.",
+  base: "a97061f40c0de26b64597bd4a3de0d2eb39b1e39",
+  sourceCommits: ["969fcdefce2bfb3c635b0242c5d1ffbd87e3f896"],
+  canonicalCI: { run: "local pinned source-WASM measurement at 969fcdefce2bfb3c635b0242c5d1ffbd87e3f896; CI confirmation pending", jobs: [] },
+  root: { delta: { "index.mjs": 67, "index.cjs": 47 }, ceiling: { "index.mjs": 1514897, "index.cjs": 1450224 } },
+  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam: the authorization passes its already-loaded hosting tier instead of importing the policy module into the chunk. Final root gzip bytes 1514897 / 1450224 (+67 / +47 above tc2687PublishedSignIn; +14 / +40 from the prior TC-2691 measurement); no worker, optional, gated or cumulative allowance changes.",
 };
 
 const tc2481WebEvidence = [
