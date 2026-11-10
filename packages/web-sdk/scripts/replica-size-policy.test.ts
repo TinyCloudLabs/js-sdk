@@ -64,6 +64,7 @@ import { approvedTc2281OpenKeyConnectedKeyId, validateTc2281OpenKeyConnectedKeyI
 import { approvedTc2594ResourceTransport, validateTc2594ResourceTransportTransition } from "./replica-size-policy";
 import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
 import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
+import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 // Historical cases keep the earlier root-only admission and its original cumulative budget.
@@ -75,6 +76,7 @@ delete current.tc2281OpenKeyConnectedKeyId;
 delete current.tc2594ResourceTransport;
 delete current.tc2657RegistryPublication;
 delete current.tc2518KeyWrap;
+delete current.tc2687PublishedSignIn;
 current.entries = current.entries.filter((entry) => entry.pr !== "#873");
 current.allowance["index.mjs"] = 388;
 
@@ -4798,6 +4800,7 @@ const finalTransportLedger = () => {
   delete ledger.tc2594ResourceTransport;
   delete ledger.tc2657RegistryPublication;
   delete ledger.tc2518KeyWrap;
+  delete ledger.tc2687PublishedSignIn;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
   ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
   ledger.entries.push({
@@ -4959,6 +4962,7 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
   delete throughTc2281.tc2594ResourceTransport;
   delete throughTc2281.tc2657RegistryPublication;
   delete throughTc2281.tc2518KeyWrap;
+  delete throughTc2281.tc2687PublishedSignIn;
 
   it("is the newest root row, exactly the TC-2582 caps plus the measured delta, with no owned charge", () => {
     expect(() => validateLedger(throughTc2281)).not.toThrow();
@@ -5010,6 +5014,7 @@ describe("TC-2594 resource transport root-only admission (#891)", () => {
   const throughTc2594 = copy(shipped);
   delete throughTc2594.tc2657RegistryPublication;
   delete throughTc2594.tc2518KeyWrap;
+  delete throughTc2594.tc2687PublishedSignIn;
 
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2594);
@@ -5059,6 +5064,7 @@ describe("TC-2594 resource transport root-only admission (#891)", () => {
 describe("TC-2657 explicit publication root-only admission (#902)", () => {
   const throughTc2657 = copy(shipped);
   delete throughTc2657.tc2518KeyWrap;
+  delete throughTc2657.tc2687PublishedSignIn;
 
   it("admits the publication root sizes and refuses one additional byte", () => {
     validateLedger(throughTc2657);
@@ -5106,10 +5112,12 @@ describe("TC-2657 explicit publication root-only admission (#902)", () => {
 });
 
 describe("TC-2518 key wrap root-only admission (#906)", () => {
+  const throughTc2518 = copy(shipped);
+  delete throughTc2518.tc2687PublishedSignIn;
   it("admits the measured root assets and refuses one additional byte", () => {
-    validateLedger(shipped);
+    validateLedger(throughTc2518);
     for (const [format, measured] of [["index.mjs", 1514668], ["index.cjs", 1450017]] as const) {
-      const ceiling = rootCeilingFor(shipped, format).ceiling;
+      const ceiling = rootCeilingFor(throughTc2518, format).ceiling;
       expect(measured <= ceiling).toBe(true);
       expect(measured + 1 > ceiling).toBe(true);
     }
@@ -5144,5 +5152,49 @@ describe("TC-2518 key wrap root-only admission (#906)", () => {
     expect(() => validateTc2518KeyWrapTransition(undefined, changed)).toThrow("TC-2518");
     expect(() => validateTc2518KeyWrapTransition(row, changed)).toThrow("TC-2518");
     expect(() => validateTc2518KeyWrapTransition(row, undefined)).toThrow("TC-2518");
+  });
+});
+
+describe("TC-2687 published sign-in root-only admission (#910)", () => {
+  it("admits the measured root assets and refuses one additional byte", () => {
+    validateLedger(shipped);
+    for (const [format, measured] of [["index.mjs", 1514830], ["index.cjs", 1450177]] as const) {
+      const ceiling = rootCeilingFor(shipped, format).ceiling;
+      expect(measured <= ceiling).toBe(true);
+      expect(measured + 1 > ceiling).toBe(true);
+    }
+  });
+
+  it("rejects altered provenance, non-root buckets and a missing predecessor", () => {
+    const mutations: Array<(row: LogoutRatchet) => void> = [
+      (row) => { row.root.ceiling["index.mjs"]++; },
+      (row) => { row.root.delta["index.cjs"]++; },
+      (row) => { row.base = "0".repeat(40); },
+      (row) => { row.sourceCommits[0] = "0".repeat(40); },
+      (row) => { row.canonicalCI.jobs.pop(); },
+      (row) => { Object.assign(row, { worker: { delta: 1, ceiling: 777150 } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      mutate(changed.tc2687PublishedSignIn!);
+      expect(() => validateLedger(changed)).toThrow("TC-2687");
+    }
+    const missing = copy(shipped);
+    delete missing.tc2518KeyWrap;
+    expect(() => validateLedger(missing)).toThrow("TC-2687");
+  });
+
+  it("admits its exact transition once and refuses later mutation or removal", () => {
+    const row = structuredClone(shipped.tc2687PublishedSignIn!);
+    expect(ancestryPins(shipped, false)).toContainEqual({
+      row: "tc2687PublishedSignIn", pin: row.sourceCommits.at(-1)!,
+    });
+    expect(() => validateTc2687PublishedSignInTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2687PublishedSignInTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2687PublishedSignInTransition(undefined, changed)).toThrow("TC-2687");
+    expect(() => validateTc2687PublishedSignInTransition(row, changed)).toThrow("TC-2687");
+    expect(() => validateTc2687PublishedSignInTransition(row, undefined)).toThrow("TC-2687");
   });
 });

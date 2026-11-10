@@ -2824,5 +2824,20 @@
     },
     "root": { "delta": { "index.mjs": 19101, "index.cjs": 12982 }, "ceiling": { "index.mjs": 1514668, "index.cjs": 1450017 } },
     "reason": "TC-2518: key wrap v2 envelope + reader policy pulls @noble/ciphers AES-GCM/GHASH and @noble/hashes HKDF plus the v2 codec through the sdk-services root/encryption entries (new Noble modules: 61,205 B before tree-shaking/minification; X25519/SHA-256 were already reached). Local master-to-candidate gzip +19,222 B ESM / +12,957 B CJS; these exact ceilings are +19,101 / +12,982 above TC-2657. No other bucket or historical row changes."
+  },
+  "tc2687PublishedSignIn": {
+    "label": "TC-2687 published sign-in scope guards, root admission (PR #910)",
+    "ruling": "Naomi, TC-2687, 2026-11-10: exact root-only ratchet above tc2518KeyWrap, zero headroom. SQLite and PostgreSQL in run 42731390477 at 5f271e52ab9a90abc239c7d13e7e91891f6b6928 agree on 1514830 / 1450177 B. Bun 1.3.14; rustc 1.99.0. Final pinned CI must confirm the integrated candidate. No other cap, owned-budget entry or cumulative allowance change.",
+    "base": "bc53babbc99eb6b644bf3c79622cee421fbcb874",
+    "sourceCommits": ["5f271e52ab9a90abc239c7d13e7e91891f6b6928"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42731390477",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42731390477/job/129550021993",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42731390477/job/129550022168"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 162, "index.cjs": 160 }, "ceiling": { "index.mjs": 1514830, "index.cjs": 1450177 } },
+    "reason": "TC-2687: Node's shared registered-scope eligibility helper and optional bootstrap, secrets, account-sync and implicit encryption guards. No new imports or dependencies; only root admission changes."
   }
 }
