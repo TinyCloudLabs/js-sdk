@@ -3153,7 +3153,10 @@ export class TinyCloudNode {
       this.config.manifest === undefined &&
       this.config.capabilityRequest === undefined
     ) {
-      await this.ensureOwnedSpaceHostedById(this.ownedSpaceId(SECRETS_SPACE));
+      const spaceId = this.ownedSpaceId(SECRETS_SPACE);
+      if (!this.auth?.registryRecordPresent || this.auth.allowsAutomaticSetup(spaceId)) {
+        await this.ensureOwnedSpaceHostedById(spaceId);
+      }
     }
     this.assertSessionEpoch(epoch, "Sign-in");
 
@@ -3214,6 +3217,13 @@ export class TinyCloudNode {
     }
 
     const steps = bootstrapSteps(this._address, this._chainId);
+    const auth = this.auth;
+    if (auth.registryRecordPresent && steps.some((step) =>
+      ("spaceId" in step && !auth.allowsAutomaticSetup(step.spaceId)) ||
+      (step.kind === "encryption-network-create" && !auth.allowsAutomaticSetup(step.networkId)))) {
+      this._bootstrapStatus = { skipped: true, reason: "registry-scope-limited" };
+      return false;
+    }
     try {
       const decision = await this.resolveBootstrapDecision(steps);
       if (decision.action === "skip") {
@@ -3872,12 +3882,12 @@ export class TinyCloudNode {
     if (this.ownStorageFull) {
       return;
     }
-    // Every registry step reads or writes the owned account space; a session
-    // without that authority (a scoped CLI login) would only collect a 401.
-    if (!this.currentSessionCoversAccountRegistry()) {
+    // Index and registry writes need both session authority and a published writable account route.
+    if (!this.currentSessionCoversAccountRegistry() ||
+        (this.auth?.registryRecordPresent && !this.auth.allowsAutomaticSetup(this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE)))) {
       if (!TinyCloudNode.accountRegistrySkipLogged) {
         TinyCloudNode.accountRegistrySkipLogged = true;
-        // Registry sync skipped: the session lacks account-space access. Event name and
+        // Registry sync skipped: account authority or its writable route is absent. Event name and
         // message stay short because web-sdk bundles this file under a zero-headroom size ceiling.
         tinyCloudDebugLogger.log("registry.skip");
       }
@@ -4150,6 +4160,8 @@ export class TinyCloudNode {
       if (!didPrincipalMatches(parsed.ownerDid, this.did)) {
         continue;
       }
+      if (this.config.manifest === undefined && this.config.capabilityRequest === undefined &&
+          this.auth.registryRecordPresent && !this.auth.allowsAutomaticSetup(networkId)) continue;
       await this.ensureEncryptionNetwork(networkId);
     }
   }

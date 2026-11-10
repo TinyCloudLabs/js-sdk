@@ -16,6 +16,8 @@ Mixed signed grants register unchanged on the union of their listed data destina
 
 Request-bound imports keep the original request/profile binding. A differing grant transport host is accepted only after validated permissions resolve through verified full-resource registry memberships; the derived destination replaces neither the saved hint nor signed bytes. Genuine no-entry still requires the original host match.
 
+Sign-in requires a route for the primary space. Automatic account bootstrap, secrets provisioning and account-index sync do not expand a registered owner's selected spaces: optional work without a published writable route is skipped. Canonical bootstrap runs only when its complete target set is available; a skipped subset does not write a completion marker. `bootstrapStatus.reason` reports `registry-scope-limited` for this case. Explicit operations on an unlisted space or encryption service still refuse, and every actual request resolves and checks its destination afresh. No storage settings are published automatically.
+
 ### Signed registry cache
 
 `registryCacheStore` accepts a `RegistryCacheStore` from `@tinycloud/sdk-core`; the default is in-memory. The store keeps the exact fetched UTF-8 response text separately from `ownerKey`, `sequence` and `fetchedAt` metadata. EOA keys use the canonical EIP-55 address across wallet chains; `did:key` keys remain exact. Every read and replacement comparison reuses the canonical signed-v2 verifier.
