@@ -64,6 +64,7 @@
     "tc-2594-resource-control-routing",
     "tc-2594-share-receive-routing",
     "tc-2657-explicit-storage-settings-publication",
+    "tc-2671-share-sender-settings",
     "tc-2687-published-signin",
     "tc-2691-host-expiry",
     "tc2380-q2",

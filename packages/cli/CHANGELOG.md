@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.28
+
+### Patch Changes
+
+- b8978b4: `tc share receive` now says when the account that shared a link needs to publish its storage settings.
+
+  Details: TC-2671
+
 ## 1.7.0-beta.27
 
 ### Patch Changes
