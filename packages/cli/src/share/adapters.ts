@@ -1158,6 +1158,20 @@ export function createShareAuthorityAdapters(input: {
     const value = received.ok ? await received.data.kv.get<Uint8Array>("", { binary: true }) : undefined;
     // The owner Node answers a revoked link's read with `401 - delegation-revoked: <cid>`.
     const failure = !received.ok ? received.error : value !== undefined && !value.ok ? value.error : undefined;
+    // Only the resolver's verified absence verdict means the sender must publish.
+    const cause = failure?.cause;
+    if (failure?.code === "node_not_found" && typeof cause === "object" && cause !== null &&
+        "code" in cause && cause.code === "node_not_found" && "verdict" in cause) {
+      const verdict = cause.verdict;
+      if (typeof verdict === "object" && verdict !== null && "status" in verdict &&
+          verdict.status === "unregistered" && !("offline" in verdict && verdict.offline === true)) {
+        throw new CLIError(
+          "SHARE_SENDER_UNREGISTERED",
+          "The account that shared this hasn't published its storage settings. Ask them to publish them (with tinycloud registry publish), then try again.",
+          ExitCode.NOT_FOUND,
+        );
+      }
+    }
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
       throw new CLIError("SHARE_REVOKED", "This share link has been revoked by its sender.", ExitCode.NOT_FOUND);
     }
