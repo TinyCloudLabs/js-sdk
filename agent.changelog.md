@@ -5,6 +5,10 @@ entry when `agent.dev.md` or related agent workflow expectations change.
 
 ## 2026-11-09
 
+- TC-2393: staged ten-client hosted MCP requirements, existing protocol support,
+  source/live header differences and directory/auth review prerequisites.
+  No runtime or sign-in behavior changed.
+
 - TC-2416: the hosted personal-records tools use one layout (the `applications`
   space, one folder per app); the older `agent-data` layout, the move tool and the
   `layout` input are removed with no compatibility path. `agent.dev.md` says not to
