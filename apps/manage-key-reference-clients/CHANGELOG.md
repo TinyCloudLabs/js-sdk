@@ -1,5 +1,14 @@
 # @tinycloud/manage-key-reference-clients
 
+## 0.0.21-beta.13
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/sdk-core@3.12.0-beta.13
+  - @tinycloud/node-sdk@3.12.0-beta.13
+  - @tinycloud/web-sdk@3.12.0-beta.13
+
 ## 0.0.21-beta.12
 
 ### Patch Changes

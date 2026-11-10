@@ -27712,7 +27712,7 @@ function canonicalKeyHashHex(encryptedSymmetricKey) {
 }
 function pathBoundSessionPermissions(input) {
   const encryptionNetwork = assertNetwork(input.encryptionNetwork);
-  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }];
+  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }];
 }
 function planPathBoundShare(input) {
   const keyPath = pathBoundKeyPath(input.shareId);
@@ -27723,9 +27723,7 @@ function planPathBoundShare(input) {
     encryptionNetwork,
     keyPath,
     keyResource,
-    requiredPermissions: [{ service: "tinycloud.encryption", path: keyResource, actions: ["tinycloud.encryption/key.create"] }],
-    sessionPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
-    registrationPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }],
+    registrationPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
     encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...extra?.metadata === void 0 ? {} : { metadata: { ...extra.metadata } } })
   };
 }
@@ -27779,34 +27777,11 @@ function bindPathBoundContentSource(input) {
     initialCiphertextDigestHex: hex2(sha2562(expected))
   };
 }
-function isUnauthorized(error) {
-  const value = error;
-  return value !== null && typeof value === "object" && (value.status === 401 || value.status === 403 || value.code === "PERMISSION_DENIED" || value.code === "AUTH_UNAUTHORIZED");
-}
 async function encryptAddressedShareContent(input) {
   const { plan, keys } = input;
   const byteLength = input.plaintext.byteLength;
-  let receipt;
-  try {
-    receipt = await keys.createKey(plan.keyPath, { networkId: plan.encryptionNetwork });
-  } catch (error) {
-    if (isUnauthorized(error)) {
-      const status = error.status;
-      throw new AddressedContentSourceError(
-        "key-not-authorized",
-        `the owner session does not hold tinycloud.encryption/key.create on ${plan.keyResource} (the node answers "Unauthorized Action: ${plan.keyResource} / tinycloud.encryption/key.create"); hold it either at sign-in (put plan.sessionPermissions in the manifest: key.create on ${plan.encryptionNetwork}/share/) or per share (requestPermissions(plan.requiredPermissions)) before creating the key` + (status === 403 ? "; if the owner signs in through OpenKey, the request must come from a first-party TinyCloud origin" : "")
-      );
-    }
-    throw error;
-  }
-  if (receipt.networkId !== plan.encryptionNetwork || receipt.keyPath !== plan.keyPath || receipt.state !== void 0 && receipt.state !== "active") {
-    throw new AddressedContentSourceError("key-receipt-mismatch", "the created key does not match this share");
-  }
   const envelope = await keys.encrypt(plan.keyPath, input.plaintext, plan.encryptOptions(input.metadata === void 0 ? void 0 : { metadata: input.metadata }));
   assertEnvelope(plan, envelope);
-  if (receipt.keyVersion !== void 0 && envelope.keyVersion !== receipt.keyVersion) {
-    throw new AddressedContentSourceError("key-receipt-mismatch", "the envelope key version does not match the created key");
-  }
   const storedBytes = pathBoundStoredBytes(envelope);
   return { envelope, storedBytes, byteLength };
 }

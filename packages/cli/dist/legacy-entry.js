@@ -2281,10 +2281,6 @@ function expandEncryptionPermissionEntry(entry) {
       normalizedActions.push("tinycloud.encryption/network.revoke");
       continue;
     }
-    if (sharePrefix && (action === "key.create" || action === "tinycloud.encryption/key.create")) {
-      normalizedActions.push("tinycloud.encryption/key.create");
-      continue;
-    }
     if (action.includes("/")) {
       throw new ManifestValidationError(
         `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`
@@ -2302,20 +2298,8 @@ function expandEncryptionPermissionEntry(entry) {
       seen.add(a);
     }
   }
-  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt" && action !== "tinycloud.encryption/key.create")) {
-    throw new ManifestValidationError("share prefix only supports decrypt and key.create");
-  }
-  if (dedupedActions.includes("tinycloud.encryption/key.create")) {
-    let canonical = false;
-    try {
-      const parsed = parseEncryptionResource(entry.path);
-      canonical = parsed.kind === "prefix" && parsed.network === "default" && parsed.prefix === "share";
-    } catch {
-      canonical = false;
-    }
-    if (!canonical) {
-      throw new ManifestValidationError("share prefix key.create requires the canonical owner address (EIP-55 checksummed) on the default network");
-    }
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("share prefix only supports decrypt");
   }
   return [
     {
