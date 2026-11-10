@@ -2839,5 +2839,32 @@
     },
     "root": { "delta": { "index.mjs": 162, "index.cjs": 160 }, "ceiling": { "index.mjs": 1514830, "index.cjs": 1450177 } },
     "reason": "TC-2687: Node's shared registered-scope eligibility helper and optional bootstrap, secrets, account-sync and implicit encryption guards. No new imports or dependencies; only root admission changes."
+  },
+  "tc2691HostExpiryWorker": {
+    "label": "host SIWE expiry (TC-2691)",
+    "ruling": "Naomi approval relayed by Bobbie, 2026-11-10: exact 777224 gzip bytes, zero headroom. Bun 1.3.14 / rustc 1.99.0, locked source-WASM rebuild.",
+    "base": "b0511a328b6a6ebf36095a96d3c9b011f2686007",
+    "sourceCommits": ["30aac85edf109fbff501995d656c22c337d47836"],
+    "canonicalCI": { "run": "local pinned source-WASM measurement at 30aac85edf109fbff501995d656c22c337d47836; CI confirmation pending", "jobs": [] },
+    "worker": { "delta": 75, "ceiling": 777224 },
+    "reason": "Host SIWE expiry builder in the deferred hosting chunk plus its import seam. Final pinned source-WASM kv-storage worker: 777224 gzip bytes (+75 above 777149); no other bucket changes."
+  },
+  "tc2691HostExpiryReplicaWorker": {
+    "label": "host SIWE expiry (TC-2691)",
+    "ruling": "Naomi approval relayed by Bobbie, 2026-11-10: exact 771072 gzip bytes, zero headroom. Bun 1.3.14 / rustc 1.99.0, locked source-WASM rebuild.",
+    "base": "b0511a328b6a6ebf36095a96d3c9b011f2686007",
+    "sourceCommits": ["30aac85edf109fbff501995d656c22c337d47836"],
+    "canonicalCI": { "run": "local pinned source-WASM measurement at 30aac85edf109fbff501995d656c22c337d47836; CI confirmation pending", "jobs": [] },
+    "replicaWorker": { "delta": 21, "ceiling": 771072 },
+    "reason": "Host SIWE expiry builder in the deferred hosting chunk plus its import seam. Final pinned source-WASM replica worker: 771072 gzip bytes (+21 above 771051); no other bucket changes."
+  },
+  "tc2691HostExpiry": {
+    "label": "host SIWE expiry (TC-2691)",
+    "ruling": "Naomi approval relayed by Bobbie, 2026-11-10; Bobbie authorized the canonical CI CJS ceiling of 1450238 gzip bytes with zero headroom, retaining the ESM ceiling of 1514897. Node 22 / Bun 1.3.14 / rustc 1.99.0, source-WASM build.",
+    "base": "a97061f40c0de26b64597bd4a3de0d2eb39b1e39",
+    "sourceCommits": ["dd81c0f71c6bcf8814b3e89c396142bdb2629fa3"],
+    "canonicalCI": { "run": "42744327164", "jobs": ["129592697357"] },
+    "root": { "delta": { "index.mjs": 67, "index.cjs": 61 }, "ceiling": { "index.mjs": 1514897, "index.cjs": 1450238 } },
+    "reason": "Host SIWE expiry builder in the deferred hosting chunk plus its import seam: the authorization passes its already-loaded hosting tier instead of importing the policy module into the chunk. Canonical CI run 42744327164 job 129592697357 measured CJS 1450238 gzip bytes (+61 above tc2687PublishedSignIn; +14 above the prior TC-2691 ceiling) and ESM 1514881, within its unchanged 1514897 ceiling. No worker, optional, gated or cumulative allowance changes."
   }
 }

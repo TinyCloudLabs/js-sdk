@@ -1410,20 +1410,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Get peer ID from TinyCloud server
     const peerId = await fetchPeerId(host, spaceId, signal);
     checkCurrent();
+    // Keep host-only construction in the existing deferred browser hosting entry.
+    const { withHostExpiry } = await import("../space-hosting.js");
+    checkCurrent();
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage(
+    const now = new Date();
+    const hostSiwe = this.wasm.generateHostSIWEMessage(
       context && siweParameters
         ? siweParameters(peerId)
         : {
             address,
             chainId,
             domain: this.domain,
-            issuedAt: new Date().toISOString(),
+            issuedAt: now.toISOString(),
             spaceId,
             peerId,
           },
     );
+    const siwe = withHostExpiry(hostSiwe, now, EXPIRY.HOSTING_YEARS, this.siweConfig?.expirationTime);
 
     checkCurrent();
     const signing = this.signMessage(siwe, purpose);
