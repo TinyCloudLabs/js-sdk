@@ -784,6 +784,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this.registryVerdict?.status === "registered";
   }
 
+  /** @internal Gates optional setup only; every actual operation still resolves its route afresh. */
+  allowsAutomaticSetup(resource: string): boolean {
+    const verdict = this.registryVerdict;
+    if (verdict === undefined || verdict.status === "unregistered") return true;
+    if (verdict.status !== "registered" || verdict.record === undefined) return false;
+    if (resource.startsWith("urn:tinycloud:encryption:")) return verdict.record.encryptionNode !== null;
+    const identity = pkhSpaceIdentity(resource);
+    return verdict.record.spaces.some((space) =>
+      pkhSpaceIdentity(space.space) === identity &&
+      space.nodes.some((node) => node.mode === "read-write"));
+  }
+
   /** Refresh membership before hosting; a saved no-entry verdict never authorizes a later creation. */
   async assertMayCreateSpace(spaceId = this._tinyCloudSession?.spaceId, host = this.primaryTinyCloudHost): Promise<void> {
     if (!spaceId) throw new Error("Must be signed in to create a space");
@@ -1395,20 +1407,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Get peer ID from TinyCloud server
     const peerId = await fetchPeerId(host, spaceId, signal);
     checkCurrent();
+    // Keep host-only construction in the existing deferred browser hosting entry.
+    const { withHostExpiry } = await import("../space-hosting.js");
+    checkCurrent();
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage(
+    const now = new Date();
+    const hostSiwe = this.wasm.generateHostSIWEMessage(
       context && siweParameters
         ? siweParameters(peerId)
         : {
             address,
             chainId,
             domain: this.domain,
-            issuedAt: new Date().toISOString(),
+            issuedAt: now.toISOString(),
             spaceId,
             peerId,
           },
     );
+    const siwe = withHostExpiry(hostSiwe, now, EXPIRY.HOSTING_YEARS, this.siweConfig?.expirationTime);
 
     checkCurrent();
     const signing = this.signMessage(siwe, purpose);

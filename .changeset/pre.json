@@ -54,6 +54,7 @@
     "tc-2490-cli-reason",
     "tc-2515-cli-attach-wording",
     "tc-2515-cli-attachment",
+    "tc-2518-key-wrap-formats",
     "tc-2526-mcp-approval-reason",
     "tc-2527-grant-no-terminal-question-openkey",
     "tc-2531-no-local-key-confirmation",
@@ -62,6 +63,8 @@
     "tc-2550-device-decrypt-manifest",
     "tc-2594-resource-control-routing",
     "tc-2594-share-receive-routing",
+    "tc-2657-explicit-storage-settings-publication",
+    "tc-2687-published-signin",
     "tc2380-q2",
     "tidy-names-openkey-grant",
     "vfs-bridge-timeout"

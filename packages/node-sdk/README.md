@@ -16,6 +16,8 @@ Mixed signed grants register unchanged on the union of their listed data destina
 
 Request-bound imports keep the original request/profile binding. A differing grant transport host is accepted only after validated permissions resolve through verified full-resource registry memberships; the derived destination replaces neither the saved hint nor signed bytes. Genuine no-entry still requires the original host match.
 
+Sign-in requires a route for the primary space. Automatic account bootstrap, secrets provisioning and account-index sync do not expand a registered owner's selected spaces: optional work without a published writable route is skipped. Canonical bootstrap runs only when its complete target set is available; a skipped subset does not write a completion marker. `bootstrapStatus.reason` reports `registry-scope-limited` for this case. Explicit operations on an unlisted space or encryption service still refuse, and every actual request resolves and checks its destination afresh. No storage settings are published automatically.
+
 ### Signed registry cache
 
 `registryCacheStore` accepts a `RegistryCacheStore` from `@tinycloud/sdk-core`; the default is in-memory. The store keeps the exact fetched UTF-8 response text separately from `ownerKey`, `sequence` and `fetchedAt` metadata. EOA keys use the canonical EIP-55 address across wallet chains; `did:key` keys remain exact. Every read and replacement comparison reuses the canonical signed-v2 verifier.
@@ -45,6 +47,14 @@ Set `siweConfig.resources` to `urn:tinycloud:recipients:<base64url>` URI strings
 
 These resources do not add permissions. Other schemes, percent encoding, escape sequences and literal controls are not accepted in this option. The generated statement and ReCap remain unchanged; `siweConfig.statement` does not replace the generated statement. Omitting resources or passing an empty array leaves the prepared message unchanged.
 
+## Space-hosting lifetime
+
+Node and browser SDKs sign space-hosting delegations with an expiration one UTC calendar year after creation (February 29 becomes February 28). `EXPIRY.HOSTING_YEARS` in `@tinycloud/sdk-core` defines this tier. `siweConfig.expirationTime` can request a shorter lifetime; later values are clamped to the hosting tier. Invalid or elapsed values are refused before signing.
+
+Hosting registration persists independently of this grant's lifetime. Existing hosted-space checks do not automatically renew the grant; normal data operations use their own active session authority.
+
+Details: TC-2691
+
 ## `@tinycloud/node-sdk/credential-pending-store`
 
 File-backed pending store for the email-proof flow. It keeps one file per request under `<home>/credentials/`, named by a hash of the request id. The directory is created with mode 0700 and each file with mode 0600. Permissions and ownership are re-checked on every read. Only a `home` that is itself a symlink is refused; ancestors of `home` may be symlinks, but `realpath(home)` must be owned by the current user. Unsafe files are left in place and reported as an error.
@@ -52,4 +62,16 @@ File-backed pending store for the email-proof flow. It keeps one file per reques
 ## Revoking delegations
 
 `tinycloud.delegation/revoke` on a space is space-wide: it can revoke any delegation in that space, including other apps' grants and the owner's own sessions. Request it only for the command that needs it, with a short expiry, and don't keep it: the CLI's own fallback asks for 5 minutes and stores nothing. Never put it in a long-lived grant or an app manifest.
+
+## Key-wrap formats
+
+Network-key writes use `x25519-aes256gcm/v1` by default. Set `keyWrapV2: true` on `TinyCloudNode`, `TinyCloudWeb`, or `EncryptionServiceConfig` to write TCW2 wraps (`x25519-hkdf-aes256gcm/v2`). `encryptToNetwork(..., { keyWrapV2 })` overrides the service setting for one call. Named-key clients accept the same flag in their configuration and encrypt options; `createNamedKeyClient(node)` inherits the Node setting.
+
+TCW2 uses X25519, HKDF-SHA256, and AES-256-GCM with a canonical authenticated header carrying the recipient, purpose, network, exact key path, key version, and metadata. The SDK compares inline metadata and key context to that header; node responses bind the exact requested capsule hash. Readers accept either supported response wrap format independently of the request format. Network descriptors and inline payload schema versions are unchanged; named-key envelopes retain their existing schema.
+
+Set `requireKeyWrapV2: true` on `TinyCloudNode`, `TinyCloudWeb`, `EncryptionServiceConfig`, or a named-key client to reject incoming v1 network-key wraps. This reader policy defaults to false and is independent of `keyWrapV2`; signed receiver responses may still use v1. `createNamedKeyClient(node)` inherits the Node reader policy unless explicitly overridden. TCW2 context strings must contain well-formed Unicode; lone UTF-16 surrogates are rejected rather than replaced.
+
+Column decryption takes an explicit expected format: `encrypted` requires the column marker and complete authenticated frame; `legacy-plaintext` preserves bytes unchanged, including a leading `0x01`. `strictEncryption` defaults to `false` and refuses explicit legacy plaintext when enabled. V1 network wraps always select `encrypted`; missing framing is never treated as plaintext.
+
+Details: TC-2518, TC-2517
 

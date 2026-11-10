@@ -1,3 +1,4 @@
+import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
@@ -880,6 +881,12 @@ function ownerPermissionsToAbilities(
  * All fields are optional - TinyCloudNode can work with zero configuration.
  */
 export interface TinyCloudNodeConfig {
+  /** Write TCW2 network-key wraps. Disabled by default. */
+  keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
+  /** Refuse explicitly designated legacy plaintext columns. Disabled by default. */
+  strictEncryption?: boolean;
   /** Hex-encoded private key (with or without 0x prefix). Optional - only needed for wallet mode and signIn() */
   privateKey?: string;
   /** Custom signer implementation. If provided, takes precedence over privateKey. */
@@ -3149,7 +3156,10 @@ export class TinyCloudNode {
       this.config.manifest === undefined &&
       this.config.capabilityRequest === undefined
     ) {
-      await this.ensureOwnedSpaceHostedById(this.ownedSpaceId(SECRETS_SPACE));
+      const spaceId = this.ownedSpaceId(SECRETS_SPACE);
+      if (!this.auth?.registryRecordPresent || this.auth.allowsAutomaticSetup(spaceId)) {
+        await this.ensureOwnedSpaceHostedById(spaceId);
+      }
     }
     this.assertSessionEpoch(epoch, "Sign-in");
 
@@ -3210,6 +3220,13 @@ export class TinyCloudNode {
     }
 
     const steps = bootstrapSteps(this._address, this._chainId);
+    const auth = this.auth;
+    if (auth.registryRecordPresent && steps.some((step) =>
+      ("spaceId" in step && !auth.allowsAutomaticSetup(step.spaceId)) ||
+      (step.kind === "encryption-network-create" && !auth.allowsAutomaticSetup(step.networkId)))) {
+      this._bootstrapStatus = { skipped: true, reason: "registry-scope-limited" };
+      return false;
+    }
     try {
       const decision = await this.resolveBootstrapDecision(steps);
       if (decision.action === "skip") {
@@ -3868,12 +3885,12 @@ export class TinyCloudNode {
     if (this.ownStorageFull) {
       return;
     }
-    // Every registry step reads or writes the owned account space; a session
-    // without that authority (a scoped CLI login) would only collect a 401.
-    if (!this.currentSessionCoversAccountRegistry()) {
+    // Index and registry writes need both session authority and a published writable account route.
+    if (!this.currentSessionCoversAccountRegistry() ||
+        (this.auth?.registryRecordPresent && !this.auth.allowsAutomaticSetup(this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE)))) {
       if (!TinyCloudNode.accountRegistrySkipLogged) {
         TinyCloudNode.accountRegistrySkipLogged = true;
-        // Registry sync skipped: the session lacks account-space access. Event name and
+        // Registry sync skipped: account authority or its writable route is absent. Event name and
         // message stay short because web-sdk bundles this file under a zero-headroom size ceiling.
         tinyCloudDebugLogger.log("registry.skip");
       }
@@ -4146,6 +4163,8 @@ export class TinyCloudNode {
       if (!didPrincipalMatches(parsed.ownerDid, this.did)) {
         continue;
       }
+      if (this.config.manifest === undefined && this.config.capabilityRequest === undefined &&
+          this.auth.registryRecordPresent && !this.auth.allowsAutomaticSetup(networkId)) continue;
       await this.ensureEncryptionNetwork(networkId);
     }
   }
@@ -5719,12 +5738,8 @@ export class TinyCloudNode {
       out.set(encrypted, 1);
       return out;
     };
-    const columnDecrypt = (key: Uint8Array, blob: Uint8Array): Uint8Array => {
-      if (blob[0] !== 0x01) {
-        return blob;
-      }
-      return wasm.vault_decrypt(key, blob.slice(1));
-    };
+    const columnDecrypt = (key: Uint8Array, blob: Uint8Array, expectedFormat: ColumnFormat): Uint8Array =>
+      decryptColumn((k, ciphertext) => wasm.vault_decrypt(k, ciphertext), key, blob, expectedFormat, this.config.strictEncryption ?? false);
     return {
       sha256: (data) => wasm.vault_sha256(data),
       randomBytes: (length) => wasm.vault_random_bytes(length),
@@ -5733,24 +5748,34 @@ export class TinyCloudNode {
         wasm.vault_x25519_dh(privateKey, publicKey),
       authEncrypt: (key, plaintext) => wasm.vault_encrypt(key, plaintext),
       authDecrypt: (key, ciphertext) => wasm.vault_decrypt(key, ciphertext),
-      sealToNetworkKey: (networkPublicKey, symmetricKey) => {
-        const seed = wasm.vault_random_bytes(32);
-        const ephemeral = wasm.vault_x25519_from_seed(seed);
+      sealToNetworkKey: (networkPublicKey, symmetricKey, options) => {
+        if (options?.keyWrapV2) return sealKeyV2(networkPublicKey, symmetricKey, options.context);
+        let ephemeral;
+        do {
+          ephemeral = wasm.vault_x25519_from_seed(wasm.vault_random_bytes(32));
+        } while (isKeyWrapV2(ephemeral.publicKey));
         const shared = wasm.vault_x25519_dh(
           ephemeral.privateKey,
           networkPublicKey,
         );
+        if (shared.every(byte => byte === 0)) throw new Error("Invalid key agreement");
         const encrypted = columnEncrypt(shared, symmetricKey);
         const out = new Uint8Array(ephemeral.publicKey.length + encrypted.length);
         out.set(ephemeral.publicKey, 0);
         out.set(encrypted, ephemeral.publicKey.length);
         return out;
       },
-      openWithReceiverKey: (receiverPrivateKey, wrappedKey) => {
+      openWithReceiverKey: (receiverPrivateKey, wrappedKey, expected) => {
+        if (isKeyWrapV2(wrappedKey)) {
+          if (!expected) throw new Error("V2 key wrap requires expected context");
+          return openKeyV2(receiverPrivateKey, wrappedKey, expected);
+        }
+        if (wrappedKey.length < 32 + 1 + 12 + 16) throw new Error("Invalid v1 key wrap length");
         const peerPublic = wrappedKey.slice(0, 32);
         const ciphertext = wrappedKey.slice(32);
         const shared = wasm.vault_x25519_dh(receiverPrivateKey, peerPublic);
-        return columnDecrypt(shared, ciphertext);
+        if (shared.every(byte => byte === 0)) throw new Error("Invalid key agreement");
+        return columnDecrypt(shared, ciphertext, "encrypted");
       },
       verifyNodeSignature: (nodeId, message, signature) =>
         verifyDidKeyEd25519Signature(nodeId, message, signature),
@@ -5932,6 +5957,8 @@ export class TinyCloudNode {
       },
     };
     return new EncryptionService({
+      keyWrapV2: this.config.keyWrapV2 ?? false,
+      requireKeyWrapV2: this.config.requireKeyWrapV2 ?? false,
       resolveTargetNode: async (networkId) => (await this.encryptionDestination(networkId)).nodeDid,
       crypto,
       signer: {

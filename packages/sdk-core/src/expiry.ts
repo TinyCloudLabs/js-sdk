@@ -11,7 +11,7 @@
  *  - Who recovers if the delegation leaks? (re-auth, revocation, no one)
  *  - Who is the principal at use time? (issuer, third party)
  *
- * The five tiers fall out of those answers. Pick a tier, not a number,
+ * The tiers fall out of those answers. Pick a tier, not a number,
  * when introducing a new delegation surface.
  *
  * @packageDocumentation
@@ -71,12 +71,16 @@ const SHARE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  */
 const APP_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Space hosting uses one UTC calendar year, with leap-day clamping. TC-2691.
+const HOSTING_YEARS = 1;
+
 export const EXPIRY = {
   EPHEMERAL_MS,
   SIGNED_READ_URL_MS,
   SESSION_MS,
   SHARE_MS,
   APP_MS,
+  HOSTING_YEARS,
 } as const;
 
 /**
