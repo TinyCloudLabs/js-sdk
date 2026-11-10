@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/operations",
-  "version": "0.9.0-beta.15",
+  "version": "0.9.0-beta.16",
   "description": "TinyCloud shared operations contracts and runtime",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -94,8 +94,8 @@
     "check:generated": "bun scripts/generate.ts --check"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.12.0-beta.11",
-    "@tinycloud/sdk-core": "3.12.0-beta.10",
+    "@tinycloud/node-sdk": "3.12.0-beta.12",
+    "@tinycloud/sdk-core": "3.12.0-beta.12",
     "@tinycloud/sdk-services": "3.12.0-beta.10",
     "node-sql-parser": "5.4.0",
     "zod": "^3.22.0",
