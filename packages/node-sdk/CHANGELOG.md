@@ -1,5 +1,27 @@
 # @tinycloudlabs/node-sdk
 
+## 3.11.2
+
+### Patch Changes
+
+- cf3918d: Space-hosting delegations now expire one year after they're created (UTC; February 29 becomes February 28). A shorter `siweConfig.expirationTime` is kept; a later one is reduced to one year. This applies in the Node and browser SDKs.
+
+  Details: TC-2691
+
+- Updated dependencies [cf3918d]
+  - @tinycloud/sdk-core@3.11.2
+
+## 3.11.1
+
+### Patch Changes
+
+- Sign-in requests to OpenKey now include only the standard public members of the session key.
+
+  Details: TC-2582
+
+- Updated dependencies
+  - @tinycloud/sdk-core@3.11.1
+
 ## 3.11.0
 
 ### Minor Changes

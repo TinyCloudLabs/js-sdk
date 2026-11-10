@@ -137,6 +137,7 @@ export {
   pkhDid,
   principalDid,
   principalDidEquals,
+  publicJwk,
   parseCanonicalNetworkId,
   TinyCloudDebugLogger,
   tinyCloudDebugLogger,
