@@ -1,5 +1,13 @@
 # @tinycloud/vfs
 
+## 0.2.19
+
+### Patch Changes
+
+- Update the `@tinycloud/node-sdk` dependency to 3.11.2.
+
+  Details: TC-2709
+
 ## 0.2.18
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @tinycloud/server
 
+## 2.5.19
+
+### Patch Changes
+
+- Update `@tinycloud/node-sdk` and `@tinycloud/sdk-core` dependencies to 3.11.2.
+
+  Details: TC-2709
+
 ## 2.5.18
 
 ### Patch Changes

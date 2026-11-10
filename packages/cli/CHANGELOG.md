@@ -4,11 +4,12 @@
 
 ### Patch Changes
 
-- Update the CLI's `@tinycloud/node-sdk` and `@tinycloud/sdk-core` dependencies to 3.11.2.
+- Update the CLI's `@tinycloud/node-sdk` and `@tinycloud/sdk-core` dependencies to 3.11.2, and its bundled `@tinycloud/courier` to 0.5.3.
 
   Details: TC-2709
 
 - Updated dependencies
+  - @tinycloud/courier@0.5.3
   - @tinycloud/operations@0.8.1
 
 ## 1.6.4

@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.5.3
+
+### Patch Changes
+
+- Update `@tinycloud/node-sdk` and `@tinycloud/sdk-core` dependencies to 3.11.2.
+
+  Details: TC-2709
+
 ## 0.5.2
 
 ### Patch Changes

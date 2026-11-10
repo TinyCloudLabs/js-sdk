@@ -12,6 +12,7 @@ import { createServer as createPortServer } from "node:net";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { NodeWasmBindings, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 
+import { TinyCloudNode as OperationsTinyCloudNode } from "../../operations/test-support/auth-runtime.ts";
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import {
   OTHER_OWNER_KEY,
@@ -1380,7 +1381,7 @@ test("a refused delegation approval names its stage, code and reason, and never 
   });
 
   // The node's `/delegate` re-activation refuses it, quoting the request in its response.
-  const activate = spyOn(TinyCloudNode.prototype, "useRuntimeDelegation").mockRejectedValue(Object.assign(
+  const activate = spyOn(OperationsTinyCloudNode.prototype, "useRuntimeDelegation").mockRejectedValue(Object.assign(
     new Error(`Failed to activate runtime permission delegation: 403 ${canary}`),
     { cause: { success: false, status: 403, error: canary } },
   ));

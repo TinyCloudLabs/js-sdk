@@ -4,10 +4,10 @@ import { join } from "node:path";
 import {
   NodeWasmBindings,
   PrivateKeySigner,
-  TinyCloudNode,
   siweRuntimeDelegation,
   type PortableDelegation,
 } from "@tinycloud/node-sdk";
+import { TinyCloudNode } from "../../../operations/test-support/auth-runtime.ts";
 
 /** Wallets used as OpenKey principals in hosted MCP tests. */
 export const REQUESTER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
