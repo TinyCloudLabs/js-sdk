@@ -443,6 +443,9 @@ export type Ledger = {
   tc2657RegistryPublication?: LogoutRatchet;
   tc2518KeyWrap?: LogoutRatchet;
   tc2687PublishedSignIn?: LogoutRatchet;
+  tc2691HostExpiryWorker?: WorkerRatchet;
+  tc2691HostExpiryReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
+  tc2691HostExpiry?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1054,6 +1057,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2657RegistryPublication !== undefined) pins.push({ row: "tc2657RegistryPublication", pin: root.tc2657RegistryPublication.sourceCommits.at(-1)! });
   if (root.tc2518KeyWrap !== undefined) pins.push({ row: "tc2518KeyWrap", pin: root.tc2518KeyWrap.sourceCommits.at(-1)! });
   if (root.tc2687PublishedSignIn !== undefined) pins.push({ row: "tc2687PublishedSignIn", pin: root.tc2687PublishedSignIn.sourceCommits.at(-1)! });
+  for (const row of ["tc2691HostExpiryWorker", "tc2691HostExpiryReplicaWorker", "tc2691HostExpiry"] as const) {
+    if (root[row] !== undefined) pins.push({ row, pin: root[row].sourceCommits.at(-1)! });
+  }
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1141,6 +1147,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2657RegistryPublication", root.tc2657RegistryPublication?.root.ceiling],
     ["tc2518KeyWrap", root.tc2518KeyWrap?.root.ceiling],
     ["tc2687PublishedSignIn", root.tc2687PublishedSignIn?.root.ceiling],
+    ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2947,6 +2954,37 @@ export const approvedTc2687PublishedSignIn: LogoutRatchet = {
   reason: "TC-2687: Node's shared registered-scope eligibility helper and optional bootstrap, secrets, account-sync and implicit encryption guards. No new imports or dependencies; only root admission changes.",
 };
 
+/** Naomi, TC-2691: final pinned source-WASM measurements, with no headroom. */
+export const approvedTc2691HostExpiryWorker: WorkerRatchet = {
+  label: "host SIWE expiry (TC-2691)",
+  ruling: "Naomi approval relayed by Bobbie, 2026-11-10: exact 777224 gzip bytes, zero headroom. Bun 1.3.14 / rustc 1.99.0, locked source-WASM rebuild.",
+  base: "b0511a328b6a6ebf36095a96d3c9b011f2686007",
+  sourceCommits: ["30aac85edf109fbff501995d656c22c337d47836"],
+  canonicalCI: { run: "local pinned source-WASM measurement at 30aac85edf109fbff501995d656c22c337d47836; CI confirmation pending", jobs: [] },
+  worker: { delta: 75, ceiling: 777224 },
+  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam. Final pinned source-WASM kv-storage worker: 777224 gzip bytes (+75 above 777149); no other bucket changes.",
+};
+
+export const approvedTc2691HostExpiryReplicaWorker: NonNullable<Ledger["tc2691HostExpiryReplicaWorker"]> = {
+  label: "host SIWE expiry (TC-2691)",
+  ruling: "Naomi approval relayed by Bobbie, 2026-11-10: exact 771072 gzip bytes, zero headroom. Bun 1.3.14 / rustc 1.99.0, locked source-WASM rebuild.",
+  base: "b0511a328b6a6ebf36095a96d3c9b011f2686007",
+  sourceCommits: ["30aac85edf109fbff501995d656c22c337d47836"],
+  canonicalCI: { run: "local pinned source-WASM measurement at 30aac85edf109fbff501995d656c22c337d47836; CI confirmation pending", jobs: [] },
+  replicaWorker: { delta: 21, ceiling: 771072 },
+  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam. Final pinned source-WASM replica worker: 771072 gzip bytes (+21 above 771051); no other bucket changes.",
+};
+
+export const approvedTc2691HostExpiry: LogoutRatchet = {
+  label: "host SIWE expiry (TC-2691)",
+  ruling: "Naomi approval relayed by Bobbie, 2026-11-10: exact root ceilings 1514883 / 1450184 gzip bytes, zero headroom. Bun 1.3.14 / rustc 1.99.0, locked source-WASM rebuild.",
+  base: "b0511a328b6a6ebf36095a96d3c9b011f2686007",
+  sourceCommits: ["30aac85edf109fbff501995d656c22c337d47836"],
+  canonicalCI: { run: "local pinned source-WASM measurement at 30aac85edf109fbff501995d656c22c337d47836; CI confirmation pending", jobs: [] },
+  root: { delta: { "index.mjs": 53, "index.cjs": 7 }, ceiling: { "index.mjs": 1514883, "index.cjs": 1450184 } },
+  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam. Final root gzip bytes 1514883 / 1450184 (+53 / +7 above tc2687PublishedSignIn); no optional, gated or cumulative allowance changes.",
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3080,6 +3118,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2657RegistryPublication: approvedTc2657RegistryPublication,
   tc2518KeyWrap: approvedTc2518KeyWrap,
   tc2687PublishedSignIn: approvedTc2687PublishedSignIn,
+  tc2691HostExpiryWorker: approvedTc2691HostExpiryWorker,
+  tc2691HostExpiryReplicaWorker: approvedTc2691HostExpiryReplicaWorker,
+  tc2691HostExpiry: approvedTc2691HostExpiry,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3448,6 +3489,12 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2687PublishedSignIn !== undefined &&
       (!value.tc2518KeyWrap || JSON.stringify(value.tc2687PublishedSignIn) !== JSON.stringify(approvedTc2687PublishedSignIn))) {
     throw new Error("Only Naomi's exact TC-2687 root-only ratchet is approved.");
+  }
+  for (const row of ["tc2691HostExpiryWorker", "tc2691HostExpiryReplicaWorker", "tc2691HostExpiry"] as const) {
+    if (value[row] !== undefined &&
+        (!value.tc2687PublishedSignIn || JSON.stringify(value[row]) !== JSON.stringify(approvedLedgerRows[row]))) {
+      throw new Error("Only Naomi's exact host SIWE expiry (TC-2691) admission is approved.");
+    }
   }
 }
 
@@ -3924,6 +3971,16 @@ export function validateTc2687PublishedSignInTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2687PublishedSignIn) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2687 root ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** Each TC-2691 bucket is introduced once and immutable afterwards. */
+export function validateTc2691HostExpiryTransition(base: Ledger, current: Ledger): void {
+  for (const row of ["tc2691HostExpiryWorker", "tc2691HostExpiryReplicaWorker", "tc2691HostExpiry"] as const) {
+    if (current[row] !== undefined && JSON.stringify(current[row]) !== JSON.stringify(approvedLedgerRows[row]) ||
+        base[row] !== undefined && JSON.stringify(current[row]) !== JSON.stringify(base[row])) {
+      throw new Error("The host SIWE expiry (TC-2691) admission may be introduced once and cannot change later.");
+    }
   }
 }
 
