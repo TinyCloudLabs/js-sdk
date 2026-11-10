@@ -1,3 +1,4 @@
+import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -198,6 +199,7 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  validateTc2691HostExpiryTransition(baseLedger, ledger);
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
   validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
