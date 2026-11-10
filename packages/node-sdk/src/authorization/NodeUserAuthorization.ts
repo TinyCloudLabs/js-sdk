@@ -96,7 +96,6 @@ import {
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
-import { withHostExpiry } from "./hostSiwe";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
 
@@ -1410,6 +1409,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Get peer ID from TinyCloud server
     const peerId = await fetchPeerId(host, spaceId, signal);
+    checkCurrent();
+    // Keep host-only construction in the existing deferred browser hosting entry.
+    const { withHostExpiry } = await import("../space-hosting.js");
     checkCurrent();
 
     // Generate host SIWE message

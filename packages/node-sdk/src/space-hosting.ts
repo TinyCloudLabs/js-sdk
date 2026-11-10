@@ -3,6 +3,7 @@
  * creates a primary space that is not hosted. Both are loaded on first use, so
  * browser bundles carry them as a separate file rather than in their root.
  */
+import { EXPIRY } from "@tinycloud/sdk-core";
 import type { ISpaceCreationHandler, SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
 import type { FetchFunction, InvokeAnyEntry, ServiceHeaders } from "@tinycloud/sdk-services";
 import type { SpaceHosting } from "./authorization/NodeUserAuthorization";
@@ -262,4 +263,35 @@ export async function createPrimarySpace({
     throw err;
   }
   handler.onSpaceCreated?.(context);
+}
+
+/** Add the bounded host lifetime before any wallet signature. */
+export function withHostExpiry(siwe: string, now: Date, requestedExpiry?: string): string {
+  if (/[\r\u0085\u2028\u2029]/.test(siwe)) {
+    throw new Error("Host SIWE contains an unsupported line separator");
+  }
+  const lines = siwe.split("\n");
+  if (lines.some((line) => line.startsWith("Expiration Time:"))) {
+    throw new Error("Host SIWE already contains Expiration Time");
+  }
+  // SIWE has an optional single-line statement, then fixed URI/version/chain/nonce/time fields.
+  const uriIndex = lines[3] === "" ? 4 : 5;
+  const issuedAtIndex = uriIndex + 4;
+  if (!lines[uriIndex]?.startsWith("URI: ") || !lines[issuedAtIndex]?.startsWith("Issued At: ")) {
+    throw new Error("Host SIWE has no positional Issued At field");
+  }
+
+  const ceiling = new Date(now);
+  const day = ceiling.getUTCDate();
+  ceiling.setUTCDate(1);
+  ceiling.setUTCFullYear(ceiling.getUTCFullYear() + EXPIRY.HOSTING_YEARS);
+  const lastDay = new Date(Date.UTC(ceiling.getUTCFullYear(), ceiling.getUTCMonth() + 1, 0)).getUTCDate();
+  ceiling.setUTCDate(Math.min(day, lastDay));
+  const requested = requestedExpiry === undefined ? ceiling.getTime() : Date.parse(requestedExpiry);
+  if (!Number.isFinite(requested) || requested <= now.getTime()) {
+    throw new Error("Host expiry must be a valid future timestamp");
+  }
+  const expiry = new Date(Math.min(requested, ceiling.getTime())).toISOString();
+  lines.splice(issuedAtIndex + 1, 0, `Expiration Time: ${expiry}`);
+  return lines.join("\n");
 }
