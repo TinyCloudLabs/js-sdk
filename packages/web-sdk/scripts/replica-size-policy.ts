@@ -2977,12 +2977,12 @@ export const approvedTc2691HostExpiryReplicaWorker: NonNullable<Ledger["tc2691Ho
 
 export const approvedTc2691HostExpiry: LogoutRatchet = {
   label: "host SIWE expiry (TC-2691)",
-  ruling: "Naomi approval relayed by Bobbie, 2026-11-10; Bobbie authorized exact remeasurement after the import-seam fix: root ceilings 1514897 / 1450224 gzip bytes, zero headroom. Node 22 / Bun 1.3.14 / rustc 1.99.0, source-WASM rebuild.",
+  ruling: "Naomi approval relayed by Bobbie, 2026-11-10; Bobbie authorized the canonical CI CJS ceiling of 1450238 gzip bytes with zero headroom, retaining the ESM ceiling of 1514897. Node 22 / Bun 1.3.14 / rustc 1.99.0, source-WASM build.",
   base: "a97061f40c0de26b64597bd4a3de0d2eb39b1e39",
-  sourceCommits: ["969fcdefce2bfb3c635b0242c5d1ffbd87e3f896"],
-  canonicalCI: { run: "local pinned source-WASM measurement at 969fcdefce2bfb3c635b0242c5d1ffbd87e3f896; CI confirmation pending", jobs: [] },
-  root: { delta: { "index.mjs": 67, "index.cjs": 47 }, ceiling: { "index.mjs": 1514897, "index.cjs": 1450224 } },
-  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam: the authorization passes its already-loaded hosting tier instead of importing the policy module into the chunk. Final root gzip bytes 1514897 / 1450224 (+67 / +47 above tc2687PublishedSignIn; +14 / +40 from the prior TC-2691 measurement); no worker, optional, gated or cumulative allowance changes.",
+  sourceCommits: ["dd81c0f71c6bcf8814b3e89c396142bdb2629fa3"],
+  canonicalCI: { run: "42744327164", jobs: ["129592697357"] },
+  root: { delta: { "index.mjs": 67, "index.cjs": 61 }, ceiling: { "index.mjs": 1514897, "index.cjs": 1450238 } },
+  reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam: the authorization passes its already-loaded hosting tier instead of importing the policy module into the chunk. Canonical CI run 42744327164 job 129592697357 measured CJS 1450238 gzip bytes (+61 above tc2687PublishedSignIn; +14 above the prior TC-2691 ceiling) and ESM 1514881, within its unchanged 1514897 ceiling. No worker, optional, gated or cumulative allowance changes.",
 };
 
 const tc2481WebEvidence = [

@@ -5225,7 +5225,7 @@ describe("TC-2687 published sign-in root-only admission (#910)", () => {
 describe("host SIWE expiry (TC-2691) exact size admissions", () => {
   it("admits exactly the final roots and refuses the next byte", () => {
     validateLedger(shipped);
-    for (const [format, measured] of [["index.mjs", 1514897], ["index.cjs", 1450224]] as const) {
+    for (const [format, measured] of [["index.mjs", 1514897], ["index.cjs", 1450238]] as const) {
       const ceiling = rootCeilingFor(shipped, format).ceiling;
       expect(measured <= ceiling).toBe(true);
       expect(measured + 1 > ceiling).toBe(true);
