@@ -1,3 +1,4 @@
+import { HOST_SIWE } from "../test-support/host-siwe";
 /**
  * Default registry-first routing at sign-in and space hosting.
  *
@@ -96,7 +97,7 @@ function wasmBindings(): IWasmBindings {
     createDelegation: async () => {
       throw new Error("not used");
     },
-    generateHostSIWEMessage: () => "host siwe",
+    generateHostSIWEMessage: () => HOST_SIWE,
     siweToDelegationHeaders: () => ({ Authorization: "Bearer host" }),
     protocolVersion: () => 1,
     vault_encrypt: () => new Uint8Array(),
