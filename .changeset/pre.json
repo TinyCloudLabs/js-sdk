@@ -38,6 +38,7 @@
     "space-hosting-probe-node-sdk",
     "space-hosting-probe-web-sdk",
     "tc-2281-openkey-sign-keyid",
+    "tc-2379-session-storage-lifecycle",
     "tc-2416-app-task-bundle",
     "tc-2416-apps-context-annotation",
     "tc-2416-apps-layout",

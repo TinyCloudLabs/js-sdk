@@ -1,5 +1,16 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.14
+
+### Patch Changes
+
+- e50dd6c: Signing out now starts clearing the saved session before it waits for background cleanup, in the Node and browser SDKs. Storage-adapter interfaces are unchanged.
+
+  Details: TC-2379
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/sdk-core@3.12.0-beta.14
+
 ## 3.12.0-beta.13
 
 ### Minor Changes
