@@ -7612,7 +7612,6 @@ export class TinyCloudNode {
         );
       }
 
-
       // The session may have been replaced or signed out while signing.
       graph.assertActive();
       this.runtimePermissionGrants.push({
