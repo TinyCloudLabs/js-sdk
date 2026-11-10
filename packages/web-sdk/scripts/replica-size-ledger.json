@@ -2794,5 +2794,35 @@
     },
     "root": { "delta": { "index.mjs": 3005, "index.cjs": 4175 }, "ceiling": { "index.mjs": 1495129, "index.cjs": 1436672 } },
     "reason": "TC-2594: registry-routed policy, identity, delegation and sharing transports; client-side CACAO verification of received and portable parents. Both canonical backends measured index.mjs 1,495,129 B and index.cjs 1,436,672 B, +3005 / +4175 over TC-2281. The coherent review follow-up binds operations to their initiating authority and preserves routed outcomes. Public-parent verification cannot reuse the private-key persisted-session WASM verifier; the single-chunk contract prevents a lazy-import saving. Admit only these root sizes; no owned-budget entry, cumulative allowance, first-import, activation, worker or gated cap changes."
+  },
+  "tc2657RegistryPublication": {
+    "label": "TC-2657 explicit publication registration history, root admission (PR #902)",
+    "ruling": "Naomi, TC-2657, 2026-11-09: exact root-only ratchet above tc2594ResourceTransport, zero headroom. SQLite and PostgreSQL in run 42697451631 at 4d3c24b325efb9879a18b47e0efe341beb43f314 agree. Bun 1.3.14; rustc 1.99.0. Final pinned CI must confirm the integrated candidate. No non-root cap, owned-budget entry or cumulative allowance change.",
+    "base": "e86376ede34be5a34b5ef58c7d43051199fc51b2",
+    "sourceCommits": ["4d3c24b325efb9879a18b47e0efe341beb43f314"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42697451631",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42697451631/job/129432981527",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42697451631/job/129432981294"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 438, "index.cjs": 363 }, "ceiling": { "index.mjs": 1495567, "index.cjs": 1437035 } },
+    "reason": "TC-2657: explicit legacy-only, signed-v2 and unknown registration provenance preserves history while allowing a first signed publication. The browser-reachable growth is Core registry-policy.ts validation, merge and high-water handling. The publisher remains an opt-in subpath; no Operations, CLI or Node-only module enters the Web root. Both canonical backends measured +438 / +363 bytes above TC-2594. Admit only these root sizes; all non-root caps, cumulative allowances and historical rows remain unchanged."
+  },
+  "tc2518KeyWrap": {
+    "label": "TC-2518 key wrap v2 envelope and reader policy, root admission (PR #906)",
+    "ruling": "Naomi, TC-2518: exact root-only ratchet above tc2657RegistryPublication, zero headroom. Local Bun 1.3.14 / rustc 1.99.0 at 6269d6b37412c90bbd71ce31939b64f8e3fe15ed measured 1514668 / 1450017 B; both backends in run 42724055569 measured 1514639 / 1450000 B. No non-root cap, owned-budget entry or cumulative allowance change.",
+    "base": "c4570b9290b5ac6785f7262677ea169b14b03c2b",
+    "sourceCommits": ["6269d6b37412c90bbd71ce31939b64f8e3fe15ed"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42724055569",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42724055569/job/129525010524",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42724055569/job/129525010668"
+      ]
+    },
+    "root": { "delta": { "index.mjs": 19101, "index.cjs": 12982 }, "ceiling": { "index.mjs": 1514668, "index.cjs": 1450017 } },
+    "reason": "TC-2518: key wrap v2 envelope + reader policy pulls @noble/ciphers AES-GCM/GHASH and @noble/hashes HKDF plus the v2 codec through the sdk-services root/encryption entries (new Noble modules: 61,205 B before tree-shaking/minification; X25519/SHA-256 were already reached). Local master-to-candidate gzip +19,222 B ESM / +12,957 B CJS; these exact ceilings are +19,101 / +12,982 above TC-2657. No other bucket or historical row changes."
   }
 }

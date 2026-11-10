@@ -79,6 +79,35 @@ With no saved storage settings, an unreachable registry refuses secrets routing 
 
 Details: TC-2481
 
+## Publish storage settings explicitly
+
+Sign-in does not publish a signed v2 storage-settings record. A newly signed-in account with no registry entry has no verified settings to reuse during an outage. To opt in, use a profile signed in with `--method local` and explicitly list the spaces and server:
+
+```bash
+tinycloud --profile owner registry publish default secrets --server https://your-storage-server.example
+tinycloud --profile owner --json registry publish applications --server https://your-storage-server.example --yes
+tinycloud --profile owner registry show
+```
+
+The preview lists the complete resulting account, server identities, spaces and decryption service, including existing entries that will be kept. A `*` marks an added or changed space. Existing memberships and the decryption service are preserved unless explicitly changed; `--read-only` selects read-only membership for the named server, and `--decryption-server <url>` explicitly selects the decryption service.
+
+**Published settings are public:** anyone who knows the account ID can look up its server addresses and plaintext space names. Review the preview before approving. The confirmation names both explicitly. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
+
+The confirmation includes the public-lookup warning once. The marker legend appears only when a space is marked. If the selected settings are already published, the command says nothing changed and JSON returns `published: true, changed: false`; it sends no additional PUT. A real update returns `changed: true`. Both modes still save the verified local copy, and no-change output keeps the disclosure.
+
+A space absent from a registered account's published settings refuses instead of falling back to another server. Include every space this account needs; existing published spaces not named in this command remain intact. Publication does not create a space, host data, grant permission, or move existing data.
+
+The command checks both public server identity surfaces, merges only the selected memberships, signs with the account's own key, and advances the existing sequence. An agent/session key cannot substitute for the owner's key. Malformed/absent known records, rollback, invalid signatures and conflicting updates refuse without an automatic write retry. After a conflict, run the command again without `--yes` to review fresh settings; `registry show` only reads the saved local copy.
+
+Registration history distinguishes a legacy-only observation from an accepted signed record. Explicit legacy-only history can publish its first signed record, including sequence zero. Accepting a signed record durably promotes that history; it never becomes legacy-only again. Existing untyped history remains unknown rather than being cleared or relabelled, so publication refuses if that history cannot establish whether a signed record was already accepted. Recovery for ambiguous older profiles is not part of this command. Legacy records still do not authorize routing.
+
+Durably confirmed signed history can be reused in memory after a profile commit. A failed history write preserves its numeric bound but never counts as durable confirmation.
+
+After a successful verified publication the CLI saves its signed copy for offline inspection and the bounded outage policy above. If remote publication succeeds but local persistence fails, the error explicitly says the settings were published; it does not pretend that no remote change occurred. Import the SDK's `publishLocationRecordV2` from `@tinycloud/sdk-core/registry-publication`; it is an opt-in entry point, not an eager Web-root export. It returns the verified record and leaves persistence to its caller. Its `onPrepared` callback receives the complete proposed payload and current verified record before signing; returning false cancels without a write.
+
+Details: TC-2657
+
+
 ## Quick Start
 
 ```bash

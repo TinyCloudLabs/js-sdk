@@ -53,3 +53,15 @@ File-backed pending store for the email-proof flow. It keeps one file per reques
 
 `tinycloud.delegation/revoke` on a space is space-wide: it can revoke any delegation in that space, including other apps' grants and the owner's own sessions. Request it only for the command that needs it, with a short expiry, and don't keep it: the CLI's own fallback asks for 5 minutes and stores nothing. Never put it in a long-lived grant or an app manifest.
 
+## Key-wrap formats
+
+Network-key writes use `x25519-aes256gcm/v1` by default. Set `keyWrapV2: true` on `TinyCloudNode`, `TinyCloudWeb`, or `EncryptionServiceConfig` to write TCW2 wraps (`x25519-hkdf-aes256gcm/v2`). `encryptToNetwork(..., { keyWrapV2 })` overrides the service setting for one call. Named-key clients accept the same flag in their configuration and encrypt options; `createNamedKeyClient(node)` inherits the Node setting.
+
+TCW2 uses X25519, HKDF-SHA256, and AES-256-GCM with a canonical authenticated header carrying the recipient, purpose, network, exact key path, key version, and metadata. The SDK compares inline metadata and key context to that header; node responses bind the exact requested capsule hash. Readers accept either supported response wrap format independently of the request format. Network descriptors and inline payload schema versions are unchanged; named-key envelopes retain their existing schema.
+
+Set `requireKeyWrapV2: true` on `TinyCloudNode`, `TinyCloudWeb`, `EncryptionServiceConfig`, or a named-key client to reject incoming v1 network-key wraps. This reader policy defaults to false and is independent of `keyWrapV2`; signed receiver responses may still use v1. `createNamedKeyClient(node)` inherits the Node reader policy unless explicitly overridden. TCW2 context strings must contain well-formed Unicode; lone UTF-16 surrogates are rejected rather than replaced.
+
+Column decryption takes an explicit expected format: `encrypted` requires the column marker and complete authenticated frame; `legacy-plaintext` preserves bytes unchanged, including a leading `0x01`. `strictEncryption` defaults to `false` and refuses explicit legacy plaintext when enabled. V1 network wraps always select `encrypted`; missing framing is never treated as plaintext.
+
+Details: TC-2518, TC-2517
+

@@ -2,10 +2,12 @@ import { Command } from "commander";
 import { invokeOperation } from "@tinycloud/operations";
 import { CLIError, handleError } from "../output/errors.js";
 import { outputJson, shouldOutputJson } from "../output/formatter.js";
+import { registerRegistryPublishCommand } from "./registry-publish.js";
 
 export function registerRegistryCommand(program: Command): void {
-  program.command("registry").description("See where your data is stored, from the copy saved on this computer")
-    .command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.")
+  const registry = program.command("registry").description("See or publish your storage settings.");
+  registerRegistryPublishCommand(registry);
+  registry.command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.")
     .action(async (did: string | undefined, _options: unknown, command: Command) => {
       try {
         const options = command.optsWithGlobals();
