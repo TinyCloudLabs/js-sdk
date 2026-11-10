@@ -1,9 +1,9 @@
 import type { ISessionStorage } from "@tinycloud/sdk-core";
+import { invalidateOwnSession } from "@tinycloud/sdk-core";
 
 /**
- * Clear the stored session for `address`, unless it provably belongs to a different session than
- * `ownSignature` (a newer sign-in saved for the same address). A stored session that cannot be read
- * or compared is cleared: sign-out never keeps authority it cannot check.
+ * Clear only the leaving session. Ownership-read failures reject: an unreadable record
+ * is not permission to delete a replacement. Legacy adapters provide no atomic suppression guarantee.
  */
 export async function clearPersistedSessionIfOwn(
   storage: ISessionStorage,
@@ -11,12 +11,10 @@ export async function clearPersistedSessionIfOwn(
   ownSignature: string | undefined,
 ): Promise<void> {
   if (ownSignature !== undefined) {
-    try {
-      const stored = await storage.load(address);
-      if (stored !== null && stored.signature !== ownSignature) return;
-    } catch {
-      // Unreadable: fall through and clear.
-    }
+    const owned = invalidateOwnSession(storage, address, ownSignature);
+    if (owned !== undefined) return owned;
+    const stored = await storage.load(address);
+    if (stored !== null && stored.signature !== ownSignature) return;
   }
   await storage.clear(address);
 }

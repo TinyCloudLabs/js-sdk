@@ -347,3 +347,24 @@ describe("a failing storage or node never throws", () => {
     expect(await cids(reloaded(backing))).toEqual(["g1"]);
   });
 });
+
+test("a panel grant whose storage load finishes after sign-out is not persisted", async () => {
+  const { backing, storage } = await signedIn();
+  const loading = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let current = true;
+  const remembering = rememberRuntimeGrants({
+    loadRuntimeGrants: async (address) => {
+      loading.resolve();
+      await release.promise;
+      return storage.loadRuntimeGrants(address);
+    },
+    saveRuntimeGrants: (address, grants) => storage.saveRuntimeGrants(address, grants),
+  }, ADDRESS, [grant("retired-panel")], () => current);
+  await loading.promise;
+  current = false;
+  await storage.clear(ADDRESS);
+  release.resolve();
+  await remembering;
+  expect(grantKeys(backing)).toEqual([]);
+});

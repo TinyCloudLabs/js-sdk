@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
+import { invalidateOwnSession } from "@tinycloud/sdk-core";
 import { FileSessionStorage } from "./FileSessionStorage";
 
 const ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -114,5 +115,45 @@ describe("FileSessionStorage", () => {
 
     expect(await storage.load(ADDRESS)).toBeNull();
     expect(readdirSync(dir)).toHaveLength(0);
+  });
+
+  test("retirement survives a new adapter and cannot remove or overwrite a replacement session", async () => {
+    const dir = tempDir();
+    const old = session("old");
+    const newer = session("new");
+    const storage = new FileSessionStorage(dir);
+    await storage.save(ADDRESS, old);
+    await new FileSessionStorage(dir).save(ADDRESS, newer);
+    await invalidateOwnSession(storage, ADDRESS, old.signature);
+    const fresh = new FileSessionStorage(dir);
+    expect((await fresh.load(ADDRESS))?.signature === newer.signature).toBe(true);
+    await expect(fresh.save(ADDRESS, old)).rejects.toBeInstanceOf(Error);
+    expect((await fresh.load(ADDRESS))?.signature === newer.signature).toBe(true);
+  });
+
+  test("an unreadable owned record is not deleted during conditional retirement", async () => {
+    const dir = tempDir();
+    const old = session("old");
+    const storage = new FileSessionStorage(dir);
+    await storage.save(ADDRESS, old);
+    const record = join(dir, readdirSync(dir)[0]!);
+    writeFileSync(record, "{ invalid json");
+    await expect(invalidateOwnSession(storage, ADDRESS, old.signature)!).rejects.toBeInstanceOf(Error);
+    expect(existsSync(record)).toBe(true);
+  });
+
+  test("a symlink in a retirement marker cannot truncate another file", async () => {
+    const dir = tempDir();
+    const old = session("old");
+    const storage = new FileSessionStorage(dir);
+    await storage.save(ADDRESS, old);
+    await invalidateOwnSession(storage, ADDRESS, old.signature);
+    const marker = join(dir, readdirSync(dir).find((name) => name.endsWith(".signed-out"))!);
+    const target = join(dir, "unrelated");
+    writeFileSync(target, "keep this content");
+    unlinkSync(marker);
+    symlinkSync(target, marker);
+    await expect(invalidateOwnSession(storage, ADDRESS, old.signature)!).rejects.toBeInstanceOf(Error);
+    expect(readFileSync(target, "utf-8") === "keep this content").toBe(true);
   });
 });

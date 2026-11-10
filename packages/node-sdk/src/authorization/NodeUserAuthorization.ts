@@ -466,6 +466,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * cancellation cleanup, so no later write can land between the two.
    */
   private persistenceQueue: Promise<void> = Promise.resolve();
+  private readonly pendingPersistence = new Set<PersistedSessionData>();
   private extensions: Extension[] = [];
   private _session?: ClientSession;
   private _tinyCloudSession?: TinyCloudSession;
@@ -662,6 +663,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const run = this.persistenceQueue.then(task);
     this.persistenceQueue = run.catch(() => undefined);
     return run;
+  }
+
+  private persistSession(address: string, data: PersistedSessionData, generation: number): Promise<void> {
+    this.assertSignInCurrent(generation);
+    this.pendingPersistence.add(data);
+    return this.enqueuePersistence(async () => {
+      this.assertSignInCurrent(generation);
+      let failure: { error: unknown } | undefined;
+      try {
+        await this.sessionStorage.save(address, data);
+      } catch (error) {
+        failure = { error };
+      }
+      if (generation !== this.sessionGeneration) {
+        await clearPersistedSessionIfOwn(this.sessionStorage, address, data.signature);
+        this.assertSignInCurrent(generation);
+      }
+      if (failure) throw failure.error;
+    }).finally(() => { this.pendingPersistence.delete(data); });
   }
 
   /** @internal Atomically adopt the state staged by TinyCloudNode.restoreSession. */
@@ -1892,15 +1912,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       now.toISOString(),
       replicaStamp,
     );
-    await this.enqueuePersistence(async () => {
-      await this.sessionStorage.save(address, persistedData);
-      // Signed out while saving: remove exactly the record this save wrote.
-      // A newer sign-in's save is queued behind this and lands afterwards.
-      if (generation !== this.sessionGeneration) {
-        await this.sessionStorage.clear(address);
-      }
-    });
-    // Never publish a session that was signed out while it was being saved.
+    await this.persistSession(address, persistedData, generation);
     this.assertSignInCurrent(generation);
 
     // Set current session
@@ -1931,11 +1943,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /**
    * Sign out and clear the current session.
    */
-  async signOut(): Promise<void> {
-    if (this._address) {
-      await this.clearPersistedSession(this._address);
-    }
-    this._session = undefined;
+  signOut(): Promise<void> {
+    const address = this._address;
+    const signature = this._tinyCloudSession?.signature;
+    this.resetSession(this.sessionManager, this.activeSessionKeyId, this.tinycloudHosts);
+    return this.clearPersistedSession(address, signature);
   }
 
   /**
@@ -2068,6 +2080,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param jwk - The JWK from `prepareSessionForSigning()`
    */
   async signInWithPreparedSession(
+    prepared: { siwe: string; jwk: Record<string, unknown>; spaceId: string; verificationMethod: string },
+    signature: string,
+    keyId: string,
+    jwk: Record<string, unknown>,
+  ): Promise<ClientSession> {
+    const generation = this.sessionGeneration;
+    return this.completePreparedSession(prepared, signature, keyId, jwk, generation);
+  }
+
+  private async completePreparedSession(
     prepared: {
       siwe: string;
       jwk: Record<string, unknown>;
@@ -2077,7 +2099,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     signature: string,
     keyId: string,
     jwk: Record<string, unknown>,
+    generation: number,
   ): Promise<ClientSession> {
+    this.assertSignInCurrent(generation);
     // Complete session setup with the prepared session + signature
     const session = this.wasm.completeSessionSetup({
       ...prepared,
@@ -2089,8 +2113,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // For now, we'll get it from the signer since it should match
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
+    this.assertSignInCurrent(generation);
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
+    this.assertSignInCurrent(generation);
 
     // Create client session (web-core compatible)
     const clientSession: ClientSession = {
@@ -2134,7 +2160,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);
-    await this.sessionStorage.save(address, persistedData);
+    await this.persistSession(address, persistedData, generation);
+    this.assertSignInCurrent(generation);
 
     // Set current session
     this._session = clientSession;
@@ -2145,16 +2172,19 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Verify SDK-node protocol compatibility and discover supported features.
     await this.refreshNodeInfo();
+    this.assertSignInCurrent(generation);
 
     // Call extension hooks
     for (const ext of this.extensions) {
       if (ext.afterSignIn) {
         await ext.afterSignIn(clientSession);
+        this.assertSignInCurrent(generation);
       }
     }
 
     // Ensure space exists (creates if needed when autoCreateSpace is true)
     await this.ensureSpaceExists();
+    this.assertSignInCurrent(generation);
 
     return clientSession;
   }
@@ -2235,6 +2265,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async prepareOpenKeySignIn(
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
   ): Promise<PreparedOpenKeyAuthorization> {
+    const generation = this.sessionGeneration;
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     assertMaxExpiresAt(options?.maxExpiresAt);
     // A per-call host override is the host this session will actually use,
@@ -2255,10 +2286,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // sign anything; signInWithPreparedSession is intentionally too late.
     const signingAddress = canonicalizeAddress(await this.signer.getAddress());
     const signingChainId = await this.signer.getChainId();
+    this.assertSignInCurrent(generation);
     await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
+    this.assertSignInCurrent(generation);
 
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
     const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning();
+    this.assertSignInCurrent(generation);
 
     // 2. Build the presentation envelope from the instance manifest (if
     //    any). This is the SUPPORTED production path for surfacing an
@@ -2297,7 +2331,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk,
       address,
       chainId,
-      generation: this.sessionGeneration,
+      generation,
       createdAt: Date.now(),
       // Kept in memory with the pending request. It is not part of `request`, so it is never sent to OpenKey, and
       // nothing here is persisted.
@@ -2324,6 +2358,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     for (let attempt = 0; ; ) {
       try {
         result ??= await authorization;
+        this.assertSignInCurrent(pending.generation);
         signed = await this.verifyOpenKeyResult(result, prepared, {
           // Relax only for a request that actually carried the opt-in.
           allowExpirationChange: originalRequest.expiryChangeable === true,
@@ -2332,6 +2367,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         signature = result.signature;
         break;
       } catch (error) {
+        this.assertSignInCurrent(pending.generation);
         if (!options?.retryResult) throw error;
         const next = await options.retryResult(
           error instanceof Error ? error : new Error(String(error)),
@@ -2343,7 +2379,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
     }
     // Verification retries never repeat network activation or create a new SIWE.
-    return this.signInWithPreparedSession(signed, signature, keyId, jwk);
+    this.assertSignInCurrent(pending.generation);
+    return this.completePreparedSession(signed, signature, keyId, jwk, pending.generation);
   }
 
   /**
@@ -2449,11 +2486,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
     jwk: Record<string, unknown>,
     options?: { expiryChangeable?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
   ): Promise<ClientSession> {
+    const generation = this.sessionGeneration;
     const signed = await this.verifyOpenKeyResult(result, prepared, {
       allowExpirationChange: options?.expiryChangeable === true,
       maxExpiresAt: options?.maxExpiresAt,
     });
-    return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
+    this.assertSignInCurrent(generation);
+    return this.completePreparedSession(signed, result.signature, keyId, jwk, generation);
   }
 
   /** Validate a candidate without activating a network session, so paste retries reuse one preparation. */
@@ -2954,11 +2993,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * Clear persisted session data. With `ownSignature`, a stored session that provably has a different
    * signature (a newer sign-in for the same address) is left alone.
    */
-  async clearPersistedSession(address?: string, ownSignature?: string): Promise<void> {
+  clearPersistedSession(address?: string, ownSignature?: string): Promise<void> {
+    const invalidations: Promise<void>[] = [];
     const targetAddress = address ?? this._address;
     if (targetAddress) {
-      await clearPersistedSessionIfOwn(this.sessionStorage, targetAddress, ownSignature);
+      invalidations.push(clearPersistedSessionIfOwn(this.sessionStorage, targetAddress, ownSignature));
     }
+    for (const pending of this.pendingPersistence) {
+      if (pending.address !== targetAddress || pending.signature !== ownSignature) {
+        invalidations.push(clearPersistedSessionIfOwn(this.sessionStorage, pending.address, pending.signature));
+      }
+    }
+    return Promise.all(invalidations).then(() => undefined);
   }
 
   /**

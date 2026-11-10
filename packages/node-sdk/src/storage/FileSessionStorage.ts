@@ -1,6 +1,7 @@
-import { ISessionStorage, PersistedSessionData, validatePersistedSessionData } from "@tinycloud/sdk-core";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
+import { ISessionStorage, PersistedSessionData, validatePersistedSessionData, registerOwnedSessionStorage } from "@tinycloud/sdk-core";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync, lstatSync } from "fs";
 import { dirname, join } from "path";
+import { createHash } from "node:crypto";
 
 /**
  * File-based session storage for Node.js.
@@ -29,6 +30,9 @@ export class FileSessionStorage implements ISessionStorage {
   constructor(baseDir?: string) {
     this.baseDir = baseDir || this.getDefaultDir();
     this.ensureDirectoryExists();
+    if (new.target === FileSessionStorage) {
+      registerOwnedSessionStorage(this, (address, signature) => this.invalidateSession(address, signature));
+    }
   }
 
   /**
@@ -58,11 +62,47 @@ export class FileSessionStorage implements ISessionStorage {
     return join(this.baseDir, filename);
   }
 
+  private retirementPath(address: string, signature: string): string {
+    return `${this.getFilePath(address)}.${createHash("sha256").update(signature).digest("hex")}.signed-out`;
+  }
+
+  private invalidateSession(address: string, signature: string): void {
+    let failure: unknown;
+    const marker = this.retirementPath(address, signature);
+    try {
+      writeFileSync(marker, "", { mode: 0o600, flag: "wx" });
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+        try {
+          if (!lstatSync(marker).isFile()) failure = error;
+        } catch (readError) {
+          failure = readError;
+        }
+      } else {
+        failure = error;
+      }
+    }
+    try {
+      const filePath = this.getFilePath(address);
+      if (existsSync(filePath)) {
+        // The comparison and unlink do not yield to another participating writer in this process.
+        const stored = JSON.parse(readFileSync(filePath, "utf-8")) as PersistedSessionData;
+        if (stored.signature === signature) unlinkSync(filePath);
+      }
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure !== undefined) throw failure;
+  }
+
   /**
    * Save a session for an address.
    */
   async save(address: string, session: PersistedSessionData): Promise<void> {
     const filePath = this.getFilePath(address);
+    if (existsSync(this.retirementPath(address, session.signature))) {
+      throw new Error("Session was cancelled by sign-out.");
+    }
     const data = JSON.stringify(session, null, 2);
     // Write a sibling temp file, then rename over the target: a crash or a failed write
     // never leaves a half-written session where the previous one was.
@@ -109,6 +149,7 @@ export class FileSessionStorage implements ISessionStorage {
       }
 
       const session = validation.data;
+      if (existsSync(this.retirementPath(address, session.signature))) return null;
 
       // Check if session is expired
       const expiresAt = new Date(session.expiresAt);
@@ -150,6 +191,7 @@ export class FileSessionStorage implements ISessionStorage {
     try {
       const data = readFileSync(filePath, "utf-8");
       const session: PersistedSessionData = JSON.parse(data);
+      if (existsSync(this.retirementPath(address, session.signature))) return false;
 
       // Check if session is expired
       const expiresAt = new Date(session.expiresAt);

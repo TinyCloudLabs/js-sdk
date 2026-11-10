@@ -1496,6 +1496,8 @@ export class TinyCloudNode {
   private _activeServiceSession?: ServiceSession;
   /** The sign-out in progress; signIn and restoreSession wait for it. */
   private signOutInFlight?: Promise<void>;
+  /** The caller's result can reject before captured cleanup releases the sign-in gate. */
+  private signOutResult?: Promise<void>;
   /**
    * Incremented by every sign-out. A sign-in or restore records it when it
    * starts and does not establish its session once it has changed.
@@ -2708,13 +2710,21 @@ export class TinyCloudNode {
    * progress.
    */
   signOut(): Promise<void> {
-    this.signOutInFlight ??= this.endSession().finally(() => {
-      this.signOutInFlight = undefined;
-    });
-    return this.signOutInFlight;
+    return this.endSession();
   }
 
-  private async endSession(): Promise<void> {
+  private endSession(): Promise<void> {
+    if (this.signOutResult) return this.signOutResult;
+    let resolveResult!: () => void;
+    let rejectResult!: (error: unknown) => void;
+    const result = new Promise<void>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    let releaseCleanup!: () => void;
+    this.signOutInFlight = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    this.signOutResult = result;
+
     const leavingAddress = this.address ?? this._restoredTcSession?.address;
     const leavingChainId = this._chainId;
     const leavingPrincipal = this.replicaSessionPrincipal
@@ -2722,43 +2732,70 @@ export class TinyCloudNode {
     const leavingAuth = this.auth;
     const leavingSignature = leavingAuth?.tinyCloudSession?.signature ?? this._restoredTcSession?.signature;
     const leavingContext = this._serviceContext;
-    let denied: { status: string; code?: string } | undefined;
-    let erased: ReplicaLocalEraseReport | undefined;
+    const registryTail = this.accountRegistryTail;
+    let teardownFailure: { error: unknown } | undefined;
     try {
       this.teardownSession();
-    } finally {
-      // Start durable denial before any registry or runtime cleanup awaits, even if
-      // session-key replacement fails after retiring the old graph.
-      const denial = leavingPrincipal
-        ? this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal }, leavingContext)
-        : Promise.resolve(undefined);
+    } catch (error) {
+      teardownFailure = { error };
+    }
+
+    // Start auth invalidation independently of every cleanup wait, even if key replacement failed.
+    let invalidation: Promise<void>;
+    try {
+      invalidation = Promise.resolve(leavingAddress
+        ? leavingAuth
+          ? leavingAuth.clearPersistedSession(leavingAddress, leavingSignature)
+          : this.config.sessionStorage && clearPersistedSessionIfOwn(this.config.sessionStorage, leavingAddress, leavingSignature)
+        : undefined);
+    } catch (error) {
+      invalidation = Promise.reject(error);
+    }
+    void invalidation.then(() => {
+      if (teardownFailure) rejectResult(teardownFailure.error);
+    }, rejectResult);
+
+    const cleanup = (async () => {
+      let denied: { status: string; code?: string } | undefined;
+      let erased: ReplicaLocalEraseReport | undefined;
       try {
-        denied = await denial;
+        denied = leavingPrincipal
+          ? await this.denyReplicaGate({ reason: "sign_out", principal: leavingPrincipal }, leavingContext)
+          : undefined;
       } finally {
         try {
-          await this.accountRegistryTail;
-          await this.quiesceReplicaRuntime();
-          // The deny commit is durable; remove the local copy before sign-out resolves.
-          if (denied) erased = await this.eraseReplicaLocalCopy("sign_out", denied.status);
+          await registryTail;
         } finally {
-          if (leavingAddress) {
-            await (leavingAuth
-              ? leavingAuth.clearPersistedSession(leavingAddress, leavingSignature)
-              : this.config.sessionStorage && clearPersistedSessionIfOwn(this.config.sessionStorage, leavingAddress, leavingSignature));
+          try {
+            await this.quiesceReplicaRuntime();
+          } finally {
+            if (denied) erased = await this.eraseReplicaLocalCopy("sign_out", denied.status);
           }
         }
       }
-    }
-    if (denied?.status === "unguarded" && erased?.outcome.status !== "erased") {
-      throw Object.assign(
-        new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`),
-        {
-          code: "REPLICA_PURGE_FAILED" as const,
-          reason: "gate_unavailable" as const,
-          retryNow: erased?.outcome.status === "failed",
-        } satisfies Omit<ReplicaPurgeError, keyof Error>,
-      );
-    }
+      if (denied?.status === "unguarded" && erased?.outcome.status !== "erased") {
+        throw Object.assign(
+          new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`),
+          {
+            code: "REPLICA_PURGE_FAILED" as const,
+            reason: "gate_unavailable" as const,
+            retryNow: erased?.outcome.status === "failed",
+          } satisfies Omit<ReplicaPurgeError, keyof Error>,
+        );
+      }
+    })();
+    void cleanup.catch(rejectResult);
+    // A rejected public result must not free a replacement sign-in to race the old erase.
+    void Promise.allSettled([invalidation, cleanup]).then(([auth, replica]) => {
+      if (auth.status === "rejected") rejectResult(auth.reason);
+      else if (teardownFailure) rejectResult(teardownFailure.error);
+      else if (replica.status === "rejected") rejectResult(replica.reason);
+      else resolveResult();
+      this.signOutResult = undefined;
+      this.signOutInFlight = undefined;
+      releaseCleanup();
+    });
+    return result;
   }
 
   /**
@@ -2870,6 +2907,8 @@ export class TinyCloudNode {
     this.replicaSessionPrincipal = undefined;
     this.replicaSessionStamp = undefined;
     this.replicaRestoreGate = undefined;
+    // Fence the auth writer before fallible allocation; the later reset adopts the replacement manager.
+    oldAuth?.resetSession(this.sessionManager, this.sessionKeyId, this.explicitHost ? [this.explicitHost] : undefined);
     const sessionKey = createDefaultSessionKey(this.wasmBindings);
     this.sessionManager = sessionKey.manager;
     this.sessionKeyId = sessionKey.keyId;

@@ -76,6 +76,8 @@ await tc.signIn();
 There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
+Sign-out reports session-storage failures. Replica cleanup has its own recovery markers; sign-out completion alone does not certify local-copy erase. Custom/native session adapters keep their existing storage contract, including the provider's durability and boot-handling responsibilities.
+
 ### Runtime permission grants with OpenKey
 
 `requestPermissions()` (and the panel's "allow" buttons) sign each runtime grant's SIWE as a byte-exact message through
