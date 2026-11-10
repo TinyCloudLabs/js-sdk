@@ -8,36 +8,36 @@ interface HolidayTagline {
 const HOLIDAY_TAGLINES: HolidayTagline[] = [
   { month: 1, day: 1, range: 1, tagline: "New year, new keys, same cloud." },
   { month: 2, day: 14, tagline: "We love your data as much as you do." },
-  { month: 3, day: 14, tagline: "3.14159 reasons to encrypt everything." },
+  { month: 3, day: 14, tagline: "3.14159 reasons to scope access." },
   { month: 5, day: 4, tagline: "May the fourth be with your keys." },
-  { month: 10, day: 31, tagline: "Nothing scarier than plaintext secrets." },
+  { month: 10, day: 31, tagline: "No tricks: review the scopes you grant." },
   { month: 12, day: 25, range: 2, tagline: "Unwrap your data, not your keys." },
-  { month: 12, day: 31, tagline: "Encrypt your resolutions." },
+  { month: 12, day: 31, tagline: "New resolutions, deliberate permissions." },
 ];
 
 const TAGLINES = [
   // Professional
-  "Your data, your keys, your cloud.",
-  "Self-sovereign storage for the modern web.",
-  "The cloud you actually own.",
-  "Encrypted by default, decentralized by design.",
-  "Where your data answers only to you.",
-  "End-to-end encrypted. No exceptions.",
-  "Like S3 but you hold the keys.",
-  "Privacy isn't a feature. It's the architecture.",
-  "Sovereign storage, zero knowledge.",
-  "Your .env is safe here — we use real cryptography.",
+  "Your data, your space, your app permissions.",
+  "User-controlled access for interoperable apps.",
+  "One data layer for your apps and agents.",
+  "Capability-based access, not encryption.",
+  "Agents get the scopes you approve.",
+  "Hosted storage is plaintext at rest, not end-to-end encrypted.",
+  "Shared data spaces with scoped access.",
+  "Access control does not hide data from the host.",
+  "Storage and key custody: docs.tinycloud.xyz/concepts/security-and-trust",
+  "Review the trust boundary before sharing secrets.",
   // Playful / nerdy
   "UCAN do anything.",
   "Keys generated, delegations granted, data liberated.",
   "Decentralized storage, centralized vibes.",
-  "Trust nobody, delegate everything.",
-  "sudo make me a sandwich, encrypted.",
+  "Read the trust model, then delegate.",
+  "sudo make me a sandwich, with scoped access.",
   "Have you tried turning your keys off and on again?",
   "All your base are belong to you.",
   "In UCAN we trust.",
-  "0 knowledge, 100% confidence.",
-  "Keeping secrets since 2024.",
+  "Know the scope before you grant it.",
+  "Capabilities connect your apps.",
 ];
 
 function getHolidayTagline(): string | null {
