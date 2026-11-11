@@ -71,16 +71,23 @@ async function resultFor(entry: { request: { resultEncryptionPublicJwk: { x: str
     : mode === "wrong-binding" ? `Request ID: urn:tinycloud:approval-request:${"z".repeat(26)}:${entry.bodyCid}`
       : `Request ID: urn:tinycloud:approval-request:${entry.requestId}:${entry.bodyCid}`;
   if (binding !== undefined) siwe = siwe.replace(/\nResources:/, `\n${binding}\nResources:`);
-  // The owner really signs a text whose blank line 2 or 4 is REPLACED (not inserted) by a Request ID or an Issued At line.
+  // The owner signs the CANONICAL message (without a Request ID for the request-id attacks; with a proper Issued At for the time attacks) and the
+  // session is completed from that signature. Only afterwards is the raw text handed to the caller altered: a blank line 2 or 4 REPLACED by a
+  // Request ID or an Issued At line, keeping the original signature, delegation header and CID. The strict parse must refuse the altered text.
+  const signature = await signer.signMessage(siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, siwe, signature });
+  let delivered = siwe;
   if (mode.startsWith("replace-")) {
     const index = mode.endsWith("-2") ? 2 : 4;
     const replacement = mode.startsWith("replace-request-id") ? `Request ID: urn:tinycloud:approval-request:${entry.requestId}:${entry.bodyCid}` : `Issued At: ${new Date(Date.now() - 864_000_000).toISOString()}`;
-    siwe = siwe.split("\n").map((row, at) => (at === index ? replacement : row)).join("\n");
+    // Baseline: the canonical message the owner really signed parses strictly; only the delivered raw text below is altered.
+    expect(() => parseApprovalSiwe(siwe)).not.toThrow();
+    expect(siwe.split("\n")[index]).toBe("");
+    delivered = siwe.split("\n").map((row, at) => (at === index ? replacement : row)).join("\n");
+    expect(delivered).not.toBe(siwe);
   }
-  const signature = await signer.signMessage(siwe);
-  const session = wasm.completeSessionSetup({ ...prepared, siwe, signature });
   const delegation = { ...session, jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did, address: signerAddress, chainId: 1,
-    spaceId: wasm.makeSpaceId(signerAddress, 1, "default"), ownerDid: `did:pkh:eip155:1:${signerAddress}`, siwe, signature };
+    spaceId: wasm.makeSpaceId(signerAddress, 1, "default"), ownerDid: `did:pkh:eip155:1:${signerAddress}`, siwe: delivered, signature };
   const recipient = entry.request.resultEncryptionPublicJwk;
   const ephemeral = createECDH("prime256v1"); ephemeral.generateKeys();
   const shared = ephemeral.computeSecret(Buffer.concat([Buffer.from([4]), Buffer.from(recipient.x, "base64url"), Buffer.from(recipient.y, "base64url")]));
@@ -384,7 +391,8 @@ test.each<Mode>(["replace-request-id-2", "replace-request-id-4", "replace-issued
     const node = await realSessionNode();
     mode = replaced;
     await expect(approveEmailInviteKey({ node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date(Date.now() + 3_600_000) }))
-      .rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+      // The refusal is the caller's own strict parse of the altered raw text, not a signature failure in the verifier that would only mask it.
+      .rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID", message: expect.stringMatching(/not a valid sign-in message|canonical form/) });
     expect(node.getRuntimePermissionDelegations()).toEqual([]);
     expect(acknowledgements).toEqual([]);
     expect(activations).toEqual([]);
