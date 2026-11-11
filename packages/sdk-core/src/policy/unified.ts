@@ -5,7 +5,8 @@ import { CID } from "multiformats/cid";
 import { base58btc } from "multiformats/bases/base58";
 import { create as createDigest } from "multiformats/hashes/digest";
 import { z } from "zod";
-import { POLICY_ROOT_MAX_LIFETIME_SECONDS } from "@tinycloud/share-envelope";
+// The longest window a policy root may have (a policy session never outlives its roots, so this also bounds every session and descendant): one shared definition.
+import { POLICY_ROOT_MAX_LIFETIME_SECONDS as MAX_POLICY_ROOT_SECONDS } from "@tinycloud/share-envelope";
 import { parseEncryptionResource as parseNamedEncryptionResource } from "@tinycloud/sdk-services";
 import type { FetchFunction, ResourceTransport } from "@tinycloud/sdk-services";
 import { jcsCanonicalize } from "./jcs";
@@ -1071,12 +1072,6 @@ export async function signCompactUcanAuthorization(
     throw new Error("compact invocation lifetime must be between one and 60 seconds");
   return signCompactUcan(input);
 }
-
-/**
- * Longest window a policy root may have. A policy session never outlives its
- * roots, so this also bounds every session and descendant.
- */
-const MAX_POLICY_ROOT_SECONDS = POLICY_ROOT_MAX_LIFETIME_SECONDS;
 
 /** Sign a proofless policy root without weakening the 60-second invocation profile. */
 export async function signCompactUcanRootAuthorization(
