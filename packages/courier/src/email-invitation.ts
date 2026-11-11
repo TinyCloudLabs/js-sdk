@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { emailProofDescriptor } from '@tinycloud/node-sdk/credentials';
 import { createFileEmailProofPendingStore } from '@tinycloud/node-sdk/credential-pending-store';
@@ -6,8 +6,9 @@ import { completeAgentShareReceive, requestAgentShareEmailProof, resumeAgentShar
 import type { AgentShareContent, PendingAgentShareReceive } from '@tinycloud/node-sdk/share-receive';
 import { publishEmailShareV3 } from '@tinycloud/node-sdk/share-publish';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { deliverCredentialInvitation, prepareAddressedShare, ShareReceiveError } from '@tinycloud/share-sdk';
-import { canonicalize, isEnvelopeDeliveryEmail } from '@tinycloud/share-envelope';
+import { bindPathBoundContentSource, deliverCredentialInvitation, encryptAddressedShareContent, planPathBoundShare, prepareAddressedShare, ShareReceiveError } from '@tinycloud/share-sdk';
+import type { PathBoundContentSource } from '@tinycloud/share-sdk';
+import { isEnvelopeDeliveryEmail } from '@tinycloud/share-envelope';
 import type { ShareEnvelopeV3 } from '@tinycloud/share-envelope';
 import { createLink, signerFromJwk } from '@tinycloud/share-envelope/links';
 import type { Ed25519PrivateJwk } from '@tinycloud/share-envelope/links';
@@ -82,6 +83,21 @@ export function canonicalInviteEmail(address: string): string {
 }
 
 /**
+ * The invitation as Share content: encrypted under its own named key `share/<shareId>` with the node-sdk's `keys.encrypt` (a
+ * v2 envelope wrapped to that key's public key, which only a holder of decrypt on exactly that key can open) and bound to the
+ * share by the share-sdk's path-bound helpers. The publisher and the recipient both read this shape; a hand-built source over a
+ * network-key envelope is accepted by the publisher and can never be opened.
+ */
+export async function sealInvitationContent(
+  node: Pick<TinyCloudNode, 'keys' | 'getDefaultEncryptionNetworkId'>, spaceId: string, body: CourierInvitation, shareId: string, path: string,
+): Promise<{ storedBytes: Uint8Array; contentSource: PathBoundContentSource; byteLength: number }> {
+  const plan = planPathBoundShare({ shareId, encryptionNetwork: node.getDefaultEncryptionNetworkId() });
+  const encrypted = await encryptAddressedShareContent({ plan, keys: node.keys, plaintext: new TextEncoder().encode(canonicalJson(body)), metadata: { contentType: 'application/json' } });
+  const contentSource = bindPathBoundContentSource({ plan, envelope: encrypted.envelope, storedBytes: encrypted.storedBytes, kvResource: `${spaceId}/kv/${path}`, selector: 'exact' });
+  return { storedBytes: encrypted.storedBytes, contentSource, byteLength: encrypted.byteLength };
+}
+
+/**
  * Send one email-bound invitation through the existing Share path. The invitation body (with its pairing relay) is
  * encrypted under a fresh `share/<shareId>` key, registered as one path-bound, digested Share policy, and announced by
  * the OpenCredentials service. Only the verified mailbox holder can open it. The bearer link is never returned.
@@ -109,30 +125,19 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   const config = await shareConfig(deps);
   const identity = await node.activeNodeIdentity();
   const descriptor = await emailProofDescriptor(email, { fetch: deps.fetch });
-  const keyPath = `share/${shareId}`;
-  const network = node.getDefaultEncryptionNetworkId();
-  await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
-  await node.keys.createKey(keyPath);
-  const plaintext = new TextEncoder().encode(canonicalJson(body));
-  const encrypted = await node.encryption.encryptToNetwork(network, plaintext, { keyPath, metadata: { contentType: 'application/json' } });
-  if (!encrypted.ok || encrypted.data.networkId !== network || encrypted.data.keyPath !== keyPath) throw new CourierError('encrypt-failed', 'The invitation could not be encrypted.');
-  const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
   const path = envelopePath(body.id, shareId);
-  const stored = await node.kv.put(path, storedBytes, { contentType: 'application/vnd.tinycloud.encrypted-envelope+json' });
+  await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
+  const sealed = await sealInvitationContent(node, profile.spaceId, body, shareId, path);
+  const stored = await node.kv.put(path, sealed.storedBytes, { contentType: 'application/vnd.tinycloud.encrypted-envelope+json' });
   if (!stored.ok) throw new CourierError('store-failed', 'The encrypted invitation could not be stored.');
   const prepared = prepareAddressedShare({ target: { kind: 'email', address: email }, actions: ['read'], policyActions: POLICY_ACTIONS, filename: 'invitation.json' });
   if (prepared.target.kind !== 'email') throw new CourierError('unsupported-recipient', 'Use a single plain email address.');
   const published = await publishEmailShareV3({
     shareId, shareOrigin: config.shareOrigin, nodeOrigin: identity.origin, nodeAudience: identity.nodeDid, enforcerDid: identity.nodeDid, spaceId: profile.spaceId,
     target: prepared.target, resource: { kind: 'exact', path }, actions: ['read'], policyActions: POLICY_ACTIONS,
-    contentSource: {
-      shareId, kvResource: `${profile.spaceId}/kv/${path}`, selector: 'exact', encryptionNetwork: encrypted.data.networkId, encryptionKeyPath: keyPath,
-      // A path-bound source registers the digest of the RAW wrapped-key bytes.
-      encryptedSymmetricKeyDigestHex: createHash('sha256').update(Buffer.from(encrypted.data.encryptedSymmetricKey, 'base64')).digest('hex'),
-      keyVersion: encrypted.data.keyVersion, mode: 'immutable', initialCiphertextDigestHex: createHash('sha256').update(storedBytes).digest('hex'),
-    },
+    contentSource: sealed.contentSource,
     ...(isEnvelopeDeliveryEmail(email) ? { deliveryEmail: email } : {}),
-    filename: 'invitation.json', mediaType: 'application/json', byteLength: plaintext.byteLength, expiresAt: new Date(body.expiresAt),
+    filename: 'invitation.json', mediaType: 'application/json', byteLength: sealed.byteLength, expiresAt: new Date(body.expiresAt),
     authority: {
       ownerDid: node.credentialHolderDid,
       createOwnerRoot: (request) => node.createUnifiedOwnerRoot(request),
