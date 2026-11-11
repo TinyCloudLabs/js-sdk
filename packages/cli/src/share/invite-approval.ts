@@ -47,6 +47,8 @@ export interface EmailInviteApprovalRequest {
   accessExpiresAt: Date;
   /** sha256 of the shared bytes: a rerun of the same file (same recipient and name) resumes its own open approval. */
   contentSha256?: string;
+  /** The relative expiry the user chose, in milliseconds (absent for a date): the same choice on a rerun resumes this approval. */
+  requestedDurationMs?: number;
   onApprovalRequest?: (request: { approvalUrl: string; requestId: string; expiresAt: string }) => void;
 }
 
@@ -71,6 +73,7 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
   const accessExpiresAt = new Date(Math.floor(request.accessExpiresAt.getTime() / 1000) * 1000).toISOString();
   const resumedContext = await pendingInvitationContext(profile, {
     recipientEmail: request.recipientEmail, subjectKind: request.subjectKind, subjectName: request.subjectName, accessExpiresAt, contentSha256: request.contentSha256,
+    ...(request.requestedDurationMs === undefined ? {} : { requestedDurationMs: request.requestedDurationMs }),
   });
   const context: ShareInvitationApprovalContext = resumedContext ?? {
     kind: "share-invitation", version: 1, invitationId: newInvitationId(now), recipientEmail: request.recipientEmail,
@@ -82,7 +85,7 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
   const delegation = await acquireApprovalRequest(node.credentialHolderDid, {
     profileName: profile, jwk: session.jwk, host, invitationContext: context, expectedOwner: ownerDid,
     openkeyHost: process.env.TC_OPENKEY_HOST ?? profileConfig.openkeyHost,
-    ...(request.contentSha256 === undefined ? {} : { invitationMeta: { contentSha256: request.contentSha256 } }),
+    ...(request.contentSha256 === undefined ? {} : { invitationMeta: { contentSha256: request.contentSha256, ...(request.requestedDurationMs === undefined ? {} : { requestedDurationMs: request.requestedDurationMs }) } }),
     ...(request.onApprovalRequest === undefined ? {} : { onApprovalRequest: request.onApprovalRequest }),
   });
   const grant = invitationGrantOf(delegation, key);

@@ -772,6 +772,7 @@ export function createShareAuthorityAdapters(input: {
       const approved = await input.approveEmailInviteKey({
         node, profile: activeProfileName, recipientEmail: targetInput.target.address, subjectName: targetInput.filename,
         subjectKind: "file", accessExpiresAt: expiresAt,
+        ...(targetInput.expiresInMs === undefined ? {} : { requestedDurationMs: targetInput.expiresInMs }),
         contentSha256: (() => {
           // The file's identity: every file name and the hash of its bytes, so a different file never resumes this approval.
           const hash = createHash("sha256");

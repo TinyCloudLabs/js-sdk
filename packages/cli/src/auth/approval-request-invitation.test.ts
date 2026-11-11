@@ -108,7 +108,8 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   const expiresAt = resultExpiresAt;
   if (action === "discover") return Response.json({ resultRef, expiresAt });
   if (action === "fetch") {
-    const [entry] = await readJson<Array<{ request: { resultEncryptionPublicJwk: { x: string; y: string } }; bodyCid: string; requestId: string }>>(join(profilePath("approval"), "approval-pending.json")) ?? [];
+    const entries = await readJson<Array<{ request: { resultEncryptionPublicJwk: { x: string; y: string } }; bodyCid: string; requestId: string }>>(join(profilePath("approval"), "approval-pending.json")) ?? [];
+    const entry = entries.find((item) => item.requestId === requestId) ?? entries[0];
     return Response.json({ requestId, bodyCid: body.bodyCid, resultRef, expiresAt, relay: await resultFor(entry!) });
   }
   acknowledgements.push(body.ackId!);
@@ -314,32 +315,50 @@ test("approveEmailInviteKey: a host that cannot be reached keeps the approved re
   expect(await readJson(pendingFile())).toEqual([]);
 });
 
-test("a rerun for the same relative expiry resumes its own open request and absolute date; another duration, file or recipient is a new request", async () => {
+test("the same relative choice resumes its open request and absolute date however long the preparation took; another duration, even by 1 s, is a new request", async () => {
   const node = await realSessionNode();
-  const base = Math.floor((Date.now() + 3_600_000) / 1000) * 1000;
-  const ask = (accessMs: number, sha = "sha-one") => approveEmailInviteKey({
-    node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date(accessMs), contentSha256: sha,
+  const DURATION = 7 * 86_400_000;
+  const base = Math.floor((Date.now() + DURATION) / 1000) * 1000;
+  const ask = (accessMs: number, durationMs = DURATION, sha = "sha-one") => approveEmailInviteKey({
+    node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date(accessMs),
+    contentSha256: sha, requestedDurationMs: durationMs,
   });
   delegateDown = true;
   await expect(ask(base)).rejects.toMatchObject({ code: "UNAVAILABLE" });
   expect(linkPosts).toBe(1);
-  await new Promise((resolve) => setTimeout(resolve, 2200));
-  const [entry] = (await readJson<Array<{ request: { context: { invitationId: string } } }>>(pendingFile()))!;
-  const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-  let startedAt = 0;
-  for (const char of entry!.request.context.invitationId.slice(0, 10)) startedAt = startedAt * 32 + crockford.indexOf(char);
-  // The same relative request, recomputed from the clock a couple of seconds later: later by exactly the time since the invitation began.
-  const recomputed = base + (Date.now() - startedAt);
   const probe = { recipientEmail: "reader@example.com", subjectKind: "file" as const, subjectName: "note.md", contentSha256: "sha-one" };
-  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: new Date(Math.floor(recomputed / 1000) * 1000).toISOString() })).toBeDefined();
-  // A different duration, file or recipient does not resume it.
-  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: new Date(Math.floor((recomputed + 3_600_000) / 1000) * 1000).toISOString() })).toBeUndefined();
-  expect(await pendingInvitationContext("approval", { ...probe, contentSha256: "sha-two", accessExpiresAt: new Date(Math.floor(recomputed / 1000) * 1000).toISOString() })).toBeUndefined();
-  expect(await pendingInvitationContext("approval", { ...probe, recipientEmail: "other@example.com", accessExpiresAt: new Date(Math.floor(recomputed / 1000) * 1000).toISOString() })).toBeUndefined();
+  const iso = (ms: number) => new Date(Math.floor(ms / 1000) * 1000).toISOString();
+  // The same duration resumes whether the rerun's clock moved by 3 s or by 90 s: no timing is inferred.
+  for (const delay of [3_000, 90_000]) {
+    expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: iso(base + delay), requestedDurationMs: DURATION })).toBeDefined();
+  }
+  // Another duration (7d + 1 s), another file, another recipient, or no duration with another date is a new request.
+  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: iso(base + 3_000 + 1_000), requestedDurationMs: DURATION + 1_000 })).toBeUndefined();
+  expect(await pendingInvitationContext("approval", { ...probe, contentSha256: "sha-two", accessExpiresAt: iso(base + 3_000), requestedDurationMs: DURATION })).toBeUndefined();
+  expect(await pendingInvitationContext("approval", { ...probe, recipientEmail: "other@example.com", accessExpiresAt: iso(base + 3_000), requestedDurationMs: DURATION })).toBeUndefined();
+  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: iso(base + 3_000) })).toBeUndefined();
   delegateDown = false;
-  const resumed = await ask(Math.floor(recomputed / 1000) * 1000);
+  const resumed = await ask(base + 5_000);
   expect(resumed).toMatchObject({ shareId: KEY_ID, accessExpiresAt: new Date(base).toISOString(), resumed: true });
   expect(linkPosts).toBe(1);
+});
+
+test("a rerun that chose a duration one second longer asks again instead of reusing the older date", async () => {
+  const node = await realSessionNode();
+  const DURATION = 7 * 86_400_000;
+  const base = Math.floor((Date.now() + DURATION) / 1000) * 1000;
+  const ask = (accessMs: number, durationMs: number) => approveEmailInviteKey({
+    node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date(accessMs),
+    contentSha256: "sha-one", requestedDurationMs: durationMs,
+  });
+  delegateDown = true;
+  await expect(ask(base, DURATION)).rejects.toMatchObject({ code: "UNAVAILABLE" });
+  expect(linkPosts).toBe(1);
+  delegateDown = false;
+  const second = await ask(base + 1_000 + 2_000, DURATION + 1_000);
+  expect(second.resumed).toBe(false);
+  expect(second.accessExpiresAt).toBe(new Date(base + 3_000).toISOString());
+  expect(linkPosts).toBe(2);
 });
 
 test("approveEmailInviteKey refuses a profile that records no owner account, and an approval signed by another account", async () => {

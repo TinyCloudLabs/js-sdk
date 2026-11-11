@@ -348,6 +348,11 @@ function jsonOutput(options: { readonly json?: boolean }, command: Command): boo
   return options.json === true || command.optsWithGlobals().json === true;
 }
 
+/** The exact duration of a relative expiry like "7d" or "36h"; undefined for a date, which is its own absolute choice. */
+function relativeExpiryMs(value: string): number | undefined {
+  return /^\d+(m|h|d|w)$/.test(value) ? parseDuration(value) : undefined;
+}
+
 function expires(value: string): Date {
   try { return new Date(Date.now() + parseDuration(value)); }
   catch { throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2); }
@@ -525,6 +530,8 @@ export function registerShareCommand(program: Command): void {
           actions,
           expiresAt: expires(options.expires ?? "7d"),
           expiryWasExplicit: options.expires !== undefined,
+          // The duration the user chose ("7d", or the default), so a rerun of the same choice resumes an open approval with its own absolute date.
+          ...(relativeExpiryMs(options.expires ?? "7d") === undefined ? {} : { expiresInMs: relativeExpiryMs(options.expires ?? "7d")! }),
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
