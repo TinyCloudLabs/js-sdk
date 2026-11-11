@@ -347,10 +347,11 @@ export interface ShareReceiveResult<T = unknown> {
 export class TinyCloudWeb {
   private openkeySignInInFlight = 0;
   private prepareSignInToken = 0;
-  /** How long a restore waits for the node's hosting answer. */
+  /** Time bound for the background hosting probe. */
   private spaceHostingCapMs = 5_000;
   private restoredNetworkWork?: {
     hosting: Promise<void>;
+    grants: Promise<void>;
     cachedHosting: SpaceHosting;
     isCurrent(): boolean;
   };
@@ -1019,17 +1020,7 @@ export class TinyCloudWeb {
     const nextTask = new Promise<void>((resolve) => setTimeout(resolve, 0));
     const isCurrent = () => this.restoredNetworkWork === work && this._node === node &&
       node.restorableSession === session && this.signOutCount === signOuts && this.signOutInFlight === 0;
-    const work: NonNullable<TinyCloudWeb["restoredNetworkWork"]> = {
-      cachedHosting,
-      isCurrent,
-      hosting: nextTask.then(async () => {
-        if (!isCurrent()) return;
-        await this.probeSpaceHosting(node);
-        if (isCurrent()) work.cachedHosting = "unknown";
-      }),
-    };
-    this.restoredNetworkWork = work;
-    void nextTask.then(async () => {
+    const grants = nextTask.then(async () => {
       if (!isCurrent()) return;
       const grantStore = this.runtimeGrantStore();
       if (grantStore !== undefined) {
@@ -1053,6 +1044,17 @@ export class TinyCloudWeb {
     }).finally(() => {
       if (isCurrent()) this.uiClient.armPrefetch(this);
     }).catch(() => undefined);
+    const work: NonNullable<TinyCloudWeb["restoredNetworkWork"]> = {
+      cachedHosting,
+      grants,
+      isCurrent,
+      hosting: nextTask.then(async () => {
+        if (!isCurrent()) return;
+        await this.probeSpaceHosting(node);
+        if (isCurrent()) work.cachedHosting = "unknown";
+      }),
+    };
+    this.restoredNetworkWork = work;
   }
 
   /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */

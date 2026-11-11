@@ -6,3 +6,5 @@
 ---
 
 Restore persisted sessions from local state and initialize replication on demand. Explicit network KV reads bypass replica setup. Refresh browser hosting and panel grants after restore.
+
+Details: TC-2773

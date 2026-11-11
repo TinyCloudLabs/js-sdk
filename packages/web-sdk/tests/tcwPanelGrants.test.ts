@@ -146,6 +146,7 @@ async function web(options: { node?: ReturnType<typeof stubNode>; manifest?: boo
     canRequestPanelPermissions(): boolean;
     requestPanelPermissions(entries: PermissionEntry[], options: { expiryMs: number }): Promise<{ approved: boolean }>;
     signOutCount: number;
+    restoredNetworkWork: { grants: Promise<void> };
     _testHooks: unknown;
   };
   return { tcw, privately, backing, sessionStorage, node };
@@ -238,6 +239,8 @@ describe("restore after a reload", () => {
     await env.sessionStorage.saveRuntimeGrants(ADDRESS, options.stored);
     if (options.failWritesAfterSeeding) env.backing.failWrites = true;
     const result = await env.tcw.restoreSession(ADDRESS);
+    expect(result.status).toBe("restored");
+    await env.privately.restoredNetworkWork.grants;
     return { ...env, result, node };
   }
 
