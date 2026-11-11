@@ -25,7 +25,7 @@ export interface InterimState {
 export type InterimPeer = StoredPeer & { interim?: InterimState };
 type LedgerEntry = StoredPeer['outbound'][number] & { priorCid?: string; delegation?: string; revokedAt?: string };
 type Resource = AccountDelegationRecord['resources'][number];
-export type InterimResult = { state: 'live' | 'renewed' | 'lapsed' | 'revoked' | 'owner-revoked' | 'unavailable'; delegation?: PortableDelegation };
+export type InterimResult = { state: 'live' | 'renewed' | 'lapsed' | 'revoked' | 'owner-revoked' | 'unavailable'; delegation?: PortableDelegation; reason?: 'no-extension' };
 
 /** Per-action canonical equality includes conditions, never just permission subsets. */
 export function issuedAuthority(resources: readonly Resource[]): string {
@@ -217,7 +217,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   const lastAttempt = state.lastAttemptAt ? Date.parse(state.lastAttemptAt) : tip.issuedAt?.getTime();
   if (!options.force && ((!options.manual && now < started + (end - started) / 2)
     || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
-  if (Math.floor(Math.min(now + INTERIM_PERIOD_MS, parent.end) / 1000) * 1000 <= end) return { state: 'live' };
+  if (Math.floor(Math.min(now + INTERIM_PERIOD_MS, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: 'no-extension' };
   state.lastAttemptAt = new Date(now).toISOString();
   save();
   const key = k.peerDelegation(peer.handle, peer.sessionId);
@@ -234,7 +234,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   parentOf(node, profile, Date.now());
   const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), { expiry: INTERIM_PERIOD_MS, requireActivation: true });
   const next = result.delegation;
-  if (next.cid === tip.cid) return { state: 'live' };
+  if (next.cid === tip.cid) return { state: 'live', reason: 'no-extension' };
   const record = { cid: next.cid, priorCid: tip.cid, issuedAt: new Date().toISOString(), expiresAt: next.expiry.toISOString(), delegation: serializeDelegation(next) };
   (peer.outbound as LedgerEntry[]).push(record);
   save(); // even a rejected result is recorded before any cleanup/network action

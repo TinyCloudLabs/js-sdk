@@ -1,6 +1,7 @@
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { CourierError, isAuthorizationRefusal } from './errors.js';
+import { CourierError, isAuthorizationRefusal, isNotFoundError } from './errors.js';
 import { cmd } from './program.js';
+import { k } from './keys.js';
 import { oneLine } from './a2a.js';
 import { loadGrant, loadProfile, withProfileTransaction } from './profile.js';
 import type { StoredPeer } from './profile.js';
@@ -8,7 +9,7 @@ import { courierNode, peerKv } from './node.js';
 import { maintainOutbound } from './interim-renewal.js';
 import { markOwnerRefused, preflightOwner } from './interim-owner.js';
 
-export async function prepareOwnerAccess(request = false): Promise<void> {
+export async function prepareOwnerAccess(request = false) {
   const result = await preflightOwner({ request });
   if (result.state === 'revoked') throw new CourierError('owner-revoked', `Courier access was revoked. Run \`${cmd('init --request')}\` to request new approval.`);
   if (result.state === 'approval-required') {
@@ -19,6 +20,7 @@ export async function prepareOwnerAccess(request = false): Promise<void> {
   if (result.notify) console.error(result.approvalUrl
     ? `Courier needs your approval to keep renewing access. Approve the request in OpenKey, then run \`${cmd('init --wait')}\`.\n${result.approvalUrl}`
     : `Courier couldn't create an approval request. Run \`${cmd('init --request')}\` to try again.`);
+  return result;
 }
 
 /** Explicit and automatic paths use the same profile transaction and the same issuance policy. */
@@ -33,7 +35,7 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
         if (node.credentialHolderDid !== profile.courierDid) { canRequestApproval = false; return; }
         try {
           const result = await maintainOutbound(node, profile, peer, save);
-          if (result.state === 'lapsed') canRequestApproval = false;
+          if (result.state === 'lapsed' || result.state === 'owner-revoked') canRequestApproval = false;
           if (result.state === 'unavailable') {
             canRequestApproval = false;
             if (!peer.interim?.unavailableAt) {
@@ -72,8 +74,23 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
       console.error(`Courier couldn't renew access for ${oneLine(handle)}. Its current access is unchanged.`);
     }
   }
-  // Request owner approval only after the current node and every eligible issued lineage were checked.
-  await prepareOwnerAccess(canRequestApproval);
+  const owner = await prepareOwnerAccess();
+  if (canRequestApproval && owner.requestDue) {
+    // restoreSession is local. Even with no eligible peer lineage, prove owner authority on the node before asking.
+    let authenticated = false;
+    try {
+      const read = await node.kv.get(k.watchState, { prefix: '' });
+      if (!read.ok && !isNotFoundError(read.error)) throw read.error;
+      authenticated = true; // A signed, authorized 404 also proves the read was accepted.
+    } catch (error) {
+      if (isAuthorizationRefusal(error)) {
+        await markOwnerRefused();
+        throw new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
+      }
+      // Unknown and transient results cannot authorize an automatic request.
+    }
+    if (authenticated) await prepareOwnerAccess(true);
+  }
 }
 
 export function watchPeerEligible(peer: StoredPeer, now = Date.now()): boolean {

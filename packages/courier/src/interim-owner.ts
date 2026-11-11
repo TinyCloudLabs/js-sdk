@@ -22,7 +22,7 @@ export interface OwnerEpisode {
   requestHash: string | null;
   phase: 'creating' | 'requested' | 'unavailable' | 'complete' | 'refused';
 }
-export type OwnerPreflight = { state: 'live' | 'approval-required' | 'approval-unavailable' | 'revoked'; approvalUrl?: string; notify?: boolean };
+export type OwnerPreflight = { state: 'live' | 'approval-required' | 'approval-unavailable' | 'revoked'; approvalUrl?: string; notify?: boolean; requestDue?: boolean };
 const episodeFile = () => path.join(profileDir(), 'renewal-owner.json');
 
 /** Read our own owner-only episode without following a link or accepting permissive modes. */
@@ -72,7 +72,7 @@ export async function preflightOwner(options: { request?: boolean } = {}): Promi
     if (!end || !Number.isFinite(savedEnd) || Math.min(end, savedEnd) <= Date.now()) {
       return { state: 'approval-required', ...(same && old ? { approvalUrl: pendingForEpisode(old, profile) } : {}) };
     }
-    if (options.request === false) return { state: 'live' };
+    if (options.request === false) return { state: 'live', requestDue: end - Date.now() <= OWNER_ASK_AHEAD_MS && !same };
     if (end - Date.now() > OWNER_ASK_AHEAD_MS) return { state: 'live' };
     const key = loadKey();
     const intentHash = requestHash(approvalIntent(profile, key));
@@ -127,14 +127,14 @@ export function assertEpisodeGrant(pending: PendingGrantRequest, payload: GrantP
   const current = loadGrant();
   if (!current) return;
   if (episode.courierDid !== loadProfile().courierDid || episode.requestHash !== requestHash(pending.request)) {
-    throw new CourierError('stale-approval', `This approval is out of date. Run \`${cmd('init --request')}\` to request a new one.`);
+    throw new CourierError('stale-approval', `This approval is out of date. To fix it, run \`${cmd('init --rotate-key --request')}\`. This makes a new Courier key, removes all your pairings and deletes the saved approval on this device. Approve the new request, then pair with your peers again. The old approval stays valid until it expires or you revoke it.`);
   }
   if (current.delegationCid !== episode.ownerGrantCid) {
     const nextEnd = siweTimes(payload.siwe).expiresAt?.getTime();
     const currentEnd = siweTimes(current.siwe).expiresAt?.getTime();
     const savedEnd = Date.parse(current.expiresAt);
     if (!nextEnd || !currentEnd || !Number.isFinite(savedEnd) || nextEnd <= Math.max(currentEnd, savedEnd)) {
-      throw new CourierError('stale-approval', `This approval doesn't extend Courier's current access, so nothing changed. Run \`${cmd('init --request')}\` to request a new one.`);
+      throw new CourierError('stale-approval', `This approval is out of date. To fix it, run \`${cmd('init --rotate-key --request')}\`. This makes a new Courier key, removes all your pairings and deletes the saved approval on this device. Approve the new request, then pair with your peers again. The old approval stays valid until it expires or you revoke it.`);
     }
   }
 }

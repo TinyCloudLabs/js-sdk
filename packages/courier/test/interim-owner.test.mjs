@@ -139,3 +139,37 @@ test('an unavailable issued listing cannot cause an automatic owner approval bef
   assert.equal(loadOwnerEpisode(), undefined);
   assert.ok(loadProfile().peers.bob.interim.unavailableAt);
 });
+
+test('zero eligible peers require authenticated own-space read; refused or unknown read never asks', async () => {
+  const { maintainPeerSet } = await import('../dist/interim-runtime.js');
+  for (const status of [401, 403, 503]) {
+    await fixture(7); let reads = 0;
+    const node = { kv: { get: async () => { reads++; return { ok: false, error: { meta: { status } } }; } } };
+    await withoutNetwork(async calls => {
+      if (status === 503) {
+        await maintainPeerSet(node);
+        assert.equal(loadOwnerEpisode(), undefined);
+      } else {
+        await assert.rejects(maintainPeerSet(node), { code: 'owner-authority-refused' });
+        assert.equal(loadOwnerEpisode().phase, 'refused');
+      }
+      assert.equal(calls(), 0);
+    });
+    assert.equal(reads, 1);
+  }
+});
+
+test('an authorized own-space missing key permits one ask; failed creation is not retried or reprobed', async () => {
+  const { maintainPeerSet } = await import('../dist/interim-runtime.js');
+  await fixture(7); let reads = 0;
+  const node = { kv: { get: async () => { reads++; return { ok: false, error: { status: 404, code: 'KV_NOT_FOUND' } }; } } };
+  await withoutNetwork(async calls => {
+    await maintainPeerSet(node);
+    assert.equal(reads, 1);
+    assert.equal(calls(), 1);
+    assert.equal(loadOwnerEpisode().phase, 'unavailable');
+    await maintainPeerSet(node);
+    assert.equal(reads, 1);
+    assert.equal(calls(), 1);
+  });
+});

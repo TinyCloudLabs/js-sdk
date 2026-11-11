@@ -49,7 +49,7 @@ test('local node: interim exact successor, parent clamp and peer collection', { 
   const run = async (home, args) => (await exec(process.execPath, [cli, ...args], { env: courierRegistryFixtureEnv(home, host), timeout: 30000 })).stdout;
   const json = async (home, args) => JSON.parse(await run(home, args));
   const file = (name, body) => { const p = path.join(root, name); fs.writeFileSync(p, JSON.stringify(body), { mode: 0o600 }); return p; };
-  async function identity(name) {
+  async function identity(name, lifetime = 3600000) {
     const home = path.join(root, name);
     const privateKey = randomBytes(32).toString('hex');
     const owner = new TinyCloudNode({ ...nodeOpts(host), privateKey, autoCreateSpace: true, manifest: {
@@ -64,7 +64,7 @@ test('local node: interim exact successor, parent clamp and peer collection', { 
     const address = await signer.getAddress();
     const abilities = {};
     for (const p of request.permissions) (abilities[p.service.replace('tinycloud.', '')] ??= {})[p.path] = p.actions;
-    const expiresAt = new Date(Date.now() + 3600000).toISOString();
+    const expiresAt = new Date(Date.now() + lifetime).toISOString();
     const prepared = wasm.prepareSession({ abilities, address, chainId: 1, domain: 'courier.local.test', issuedAt: new Date().toISOString(), expirationTime: expiresAt, spaceId: owner.spaceId, jwk: request.publicJwk });
     const signature = await signer.signMessage(prepared.siwe);
     const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -217,13 +217,34 @@ test('local node: interim exact successor, parent clamp and peer collection', { 
     courierDid: alice.profile.courierDid, intentHash: 'old-approved-intent', requestId: pending.requestId, requestHash: requestHash(pending.request), phase: 'requested' });
   writeSecure(path.join(alice.home, 'grant.json'), nextGrant);
   const grantBytes = fs.readFileSync(path.join(alice.home, 'grant.json'), 'utf8');
-  assert.throws(() => assertEpisodeGrant(pending, { siwe: previousGrant.siwe }), /doesn't extend/);
+  assert.throws(() => assertEpisodeGrant(pending, { siwe: previousGrant.siwe }), { code: 'stale-approval' });
   assert.equal(fs.readFileSync(path.join(alice.home, 'grant.json'), 'utf8'), grantBytes);
   assert.equal((await checkOwner({ request: false })).state, 'live');
   assert.equal(loadOwnerEpisode().phase, 'complete');
   alice.grant = nextGrant;
   na = await courierNode(loadProfile());
   t.diagnostic('stale approval episode cannot replace a real later installed owner grant; old episode closes');
+
+  // No peer lineage can reveal ancestor revocation here: the own authenticated read must protect the ask.
+  const lonely = await identity('zero-eligible', 7 * 86_400_000);
+  process.env.COURIER_HOME = lonely.home;
+  const lonelyNode = await courierNode(loadProfile());
+  assert.ok((await lonely.owner.revokeDelegation(lonely.grant.delegationCid)).ok);
+  const { watchPreflight: zeroPeerPreflight } = await import('../dist/interim-runtime.js');
+  const beforeZeroPeer = globalThis.fetch; let zeroPeerApprovals = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+    const mockedRegistry = url.origin === new URL(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL).origin && /^\/v[12]\/locations\/[^/]+$/.test(url.pathname);
+    if (url.origin !== host && !mockedRegistry) { zeroPeerApprovals++; throw new Error('no automatic owner request'); }
+    return beforeZeroPeer(input, init);
+  };
+  try { await assert.rejects(zeroPeerPreflight(lonelyNode), { code: 'owner-authority-refused' }); }
+  finally { globalThis.fetch = beforeZeroPeer; }
+  assert.equal(zeroPeerApprovals, 0);
+  assert.equal(loadOwnerEpisode().phase, 'refused');
+  assert.deepEqual(loadProfile().peers, {});
+  t.diagnostic('native owner revoke with zero eligible peers: authenticated own read refuses, zero approval calls, durable refused phase');
+  process.env.COURIER_HOME = alice.home;
 
   const ancestor = await pair('ancestor');
   const ownerRevoke = await alice.owner.revokeDelegation(alice.grant.delegationCid);
