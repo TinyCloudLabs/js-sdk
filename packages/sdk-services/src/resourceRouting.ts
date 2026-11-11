@@ -41,17 +41,22 @@ export async function verifyResourceDestination(target: ResourceDestination, fet
   let keys: unknown;
   try {
     const signal = AbortSignal.timeout(5_000);
-    const responses = await Promise.all([
-      fetchFn(`${target.url}/info`, { signal, redirect: "error" }),
-      fetchFn(`${target.url}/.well-known/tinycloud/node-keys`, { signal, redirect: "error" }),
-    ]);
-    if (responses.some((response) => response.status >= 500)) throw new NodeNotRespondingError([target.url]);
-    if (responses.some((response) => !response.ok)) throw new NodeIdentityMismatchError(target.url, target.nodeDid);
-    try {
-      [info, keys] = await Promise.all(responses.map((response) => response.json()));
-    } catch {
-      throw new NodeIdentityMismatchError(target.url, target.nodeDid);
-    }
+    const replies = await Promise.all([
+      `${target.url}/info`,
+      `${target.url}/.well-known/tinycloud/node-keys`,
+    ].map(async (url) => {
+      const response = await fetchFn(url, { signal, redirect: "error" });
+      // A background lane holds its slot through the body. Consume each reply
+      // immediately so the other identity request can acquire that slot.
+      const content = Promise.resolve().then(() => {
+        if (response.ok) return response.json();
+        return (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.();
+      }).catch(() => undefined);
+      return { response, content };
+    }));
+    if (replies.some(({ response }) => response.status >= 500)) throw new NodeNotRespondingError([target.url]);
+    if (replies.some(({ response }) => !response.ok)) throw new NodeIdentityMismatchError(target.url, target.nodeDid);
+    [info, keys] = await Promise.all(replies.map(({ content }) => content));
   } catch (error) {
     if (error instanceof NodeIdentityMismatchError || error instanceof NodeNotRespondingError) throw error;
     throw new NodeNotRespondingError([target.url], error);
