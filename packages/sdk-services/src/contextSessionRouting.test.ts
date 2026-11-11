@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ServiceContext } from "./context";
 import { KVService } from "./kv/KVService";
-import { createResourceRoutingFetch } from "./resourceRouting";
+import { createResourceRoutingFetch, createResourceTransportInvocationFetch, type ResourceTransport } from "./resourceRouting";
 import type { ServiceSession } from "./types";
 
 const session = (name: string): ServiceSession => ({
@@ -87,17 +87,26 @@ test("routed foreground retries keep the physical host lease through backoff and
   }
 });
 
-test("a routed multi-destination write cancels the unreturned body and releases that host's lane", async () => {
+test.each(["router", "resource transport"] as const)("a multi-destination %s write cancels its unreturned body and releases that host's lane", async (kind) => {
   const targets = ["https://write-first.invalid", "https://write-second.invalid"];
   const authorization = `header.${btoa(JSON.stringify({ att: {
     "tinycloud:pkh:eip155:1:0x1:default/kv/note": { "tinycloud.kv/put": [{}] },
   } }))}.signature`;
   const cancelled: string[] = [];
+  const raw = async (url: string) => new Response(new ReadableStream({
+    cancel() { cancelled.push(url); },
+  }));
+  const transport: ResourceTransport = async (_resources, send) => {
+    const responses = [];
+    for (const url of targets) responses.push(await send({
+      url, nodeDid: "did:key:fixture", nodeInfo: { nodeId: "did:key:fixture" },
+      bindAudience: async (value) => value, fetch: raw,
+    }));
+    return responses[0];
+  };
   const context = new ServiceContext({
     hosts: ["https://write-stale.invalid"], invoke: () => ({}),
-    fetch: createResourceRoutingFetch(async (url) => new Response(new ReadableStream({
-      cancel() { cancelled.push(url); },
-    })), {
+    fetch: kind === "resource transport" ? createResourceTransportInvocationFetch(transport, session("A")) : createResourceRoutingFetch(raw, {
       resolveResource: async () => targets.map((url) => ({ url })),
       verifyDestination: async () => undefined, bindAudience: async (value) => value,
     }),

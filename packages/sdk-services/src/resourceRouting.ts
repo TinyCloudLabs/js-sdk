@@ -160,6 +160,18 @@ async function discardResponse(response: FetchResponse | undefined): Promise<voi
   await (response?.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.().catch(() => undefined);
 }
 
+/** A FetchFunction owns its unreturned replies; generic resource transports do not. */
+async function withOwnedReplies(run: (replies: FetchResponse[]) => Promise<FetchResponse>): Promise<FetchResponse> {
+  const replies: FetchResponse[] = [];
+  let response: FetchResponse | undefined;
+  try {
+    response = await run(replies);
+    return response;
+  } finally {
+    await Promise.all(replies.filter((reply) => reply !== response).map(discardResponse));
+  }
+}
+
 function invocationResources(authorization: string): Array<{ resource: string; access: ResourceAccess }> {
   const encoded = authorization.split(".")[1];
   if (!encoded) throw new ResourceNotRoutedError("invalid invocation");
@@ -216,7 +228,6 @@ export async function routeResourceRequest(
       try {
         response = await send(target);
         if (response.ok || response.status !== 404) return response;
-        if (target !== targets.at(-1)) await discardResponse(response);
       } catch (error) {
         if (!(error instanceof NodeNotRespondingError)) throw error;
         failure = error;
@@ -233,25 +244,15 @@ export async function routeResourceRequest(
   for (const target of targets) {
     try {
       const result = await send(target);
-      if (result.ok) {
-        succeeded.push(target.url);
-        if (response) await discardResponse(result);
-        else response = result;
-      } else {
-        failed.push({ url: target.url, status: result.status });
-        if (failureResponse) await discardResponse(result);
-        else failureResponse = result;
-      }
+      if (result.ok) { succeeded.push(target.url); response ??= result; }
+      else { failed.push({ url: target.url, status: result.status }); failureResponse ??= result; }
     } catch (error) {
       if (!routingFailure(error) && succeeded.length === 0) throw error;
       failed.push({ url: target.url, cause: error });
     }
   }
   if (failed.length > 0) {
-    if (succeeded.length > 0 || targets.length > 1) {
-      await Promise.all([discardResponse(response), discardResponse(failureResponse)]);
-      throw new PartialNodeWriteError(succeeded, failed);
-    }
+    if (succeeded.length > 0 || targets.length > 1) throw new PartialNodeWriteError(succeeded, failed);
     if (failureResponse) return failureResponse;
     if (failed[0]?.cause && !(failed[0].cause instanceof NodeNotRespondingError)) throw failed[0].cause;
     throw new NodeNotRespondingError(targets.map(({ url }) => url), failed[0]?.cause);
@@ -266,13 +267,16 @@ export function createResourceTransportInvocationFetch(transport: ResourceTransp
     if (parsed.pathname !== "/invoke") throw new ResourceNotRoutedError(parsed.pathname);
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
-    return transport(invocationResources(authorization), async (target) => {
+    return withOwnedReplies((replies) => transport(invocationResources(authorization), async (target) => {
       const signed = await target.bindAudience(authorization);
+      init?.signal?.throwIfAborted();
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
         .filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
-      return fetchResolved(target.fetch, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
-    }, { invocationSession: session });
+      const response = await fetchResolved(target.fetch, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
+      replies.push(response);
+      return response;
+    }, { invocationSession: session }));
   }, { [routesRequests]: true });
 }
 
@@ -284,23 +288,30 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
     const resources = invocationResources(authorization);
-    const send = async (target: ResourceDestination): Promise<FetchResponse> => {
-      init?.signal?.throwIfAborted();
-      if (routing.verifyDestination) await routing.verifyDestination(target);
-      else await verifyResourceDestination(target, fetchFn);
-      const signed = target.nodeDid ? await routing.bindAudience(authorization, target.nodeDid) : authorization;
-      const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
-      headers.push(["Authorization", signed]);
-      const timeout = AbortSignal.timeout(5_000);
-      const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
-      try {
-        return await fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
-      } catch (error) {
-        if (init?.signal?.aborted) throw error;
-        if (routingFailure(error)) throw error;
-        throw new NodeNotRespondingError([target.url], error);
-      }
-    };
-    return routeResourceRequest(resources, routing, send);
+    return withOwnedReplies(async (replies) => {
+      const write = resources.some(({ access }) => access === "write" || access === "host");
+      const send = async (target: ResourceDestination): Promise<FetchResponse> => {
+        if (!write && replies.at(-1)?.status === 404) await discardResponse(replies.at(-1));
+        init?.signal?.throwIfAborted();
+        if (routing.verifyDestination) await routing.verifyDestination(target);
+        else await verifyResourceDestination(target, fetchFn);
+        const signed = target.nodeDid ? await routing.bindAudience(authorization, target.nodeDid) : authorization;
+        init?.signal?.throwIfAborted();
+        const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
+        headers.push(["Authorization", signed]);
+        const timeout = AbortSignal.timeout(5_000);
+        const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+        try {
+          const response = await fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
+          replies.push(response);
+          return response;
+        } catch (error) {
+          if (init?.signal?.aborted) throw error;
+          if (routingFailure(error)) throw error;
+          throw new NodeNotRespondingError([target.url], error);
+        }
+      };
+      return routeResourceRequest(resources, routing, send);
+    });
   }, { [routesRequests]: true });
 }

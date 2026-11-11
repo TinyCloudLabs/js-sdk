@@ -11,7 +11,6 @@ export function inheritResourceRouting(target: FetchFunction, source: FetchFunct
 
 /** The router calls this only after selecting the physical destination. */
 export function fetchResolved(fetch: FetchFunction, url: string, init?: FetchRequestInit): Promise<FetchResponse> {
-  init?.signal?.throwIfAborted();
   const dispatch = (init as FetchRequestInit & { [resolvedDispatch]?: ResolvedDispatch } | undefined)?.[resolvedDispatch];
   return dispatch ? dispatch(fetch, url, init!) : fetch(url, init);
 }
