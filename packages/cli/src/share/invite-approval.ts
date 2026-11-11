@@ -25,6 +25,8 @@ function newInvitationId(now: number): string {
 /** What an approved invitation gives the share: the key id (from the signed grant only). The grant itself is installed on the profile's node. */
 export interface EmailInviteKey {
   shareId: string;
+  /** The access expiry the owner was shown and signed (inside the request body). It is the file's own expiry, never shortened or extended. */
+  accessExpiresAt: string;
 }
 
 export interface EmailInviteApprovalRequest {
@@ -95,5 +97,5 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
   }
   // Taking the approval makes it single-use: a send that fails from here on needs a new approval.
   await takeInvitationApproval(profile, delegation);
-  return { shareId: grant.shareId };
+  return { shareId: grant.shareId, accessExpiresAt: context.accessExpiresAt };
 };

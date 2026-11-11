@@ -64,11 +64,20 @@ describe("per-invitation approval for a session-only email share", () => {
       asked.push({ ...request, node: undefined });
       expect(requests).toEqual([]);
       expect(events).toEqual([]);
-      return { shareId: APPROVED_ID };
+      return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString() };
     }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
     expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date("2030-01-01T00:00:00.000Z") }]);
     expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
+  });
+
+  it("refuses an approval whose signed access date is not the expiry the share is issued with, before anything is requested or encrypted", async () => {
+    for (const accessExpiresAt of ["2029-12-31T23:59:59.000Z", "2030-01-01T00:00:01.000Z"]) {
+      const error = await adapter(async () => ({ shareId: APPROVED_ID, accessExpiresAt })).publish(input).then(() => undefined, (caught: unknown) => caught);
+      expect(String(error)).toContain("decrypt-not-held");
+      expect(requests).toEqual([]);
+      expect(events).toEqual([]);
+    }
   });
 
   it("stops with nothing created or requested when the approval is refused", async () => {
@@ -82,7 +91,7 @@ describe("per-invitation approval for a session-only email share", () => {
   it("does not ask when the session already holds decrypt for the share key, and is refused as before without an approver", async () => {
     holdsDecrypt = true;
     let asked = 0;
-    const error = await adapter(async () => { asked += 1; return { shareId: APPROVED_ID }; }).publish(input).then(() => undefined, (caught: unknown) => caught);
+    const error = await adapter(async () => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString() }; }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
     expect(asked).toBe(0);
     expect(events.at(-1)).toMatch(/^encrypt share\/[0-9a-f]{32}$/);

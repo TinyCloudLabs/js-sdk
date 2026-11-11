@@ -762,6 +762,10 @@ export function createShareAuthorityAdapters(input: {
         node, profile: activeProfileName, recipientEmail: targetInput.target.address, subjectName: targetInput.filename,
         subjectKind: "file", accessExpiresAt: expiresAt,
       });
+      // What the owner signed as the file's access date must be the expiry this share is issued with: no silent shortening, no extension.
+      if (approved.accessExpiresAt !== expiresAt.toISOString()) {
+        throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      }
       shareId = approved.shareId;
       pathPlan = planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork! });
     }

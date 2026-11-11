@@ -265,12 +265,14 @@ test("approveEmailInviteKey: with the real did:pkh owner and did:key session, th
   const resource = `${network}/share/${KEY_ID}`;
   const holds = () => { try { return String(sessionHoldsEncryptionDecrypt(node as unknown as TinyCloudNode, resource)); } catch (error) { return `throws ${(error as Error).message}`; } };
   expect(holds()).toBe("false");
+  const access = new Date(Date.now() + 3_600_000);
   const result = await approveEmailInviteKey({
     node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file",
-    accessExpiresAt: new Date(Date.now() + 3_600_000), onApprovalRequest: (request) => { asked.push(request.approvalUrl); },
+    accessExpiresAt: access, onApprovalRequest: (request) => { asked.push(request.approvalUrl); },
   });
   expect(holds()).toBe("true");
-  expect(result).toEqual({ shareId: KEY_ID });
+  // The signed access date is the file's own expiry, to the second.
+  expect(result).toEqual({ shareId: KEY_ID, accessExpiresAt: new Date(Math.floor(access.getTime() / 1000) * 1000).toISOString() });
   const installed = node.getRuntimePermissionDelegations().flatMap((delegation) => delegation.resources ?? []).filter((resource) => resource.path.includes("/share/"));
   expect(installed.map((resource) => resource.path)).toEqual([`${network}/share/${KEY_ID}`]);
   expect([...installed[0]!.actions].sort()).toEqual([...pair].sort());
