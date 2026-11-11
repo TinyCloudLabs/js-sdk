@@ -8,7 +8,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
-import { activateSessionWithHost } from '@tinycloud/sdk-core';
+import { activateSessionWithHost, signCompactUcanAuthorization } from '@tinycloud/sdk-core';
 import { courierRegistryFixtureEnv, installCourierRegistryFixture } from './support/registry-fixture.mjs';
 import { courierNode, peerKv, nodeOpts } from '../dist/node.js';
 import { cmdRevoke } from '../dist/commands.js';
@@ -87,6 +87,13 @@ test('local node: healthy peer read, cmdRevoke all children/current replacement,
   const write = await na.kv.put(`${k.toPeer('bob')}proof.txt`, 'healthy'); assert.ok(write.ok);
   process.env.COURIER_HOME = b;
   const pb = loadProfile(); const nb = await courierNode(pb); const kv = await peerKv(nb, pb, pb.peers.alice);
+  const now = Math.floor(Date.now() / 1000);
+  const foreign = await signCompactUcanAuthorization({ issuerDid: pa.courierDid, audienceDid: info.nodeId,
+    attenuation: { [`tinycloud:${pb.courierDid.slice(4)}:agent/delegation`]: { 'tinycloud.delegation/list': [{}] } },
+    facts: [{}], proofs: [], notBefore: now, expiresAt: now + 60, nonce: `urn:uuid:${crypto.randomUUID()}`, sign: (bytes) => na.signSessionBytes(bytes) });
+  const foreignResponse = await fetch(`${host}/delegation/query`, { method: 'POST', headers: { Authorization: foreign.authorization, 'content-type': 'application/json' }, body: JSON.stringify({ direction: 'issued' }) });
+  assert.equal(foreignResponse.status, 403);
+  t.diagnostic('another DID issued-list resource refused: HTTP 403');
   const before = await kv.get(`${k.toPeer('bob')}proof.txt`); assert.ok(before.ok, JSON.stringify(before));
   t.diagnostic('healthy peer read BEFORE cmdRevoke: ok');
   process.env.COURIER_HOME = a;
@@ -102,7 +109,22 @@ test('local node: healthy peer read, cmdRevoke all children/current replacement,
   assert.ok(progress);
   assert.equal(progress.outbound.filter((e) => e.revokedAt).length, 1);
   t.diagnostic('partial revoke failure retained pairing and one durable receipt; retry follows');
-  const result = await run(a, ['revoke', 'bob']); assert.match(result, /Revoked bob/);
+  let entered; const atRevoke = new Promise((r) => { entered = r; });
+  let release; const gate = new Promise((r) => { release = r; });
+  globalThis.fetch = async (input, init) => {
+    if (new URL(input instanceof Request ? input.url : String(input)).pathname === '/revoke') { entered(); await gate; }
+    return realFetch(input, init);
+  };
+  const retry = cmdRevoke(parseArgs(['bob']));
+  await atRevoke;
+  const concurrentRenew = run(a, ['pair', 'renew', 'bob', '--force']).then(() => ({ ok: true }), (error) => ({ ok: false, error }));
+  await new Promise((r) => setTimeout(r, 200));
+  release();
+  try { await retry; } finally { globalThis.fetch = realFetch; }
+  const renewal = await concurrentRenew;
+  assert.equal(renewal.ok, false);
+  assert.match(renewal.error.stderr, /unknown-peer/);
+  t.diagnostic('concurrent forced renewal waited for revoke, then refused unknown-peer');
   const after = await kv.get(`${k.toPeer('bob')}proof.txt`); assert.equal(after.ok, false);
   t.diagnostic(`NEXT peer read AFTER cmdRevoke: denied (${after.error?.code})`);
   const listed = await na.delegationManager.queryAllIssued({ space: pa.spaceId }); assert.ok(listed.ok);

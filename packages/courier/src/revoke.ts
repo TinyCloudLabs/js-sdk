@@ -13,7 +13,7 @@ export async function revokePeer(node: TinyCloudNode, profile: Profile, handle: 
     p.actions.map((action) => JSON.stringify([`${p.space}/${p.service.replace('tinycloud.', '')}/${p.path}`, action]))).sort();
   const matches = listed.data.filter((record) => {
     if (bareDid(record.delegatorDid) !== profile.courierDid || bareDid(record.delegateDid) !== peer.courierDid) return false;
-    if (record.resources.some((r) => r.caveats.length)) return false;
+    if (record.resources.some((r) => r.caveats.length !== r.actions.length || r.caveats.some((c) => Object.keys(c).length !== 0))) return false;
     const actual = record.resources.flatMap((r) => r.actions.map((action) => JSON.stringify([r.resource, action]))).sort();
     return JSON.stringify(actual) === JSON.stringify(expected);
   });
