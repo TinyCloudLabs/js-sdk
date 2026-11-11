@@ -1,3 +1,4 @@
+import { discardResponse } from "../responseBody";
 import type { StorageQuotaInfo } from "../types";
 
 /** @deprecated Use `tc.on("storage.full", handler)` instead. Nothing in the SDK calls `onUpgradeRequired`. */
@@ -46,7 +47,10 @@ export class TinyCloudQuota {
     const resp = await fetch(
       `${this.quotaUrl}/api/quota/${encodeURIComponent(spaceId)}`
     );
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      await discardResponse(resp);
+      return null;
+    }
 
     const data = (await resp.json()) as { storage_limit_bytes?: number };
     return {

@@ -5,6 +5,7 @@
  * Uses dependency injection via IServiceContext for platform dependencies.
  */
 
+import { discardResponse } from "../responseBody";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -395,13 +396,14 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return err(authRequiredError("duckdb"));
       }
 
+      const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
         const response = await this.invokeWithRetry(
           `${this.host}/invoke`,
           () =>
             this.context.invoke(
-              this.context.session!,
+              session,
               "duckdb",
               dbName,
               DuckDbAction.IMPORT
@@ -417,6 +419,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           return await this.handleErrorResponse(response, "import");
         }
 
+        await discardResponse(response);
         return ok(undefined);
       } catch (error) {
         return err(wrapError("duckdb", error));
@@ -435,9 +438,10 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     signal: AbortSignal,
     extraHeaders?: Record<string, string>
   ): Promise<FetchResponse> {
+    const session = this.session;
     return this.invokeWithRetry(
       `${this.host}/invoke`,
-      () => this.context.invoke(this.context.session!, "duckdb", dbName, action),
+      () => this.context.invoke(session, "duckdb", dbName, action),
       {
         headers: { "Content-Type": "application/json", ...extraHeaders },
         body: JSON.stringify(body),

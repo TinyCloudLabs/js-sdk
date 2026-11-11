@@ -6883,10 +6883,29 @@ export class TinyCloudNode {
           "ensureKey", "encrypt", "decrypt", "decryptMany",
         ].includes(property)) return undefined;
         return (...args: unknown[]) => {
+          const graph = this._serviceGraph;
+          graph.assertActive();
+          const session = this._serviceContext?.session ?? this.session;
+          // Capture defaults and caller options before even the lazy import can yield.
+          const optionIndex = property === "encrypt" ? 2 : 1;
+          if (property !== "decrypt" && property !== "decryptMany") {
+            const options = args[optionIndex] as { networkId?: string } | undefined;
+            args[optionIndex] = {
+              ...options,
+              networkId: options?.networkId ?? this.getDefaultEncryptionNetworkId(),
+            };
+          }
           this._namedKeyClient ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) => createNamedKeyClient(this));
           return this._namedKeyClient.then((client) => {
+            graph.assertActive();
+            if ((this._serviceContext?.session ?? this.session) !== session) {
+              throw new Error("Named-key session was replaced");
+            }
             const method = (client as unknown as Record<string, (...args: unknown[]) => unknown>)[property];
-            return method.apply(client, args);
+            return Promise.resolve(method.apply(client, args)).then((result) => {
+              graph.assertActive();
+              return result;
+            });
           });
         };
       },

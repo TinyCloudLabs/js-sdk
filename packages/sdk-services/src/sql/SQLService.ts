@@ -65,7 +65,13 @@ export class SQLService extends BaseService implements ISQLService {
   static readonly serviceName = "sql";
 
   declare protected _config: SQLServiceConfig;
-  private readonly migrationLocks = new Map<string, Promise<Result<SqlMigrationApplyResponse>>>();
+  private readonly migrationLocks = new Map<string, {
+    session: ServiceSession;
+    serviceSignal: AbortSignal;
+    contextSignal: AbortSignal;
+    operationSignal?: AbortSignal;
+    promise: Promise<Result<SqlMigrationApplyResponse>>;
+  }>();
 
   constructor(config: SQLServiceConfig = {}) {
     super();
@@ -132,18 +138,35 @@ export class SQLService extends BaseService implements ISQLService {
       return err(serviceError(ErrorCodes.INVALID_INPUT, validationError, "sql"));
     }
 
+    if (!this.requireAuth()) return err(authRequiredError("sql"));
+    const session = this.session;
+    const context = this.context;
+    const serviceSignal = this.abortController.signal;
+    const contextSignal = context.abortSignal;
+    const operationSignal = context.operationAbortSignal;
+    const request = this.createRequestSignal(options.signal);
+    const guard = (): void => {
+      request.signal.throwIfAborted();
+      if (this.context !== context || context.session !== session) {
+        throw new DOMException("SQL migration session changed", "AbortError");
+      }
+    };
     const lockKey = `${dbName}\0${options.namespace}`;
     const existing = this.migrationLocks.get(lockKey);
-    if (existing) {
-      return existing;
+    if (existing && existing.session === session && existing.serviceSignal === serviceSignal &&
+        existing.contextSignal === contextSignal && existing.operationSignal === operationSignal) {
+      request.dispose();
+      return existing.promise;
     }
 
-    const promise = this.applyMigrationsOnDbUnlocked(dbName, options);
-    this.migrationLocks.set(lockKey, promise);
+    const promise = this.applyMigrationsOnDbUnlocked(dbName, { ...options, signal: request.signal }, guard);
+    const lock = { session, serviceSignal, contextSignal, operationSignal, promise };
+    this.migrationLocks.set(lockKey, lock);
     try {
       return await promise;
     } finally {
-      this.migrationLocks.delete(lockKey);
+      request.dispose();
+      if (this.migrationLocks.get(lockKey) === lock) this.migrationLocks.delete(lockKey);
     }
   }
 
@@ -160,6 +183,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
         const body: Record<string, unknown> = {
@@ -175,11 +199,12 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           action,
           body,
-          request.signal
+          request.signal,
+          session
         );
 
         if (!response.ok) {
-          const failure = await this.handleErrorResponse(response, "query", dbName, [action]);
+          const failure = await this.handleErrorResponse(response, "query", dbName, [action], session);
           return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
@@ -204,6 +229,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
         const body: Record<string, unknown> = {
@@ -226,11 +252,12 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           requestedActions,
           body,
-          request.signal
+          request.signal,
+          session
         );
 
         if (!response.ok) {
-          const failure = await this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          const failure = await this.handleErrorResponse(response, "execute", dbName, requestedActions, session);
           return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
@@ -254,6 +281,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
         const requestedActions = this.actionsForSqlBatch(statements);
@@ -261,11 +289,12 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           requestedActions,
           { action: "batch", statements },
-          request.signal
+          request.signal,
+          session
         );
 
         if (!response.ok) {
-          const failure = await this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          const failure = await this.handleErrorResponse(response, "batch", dbName, requestedActions, session);
           return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
@@ -290,6 +319,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
         // TC-114: mint the dispatchable ability, not the literal method name.
@@ -306,11 +336,12 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           SQLAction.WRITE,
           { action: "execute_statement", name, params: params ?? [] },
-          request.signal
+          request.signal,
+          session
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
+          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE], session);
         }
 
         const data = (await response.json()) as
@@ -334,6 +365,7 @@ export class SQLService extends BaseService implements ISQLService {
         return err(authRequiredError("sql"));
       }
 
+      const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
         // TC-114: mint the dispatchable ability, not the literal method name.
@@ -345,11 +377,12 @@ export class SQLService extends BaseService implements ISQLService {
           dbName,
           SQLAction.READ,
           { action: "export" },
-          request.signal
+          request.signal,
+          session
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
+          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ], session);
         }
 
         // FetchResponse doesn't expose blob(), so access it from the
@@ -373,17 +406,20 @@ export class SQLService extends BaseService implements ISQLService {
   private async applyMigrationsOnDbUnlocked(
     dbName: string,
     options: SqlMigrationApplyOptions,
+    guard: () => void,
   ): Promise<Result<SqlMigrationApplyResponse>> {
     return this.withTelemetry("migrations.apply", dbName, async () => {
       // Read before writing: up-to-date databases must open without writes,
       // even when the owner's storage is full or the session is read-only.
       // sqlite_master also exists in a fresh database, so bootstrap reads succeed.
+      guard();
       const probe = await this.queryOnDb<{ name: string }>(
         dbName,
         `SELECT name FROM sqlite_master WHERE type='table' AND name='${MIGRATIONS_TABLE}'`,
         [],
         { signal: options.signal },
       );
+      guard();
       // Keep compatibility with nodes that report missing databases/tables.
       let tableMissing = probe.ok
         ? probe.data.rows.length === 0
@@ -393,12 +429,14 @@ export class SQLService extends BaseService implements ISQLService {
 
       const appliedIds = new Set<string>();
       if (!tableMissing) {
+        guard();
         const listed = await this.queryOnDb<{ id: string }>(
           dbName,
           `SELECT id FROM ${MIGRATIONS_TABLE} WHERE namespace = ? ORDER BY applied_at, id`,
           [options.namespace],
           { signal: options.signal },
         );
+        guard();
         tableMissing =
           !listed.ok &&
           (listed.error.code === ErrorCodes.SQL_DATABASE_NOT_FOUND ||
@@ -418,12 +456,16 @@ export class SQLService extends BaseService implements ISQLService {
       const applied: string[] = [];
 
       if (pending.length > 0 && tableMissing) {
+        guard();
         const created = await this.ensureMigrationsTable(dbName, options.signal);
+        guard();
         if (!created.ok) return created;
       }
 
       for (const migration of pending) {
+        guard();
         const result = await this.applyOneMigration(dbName, options.namespace, migration, options.signal);
+        guard();
         if (!result.ok) return result;
         applied.push(migration.id);
       }
@@ -496,14 +538,14 @@ export class SQLService extends BaseService implements ISQLService {
     dbName: string,
     actions: string | string[],
     body: Record<string, unknown>,
-    signal: AbortSignal
+    signal: AbortSignal,
+    session: ServiceSession,
   ): Promise<FetchResponse> {
     const actionList = Array.isArray(actions) ? actions : [actions];
 
     return this.invokeWithRetry(
       `${this.host}/invoke`,
       () => {
-        const session = this.context.session!;
         return actionList.length === 1
           ? this.context.invoke(session, "sql", dbName, actionList[0]!)
           : this.invokeSQLAny(session, dbName, actionList);
@@ -571,6 +613,7 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string,
     dbName: string,
     requestedActions: readonly string[],
+    session: ServiceSession,
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -606,7 +649,7 @@ export class SQLService extends BaseService implements ISQLService {
       const { action } = parseAuthError(errorText);
       if (action && requestedActions.includes(action)) {
         meta.requiredAction = action;
-        meta.resource = `${this.context.session!.spaceId}/sql/${dbName}`;
+        meta.resource = `${session.spaceId}/sql/${dbName}`;
       }
     }
 

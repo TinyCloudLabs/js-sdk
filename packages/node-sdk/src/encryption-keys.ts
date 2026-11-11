@@ -16,7 +16,7 @@ import {
   NamedKeyError,
   type NamedKeyClientConfig,
 } from "@tinycloud/sdk-services/encryption/named-keys";
-import type { EncryptionCrypto } from "@tinycloud/sdk-services";
+import type { ServiceSession, EncryptionCrypto } from "@tinycloud/sdk-services";
 import type { TinyCloudNode } from "./TinyCloudNode";
 
 export {
@@ -34,13 +34,15 @@ export {
 } from "@tinycloud/sdk-services/encryption/named-keys";
 
 interface NodeSigningInternals {
+  readonly _serviceGraph: { assertActive(): void };
+  readonly _serviceContext?: { session: ServiceSession | null };
   readonly config?: { keyWrapV2?: boolean; requireKeyWrapV2?: boolean };
   signRawNetworkAuthorization(input: {
     targetNode: string;
     networkId: string;
     action: string;
     facts: object;
-  }): Promise<{ authorization: string; invocationCid: string }>;
+  }, binding?: { graph: { assertActive(): void }; session: ServiceSession }): Promise<{ authorization: string; invocationCid: string }>;
   createEncryptionCrypto(): EncryptionCrypto;
 }
 
@@ -85,20 +87,44 @@ export function createNamedKeyClient(
     crypto: signer.createEncryptionCrypto(),
     fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
     defaultNetworkId: () => options.networkId ?? node.getDefaultEncryptionNetworkId(),
-    signInvocation: (input) =>
-      signer.signRawNetworkAuthorization({
-        targetNode: input.targetNode,
-        networkId: input.resource,
-        action: input.action,
-        facts: input.facts,
-      }),
-    decryptRoot: (envelope) => {
-      const delegationCid = node.session?.delegationCid;
-      if (delegationCid === undefined) {
-        return Promise.reject(new Error("Not signed in. Call signIn() first."));
-      }
-      return node.encryption.decryptEnvelope(envelope, { proofs: [delegationCid] });
+    captureOperation: () => {
+      const graph = signer._serviceGraph;
+      graph.assertActive();
+      const session = signer._serviceContext?.session ?? node.session;
+      let networkId = options.networkId;
+      let encryption: TinyCloudNode["encryption"] | undefined;
+      return {
+        ...config,
+        captureOperation: undefined,
+        assertActive: () => graph.assertActive(),
+        defaultNetworkId: () => {
+          graph.assertActive();
+          // Calls that need a default resolve it synchronously at entry. Explicit
+          // networks and envelope-only decrypts never consult the node default.
+          return networkId ??= node.getDefaultEncryptionNetworkId();
+        },
+        signInvocation: (input) => {
+          graph.assertActive();
+          if (!session) throw new Error("Not signed in. Call signIn() first.");
+          return signer.signRawNetworkAuthorization({
+            targetNode: input.targetNode,
+            networkId: input.resource,
+            action: input.action,
+            facts: input.facts,
+          }, { graph, session });
+        },
+        decryptRoot: async (envelope) => {
+          graph.assertActive();
+          if (!session) throw new Error("Not signed in. Call signIn() first.");
+          encryption ??= node.encryption;
+          const result = await encryption.decryptEnvelope(envelope, { proofs: [session.delegationCid] });
+          graph.assertActive();
+          return result;
+        },
+      };
     },
+    // Public entry points replace these hooks with a captured operation first.
+    signInvocation: () => { throw new Error("Named-key operation was not captured"); },
   };
   return new NamedKeyClient(config);
 }

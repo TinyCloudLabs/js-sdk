@@ -5,6 +5,7 @@
  * Uses dependency injection via IServiceContext for platform dependencies.
  */
 
+import { discardResponse } from "../responseBody";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -14,6 +15,7 @@ import {
   serviceError,
   FetchResponse,
   ServiceHeaders,
+  ServiceSession,
 } from "../types";
 import type { KVReadThrough, KVListPage } from "./replication/types";
 import {
@@ -275,6 +277,7 @@ export class KVService extends BaseService implements IKVService {
    * @returns Fetch response
    */
   private async invokeOperation(
+    session: ServiceSession,
     path: string,
     action: string,
     body: Blob | string | undefined,
@@ -283,7 +286,11 @@ export class KVService extends BaseService implements IKVService {
   ): Promise<FetchResponse> {
     return this.invokeWithRetry(
       `${this.host}/invoke`,
-      () => this.context.invoke(this.context.session!, "kv", path, action),
+      () => {
+        signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        return this.context.invoke(session, "kv", path, action);
+      },
       { headers: extraHeaders, body, signal }
     );
   }
@@ -520,6 +527,7 @@ export class KVService extends BaseService implements IKVService {
     action: typeof KVAction.GET | typeof KVAction.HEAD,
     options?: KVGetOptions | KVHeadOptions
   ): Promise<Result<KVBatchReadResponse<T>>> {
+    const session = this.context?.session!;
     if (!this.requireAuth()) return err(authRequiredError("kv"));
     if (keys.length === 0) return ok({ results: [], count: 0 });
     if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
@@ -580,7 +588,8 @@ export class KVService extends BaseService implements IKVService {
       const response = await this.invokeWithRetry(
         `${this.host}/invoke`,
         () => {
-          const session = this.context.session!;
+          request.signal.throwIfAborted();
+          if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
           return this.context.invokeAny!(
             session,
             paths.map((path) => ({
@@ -600,6 +609,7 @@ export class KVService extends BaseService implements IKVService {
           : await response.text();
         if (response.status === 401 || response.status === 403) {
           return this.authorizationFailure(
+            session,
             `Failed to batch read ${keys.length} key(s)`,
             response,
             errorText,
@@ -712,6 +722,7 @@ export class KVService extends BaseService implements IKVService {
   }
 
   private async createSignedReadUrlError(
+    session: ServiceSession,
     response: FetchResponse,
     key: string,
     path: string
@@ -728,6 +739,7 @@ export class KVService extends BaseService implements IKVService {
 
     if (response.status === 401 || response.status === 403) {
       return this.authorizationFailure(
+        session,
         `Failed to create signed read URL for key ${JSON.stringify(key)}`,
         response,
         errorText,
@@ -767,6 +779,7 @@ export class KVService extends BaseService implements IKVService {
    * canonical resource under the authenticated session's space.
    */
   private authorizationFailure(
+    session: ServiceSession,
     context: string,
     response: FetchResponse,
     errorText: string,
@@ -777,7 +790,7 @@ export class KVService extends BaseService implements IKVService {
     const { resource, action } = parseAuthError(errorText);
     const requestedPath = paths.find((path) =>
       resource === path ||
-      resource === `${this.context.session!.spaceId}/kv/${path}`
+      resource === `${session.spaceId}/kv/${path}`
     );
     const capability = requestedPath !== undefined && action === expectedAction
       ? validatedCapabilityOf({
@@ -785,7 +798,7 @@ export class KVService extends BaseService implements IKVService {
           code: ErrorCodes.AUTH_UNAUTHORIZED,
           meta: {
             status: response.status,
-            resource: `${this.context.session!.spaceId}/kv/${requestedPath}`,
+            resource: `${session.spaceId}/kv/${requestedPath}`,
             requiredAction: action,
           },
         })
@@ -832,7 +845,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVGetOptions
   ): Promise<Result<KVResponse<T>>> {
     return this.withTelemetry("get", key, async () => {
-      if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -852,7 +865,10 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.getFromNetwork<T>(key, path, options, request.signal);
+        if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.getFromNetwork<T>(session, key, path, options, request.signal);
         if (options?.source === "network") {
           const observer = this.readThrough;
           if (observer === null) return await network();
@@ -866,7 +882,7 @@ export class KVService extends BaseService implements IKVService {
             try {
               observer.observeNetworkRequested({
                 op: "get",
-                space: this.context.session!.spaceId,
+                space: session.spaceId,
                 path,
                 reason: "NETWORK_REQUESTED",
                 outcome,
@@ -880,7 +896,7 @@ export class KVService extends BaseService implements IKVService {
         }
         if (this.readThrough === null) return await network();
         return await this.readThrough.get({
-          space: this.context.session!.spaceId,
+          space: session.spaceId,
           key,
           path,
           options,
@@ -895,12 +911,14 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async getFromNetwork<T>(
+    session: ServiceSession,
     key: string,
     path: string,
     options: KVGetOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVResponse<T>>> {
     const response = await this.invokeOperation(
+      session,
       path,
       KVAction.GET,
       undefined,
@@ -914,19 +932,20 @@ export class KVService extends BaseService implements IKVService {
         const errorText = await this.readAuthorizationText(response);
         const permissionHint = parsePermissionHintFromErrorText(errorText);
         const structuredCapability = permissionHint?.service === "tinycloud.kv" &&
-          permissionHint.space === this.context.session!.spaceId &&
+          permissionHint.space === session.spaceId &&
           permissionHint.path === path
           ? validatedCapabilityOf({
               service: "kv",
               code: ErrorCodes.AUTH_UNAUTHORIZED,
               meta: {
                 status: response.status,
-                resource: `${this.context.session!.spaceId}/kv/${path}`,
+                resource: `${session.spaceId}/kv/${path}`,
                 requiredAction: KVAction.GET,
               },
             })
           : undefined;
         return this.authorizationFailure(
+          session,
           `Failed to get key ${JSON.stringify(key)}`,
           response,
           errorText,
@@ -977,7 +996,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVPutOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("put", key, async () => {
-      if (this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -999,11 +1018,14 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.putToNetwork(key, path, body, options, request.signal);
+        if (this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.putToNetwork(session, key, path, body, options, request.signal);
         if (this.readThrough === null) return await network();
         return await this.readThrough.write({
           op: "put",
-          space: this.context.session!.spaceId,
+          space: session.spaceId,
           entries: [{ path, body }],
           signal: request.signal,
           conditional: options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined,
@@ -1017,6 +1039,7 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async putToNetwork(
+    session: ServiceSession,
     key: string,
     path: string,
     body: Blob | string,
@@ -1024,6 +1047,7 @@ export class KVService extends BaseService implements IKVService {
     signal: AbortSignal
   ): Promise<Result<KVResponse<void>>> {
     const response = await this.invokeOperation(
+      session,
       path,
       KVAction.PUT,
       body,
@@ -1035,6 +1059,7 @@ export class KVService extends BaseService implements IKVService {
     );
     if (response.status === 401 || response.status === 403) {
       return this.authorizationFailure(
+        session,
         `Failed to put key ${JSON.stringify(key)}`,
         response,
         await this.readAuthorizationText(response),
@@ -1066,6 +1091,7 @@ export class KVService extends BaseService implements IKVService {
         { meta: { status: response.status, statusText: response.statusText } }
       ));
     }
+    await discardResponse(response);
     return ok({
       data: undefined as void,
       headers: this.createResponseHeaders(response.headers),
@@ -1081,7 +1107,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVBatchPutOptions
   ): Promise<Result<KVBatchPutResponse>> {
     return this.withTelemetry("batchPut", String(items.length), async () => {
-      if (this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1100,7 +1126,6 @@ export class KVService extends BaseService implements IKVService {
         );
       }
 
-      const session = this.context.session!;
       const paths = items.map((item) => this.getFullPath(item.key, options?.prefix));
       const seen = new Set<string>();
       for (const path of paths) {
@@ -1118,7 +1143,10 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.batchPutToNetwork(items, paths, request.signal);
+        if (this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.batchPutToNetwork(session, items, paths, request.signal);
         if (this.readThrough === null) return await network();
         const entries = items.map((item, index) => ({
           path: paths[index]!,
@@ -1129,7 +1157,7 @@ export class KVService extends BaseService implements IKVService {
           space: session.spaceId,
           entries,
           signal: request.signal,
-          network: () => this.batchPutToNetwork(items, paths, request.signal, entries),
+          network: () => this.batchPutToNetwork(session, items, paths, request.signal, entries),
         });
       } catch (error) {
         const wrapped = wrapError("kv", error);
@@ -1140,12 +1168,12 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async batchPutToNetwork(
+    session: ServiceSession,
     items: KVBatchPutItem[],
     paths: string[],
     signal: AbortSignal,
     entries?: Array<{ path: string; body: Blob }>
   ): Promise<Result<KVBatchPutResponse>> {
-    const session = this.context.session!;
     // Conservative: `true` means we handed a fully-constructed request to
     // fetch(). It does NOT prove bytes reached the node — DNS/connect
     // failures and synchronous fetch rejections are included. Proving
@@ -1170,6 +1198,8 @@ export class KVService extends BaseService implements IKVService {
         const response = await this.invokeWithRetry(
           `${this.host}/invoke`,
           () => {
+            signal.throwIfAborted();
+            if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
             const headers = this.context.invokeAny!(
               session,
               paths.map((path) => ({
@@ -1218,6 +1248,7 @@ export class KVService extends BaseService implements IKVService {
 
           if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
+              session,
               `Failed to batch put ${items.length} key(s)`,
               response,
               errorText,
@@ -1359,7 +1390,7 @@ export class KVService extends BaseService implements IKVService {
    */
   async list(options?: KVListOptions): Promise<Result<KVListResponse>> {
     return this.withTelemetry("list", options?.prefix, async () => {
-      if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1383,7 +1414,10 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.listFromNetwork(listPath, options, request.signal);
+        if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.listFromNetwork(session, listPath, options, request.signal);
         let page: Result<KVListPage>;
         if (options?.source === "network") {
           const observer = this.readThrough;
@@ -1399,7 +1433,7 @@ export class KVService extends BaseService implements IKVService {
               try {
                 observer.observeNetworkRequested({
                   op: "list",
-                  space: this.context.session!.spaceId,
+                  space: session.spaceId,
                   path: listPath,
                   reason: "NETWORK_REQUESTED",
                   outcome,
@@ -1414,7 +1448,7 @@ export class KVService extends BaseService implements IKVService {
           page = await network();
         } else {
           page = await this.readThrough.list({
-            space: this.context.session!.spaceId,
+            space: session.spaceId,
             listPath,
             options,
             signal: request.signal,
@@ -1432,11 +1466,13 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async listFromNetwork(
+    session: ServiceSession,
     listPath: string,
     options: KVListOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVListPage>> {
     const response = await this.invokeOperation(
+      session,
       listPath,
       KVAction.LIST,
       undefined,
@@ -1451,6 +1487,7 @@ export class KVService extends BaseService implements IKVService {
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         return this.authorizationFailure(
+          session,
           "Failed to list keys",
           response,
           await this.readAuthorizationText(response),
@@ -1502,6 +1539,7 @@ export class KVService extends BaseService implements IKVService {
    */
   async changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>> {
     return this.withTelemetry("changes", options?.prefix, async () => {
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1536,6 +1574,7 @@ export class KVService extends BaseService implements IKVService {
       const request = this.createRequestSignal(options.signal, options.timeout);
       try {
         const response = await this.invokeOperation(
+          session,
           requestPrefix,
           KVAction.SYNC,
           undefined,
@@ -1546,7 +1585,7 @@ export class KVService extends BaseService implements IKVService {
         if (!response.ok) {
           // Awaited so the timeout and abort listeners stay live while the
           // error body is read; `finally` disposes them only afterwards.
-          return await this.changesFailure(response, options.prefix, request.signal);
+          return await this.changesFailure(session, response, options.prefix, request.signal);
         }
 
         const text = await response.text();
@@ -1582,6 +1621,7 @@ export class KVService extends BaseService implements IKVService {
    * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
    */
   private async changesFailure(
+    session: ServiceSession,
     response: FetchResponse,
     prefix: string,
     signal: AbortSignal
@@ -1634,7 +1674,7 @@ export class KVService extends BaseService implements IKVService {
       }
     }
     if (response.status === 401 || response.status === 403) {
-      return this.authorizationFailure(context, response, errorText, [prefix], KVAction.SYNC);
+      return this.authorizationFailure(session, context, response, errorText, [prefix], KVAction.SYNC);
     }
     return err(serviceError(
       response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR,
@@ -1713,7 +1753,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVDeleteOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("delete", key, async () => {
-      if (this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1722,11 +1762,14 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.deleteFromNetwork(key, path, options, request.signal);
+        if (this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.deleteFromNetwork(session, key, path, options, request.signal);
         if (this.readThrough === null) return await network();
         return await this.readThrough.write({
           op: "delete",
-          space: this.context.session!.spaceId,
+          space: session.spaceId,
           entries: [{ path }],
           signal: request.signal,
           conditional: options?.ifMatch !== undefined,
@@ -1740,12 +1783,14 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async deleteFromNetwork(
+    session: ServiceSession,
     key: string,
     path: string,
     options: KVDeleteOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVResponse<void>>> {
     const response = await this.invokeOperation(
+      session,
       path,
       KVAction.DELETE,
       undefined,
@@ -1755,6 +1800,7 @@ export class KVService extends BaseService implements IKVService {
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         return this.authorizationFailure(
+          session,
           `Failed to delete key ${JSON.stringify(key)}`,
           response,
           await this.readAuthorizationText(response),
@@ -1782,6 +1828,7 @@ export class KVService extends BaseService implements IKVService {
         { meta: { status: response.status, statusText: response.statusText } }
       ));
     }
+    await discardResponse(response);
     return ok({
       data: undefined as void,
       headers: this.createResponseHeaders(response.headers),
@@ -1797,6 +1844,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVHeadOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("head", key, async () => {
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1806,6 +1854,7 @@ export class KVService extends BaseService implements IKVService {
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
         const response = await this.invokeOperation(
+          session,
           path,
           KVAction.HEAD,
           undefined,
@@ -1815,6 +1864,7 @@ export class KVService extends BaseService implements IKVService {
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
             return this.authorizationFailure(
+              session,
               `Failed to get metadata for key ${JSON.stringify(key)}`,
               response,
               await this.readAuthorizationText(response),
@@ -1841,6 +1891,7 @@ export class KVService extends BaseService implements IKVService {
           );
         }
 
+        await discardResponse(response);
         return ok({
           data: undefined as void,
           headers: this.createResponseHeaders(response.headers),
@@ -1870,12 +1921,12 @@ export class KVService extends BaseService implements IKVService {
     options?: KVCreateSignedReadUrlOptions
   ): Promise<Result<KVSignedReadUrlResponse>> {
     return this.withTelemetry("createSignedReadUrl", key, async () => {
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
 
       const path = this.getFullPath(key, options?.prefix);
-      const session = this.context.session!;
       const body: {
         space: string;
         path: string;
@@ -1910,7 +1961,7 @@ export class KVService extends BaseService implements IKVService {
         );
 
         if (!response.ok) {
-          return await this.createSignedReadUrlError(response, key, path);
+          return await this.createSignedReadUrlError(session, response, key, path);
         }
 
         const signedUrl = this.normalizeSignedReadUrlResponse(

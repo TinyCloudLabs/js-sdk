@@ -1,3 +1,4 @@
+import { discardResponse } from "../responseBody";
 import { BaseService } from "../base/BaseService";
 import type { RequestSignal } from "../base/types";
 import { abortableSleep } from "../sleep";
@@ -231,15 +232,19 @@ export class HooksService extends BaseService implements IHooksService {
       );
     }
 
+    const session = this.session;
+    const request = this.createRequestSignal();
     try {
       const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks`,
         () =>
           this.createHookHeaders(
+            session,
             "tinycloud.hooks/register",
             buildScopePath(webhook.service, webhook.pathPrefix),
           ),
         {
+          signal: request.signal,
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             space: webhook.space,
@@ -271,6 +276,8 @@ export class HooksService extends BaseService implements IHooksService {
       return ok(data);
     } catch (error) {
       return err(wrapError("hooks", error));
+    } finally {
+      request.dispose();
     }
   }
 
@@ -281,6 +288,8 @@ export class HooksService extends BaseService implements IHooksService {
       return err(authRequiredError("hooks"));
     }
 
+    const session = this.session;
+    const request = this.createRequestSignal();
     try {
       const query = new URLSearchParams();
       if (options.space) {
@@ -300,12 +309,13 @@ export class HooksService extends BaseService implements IHooksService {
         `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
         () =>
           this.createHookHeaders(
+            session,
             "tinycloud.hooks/list",
             options.service
               ? buildScopePath(options.service, options.pathPrefix)
               : "webhooks",
           ),
-        { method: "GET" },
+        { method: "GET", signal: request.signal },
       );
 
       if (!response.ok) {
@@ -328,6 +338,8 @@ export class HooksService extends BaseService implements IHooksService {
       return ok(records);
     } catch (error) {
       return err(wrapError("hooks", error));
+    } finally {
+      request.dispose();
     }
   }
 
@@ -339,11 +351,14 @@ export class HooksService extends BaseService implements IHooksService {
       return err(authRequiredError("hooks"));
     }
 
+    const session = this.session;
+    const request = this.createRequestSignal();
     try {
       const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
         () =>
           this.createHookHeaders(
+            session,
             "tinycloud.hooks/unregister",
             options.target
               ? buildScopePath(
@@ -352,7 +367,7 @@ export class HooksService extends BaseService implements IHooksService {
                 )
               : `webhooks/${id}`,
           ),
-        { method: "DELETE" },
+        { method: "DELETE", signal: request.signal },
       );
 
       if (!response.ok) {
@@ -365,9 +380,12 @@ export class HooksService extends BaseService implements IHooksService {
         );
       }
 
+      await discardResponse(response);
       return ok(undefined);
     } catch (error) {
       return err(wrapError("hooks", error));
+    } finally {
+      request.dispose();
     }
   }
 
@@ -492,12 +510,13 @@ export class HooksService extends BaseService implements IHooksService {
         return { kind: "stopped" };
       }
       request = this.createRequestSignal(signal, 0);
+      const session = this.session;
       const host = this.host;
       const minted = await awaitOwned(request!.signal, () =>
         context.fetch(`${host}/hooks/tickets`, {
           method: "POST",
           headers: {
-            ...serviceHeadersToRecord(this.createInvokeHeaders(plan.subscriptions)),
+            ...serviceHeadersToRecord(this.createInvokeHeaders(session, plan.subscriptions)),
             "content-type": "application/json",
           },
           body: JSON.stringify({
@@ -714,11 +733,12 @@ export class HooksService extends BaseService implements IHooksService {
     this.wake();
   }
 
-  private createHookHeaders(action: string, path: string): ServiceHeaders {
-    return this.context.invoke(this.session, "hooks", path, action);
+  private createHookHeaders(session: ServiceSession, action: string, path: string): ServiceHeaders {
+    return this.context.invoke(session, "hooks", path, action);
   }
 
   private createInvokeHeaders(
+    session: ServiceSession,
     subscriptions: HookSubscription[],
   ): ServiceHeaders {
     const entries: InvokeAnyEntry[] = subscriptions.map((subscription) => ({
@@ -731,13 +751,13 @@ export class HooksService extends BaseService implements IHooksService {
     }));
 
     if (this.context.invokeAny) {
-      return this.context.invokeAny(this.session, entries);
+      return this.context.invokeAny(session, entries);
     }
 
     if (entries.length === 1) {
       const entry = entries[0];
       return this.context.invoke(
-        this.session,
+        session,
         entry.service,
         entry.path,
         entry.action,
