@@ -1,15 +1,19 @@
 {
   "name": "tc-apps",
-  "version": "0.1.5",
+  "version": "0.3.11",
   "source": "https://agents.tinycloud.xyz",
   "files": {
     "SKILL.md": {
-      "sha256": "bd8eb2e2049060384a94f9683d783fcba91674565734a40d49e26e7baf68a6da",
-      "size": 19600
+      "sha256": "03c4b2724e441de33e64a2ddcfd00c0df0c118e80cfc9a80d6541f5915b55c3a",
+      "size": 37462
     },
     "SQL.md": {
-      "sha256": "f707b3aeedc1f4bf7d05ed93d084b7db4f69856b0ad7c37a808a29497f09513f",
-      "size": 13080
+      "sha256": "ca38d23da005460466e71f568189b5dc3c6e37c9f6cb282e7e38b4dfc010eed7",
+      "size": 12250
+    },
+    "TINY-APPS.md": {
+      "sha256": "2362ab9099397b295993dbda5114cdb5f8f9dd3f9bc5ecc23ad1ef7b59b1b480",
+      "size": 28680
     }
   }
 }

@@ -1,5 +1,217 @@
 # @tinycloud/server
 
+## 2.5.19-beta.13
+
+### Patch Changes
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/sdk-core@3.12.0-beta.14
+  - @tinycloud/node-sdk@3.12.0-beta.14
+
+## 2.5.19-beta.12
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/sdk-core@3.12.0-beta.13
+  - @tinycloud/node-sdk@3.12.0-beta.13
+
+## 2.5.19-beta.11
+
+### Patch Changes
+
+- Updated dependencies [693676e]
+  - @tinycloud/sdk-core@3.12.0-beta.12
+  - @tinycloud/node-sdk@3.12.0-beta.12
+
+## 2.5.19-beta.10
+
+### Patch Changes
+
+- Updated dependencies [5f271e5]
+  - @tinycloud/node-sdk@3.12.0-beta.11
+
+## 2.5.19-beta.9
+
+### Patch Changes
+
+- Updated dependencies [593f051]
+  - @tinycloud/node-sdk@3.12.0-beta.10
+  - @tinycloud/sdk-core@3.12.0-beta.10
+
+## 2.5.19-beta.8
+
+### Patch Changes
+
+- Updated dependencies [e409bef]
+  - @tinycloud/sdk-core@3.12.0-beta.9
+  - @tinycloud/node-sdk@3.12.0-beta.9
+
+## 2.5.19-beta.7
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+
+## 2.5.19-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/sdk-core@3.12.0-beta.7
+
+## 2.5.19-beta.5
+
+### Patch Changes
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+
+## 2.5.19-beta.4
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+
+## 2.5.19-beta.3
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+
+## 2.5.19-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 2.5.19-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 2.5.19-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 2.5.18
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+
+## 2.5.18-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
+## 2.5.18-beta.1
+
+### Patch Changes
+
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0-beta.1
+  - @tinycloud/sdk-core@3.11.0-beta.1
+
+## 2.5.18-beta.0
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+
+## 2.5.17
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+
+## 2.5.17-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+
+## 2.5.17-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+
+## 2.5.17-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.1
+- @tinycloud/sdk-core@3.10.0-beta.1
+
+## 2.5.16
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1
+  - @tinycloud/sdk-core@3.9.1
+
+## 2.5.16-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.9.1-beta.1
+
+## 2.5.16-beta.0
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1-beta.0
+  - @tinycloud/sdk-core@3.9.1-beta.0
+
+## 2.5.15
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.9.0
+  - @tinycloud/sdk-core@3.9.0
+
 ## 2.5.15-beta.7
 
 ### Patch Changes

@@ -15,6 +15,7 @@
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
+export { NodeNotRespondingError, NodeIdentityMismatchError, PartialNodeWriteError } from "@tinycloud/sdk-services";
 
 // Re-export core types
 export type {
@@ -121,6 +122,7 @@ export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
   type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
 } from "./authorization/NodeUserAuthorization";
 export { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./authorization/openKeyBridge";
 export { refuseCaveated } from "./authorization/caveatRefusal";

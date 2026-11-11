@@ -7,6 +7,7 @@ import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { checkLinkRecord, linkIssuerPublicKey } from '@tinycloud/share-envelope/links';
 import { canonicalize } from '@tinycloud/share-envelope';
 import { AGENT_GRANT, COURIER_SPACE } from '../../dist/keys.js';
+import { courierRegistryFixtureEnv } from './registry-fixture.mjs';
 
 const wasm = new NodeWasmBindings();
 const bare = (did) => did.split('#')[0];
@@ -112,7 +113,7 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const host = `https://127.0.0.1:${server.address().port}`;
-  const envFor = (home) => ({ ...process.env, HOME: home, COURIER_HOME: home, NODE_EXTRA_CA_CERTS: cert, COURIER_LINKS_API_ORIGIN: host, COURIER_LINK_ORIGIN: host });
+  const envFor = (home) => ({ ...courierRegistryFixtureEnv(home, host), NODE_EXTRA_CA_CERTS: cert, COURIER_LINKS_API_ORIGIN: host, COURIER_LINK_ORIGIN: host });
   async function home(name, ownerPrivateKey = randomBytes(32).toString('hex')) {
     const dir = path.join(root, name);
     fs.mkdirSync(dir, { mode: 0o700 });

@@ -16,6 +16,19 @@ const lazyIssued: Plugin = {
   },
 };
 
+// Publication is opt-in. Its shared helpers must use the root's validation-error
+// constructors, not another bundled copy. Source imports stay relative for tests and DTS.
+const publicationCoreRoot: Plugin = {
+  name: "publication-core-root",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/registry-publication-helpers$/ }, (args) =>
+      args.kind === "import-statement" && /[\\/]registry-publication\.ts$/.test(args.importer)
+        ? { path: "@tinycloud/sdk-core", external: true }
+        : undefined,
+    );
+  },
+};
+
 export default defineConfig({
   entry: [
     "src/index.ts",
@@ -26,13 +39,14 @@ export default defineConfig({
     "src/delegations/issued.ts",
     "src/held-credentials/index.ts",
     "src/kv-list-matching/index.ts",
+    "src/registry-publication.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
   sourcemap: true,
   splitting: false,
-  esbuildPlugins: [lazyIssued],
+  esbuildPlugins: [lazyIssued, publicationCoreRoot],
   // Resolve bundled deps' package.json "exports"/"browser" conditions as a
   // browser platform would. Node 20+ ships a global WebCrypto (globalThis.crypto),
   // so the browser-conditioned code these packages ship also runs correctly under

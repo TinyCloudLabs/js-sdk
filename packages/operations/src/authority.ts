@@ -141,27 +141,36 @@ export function canonicalizeOperationCapabilities(
   resolveSpace?: OperationSpaceResolver,
 ): CanonicalPermissionEntry[] {
   return canonicalizeCapabilities(permissions.map((permission) => {
-    const canonicalPath = canonicalizeOperationPath(permission);
-    if (permission.space === undefined || resolveSpace === undefined) {
-      return canonicalPath;
+    const resource = canonicalizeOperationResource(permission);
+    if (resource.space === undefined || resolveSpace === undefined) {
+      return resource;
     }
     try {
-      return { ...canonicalPath, space: resolveSpace(permission.space) };
+      return { ...resource, space: resolveSpace(resource.space) };
     } catch {
       // An unresolvable identity remains a non-matching literal. It must never
       // be widened to a wildcard or to another authenticated owner.
-      return canonicalPath;
+      return resource;
     }
   }));
 }
 
-function canonicalizeOperationPath(permission: PermissionEntry): PermissionEntry {
+function canonicalizeOperationResource(permission: PermissionEntry): PermissionEntry {
   if (permission.service !== "tinycloud.encryption") return permission;
+  // Raw URNs bind their owner/network in the path. "encryption" is the legacy
+  // service marker, not an owned data-space; an explicit full space stays bound.
+  const rawMarker = permission.space === "encryption"
+    && permission.path.startsWith("urn:tinycloud:encryption:");
   const match = permission.path.match(
     /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.*)$/,
   );
-  if (!match) return permission;
-  return { ...permission, path: `${match[1]}${match[2]!.toLowerCase()}${match[3]}` };
+  if (!match && !rawMarker) return permission;
+  const canonical = {
+    ...permission,
+    path: match ? `${match[1]}${match[2]!.toLowerCase()}${match[3]}` : permission.path,
+  };
+  if (rawMarker) delete canonical.space;
+  return canonical;
 }
 
 function operationSpacesEqual(

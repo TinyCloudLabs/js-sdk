@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ServiceSession } from "@tinycloud/sdk-services";
+import type { ResourceTransport, ServiceSession } from "@tinycloud/sdk-services";
+import { PartialNodeWriteError, routeResourceRequest } from "@tinycloud/sdk-services";
 import { bases } from "multiformats/basics";
 import { ed25519 } from "@noble/curves/ed25519";
+import { blake3 } from "@noble/hashes/blake3";
+import { CID } from "multiformats/cid";
+import { create as createDigest } from "multiformats/hashes/digest";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
@@ -17,6 +21,27 @@ const SHARE_PUBLIC_KEY = ed25519.getPublicKey(SHARE_PRIVATE_KEY);
 const SHARE_DID = `did:key:${bases.base58btc.encode(Uint8Array.from([0xed, 0x01, ...SHARE_PUBLIC_KEY]))}`;
 const SHARE_X = Buffer.from(SHARE_PUBLIC_KEY).toString("base64url");
 const SHARE_D = Buffer.from(SHARE_PRIVATE_KEY).toString("base64url");
+const PARENT_SEED = new Uint8Array(32).fill(19);
+const PARENT_PUBLIC = ed25519.getPublicKey(PARENT_SEED);
+const PARENT_DID = `did:key:${bases.base58btc.encode(Uint8Array.from([0xed, 0x01, ...PARENT_PUBLIC]))}`;
+const parentHeader = Buffer.from(JSON.stringify({
+  alg: "EdDSA", typ: "JWT", ucv: "0.10.0",
+  jwk: { kty: "OKP", crv: "Ed25519", x: Buffer.from(PARENT_PUBLIC).toString("base64url") },
+})).toString("base64url");
+const parentPayload = Buffer.from(JSON.stringify({
+  iss: PARENT_DID, aud: SHARE_DID, exp: PARENT_EXPIRY.getTime() / 1000, prf: [],
+  att: { [`${SPACE}/kv/`]: { "tinycloud.kv/*": [{}] } },
+})).toString("base64url");
+const parentSigningInput = `${parentHeader}.${parentPayload}`;
+const PARENT_AUTHORIZATION = `${parentSigningInput}.${Buffer.from(ed25519.sign(new TextEncoder().encode(parentSigningInput), PARENT_SEED)).toString("base64url")}`;
+const PARENT_CID = CID.createV1(0x55, createDigest(0x1e, blake3(new TextEncoder().encode(PARENT_AUTHORIZATION)))).toString();
+
+function resourceTransportFor(fetchFn: typeof globalThis.fetch, host = HOST): ResourceTransport {
+  return async (_resources, send) => send({
+    url: host, nodeDid: SHARE_DID, nodeInfo: { nodeId: SHARE_DID }, fetch: fetchFn,
+    bindAudience: async (authorization) => authorization,
+  });
+}
 
 function childToken(params: CreateDelegationWasmParams, actions = Object.values(params.abilities.kv)[0]): string {
   const path = Object.keys(params.abilities.kv)[0];
@@ -24,7 +49,7 @@ function childToken(params: CreateDelegationWasmParams, actions = Object.values(
     iss: SHARE_DID,
     aud: params.delegateDID,
     exp: params.expirationSecs,
-    prf: ["bafy-parent"],
+    prf: [params.session.delegationCid],
     att: {
       [`${params.spaceId}/kv/${path}`]: Object.fromEntries(actions.map((action) => [action, [{}]])),
     },
@@ -39,6 +64,9 @@ function childToken(params: CreateDelegationWasmParams, actions = Object.values(
 function makeService(options: {
   assertActive?: () => void;
   fetch?: typeof globalThis.fetch;
+  routing?: boolean;
+  resourceTransport?: ResourceTransport;
+  session?: ServiceSession;
 } = {}) {
   const createDelegationWasm = mock((params: CreateDelegationWasmParams) => ({
     delegation: childToken(params),
@@ -57,6 +85,8 @@ function makeService(options: {
     hosts: [HOST],
     invoke: mock(async () => ({ ok: true, data: undefined })) as never,
     fetch,
+    resourceTransport: options.resourceTransport ?? (options.routing === false ? undefined : resourceTransportFor(fetch)),
+    session: options.session,
     keyProvider: {} as KeyProvider,
     registry: new CapabilityKeyRegistry(),
     createKVService: mock(() => ({})) as never,
@@ -81,7 +111,7 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
       d: SHARE_D,
     },
     delegation: {
-      cid: "bafy-parent",
+      cid: PARENT_CID,
       delegateDID: SHARE_DID,
       spaceId: SPACE,
       path: "xyz.tinycloud.artifacts/artifacts/listen-import",
@@ -89,7 +119,7 @@ function shareLink(service: SharingService, overrides: Partial<EncodedShareData[
       expiry: PARENT_EXPIRY,
       isRevoked: false,
       allowSubDelegation: true,
-      authHeader: "parent.header.signature",
+      authHeader: PARENT_AUTHORIZATION,
       ...overrides,
     },
   });
@@ -149,7 +179,7 @@ describe("SharingService.delegateReceivedShare", () => {
     const params = createDelegationWasm.mock.calls[0][0];
     expect(params.delegateDID).toBe("did:key:z6MkFeedHost");
     expect(params.session).toMatchObject({
-      delegationCid: "bafy-parent",
+      delegationCid: PARENT_CID,
       spaceId: SPACE,
       verificationMethod: `${SHARE_DID}#${SHARE_DID.slice("did:key:".length)}`,
       jwk: { d: SHARE_D },
@@ -166,7 +196,7 @@ describe("SharingService.delegateReceivedShare", () => {
     });
     expect(result.data.delegation).toMatchObject({
       delegateDID: "did:key:z6MkFeedHost",
-      parentCid: "bafy-parent",
+      parentCid: PARENT_CID,
       ownerAddress: OWNER,
       chainId: 1,
       disableSubDelegation: true,
@@ -174,7 +204,7 @@ describe("SharingService.delegateReceivedShare", () => {
     const transported = JSON.stringify(result.data);
     expect(transported).not.toContain("tc1:");
     expect(transported).not.toContain(SHARE_D);
-    expect(transported).not.toContain("parent.header.signature");
+    expect(transported).not.toContain(PARENT_AUTHORIZATION);
   });
 
   test("rejects capability broadening before signing or network access", async () => {
@@ -489,6 +519,7 @@ describe("SharingService.delegateReceivedShare", () => {
       const service = new SharingService({
         hosts: [host],
         invoke: mock(async () => ({ ok: true, data: undefined })) as never,
+        resourceTransport: resourceTransportFor(globalThis.fetch, host),
         keyProvider: {} as KeyProvider,
         registry: new CapabilityKeyRegistry(),
         createKVService: mock(() => ({})) as never,
@@ -592,7 +623,7 @@ describe("SharingService.delegateReceivedShare", () => {
   test("scrubs lower-level errors instead of returning credential-bearing causes", async () => {
     const { service, createDelegationWasm } = makeService();
     createDelegationWasm.mockImplementationOnce(() => {
-      throw new Error(`tc1:secret ${SHARE_D} parent.header.signature`);
+      throw new Error(`tc1:secret ${SHARE_D} ${PARENT_AUTHORIZATION}`);
     });
     const result = await service.delegateReceivedShare(shareLink(service), {
       delegateDID: "did:key:z6MkFeedHost",
@@ -602,7 +633,7 @@ describe("SharingService.delegateReceivedShare", () => {
     expect(result.error.message).toBe("Failed to create or register the child delegation");
     expect(result.error.cause).toBeUndefined();
     expect(JSON.stringify(result.error)).not.toContain(SHARE_D);
-    expect(JSON.stringify(result.error)).not.toContain("parent.header.signature");
+    expect(JSON.stringify(result.error)).not.toContain(PARENT_AUTHORIZATION);
   });
 
   test("receive auto-subdelegates to the current session and uses its key", async () => {
@@ -626,11 +657,13 @@ describe("SharingService.delegateReceivedShare", () => {
       verificationMethod: "did:key:z6MkCurrentSession#z6MkCurrentSession",
       jwk: { kty: "OKP", crv: "Ed25519", x: "current-x", d: "current-private" },
     };
+    const fetch = mock(async () => new Response(null, { status: 200 }));
     const service = new SharingService({
       hosts: [HOST],
       session: currentSession,
       invoke: mock(async () => ({ ok: true, data: undefined })) as never,
-      fetch: mock(async () => new Response(null, { status: 200 })),
+      fetch,
+      resourceTransport: resourceTransportFor(fetch),
       keyProvider: {} as KeyProvider,
       registry: new CapabilityKeyRegistry(),
       createKVService: createKVService as never,
@@ -687,10 +720,13 @@ describe("SharingService.generate root-delegation signing failures", () => {
     >,
     fetcher?: SharingFetch,
     registry = new CapabilityKeyRegistry(),
+    transport?: ResourceTransport,
+    host = HOST,
   ): SharingService {
     const shareJwk = { kty: "OKP", crv: "Ed25519", x: SHARE_X, d: SHARE_D };
     return new SharingService({
-      hosts: [HOST],
+      hosts: [host],
+      resourceTransport: transport,
       invoke: mock(async () => ({ ok: true, data: undefined })) as never,
       fetch: fetcher ?? (async () => new Response(null, { status: 200 })),
       keyProvider: {
@@ -722,6 +758,95 @@ describe("SharingService.generate root-delegation signing failures", () => {
       onRootDelegationNeeded,
     });
   }
+
+  test("generate preserves real partial registration receipts and cause", async () => {
+    const boundary = partialRegistrationTransport();
+    try {
+      const registry = new CapabilityKeyRegistry();
+      registry.registerKey({ id: "parent", did: SHARE_DID, type: "session", priority: 0 }, [{
+        cid: PARENT_CID, delegateDID: SHARE_DID, spaceId: SPACE, path: "shared",
+        actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY, isRevoked: false, allowSubDelegation: true,
+      }]);
+      const service = makeGeneratingService(async () => undefined, undefined, registry, boundary.transport);
+      const result = await service.generate({ path: "shared", actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY });
+      assertPartialRegistration(result, boundary);
+    } finally { boundary.server.stop(true); }
+  });
+
+  test("generate retains partial receipts when its graph retires during registration", async () => {
+    const boundary = partialRegistrationTransport();
+    try {
+      const registry = new CapabilityKeyRegistry();
+      registry.registerKey({ id: "parent", did: SHARE_DID, type: "session", priority: 0 }, [{
+        cid: PARENT_CID, delegateDID: SHARE_DID, spaceId: SPACE, path: "shared",
+        actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY, isRevoked: false, allowSubDelegation: true,
+      }]);
+      const service = makeGeneratingService(async () => undefined, undefined, registry, boundary.transport);
+      service.updateConfig({ assertActive: () => {
+        if (boundary.failure) throw new Error("retired graph");
+      } });
+      const result = await service.generate({ path: "shared", actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY });
+      assertPartialRegistration(result, boundary);
+    } finally { boundary.server.stop(true); }
+  });
+
+  for (const adapter of ["root callback", "fallback result"] as const) {
+    test(`generate preserves real partial registration through its ${adapter}`, async () => {
+      const boundary = partialRegistrationTransport();
+      try {
+        const register = () => boundary.transport([{ resource: SPACE, access: "write" }], (target) =>
+          target.fetch(`${target.url}/delegate`, { method: "POST", redirect: "error" }));
+        const registry = new CapabilityKeyRegistry();
+        if (adapter === "fallback result") {
+          registry.registerKey({ id: "parent", did: SHARE_DID, type: "session", priority: 0 }, [{
+            cid: PARENT_CID, delegateDID: SHARE_DID, spaceId: SPACE, path: "shared",
+            actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY, isRevoked: false, allowSubDelegation: true,
+          }]);
+        }
+        const service = new SharingService({
+          hosts: [HOST], session: { spaceId: SPACE } as ServiceSession,
+          invoke: () => ({}), registry, createKVService: () => ({}) as never,
+          keyProvider: {
+            createSessionKey: (name: string) => name,
+            getDID: () => SHARE_DID,
+            getJWK: () => ({ kty: "OKP", crv: "Ed25519", x: SHARE_X, d: SHARE_D }),
+          } as unknown as KeyProvider,
+          createDelegation: async () => {
+            try { await register(); throw new Error("expected partial registration"); }
+            catch (error) {
+              if (!(error instanceof PartialNodeWriteError)) throw error;
+              return { ok: false, error: { code: error.code, message: error.message, service: "delegation",
+                cause: error, meta: { succeeded: error.succeeded, failed: error.failed } } };
+            }
+          },
+          onRootDelegationNeeded: async () => { await register(); return undefined; },
+        });
+        const result = await service.generate({ path: "shared", actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY });
+        assertPartialRegistration(result, boundary);
+      } finally { boundary.server.stop(true); }
+    });
+  }
+
+  test("generate refuses a native same-origin 307 before forwarding the delegation bearer", async () => {
+    let observed = 0;
+    let sends = 0;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      if (new URL(request.url).pathname === "/observer") { observed++; return new Response(null); }
+      sends++;
+      return new Response(null, { status: 307, headers: { location: "/observer" } });
+    } });
+    try {
+      const registry = new CapabilityKeyRegistry();
+      registry.registerKey({ id: "parent", did: SHARE_DID, type: "session", priority: 0 }, [{
+        cid: PARENT_CID, delegateDID: SHARE_DID, spaceId: SPACE, path: "shared",
+        actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY, isRevoked: false, allowSubDelegation: true,
+      }]);
+      const service = makeGeneratingService(async () => undefined, globalThis.fetch.bind(globalThis), registry, undefined, server.url.origin);
+      await service.generate({ path: "shared", actions: ["tinycloud.kv/get"], expiry: PARENT_EXPIRY });
+      expect(sends).toBe(1);
+      expect(observed).toBe(0);
+    } finally { server.stop(true); }
+  });
 
   test("preserves registration 403 as a typed authorization failure through generate", async () => {
     const registry = new CapabilityKeyRegistry();
@@ -1054,7 +1179,7 @@ describe("SharingService non-transferable shares", () => {
   });
 
   test("receives a non-transferable share with autoSubdelegate:false", async () => {
-    const { service } = makeGenerateService();
+    const { service } = makeService();
 
     const result = await service.receive(shareLink(service, { allowSubDelegation: false }), {
       autoSubdelegate: false,
@@ -1063,3 +1188,66 @@ describe("SharingService non-transferable shares", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+for (const operation of ["delegate", "receive"] as const) {
+  test(`standalone ${operation} refuses a recorded-host link without resource routing`, async () => {
+    const { service, createDelegationWasm, fetch } = makeService({ routing: false });
+    const link = shareLink(service);
+    const result = operation === "delegate"
+      ? await service.delegateReceivedShare(link, { delegateDID: SHARE_DID })
+      : await service.receive(link, { autoSubdelegate: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "NOT_INITIALIZED" } });
+    expect(createDelegationWasm).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+}
+
+function partialRegistrationTransport() {
+  const writes: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    writes.push(path);
+    return path === "/first/delegate" ? Response.json({ activated: [SPACE] }) : new Response("refused", { status: 403 });
+  } });
+  let failure: unknown;
+  const transport: ResourceTransport = async (resources, send, options) => {
+    try {
+      return await routeResourceRequest(resources, {
+        resolveResource: async () => [{ url: `${server.url.origin}/first` }, { url: `${server.url.origin}/second` }],
+      }, (target) => send({
+        ...target, nodeDid: SHARE_DID, nodeInfo: { nodeId: SHARE_DID },
+        fetch: globalThis.fetch.bind(globalThis), bindAudience: async (authorization) => authorization,
+      }), options);
+    } catch (error) { failure = error; throw error; }
+  };
+  return { server, transport, writes, get failure() { return failure; } };
+}
+
+function assertPartialRegistration(
+  result: { ok: boolean; error?: DelegationError },
+  boundary: { writes: string[]; readonly failure: unknown },
+) {
+  expect(boundary.writes).toEqual(["/first/delegate", "/second/delegate"]);
+  expect(boundary.failure).toBeInstanceOf(PartialNodeWriteError);
+  const partial = boundary.failure as PartialNodeWriteError;
+  expect(result).toMatchObject({ ok: false, error: {
+    code: "PARTIAL_NODE_WRITE", meta: { succeeded: partial.succeeded, failed: partial.failed },
+  } });
+  expect(result.error?.cause).toBe(partial);
+}
+
+for (const operation of ["delegateReceivedShare", "receive"] as const) {
+  test(`${operation} preserves real partial registration receipts and cause`, async () => {
+    const boundary = partialRegistrationTransport();
+    try {
+      const { service } = makeService({ resourceTransport: boundary.transport, session: {
+        spaceId: SPACE, verificationMethod: "did:key:z6MkFeedHost",
+      } as ServiceSession });
+      const link = shareLink(service);
+      const result = operation === "receive"
+        ? await service.receive(link)
+        : await service.delegateReceivedShare(link, { delegateDID: "did:key:z6MkFeedHost" });
+      assertPartialRegistration(result, boundary);
+    } finally { boundary.server.stop(true); }
+  });
+}

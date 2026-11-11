@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 import {
   profileStoreMetadataPath,
   profileStorePath,

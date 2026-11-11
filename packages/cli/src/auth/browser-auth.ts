@@ -1,9 +1,13 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { acquireApprovalRequest } from "./approval-request.js";
+import type { ApprovalWait } from "./approval-wait.js";
+import { ProfileManager } from "../config/profiles.js";
+import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
 export interface DelegationData {
   delegationHeader: { Authorization: string };
@@ -20,6 +24,11 @@ export interface AuthFlowOptions {
   /** Local command identity only; never sent in the signed request or delegation. */
   commandIntent?: string;
   onApprovalRequest?: (request: { approvalUrl: string; requestId: string; expiresAt: string }) => void;
+  /**
+   * Bound the wait for the owner's approval (`--timeout`). A new request then ends the call at once with
+   * APPROVAL_PENDING (exit 8), a resumed one waits until the deadline; an approval that has arrived is always collected.
+   */
+  approvalWait?: ApprovalWait;
   noPopup?: boolean;
   jwk?: object;
   host?: string;
@@ -44,30 +53,12 @@ export interface AuthFlowOptions {
    * Undefined preserves the caller's existing default.
    */
   expiry?: string | number;
-}
-
-const PRIVATE_JWK_FIELDS = new Set([
-  "d",
-  "p",
-  "q",
-  "dp",
-  "dq",
-  "qi",
-  "oth",
-  "k",
-]);
-
-
-export function publicJwkForDelegation(jwk: object): object {
-  const publicJwk: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
-    }
-  }
-
-  return publicJwk;
+  /**
+   * Opt in to a user-chosen lifetime on a PLAIN link (the explicit paste flow). Only `buildAuthUrl` reads it, so the
+   * signed approval request, which carries its lifetime in an immutable signed body, never sends it. Callers that set
+   * it must verify the signed result with the matching `expiryChangeable` expectation.
+   */
+  expiryChangeable?: boolean;
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */
@@ -93,7 +84,7 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   if (options.jwk) {
     // base64url-encode the JWK
     const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk)),
+      JSON.stringify(publicJwk(options.jwk)),
     ).toString("base64url");
     params.set("jwk", jwkB64);
   }
@@ -115,6 +106,12 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   }
   if (options.expiry !== undefined) {
     params.set("expiry", String(options.expiry));
+  }
+  // OpenKey reads exactly the string "true". Without it the plain link is shorter-only: the user can pick no longer
+  // than the `expiry` above (or the 7-day default when there is none). With it the picker is uncapped, and the CLI
+  // holds the signed result to its own bound (see `expiryChangeable` in SignedSessionExpectations).
+  if (options.expiryChangeable === true) {
+    params.set("expiryChangeable", "true");
   }
   // Announce the negotiated authorization protocol so OpenKey can pick the
   // right widget copy. Older OpenKey builds ignore unknown params.
@@ -179,12 +176,40 @@ export function validateDelegationCallbackPayload(value: unknown): string | null
   return null;
 }
 
+/** The redeemed delegation must be for this CLI key and carry no private key material. */
+function assertBoundToKey(parsed: unknown, did: string, localJwk: Record<string, unknown>): void {
+  const delegation = parsed as Record<string, unknown> | null;
+  const jwk = delegation?.jwk as Record<string, unknown> | undefined;
+  if (
+    typeof delegation?.verificationMethod !== "string" ||
+    delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
+    !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
+    jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
+    typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
+    "d" in jwk
+  ) {
+    throw new Error("Delegation is bound to a different CLI key.");
+  }
+}
+
 /** A pasted OpenKey result: a short code (looked up and bound to this key) or the full delegation code. */
 export async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const trimmed = input.trim();
   let parsed: unknown;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const localJwk = publicJwk(options.jwk);
+    // OpenKey consumes the code on redeem: a code an interrupted run already redeemed is finished from its local copy.
+    const saved = options.profileName === undefined ? undefined : await pendingDelegationFor(options.profileName, trimmed);
+    if (saved !== undefined) {
+      try {
+        assertBoundToKey(saved, did, localJwk);
+      } catch (error) {
+        await dropPendingDelegationFor(options.profileName!, trimmed);
+        throw error;
+      }
+      return saved;
+    }
     const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ??
       (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST
         ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
@@ -193,23 +218,19 @@ export async function delegationFromInput(input: string, did: string, options: A
     });
     if (!response.ok) {
       throw Object.assign(new Error(response.status === 404
-        ? "Delegation code not found or expired. Use the full code shown in OpenKey instead."
+        ? "Delegation code not found or expired. A short code works only once and OpenKey no longer has this one (it was already used, it expired, or the CLI refused it). Approve again in OpenKey to get a new code."
         : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json() as { delegation?: unknown };
     parsed = result.delegation;
-    const delegation = parsed as Record<string, unknown> | null;
-    const jwk = delegation?.jwk as Record<string, unknown> | undefined;
-    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
-    if (
-      typeof delegation?.verificationMethod !== "string" ||
-      delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
-      !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
-      jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
-      typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
-      [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
-    ) {
-      throw new Error("Delegation is bound to a different CLI key.");
+    assertBoundToKey(parsed, did, localJwk);
+    // Before the caller verifies or activates anything, so a kill from here on cannot lose the owner's approval.
+    if (options.profileName !== undefined && validateDelegationCallbackPayload(parsed) === null) {
+      // A first sign-in holds its new key only in memory until the login commits; a copy bound to a key that is
+      // never saved could not be finished after a kill, so say what to do instead of keeping it.
+      const stored = await ProfileManager.getKey(options.profileName) as Record<string, unknown> | null;
+      if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed as DelegationData);
+      else console.error("Note: this sign-in's key is not saved until the login commits, so an interrupted sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
     }
   } else {
     try {

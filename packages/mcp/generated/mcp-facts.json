@@ -66,8 +66,7 @@
       "operationVersion": 1,
       "effects": [
         "read",
-        "write",
-        "destructive"
+        "write"
       ],
       "postures": [
         "owner-openkey",
@@ -146,6 +145,24 @@
         "local-owner-key"
       ],
       "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_auth_read_scope",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
+      "operationId": "tinycloud.auth.read_scope",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
     },
     {
       "name": "tinycloud_auth_request",
@@ -307,6 +324,40 @@
         "owner-openkey",
         "delegate-session",
         "local-owner-key"
+      ],
+      "sensitiveOutput": false
+    },
+    {
+      "name": "tinycloud_read",
+      "surfaces": [
+        "local",
+        "hosted"
+      ],
+      "operationId": "tinycloud.read",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
+      "name": "tinycloud.registry.show",
+      "surfaces": [],
+      "operationId": "tinycloud.registry.show",
+      "operationVersion": 1,
+      "effects": [
+        "read"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key",
+        "unauthenticated"
       ],
       "sensitiveOutput": false
     },

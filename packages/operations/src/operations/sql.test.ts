@@ -325,7 +325,7 @@ describe("SQLite DML operation", () => {
       space: OWNER_APPLICATIONS,
       path: "com.example.notes/data.sqlite",
       actions: ["tinycloud.sql/write"],
-      description: expect.stringContaining("full read/write/schema mutation authority"),
+      description: expect.stringMatching(/any row[^]*schema split/),
     }]);
     expect(await operation.execute(context(node), input)).toEqual({
       status: "ok",
@@ -335,7 +335,7 @@ describe("SQLite DML operation", () => {
         statementType: "insert",
         changes: 1,
         lastInsertRowId: 42,
-        authorityNotice: expect.stringContaining("full read/write/schema mutation authority"),
+        authorityNotice: expect.stringMatching(/any row[^]*schema split/),
       },
     });
     expect(calls).toEqual([[

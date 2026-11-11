@@ -1,5 +1,195 @@
 # @tinycloud/vfs
 
+## 0.2.19-beta.14
+
+### Patch Changes
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/node-sdk@3.12.0-beta.14
+
+## 0.2.19-beta.13
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/node-sdk@3.12.0-beta.13
+
+## 0.2.19-beta.12
+
+### Patch Changes
+
+- Updated dependencies [693676e]
+  - @tinycloud/node-sdk@3.12.0-beta.12
+
+## 0.2.19-beta.11
+
+### Patch Changes
+
+- Updated dependencies [5f271e5]
+  - @tinycloud/node-sdk@3.12.0-beta.11
+
+## 0.2.19-beta.10
+
+### Patch Changes
+
+- Updated dependencies [593f051]
+  - @tinycloud/node-sdk@3.12.0-beta.10
+
+## 0.2.19-beta.9
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.9
+
+## 0.2.19-beta.8
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/node-sdk@3.12.0-beta.8
+
+## 0.2.19-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+
+## 0.2.19-beta.6
+
+### Patch Changes
+
+- 171ee63: VFS worker bridge calls now stop waiting after a bounded time and throw a typed `TinyCloudVfsBridgeTimeoutError` (code `ETIMEDOUT`).
+
+  Details: TC-2608
+
+## 0.2.19-beta.5
+
+### Patch Changes
+
+- Updated dependencies [2139b24]
+  - @tinycloud/node-sdk@3.12.0-beta.5
+
+## 0.2.19-beta.4
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/node-sdk@3.12.0-beta.4
+
+## 0.2.19-beta.3
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/node-sdk@3.12.0-beta.3
+
+## 0.2.19-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 0.2.19-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 0.2.19-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 0.2.18
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+
+## 0.2.18-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+
+## 0.2.18-beta.1
+
+### Patch Changes
+
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0-beta.1
+
+## 0.2.18-beta.0
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+
+## 0.2.17
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0
+
+## 0.2.17-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+
+## 0.2.17-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.2
+
+## 0.2.17-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.1
+
+## 0.2.16
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1
+
+## 0.2.16-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.9.1-beta.1
+
+## 0.2.16-beta.0
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1-beta.0
+
+## 0.2.15
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.9.0
+
 ## 0.2.15-beta.7
 
 ### Patch Changes

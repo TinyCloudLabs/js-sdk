@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
@@ -26,7 +26,32 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { DEFAULT_DELEGATION_EXPIRY_MS } from "./delegateToHelpers";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 const revokeTargetCid = "bafkr4id4zlugcezsh7a5op53hdbepyi2buq5wx6s2czglg2xchvxeqqmn4";
+
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
+
+function withRegistryMetadata(
+  businessFetch: typeof fetch,
+  registryFetch: typeof fetch,
+  identity?: { origin: string; nodeDid: string },
+): typeof fetch {
+  return mock((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === registry.url.origin) return registryFetch(input, init);
+    if (identity && url.origin === identity.origin && (init?.method ?? "GET") === "GET") {
+      if (url.pathname === "/info") return Response.json({ nodeId: identity.nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: identity.nodeDid });
+    }
+    return businessFetch(input, init);
+  }) as typeof fetch;
+}
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -81,6 +106,7 @@ function makeFakeWasmBindings(
       };
     }),
     parseRecapFromSiwe: mock(() => []),
+    parseVerifiedRecapFromSiwe: mock(() => []),
     generateHostSIWEMessage: mock(() => ""),
     siweToDelegationHeaders: mock(() => ({})),
     protocolVersion: () => 1,
@@ -182,6 +208,7 @@ function makeNode(invoke: IWasmBindings["invoke"]): TinyCloudNode {
   };
   const node = new TinyCloudNode({
     host: "https://tinycloud.test",
+    tinycloudRegistryUrl: registry.url.origin,
     signer: signer as any,
     wasmBindings: makeFakeWasmBindings(invoke),
   });
@@ -198,6 +225,8 @@ Nonce: 32891756
 Issued At: 2026-05-05T00:00:00.000Z
 Expiration Time: 2999-01-01T00:00:00.000Z`;
   (node as any).auth = {
+    resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
+    nodeIdForHost: () => node.did,
     tinyCloudSession: {
       address,
       chainId: 1,
@@ -216,12 +245,12 @@ Expiration Time: 2999-01-01T00:00:00.000Z`;
 
 async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = mock(async () =>
+  globalThis.fetch = withRegistryMetadata(mock(async () =>
     new Response(JSON.stringify({ activated: ["runtime-cid"] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }),
-  ) as any;
+  ) as typeof fetch, originalFetch);
   try {
     await fn();
   } finally {
@@ -328,7 +357,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -406,7 +435,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     const networkUrl = `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}`;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = withRegistryMetadata(mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = (init?.method ?? "GET").toUpperCase();
       if (method === "GET" && url === networkUrl) return Response.json({ descriptor });
@@ -436,7 +465,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
         return new Response(`Unauthorized Action: ${networkId} / tinycloud.encryption/decrypt`, { status });
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
-    }) as typeof fetch;
+    }) as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encrypted = await (node as any).createEncryptionService().encryptToNetwork(
@@ -476,9 +505,9 @@ describe("TinyCloudNode runtime permission delegations", () => {
   test("failed runtime grant activation preserves the host verdict and diagnostic", async () => {
     const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () =>
+    globalThis.fetch = withRegistryMetadata(mock(async () =>
       new Response("Unauthorized Action: missing capability", { status: 403 }),
-    ) as unknown as typeof fetch;
+    ) as unknown as typeof fetch, originalFetch);
     try {
       await node.grantRuntimePermissions([{
         service: "tinycloud.kv",
@@ -913,13 +942,13 @@ describe("TinyCloudNode runtime permission delegations", () => {
       fn: () => Promise<void>,
     ): Promise<void> {
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (input: RequestInfo | URL) => {
+      globalThis.fetch = withRegistryMetadata((async (input: RequestInfo | URL) => {
         events.push(`fetch:${String(input)}`);
         return new Response(JSON.stringify({ activated: ["child-runtime-cid"] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
-      }) as typeof fetch;
+      }) as typeof fetch, originalFetch);
       try {
         await fn();
       } finally {
@@ -1024,13 +1053,13 @@ describe("TinyCloudNode runtime permission delegations", () => {
     });
     const activated: string[] = [];
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = withRegistryMetadata((async (_input: RequestInfo | URL, init?: RequestInit) => {
       activated.push(new Headers(init?.headers).get("Authorization") ?? "");
       return new Response(JSON.stringify({ activated: ["x"] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch;
+    }) as typeof fetch, originalFetch);
     try {
       const result = await node.delegateTo("did:key:backend", [permission], { disableSubDelegation: true });
       const token = result.delegation.delegationHeader.Authorization;
@@ -1573,7 +1602,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
         actions: ["tinycloud.encryption/decrypt"],
       },
     ];
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: secretsSpaceId,
@@ -1619,7 +1648,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
       path: networkId,
       actions: ["tinycloud.encryption/decrypt"],
     };
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "encryption",
         space: "encryption",
@@ -1694,27 +1723,32 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
 
     const node = new TinyCloudNode({
       host: "http://127.0.0.1:1",
+      tinycloudRegistryUrl: registry.url.origin,
       signer,
       wasmBindings: wasm,
     });
     await node.restoreSession(proof);
     const bindings = (node as any).wasmBindings;
     const originalInvokeAny = bindings.invokeAny;
-    const queryInvokeAny = mock((..._args: any[]) => ({ Authorization: "restored-query" }));
+    const queryInvokeAny = mock(originalInvokeAny.bind(bindings));
     bindings.invokeAny = queryInvokeAny;
-    (node.delegationManager as any).fetchFn = mock(async () => new Response(JSON.stringify({
-      schemaVersion: 2,
-      items: [],
-    }), { headers: { "content-type": "application/json" } }));
-    const restoredQuery = await node.delegationManager.query();
-    expect(restoredQuery.ok).toBe(true);
-    expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
-      spaceId: node.accountSpaceId,
-      service: "delegation",
-      path: "",
-      action: "tinycloud.delegation/list",
-    }]);
-    bindings.invokeAny = originalInvokeAny;
+    const queryFetch = globalThis.fetch;
+    globalThis.fetch = withRegistryMetadata(mock(async () => Response.json({
+      schemaVersion: 2, items: [],
+    })) as typeof fetch, queryFetch, { origin: "http://127.0.0.1:1", nodeDid: node.did });
+    try {
+      const restoredQuery = await node.delegationManager.query();
+      expect(restoredQuery.ok).toBe(true);
+      expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
+        spaceId: node.accountSpaceId,
+        service: "delegation",
+        path: "",
+        action: "tinycloud.delegation/list",
+      }]);
+    } finally {
+      globalThis.fetch = queryFetch;
+      bindings.invokeAny = originalInvokeAny;
+    }
     expect(node.getVerifiedSessionCapabilities()).toEqual([{
       service: "tinycloud.encryption",
       space: spaceId,
@@ -1877,9 +1911,9 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
   test("classifies a host missing-parent rejection for raw CID revoke authority", async () => {
     const node = makeNode(mock(() => ({})) as any);
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () =>
+    globalThis.fetch = withRegistryMetadata(mock(async () =>
       new Response("Cannot find parent delegation", { status: 401 })
-    ) as any;
+    ) as typeof fetch, originalFetch);
 
     try {
       await expect(node.grantRuntimePermissions([{
@@ -2239,7 +2273,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
         headers: { "Content-Type": "application/json" },
       }),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -2354,7 +2388,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
 
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -2391,10 +2425,11 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
         "hello tinycloud encryption",
       );
 
-      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "POST", "POST"]);
+      const postCalls = fetchCalls.filter((call) => call.method === "POST");
+      expect(postCalls).toHaveLength(2);
       expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(2);
 
-      const postCall = fetchCalls[1];
+      const postCall = postCalls[0];
       expect(postCall.url).toBe(
         `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
       );
@@ -2409,7 +2444,7 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
       expect(request.receiverPublicKeyHash).toBe(
         canonicalHashHex(crypto.sha256, request.receiverPublicKey),
       );
-      const scopedPostCall = fetchCalls[2];
+      const scopedPostCall = postCalls[1];
       expect(scopedPostCall.url).toBe(postCall.url);
       const scopedRequest = JSON.parse(
         scopedPostCall.body ?? "{}",
@@ -2491,7 +2526,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put");
 
     // The primary session's own recap covers this native op.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2530,7 +2565,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
 
     installBroadGrant(node, defaultSpaceId, "sql", "tinycloud.sql/write");
 
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "sql",
         space: defaultSpaceId,
@@ -2580,7 +2615,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
 
     // Primary recap only covers the DEFAULT space — so the op on `secrets`
     // is not covered by the synthetic primary and the grant must win.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2623,7 +2658,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     // Primary recap claims Bob's identically-named "default" space. Because we
     // build primary ops from the RAW full URI, the owner is preserved and the
     // synthetic primary must NOT cover an op on Alice's space.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: bobSpaceId,
@@ -2667,7 +2702,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     // recap claims it, the synthetic primary must NOT include it — otherwise
     // the (non-working) primary would out-rank the working bootstrap grant.
     (node as any).auth.lastActivationSkippedSpaceIds = [defaultSpaceId];
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2742,7 +2777,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     });
 
     // Primary recap only covers the DEFAULT space.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "sql",
         space: defaultSpaceId,
@@ -2811,7 +2846,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
 
     // One real delegated grant plus the synthetic primary.
     installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put", "delegated");
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2864,7 +2899,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 
     // Primary recap covers BOTH the primary space AND the account space.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: applicationsSpaceId,
@@ -2921,7 +2956,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     const applicationsSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
     const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: applicationsSpaceId,
@@ -3135,7 +3170,7 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
   function nodeWithSessionRecap(recap: unknown[]): TinyCloudNode {
     const node = makeNode(mock(() => ({})));
     Reflect.set(node, "_address", ADDRESS);
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => recap);
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => recap);
     return node;
   }
 
@@ -3154,12 +3189,12 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
 
   async function withFetchActivated<T>(fn: () => Promise<T>): Promise<T> {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () =>
+    globalThis.fetch = withRegistryMetadata(mock(async () =>
       new Response(JSON.stringify({ activated: ["runtime-cid"] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
-    ) as any;
+    ) as typeof fetch, originalFetch);
     try {
       return await fn();
     } finally {

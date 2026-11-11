@@ -166,13 +166,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
-- Exact Share-key creation is runtime consent, not a static manifest entry.
-  `TinyCloudWeb.requestPermissions(entries, { expiryMs })` accepts only
-  `tinycloud.encryption/key.create` on the authenticated owner's canonical
-  `urn:tinycloud:encryption:<ownerDid>:default/share/<id>` key. Approval stays
-  bound to the same signed session; decline, session replacement and unsupported
-  native shells cannot install a grant. Keep the static manifest and native
-  ceiling restrictions intact.
+- Share publishing never creates the share key and never requests
+  `tinycloud.encryption/key.create`: it encrypts to the deterministic
+  `share/<id>` key's public key (unauthenticated GET), and the node records the
+  key when the share policy is registered. The `<network>/share/` manifest
+  prefix accepts `decrypt` only; `key.create` remains for `apps/` keys via
+  `manifest.keys`.
 - The public ChatGPT candidate is `/chatgpt/mcp`, not the broad `/mcp` service.
   Tool bindings are public opt-in; keep recovery-tool mapping restricted to the
   selected surface. Public approvals/state are separate and require matching
@@ -181,14 +180,54 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   canonical write outcomes must not be truncated. Package/review state lives
   under `packages/mcp/plugin`. Default-branch merges and deployment require
   explicit owner approval; never enable auto-merge or bypass that gate.
+- TC-2393's hosted-client requirements and source/live evidence are in
+  `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
+  separate from official-directory acceptance; metadata is not authenticated QA.
 - Hosted personal apps live in `packages/operations/src/operations/apps.ts` and
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
+- Personal apps have one layout, the one the skill's `layout.sh` calls new
+  (`src/tc-apps/layout.ts`): space `applications`, keys under
+  `xyz.tinycloud.tinyapps.<app>/`, discovery entry
+  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, one SQL copy per app at
+  `<root>index`. The older `default` space folder `xyz.tinycloud.agent-data/`
+  (the skill's legacy layout) is deliberately not read or written (no
+  compatibility path, TC-2416); do not reintroduce a layout parameter or an
+  older-catalog check. Approvals are per app: a KV path prefix matches only on a
+  `/` boundary, so no single grant covers every app, and every grant is in the
+  `applications` space.
 - The rules generator adapts the CLI examples to MCP write inputs: keep the
   vendored CLI attribution intact. MCP put/move values omit top-level `by`,
   including edits of read-back records and catalogs. Keep this restriction
   expressible in the generated JSON Schema; stored/read-back records retain `by`.
+- Personal-app context can bundle one app's folder and the app list via `app`
+  and `access` (`change` by default, or `read`). A generic change bundle includes app-list
+  put so creating the app needs no further approval; omitting
+  `app` retains per-call approvals. Reads reuse an existing read-only folder grant.
+  Catalog slugs are handled before generic app-id validation: Health Log bundles
+  app-list read and its exact database read/write; Recipes bundles app-list and
+  knowledge reads and learns its database from the notes. Both support read-only
+  access; Recipes never requests writes. Catalog grants stay in applications.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
-  including a partial move or failed derived-copy upkeep.
+  including a failed derived-copy upkeep.
+- Generic retrieval lives in `packages/operations/src/operations/read.ts` and
+  `read-scope.ts`. Explicit subtree/database consent uses the existing
+  request-bound approval kernel; GET/HEAD must never broaden implicitly.
+  `tinycloud.read` reacquires bounded KV/SQL data for each digest-bound page.
+  Continuations bind host, source owner, canonical locator/query, hash and
+  length, never sender credentials. Recipient authority remains independent.
+  Preserve byte-exact KV vs derived SQL provenance and fail closed on changes.
+  Keep these private tools out of the public ChatGPT binding set; native read
+  exposure must remain inside the existing signed grant ceiling.
+- Meals, food, calories, body weight and recipes are not generic personal
+  records: the rules route them to Health Log and Recipes through the generic
+  knowledge and SQL tools. The routing table is extracted from the vendored
+  `TINY-APPS.md`; the statements in `src/tc-apps/preamble.ts` (`HEALTHLOG_*`)
+  mirror the pinned Health Log schema (`packages/cli/src/lib/apps-install.healthlog.schema.sql`)
+  and are checked against the generic SQL tools' input schemas in
+  `apps.catalog.test.ts`. "Not installed" is detected from the first query: a missing
+  database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
+  (operations/src/operations/sql.ts). Drop that step when onboarding grants
+  the schema for catalog apps (TC-2430).
