@@ -115,7 +115,7 @@ export function verifyInvitationGrant(
   }
   assertApprovalRequestBinding(parsed, expected.request);
   const bindings = new NodeWasmBindings();
-  if (typeof bindings.validateSessionGrant !== "function") refuse("This runtime cannot verify invitation approvals; no invitation was sent.");
+  if (typeof bindings.validateSessionGrant !== "function") refuse("Invitation approval could not be verified; no invitation was sent.");
   let proof: { verifiedRecap?: Array<{ service: string; space: string; path: string; actions: string[]; caveats?: unknown[] }>; expiresAt?: string };
   try {
     proof = bindings.validateSessionGrant({
