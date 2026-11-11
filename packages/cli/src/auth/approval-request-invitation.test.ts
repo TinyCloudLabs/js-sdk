@@ -288,7 +288,7 @@ test("approveEmailInviteKey: with the real did:pkh owner and did:key session, th
   });
   expect(holds()).toBe("true");
   // The signed access date is the file's own expiry, to the second.
-  expect(result).toEqual({ shareId: KEY_ID, accessExpiresAt: new Date(Math.floor(access.getTime() / 1000) * 1000).toISOString() });
+  expect(result).toEqual({ shareId: KEY_ID, accessExpiresAt: new Date(Math.floor(access.getTime() / 1000) * 1000).toISOString(), resumed: false });
   const installed = node.getRuntimePermissionDelegations().flatMap((delegation) => delegation.resources ?? []).filter((resource) => resource.path.includes("/share/"));
   expect(installed.map((resource) => resource.path)).toEqual([`${network}/share/${KEY_ID}`]);
   expect([...installed[0]!.actions].sort()).toEqual([...pair].sort());
@@ -312,6 +312,34 @@ test("approveEmailInviteKey: a host that cannot be reached keeps the approved re
   expect(linkPosts).toBe(1);
   expect(acknowledgements).toHaveLength(1);
   expect(await readJson(pendingFile())).toEqual([]);
+});
+
+test("a rerun for the same relative expiry resumes its own open request and absolute date; another duration, file or recipient is a new request", async () => {
+  const node = await realSessionNode();
+  const base = Math.floor((Date.now() + 3_600_000) / 1000) * 1000;
+  const ask = (accessMs: number, sha = "sha-one") => approveEmailInviteKey({
+    node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date(accessMs), contentSha256: sha,
+  });
+  delegateDown = true;
+  await expect(ask(base)).rejects.toMatchObject({ code: "UNAVAILABLE" });
+  expect(linkPosts).toBe(1);
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  const [entry] = (await readJson<Array<{ request: { context: { invitationId: string } } }>>(pendingFile()))!;
+  const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  let startedAt = 0;
+  for (const char of entry!.request.context.invitationId.slice(0, 10)) startedAt = startedAt * 32 + crockford.indexOf(char);
+  // The same relative request, recomputed from the clock a couple of seconds later: later by exactly the time since the invitation began.
+  const recomputed = base + (Date.now() - startedAt);
+  const probe = { recipientEmail: "reader@example.com", subjectKind: "file" as const, subjectName: "note.md", contentSha256: "sha-one" };
+  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: new Date(Math.floor(recomputed / 1000) * 1000).toISOString() })).toBeDefined();
+  // A different duration, file or recipient does not resume it.
+  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: new Date(Math.floor((recomputed + 3_600_000) / 1000) * 1000).toISOString() })).toBeUndefined();
+  expect(await pendingInvitationContext("approval", { ...probe, contentSha256: "sha-two", accessExpiresAt: new Date(Math.floor(recomputed / 1000) * 1000).toISOString() })).toBeUndefined();
+  expect(await pendingInvitationContext("approval", { ...probe, recipientEmail: "other@example.com", accessExpiresAt: new Date(Math.floor(recomputed / 1000) * 1000).toISOString() })).toBeUndefined();
+  delegateDown = false;
+  const resumed = await ask(Math.floor(recomputed / 1000) * 1000);
+  expect(resumed).toMatchObject({ shareId: KEY_ID, accessExpiresAt: new Date(base).toISOString(), resumed: true });
+  expect(linkPosts).toBe(1);
 });
 
 test("approveEmailInviteKey refuses a profile that records no owner account, and an approval signed by another account", async () => {

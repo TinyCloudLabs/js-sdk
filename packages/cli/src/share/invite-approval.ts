@@ -32,6 +32,8 @@ export interface EmailInviteKey {
   shareId: string;
   /** The access expiry the owner was shown and signed (inside the request body). It is the file's own expiry, never shortened or extended. */
   accessExpiresAt: string;
+  /** The approval continued an open request for the same relative expiry: the share is issued with ITS absolute access date, not a recomputed one. */
+  resumed: boolean;
 }
 
 export interface EmailInviteApprovalRequest {
@@ -43,6 +45,8 @@ export interface EmailInviteApprovalRequest {
   subjectKind: "file" | "session";
   /** When the shared content stops being readable by the recipient. */
   accessExpiresAt: Date;
+  /** sha256 of the shared bytes: a rerun of the same file (same recipient and name) resumes its own open approval. */
+  contentSha256?: string;
   onApprovalRequest?: (request: { approvalUrl: string; requestId: string; expiresAt: string }) => void;
 }
 
@@ -65,9 +69,10 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
   }
   const now = Date.now();
   const accessExpiresAt = new Date(Math.floor(request.accessExpiresAt.getTime() / 1000) * 1000).toISOString();
-  const context: ShareInvitationApprovalContext = await pendingInvitationContext(profile, {
-    recipientEmail: request.recipientEmail, subjectKind: request.subjectKind, subjectName: request.subjectName, accessExpiresAt,
-  }) ?? {
+  const resumedContext = await pendingInvitationContext(profile, {
+    recipientEmail: request.recipientEmail, subjectKind: request.subjectKind, subjectName: request.subjectName, accessExpiresAt, contentSha256: request.contentSha256,
+  });
+  const context: ShareInvitationApprovalContext = resumedContext ?? {
     kind: "share-invitation", version: 1, invitationId: newInvitationId(now), recipientEmail: request.recipientEmail,
     subjectKind: request.subjectKind, subjectName: request.subjectName,
     acceptanceExpiresAt: new Date(Math.floor(Math.min(now + DAY_MS, Date.parse(accessExpiresAt)) / 1000) * 1000).toISOString(), accessExpiresAt,
@@ -77,11 +82,12 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
   const delegation = await acquireApprovalRequest(node.credentialHolderDid, {
     profileName: profile, jwk: session.jwk, host, invitationContext: context, expectedOwner: ownerDid,
     openkeyHost: process.env.TC_OPENKEY_HOST ?? profileConfig.openkeyHost,
+    ...(request.contentSha256 === undefined ? {} : { invitationMeta: { contentSha256: request.contentSha256 } }),
     ...(request.onApprovalRequest === undefined ? {} : { onApprovalRequest: request.onApprovalRequest }),
   });
   const grant = invitationGrantOf(delegation, key);
   // Every deterministic check passes before anything is installed or taken: the approval was signed for THIS share's access date.
-  if (context.accessExpiresAt !== accessExpiresAt) {
+  if (resumedContext === undefined && context.accessExpiresAt !== accessExpiresAt) {
     throw new CLIError("APPROVAL_RESULT_INVALID", "The approval was not signed for this share's expiry; nothing was installed or sent.", ExitCode.PERMISSION_DENIED);
   }
   const entryKey = grant.permissions[0]!;
@@ -110,5 +116,5 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
   }
   // Taking the approval makes it single-use: a send that fails from here on needs a new approval.
   await takeInvitationApproval(profile, delegation);
-  return { shareId: grant.shareId, accessExpiresAt: context.accessExpiresAt };
+  return { shareId: grant.shareId, accessExpiresAt: context.accessExpiresAt, resumed: resumedContext !== undefined };
 };

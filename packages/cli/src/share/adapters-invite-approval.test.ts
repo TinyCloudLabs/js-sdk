@@ -62,21 +62,53 @@ describe("per-invitation approval for a session-only email share", () => {
   it("asks for the approval with the recipient, file name and expiry before any request, then encrypts under only the approved key and never creates one", async () => {
     const asked: unknown[] = [];
     const error = await adapter(async (request) => {
-      asked.push({ ...request, node: undefined });
-      expect(requests).toEqual([]);
+      asked.push({ ...request, node: undefined, contentSha256: undefined });
+      // Everything that needs no owner action has passed first: the one request so far is the share service's config check.
+      expect(requests).toHaveLength(1);
       expect(events).toEqual([]);
-      return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString() };
+      return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString(), resumed: false };
     }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
-    expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: EXPIRES }]);
+    expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: EXPIRES, contentSha256: undefined }]);
     expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
+  });
+
+  it("refuses a file that would stay readable longer than the 31-day policy root limit before any request or approval, and accepts 31 days minus 30 seconds", async () => {
+    let asked = 0;
+    const approver = async (request: { accessExpiresAt: Date }) => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: request.accessExpiresAt.toISOString(), resumed: false }; };
+    const past = { ...input, expiresAt: new Date(Date.now() + 35 * 86_400_000) } as TargetPublishInput;
+    const refused = await adapter(approver as never).publish(past).then(() => undefined, (caught: unknown) => caught) as { failure?: { kind: string; requestedDays: number; limitDays: number } };
+    expect(refused?.failure).toEqual({ kind: "invite-access-too-long", requestedDays: 35, limitDays: 31 });
+    expect(asked).toBe(0);
+    expect(requests).toEqual([]);
+    expect(events).toEqual([]);
+    const within = { ...input, expiresAt: new Date(Date.now() + 31 * 86_400_000 - 30_000) } as TargetPublishInput;
+    expect(await adapter(approver as never).publish(within).then(() => undefined, (caught: unknown) => caught)).toBe(stop);
+    expect(asked).toBe(1);
+  });
+
+  it("checks the share origin before asking for any approval", async () => {
+    let asked = 0;
+    const wrongOrigin = { ...input, origin: "https://other.example" } as TargetPublishInput;
+    await expect(adapter((async () => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: "", resumed: false }; }) as never).publish(wrongOrigin)).rejects.toThrow("origin-mismatch");
+    expect(asked).toBe(0);
+  });
+
+  it("issues a resumed approval's own earlier absolute date, never a recomputed or later one, and refuses any other difference", async () => {
+    const earlier = new Date(EXPIRES.getTime() - 40_000).toISOString();
+    const resumedApprover = (async () => ({ shareId: APPROVED_ID, accessExpiresAt: earlier, resumed: true })) as never;
+    expect(await adapter(resumedApprover).publish(input).then(() => undefined, (caught: unknown) => caught)).toBe(stop);
+    const later = new Date(EXPIRES.getTime() + 40_000).toISOString();
+    await expect(adapter((async () => ({ shareId: APPROVED_ID, accessExpiresAt: later, resumed: true })) as never).publish(input)).rejects.toThrow("invalid-request");
+    await expect(adapter((async () => ({ shareId: APPROVED_ID, accessExpiresAt: earlier, resumed: false })) as never).publish(input)).rejects.toThrow("invalid-request");
   });
 
   it("refuses an approval whose signed access date is not the expiry the share is issued with, before anything is requested or encrypted", async () => {
     for (const accessExpiresAt of [new Date(EXPIRES.getTime() - 1000).toISOString(), new Date(EXPIRES.getTime() + 1000).toISOString()]) {
-      const error = await adapter(async () => ({ shareId: APPROVED_ID, accessExpiresAt })).publish(input).then(() => undefined, (caught: unknown) => caught);
+      requests.length = 0;
+      const error = await adapter(async () => ({ shareId: APPROVED_ID, accessExpiresAt, resumed: false })).publish(input).then(() => undefined, (caught: unknown) => caught);
       expect(String(error)).toContain("invalid-request");
-      expect(requests).toEqual([]);
+      expect(requests).toHaveLength(1); // the share service config check only
       expect(events).toEqual([]);
     }
   });
@@ -85,14 +117,14 @@ describe("per-invitation approval for a session-only email share", () => {
     const refusal = new Error("the owner declined");
     const error = await adapter(async () => { throw refusal; }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(refusal);
-    expect(requests).toEqual([]);
+    expect(requests).toHaveLength(1); // the share service config check only
     expect(events).toEqual([]);
   });
 
   it("does not ask when the session already holds decrypt for the share key, and is refused as before without an approver", async () => {
     holdsDecrypt = true;
     let asked = 0;
-    const error = await adapter(async () => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString() }; }).publish(input).then(() => undefined, (caught: unknown) => caught);
+    const error = await adapter(async () => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString(), resumed: false }; }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
     expect(asked).toBe(0);
     expect(events.at(-1)).toMatch(/^encrypt share\/[0-9a-f]{32}$/);

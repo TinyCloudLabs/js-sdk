@@ -4,6 +4,7 @@ import { createShareLinks, type ShareLinks } from "./short-links.js";
 import type { EmailInviteApprover } from "./invite-approval.js";
 import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
+import { POLICY_ROOT_MAX_LIFETIME_SECONDS } from "@tinycloud/share-envelope";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
 import { chmod, link, open, readFile, stat, unlink } from "node:fs/promises";
@@ -730,7 +731,7 @@ export function createShareAuthorityAdapters(input: {
       });
     }
     const effectiveExpiry = expiryClamped ? sessionExpiresAt! : targetInput.expiresAt;
-    const expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1000) * 1000);
+    let expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1000) * 1000);
     if (expiresAt.getTime() <= Date.now() + 60_000) {
       throw new SharePublishAuthorityError({
         kind: "lifetime-exceeds-session",
@@ -759,14 +760,36 @@ export function createShareAuthorityAdapters(input: {
       if (input.approveEmailInviteKey === undefined || targetInput.target.kind !== "email" || activeProfileName === undefined) {
         throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
       }
+      // Everything that can be checked without the owner passes first, so nothing is approved that could not be published. An addressed share
+      // cannot stay readable longer than the policy root limit the SDK signs with; a longer one is refused here, never shortened.
+      const requestedSeconds = (expiresAt.getTime() - Date.now()) / 1000;
+      if (requestedSeconds > POLICY_ROOT_MAX_LIFETIME_SECONDS) {
+        throw new SharePublishAuthorityError({ kind: "invite-access-too-long", requestedDays: Math.ceil(requestedSeconds / 86_400), limitDays: POLICY_ROOT_MAX_LIFETIME_SECONDS / 86_400 });
+      }
+      if (targetInput.origin !== (await publicConfig()).shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
+      await node.activeNodeIdentity();
       // The approver chooses the key: its id replaces the one generated above, which was never used.
       const approved = await input.approveEmailInviteKey({
         node, profile: activeProfileName, recipientEmail: targetInput.target.address, subjectName: targetInput.filename,
         subjectKind: "file", accessExpiresAt: expiresAt,
+        contentSha256: (() => {
+          // The file's identity: every file name and the hash of its bytes, so a different file never resumes this approval.
+          const hash = createHash("sha256");
+          for (const file of targetInput.files !== undefined && targetInput.files.length > 0 ? targetInput.files : [{ bytes: targetInput.source, filename: targetInput.filename }]) {
+            hash.update(file.filename).update("\0").update(createHash("sha256").update(file.bytes).digest());
+          }
+          return hash.digest("hex");
+        })(),
       });
       // What the owner signed as the file's access date must be the expiry this share is issued with: no silent shortening, no extension.
       if (approved.accessExpiresAt !== expiresAt.toISOString()) {
-        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "the approval's access date is not this share's expiry; nothing was published" });
+        // Only a resumed approval for the same relative expiry carries an earlier absolute date: the share is issued with exactly that date (never later
+        // than the one just computed, never recomputed). Any other difference is refused.
+        const approvedExpiry = new Date(approved.accessExpiresAt);
+        if (!approved.resumed || !(approvedExpiry.getTime() < expiresAt.getTime()) || approvedExpiry.getTime() <= Date.now() + 60_000) {
+          throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "the approval's access date is not this share's expiry; nothing was published" });
+        }
+        expiresAt = approvedExpiry;
       }
       shareId = approved.shareId;
       pathPlan = planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork! });

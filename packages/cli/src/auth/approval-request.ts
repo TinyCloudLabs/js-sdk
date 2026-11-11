@@ -37,6 +37,8 @@ interface PendingApproval {
   signingKey?: Ed25519PrivateJwk;
   relayPrivateKey: string;
   expectedOwner?: string;
+  /** An invitation's file identity (sha256 of the shared bytes), kept so a rerun of the same file resumes it. */
+  invitationMeta?: { contentSha256: string };
   resultRef?: string;
   resultExpiresAt?: string;
   resultEnvelope?: unknown;
@@ -517,6 +519,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,
       ...(profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey }),
       relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, ackId: randomUUID(),
+      ...(options.invitationMeta === undefined ? {} : { invitationMeta: options.invitationMeta }),
       ...(options.commandIntent === undefined ? {} : { commandIntent: options.commandIntent }) };
     await updatePending(profile, (items) => [...items, entry!]);
   }
@@ -687,11 +690,27 @@ export async function completeApprovalResult(profile: string, delegation?: objec
  * The context of a still-open invitation approval for this recipient and file, so a rerun resumes it instead of asking again.
  * Everything the owner was shown must match: recipient, subject kind and name, and the content's access expiry.
  */
-export async function pendingInvitationContext(profile: string, match: { recipientEmail: string; subjectKind: "file" | "session"; subjectName: string; accessExpiresAt: string }): Promise<ShareInvitationApprovalContext | undefined> {
-  const now = Date.now();
-  return (await activePending(profile)).flatMap((entry) => entry.request.context ? [entry.request.context] : [])
-    .find((context) => context.recipientEmail === match.recipientEmail && context.subjectKind === match.subjectKind && context.subjectName === match.subjectName
-      && context.accessExpiresAt === match.accessExpiresAt && Date.parse(context.acceptanceExpiresAt) > now);
+export async function pendingInvitationContext(profile: string, match: {
+  recipientEmail: string; subjectKind: "file" | "session"; subjectName: string; accessExpiresAt: string; contentSha256?: string; now?: number;
+}): Promise<ShareInvitationApprovalContext | undefined> {
+  const now = match.now ?? Date.now();
+  return (await activePending(profile)).flatMap((entry) => entry.request.context ? [{ context: entry.request.context, entry }] : [])
+    .find(({ context, entry }) => context.recipientEmail === match.recipientEmail && context.subjectKind === match.subjectKind && context.subjectName === match.subjectName
+      && Date.parse(context.acceptanceExpiresAt) > now && entry.invitationMeta?.contentSha256 === match.contentSha256
+      && (context.accessExpiresAt === match.accessExpiresAt || sameRelativeExpiry(context, match.accessExpiresAt, now)))?.context;
+}
+
+/**
+ * A relative expiry ("7d", or the default) is recomputed from the clock on every run. A rerun asks for the SAME relative expiry when its
+ * new access date differs from the pending one by exactly the time since that invitation began (its id is a ULID: the start time), to the
+ * second. Then it resumes the pending request and its own absolute date; any other date is a new choice and a new request.
+ */
+function sameRelativeExpiry(context: ShareInvitationApprovalContext, accessExpiresAt: string, now: number): boolean {
+  const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  let startedAt = 0;
+  for (const char of context.invitationId.slice(0, 10)) startedAt = startedAt * 32 + CROCKFORD.indexOf(char);
+  const drift = (Date.parse(accessExpiresAt) - Date.parse(context.accessExpiresAt)) - (now - startedAt);
+  return Number.isFinite(drift) && Math.abs(drift) <= 2000;
 }
 
 /**

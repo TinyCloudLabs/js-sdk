@@ -36,6 +36,8 @@ export interface AuthFlowOptions {
   permissions?: PermissionEntry[];
   /** A share-invitation approval: no permissions and no key id; the approver chooses the key. */
   invitationContext?: ShareInvitationApprovalContext;
+  /** An invitation's file identity, stored with its pending request so a rerun of the same file resumes it. */
+  invitationMeta?: { contentSha256: string };
   /**
    * User-facing context shown on the OpenKey approval page. Optional at the
    * OpenKey protocol boundary, but TinyCloud CLI permission-grant call sites
