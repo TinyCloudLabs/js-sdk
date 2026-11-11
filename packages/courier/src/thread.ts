@@ -21,12 +21,12 @@ export interface PeerReadError {
 }
 
 export function peerReadError(peer: string): PeerReadError {
-  return { peer, code: 'peer-read-failed', message: `Couldn't read messages from ${oneLine(peer)}.` };
+  return { peer, code: 'peer-read-failed', message: `Couldn't read messages from ${oneLine(peer, 80)}.` };
 }
 
 export function partialReadText(source: 'Thread' | 'Inbox', errors: readonly PeerReadError[]): string {
   if (!errors.length) return '';
-  const peers = [...new Set(errors.map(error => oneLine(error.peer)))].join(', ');
+  const peers = [...new Set(errors.map(error => oneLine(error.peer, 80)))].join(', ');
   return `${source} may be incomplete: couldn't read messages from ${peers}. Try again later.\n`;
 }
 

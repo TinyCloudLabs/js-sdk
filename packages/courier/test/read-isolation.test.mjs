@@ -105,3 +105,9 @@ test('same message ids on different peers remain separately attributed; foreign-
   const result = await collectThread({ selfKv, threadId: 'T', peers: [peer('a'), peer('b')], kvFor: async p => p.handle === 'a' ? a : b });
   assert.deepEqual(result.entries.map(e => [e.peer, e.id, e.side]), [['a', 'M', 'peer'], ['b', 'M', 'peer']]);
 });
+
+test('peer read warnings strip terminal controls and cap the peer label', () => {
+  const error = peerReadError('bad\u001b[2J\u202E' + 'x'.repeat(500));
+  assert.doesNotMatch(error.message, /\u001b|\u202e/i);
+  assert.ok(error.message.length < 120);
+});
