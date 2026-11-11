@@ -134,7 +134,7 @@ function unsupportedIssuedQuery(): Result<never> {
 /**
  * Lists the delegations this session's own key issued: one invocation signed
  * by that key with the single capability `tinycloud.delegation/list` on
- * `<key DID>/delegation` and no proof. Pages are ordered by delegation CID,
+ * `tinycloud:<key DID suffix>:agent/delegation` and no proof. Pages are ordered by delegation CID,
  * not by time, and may be short; only a missing `nextCursor` ends the list.
  */
 export async function queryIssued(
@@ -151,10 +151,14 @@ export async function queryIssued(
       ),
     };
   }
+  const signerDid = signer.did().split("#", 1)[0]!;
+  if (!/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/.test(signerDid)) {
+    return { ok: false, error: createError(DelegationErrorCodes.INVALID_INPUT, "Issued queries require the session key's did:key") };
+  }
   try {
     const send = async (fetchFn: FetchFunction, host: string, nodeAudience?: string) => {
       const authorization = await signer.sign({
-        [`${signer.did()}/delegation`]: { [DelegationAction.LIST]: [{}] },
+        [`tinycloud:${signerDid.slice("did:".length)}:agent/delegation`]: { [DelegationAction.LIST]: [{}] },
       }, nodeAudience);
       return fetchFn(`${host}/delegation/query`, {
         method: "POST",
