@@ -61,7 +61,7 @@ Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
               [--intent request|ask|answer|update|inform] [--ask "…"]… [--constraint "…"]…
               [--reply-to <messageId>] [--task-ref <taskId>]…
-  status [--peer <peer>] [--json]   Saved per-side expiry; no remote access or renewal check
+  status [--peer <peer>] [--json]   Saved per-side expiry
   inbox [--json] [--peek]          New counterparty messages; --peek skips receipt updates
   read <threadId> [--peer p] [--json]
                                    The merged thread: both sides' messages + tasks

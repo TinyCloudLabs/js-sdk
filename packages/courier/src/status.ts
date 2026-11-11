@@ -57,7 +57,7 @@ export function cmdStatus(args: ParsedArgs): void {
     console.log(JSON.stringify(output, null, 2));
     return;
   }
-  console.log("Showing saved expiry times only. This doesn't contact peers or check renewals.");
+  console.log("Showing saved expiry times.");
   console.log("Inbound: your access to the peer. Outbound: the peer's access to you (latest saved grant).");
   if (!output.peers.length) console.log('No saved peers.');
   for (const peer of output.peers) {
