@@ -50,7 +50,8 @@ export const MAX_WORKER_GZIP_BYTES = 777_224;
 // The same pinned #873 lanes measured771051 (+33); the new worker-only row
 // preserves every root, initial, activation and gated ceiling.
 // host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 771_072;
+// TC-2773: canonical run 42939305043 measures 771106 (+34), approved by Naomi with zero headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 771_106;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 
