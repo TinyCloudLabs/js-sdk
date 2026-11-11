@@ -1,5 +1,22 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.19
+
+### Minor Changes
+
+- e3e4bd7: `courier invite --mode email` asks the owner for one approval per invitation. The approval request carries the recipient, session name and dates; OpenKey chooses the Share key and returns a grant for that one key (`key.create` and `decrypt`), valid until the invitation expires (at most 24 hours). Courier writes the pending invitation before asking, sends nothing until the approval is verified, and uses the approved grant only for that invitation's key; the main Courier grant is not changed. Run the same command again to continue a pending invitation. `@tinycloud/share-envelope/links` adds an optional strict `context` to the approval request (with no permissions) and `buildShareInvitationApprovalSpec`.
+
+  Details: TC-2234
+
+### Patch Changes
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+  - @tinycloud/sdk-core@3.12.0-beta.17
+  - @tinycloud/share-sdk@1.5.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.17
+
 ## 0.6.0-beta.18
 
 ### Patch Changes

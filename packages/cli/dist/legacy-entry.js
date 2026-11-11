@@ -16902,6 +16902,7 @@ __export(links_exports, {
   approvalSessionProof: () => approvalSessionProof,
   assertDidKeySignature: () => assertDidKeySignature,
   buildFullLink: () => buildFullLink,
+  buildShareInvitationApprovalSpec: () => buildShareInvitationApprovalSpec,
   buildShortLink: () => buildShortLink,
   checkApprovalResultBinding: () => checkApprovalResultBinding,
   checkLinkBody: () => checkLinkBody,
@@ -17448,6 +17449,22 @@ async function openLinkRecord(record3, key, options = {}) {
   await runBodyValidator(opened, options.validateBody);
   return opened;
 }
+function buildShareInvitationApprovalSpec(input) {
+  const { context: context2 } = input;
+  const lifetime = Math.floor((Date.parse(context2.acceptanceExpiresAt) - input.now) / 1e3);
+  if (!(lifetime > 0) || lifetime > DAY_SECONDS) throw new LinkError("body_validation_failed", "approval must expire within 24 hours");
+  return {
+    issuer: input.targetDid,
+    requestVersion: 1,
+    targetDid: input.targetDid,
+    targetPublicJwk: input.targetPublicJwk,
+    nodeOrigin: input.nodeOrigin,
+    permissions: [],
+    grantLifetimeSeconds: lifetime,
+    suggestedLifetimeSeconds: lifetime,
+    context: context2
+  };
+}
 function parseApprovalRequest(value4, options = {}) {
   const parsed = requestSchema.safeParse(value4);
   if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
@@ -17918,7 +17935,7 @@ function checkApprovalResultBinding(opened, expected) {
   if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
   return { ownerDid, delegationExpiresAt, delegation };
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, isoUtc, invitationContext, requestSchema, DAY_SECONDS, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -18059,22 +18076,35 @@ var init_links = __esm({
       actions: external_exports2.array(external_exports2.string().min(1)).min(1),
       caveats: external_exports2.array(external_exports2.unknown()).optional()
     }).strict();
+    isoUtc = external_exports2.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/).refine((value4) => new Date(value4).toISOString() === value4);
+    invitationContext = external_exports2.object({
+      kind: external_exports2.literal("share-invitation"),
+      version: external_exports2.literal(1),
+      invitationId: external_exports2.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/),
+      recipientEmail: external_exports2.string().min(3).max(254),
+      subjectKind: external_exports2.enum(["session", "file"]),
+      subjectName: external_exports2.string().min(1).max(120),
+      acceptanceExpiresAt: isoUtc,
+      accessExpiresAt: isoUtc
+    }).strict();
     requestSchema = external_exports2.object({
       issuer: external_exports2.string(),
       requestVersion: external_exports2.literal(1),
       targetDid: external_exports2.string(),
       targetPublicJwk: ed25519Jwk,
       nodeOrigin: origin,
-      permissions: external_exports2.array(permission).min(1),
+      permissions: external_exports2.array(permission),
       reason: external_exports2.string().optional(),
       grantLifetimeSeconds: external_exports2.number().int().positive(),
       resultEncryptionPublicJwk: p256Jwk,
+      context: invitationContext.optional(),
       /**
        * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
        * maximum; it has no upper bound of its own, and the approver may still choose less.
        */
       suggestedLifetimeSeconds: external_exports2.number().int().positive().optional()
-    }).strict().refine((request) => request.suggestedLifetimeSeconds === void 0 || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds);
+    }).strict().refine((request) => request.suggestedLifetimeSeconds === void 0 || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds).refine((request) => request.context === void 0 ? request.permissions.length > 0 : request.permissions.length === 0);
+    DAY_SECONDS = 86400;
     DEFAULT_TIMEOUT_MS = 1e4;
     MAX_JSON_RESPONSE_BYTES = 4096;
     AUDIENCE_ORIGIN = /^https:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/;
@@ -26958,6 +26988,7 @@ var unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefin
 var shareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV3Invariants);
 var ENVELOPE_AAD_LABEL = "tinycloud-share-envelope-v1";
 var AAD = utf8Bytes(ENVELOPE_AAD_LABEL);
+var POLICY_ROOT_MAX_LIFETIME_SECONDS = 31 * 24 * 60 * 60;
 var ARTIFACT_ROOT = "artifacts";
 function parseArtifactVersionPath(path) {
   const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
@@ -28435,6 +28466,7 @@ function canonicalMailbox(value4) {
   if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain(domain)) return void 0;
   return Object.freeze({ email, domain });
 }
+var POLICY_ROOT_MAX_LIFETIME_SECONDS2 = 31 * 24 * 60 * 60;
 
 // src/share/short-links.ts
 var SHORT_LINK_MAX_LIFE_SECONDS = LINK_TYPE_SPECS.share.maxLifeSeconds;
@@ -34031,6 +34063,7 @@ function canonicalMailbox2(value4) {
   if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain2(domain)) return void 0;
   return Object.freeze({ email, domain });
 }
+var POLICY_ROOT_MAX_LIFETIME_SECONDS3 = 31 * 24 * 60 * 60;
 function verifyCompactUcanAuthorization(authorization, expectedCid) {
   if (/\s/.test(authorization)) throw new TypeError("compact Authorization contains whitespace");
   const segments = authorization.split(".");

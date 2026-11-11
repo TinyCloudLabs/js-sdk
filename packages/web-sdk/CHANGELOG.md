@@ -1,5 +1,16 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+  - @tinycloud/sdk-core@3.12.0-beta.17
+  - @tinycloud/share-sdk@1.5.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.17
+
 ## 3.12.0-beta.16
 
 ### Patch Changes

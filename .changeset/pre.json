@@ -72,6 +72,8 @@
     "tc-2691-host-expiry",
     "tc-2748-courier-read-isolation",
     "tc2234-courier-email-invitation",
+    "tc2234-invite-approval",
+    "tc2234-policy-root-limit",
     "tc2380-q2",
     "tc2747-courier-expiry-status",
     "tidy-names-openkey-grant",
