@@ -281,7 +281,7 @@ jobs:
       - name: Install Playwright chromium (deterministic)
         working-directory: js-sdk
         run: |
-          bunx playwright install --with-deps chromium
+          bunx playwright install chromium
 
       - name: Run vertical browser journey
         working-directory: js-sdk
