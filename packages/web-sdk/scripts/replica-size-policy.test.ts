@@ -65,6 +65,7 @@ import { approvedTc2594ResourceTransport, validateTc2594ResourceTransportTransit
 import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
 import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
 import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
+import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
@@ -81,6 +82,7 @@ delete current.tc2687PublishedSignIn;
 delete current.tc2691HostExpiryWorker;
 delete current.tc2691HostExpiryReplicaWorker;
 delete current.tc2691HostExpiry;
+delete current.tc2773LazyRestoreReplicaWorker;
 current.entries = current.entries.filter((entry) => entry.pr !== "#873");
 current.allowance["index.mjs"] = 388;
 
@@ -4808,6 +4810,7 @@ const finalTransportLedger = () => {
   delete ledger.tc2691HostExpiryWorker;
   delete ledger.tc2691HostExpiryReplicaWorker;
   delete ledger.tc2691HostExpiry;
+  delete ledger.tc2773LazyRestoreReplicaWorker;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
   ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
   ledger.entries.push({
@@ -4973,6 +4976,7 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
   delete throughTc2281.tc2691HostExpiryWorker;
   delete throughTc2281.tc2691HostExpiryReplicaWorker;
   delete throughTc2281.tc2691HostExpiry;
+  delete throughTc2281.tc2773LazyRestoreReplicaWorker;
 
   it("is the newest root row, exactly the TC-2582 caps plus the measured delta, with no owned charge", () => {
     expect(() => validateLedger(throughTc2281)).not.toThrow();
@@ -5028,6 +5032,7 @@ describe("TC-2594 resource transport root-only admission (#891)", () => {
   delete throughTc2594.tc2691HostExpiryWorker;
   delete throughTc2594.tc2691HostExpiryReplicaWorker;
   delete throughTc2594.tc2691HostExpiry;
+  delete throughTc2594.tc2773LazyRestoreReplicaWorker;
 
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2594);
@@ -5081,6 +5086,7 @@ describe("TC-2657 explicit publication root-only admission (#902)", () => {
   delete throughTc2657.tc2691HostExpiryWorker;
   delete throughTc2657.tc2691HostExpiryReplicaWorker;
   delete throughTc2657.tc2691HostExpiry;
+  delete throughTc2657.tc2773LazyRestoreReplicaWorker;
 
   it("admits the publication root sizes and refuses one additional byte", () => {
     validateLedger(throughTc2657);
@@ -5133,6 +5139,7 @@ describe("TC-2518 key wrap root-only admission (#906)", () => {
   delete throughTc2518.tc2691HostExpiryWorker;
   delete throughTc2518.tc2691HostExpiryReplicaWorker;
   delete throughTc2518.tc2691HostExpiry;
+  delete throughTc2518.tc2773LazyRestoreReplicaWorker;
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2518);
     for (const [format, measured] of [["index.mjs", 1514668], ["index.cjs", 1450017]] as const) {
@@ -5179,6 +5186,7 @@ describe("TC-2687 published sign-in root-only admission (#910)", () => {
   delete throughTc2687.tc2691HostExpiryWorker;
   delete throughTc2687.tc2691HostExpiryReplicaWorker;
   delete throughTc2687.tc2691HostExpiry;
+  delete throughTc2687.tc2773LazyRestoreReplicaWorker;
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2687);
     for (const [format, measured] of [["index.mjs", 1514830], ["index.cjs", 1450177]] as const) {
@@ -5269,4 +5277,48 @@ describe("host SIWE expiry (TC-2691) exact size admissions", () => {
       expect(() => validateTc2691HostExpiryTransition(shipped, removed)).toThrow("TC-2691");
     });
   }
+});
+
+
+describe("TC-2773 exact replica worker admission", () => {
+  const row = shipped.tc2773LazyRestoreReplicaWorker!;
+
+  it("admits the canonical measurement and refuses the next byte", () => {
+    validateLedger(shipped);
+    expect(row.replicaWorker.ceiling).toBe(771106);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(771106);
+    expect(771106 <= row.replicaWorker.ceiling).toBe(true);
+    expect(771107 > row.replicaWorker.ceiling).toBe(true);
+    expect(ancestryPins(shipped, false)).toContainEqual({
+      row: "tc2773LazyRestoreReplicaWorker", pin: row.sourceCommits.at(-1)!,
+    });
+  });
+
+  it("rejects changed provenance, extra buckets and a missing predecessor", () => {
+    const mutations: Array<(entry: typeof row) => void> = [
+      (entry) => { entry.replicaWorker.ceiling++; },
+      (entry) => { entry.replicaWorker.delta++; },
+      (entry) => { entry.sourceCommits[0] = "0".repeat(40); },
+      (entry) => { entry.canonicalCI.jobs.pop(); },
+      (entry) => { Object.assign(entry, { worker: { ceiling: 777225, delta: 1 } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      mutate(changed.tc2773LazyRestoreReplicaWorker!);
+      expect(() => validateLedger(changed)).toThrow("TC-2773");
+    }
+    const missing = copy(shipped);
+    delete missing.tc2691HostExpiryReplicaWorker;
+    expect(() => validateLedger(missing)).toThrow("TC-2773");
+  });
+
+  it("admits its exact transition once and rejects mutation or removal", () => {
+    expect(() => validateTc2773LazyRestoreReplicaWorkerTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2773LazyRestoreReplicaWorkerTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.replicaWorker.ceiling++;
+    expect(() => validateTc2773LazyRestoreReplicaWorkerTransition(undefined, changed)).toThrow("TC-2773");
+    expect(() => validateTc2773LazyRestoreReplicaWorkerTransition(row, changed)).toThrow("TC-2773");
+    expect(() => validateTc2773LazyRestoreReplicaWorkerTransition(row, undefined)).toThrow("TC-2773");
+  });
 });
