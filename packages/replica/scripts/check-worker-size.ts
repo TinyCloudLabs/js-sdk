@@ -35,7 +35,8 @@ import { join, resolve } from "node:path";
 // kvSyncTransport. Run42498701097 at11f3b8a7 measured777149 (+24) in both lanes;
 // Naomi8e3df7f3 admits only that exact worker size; tc2481OfflineReplicaTransport records it.
 // host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
-export const MAX_WORKER_GZIP_BYTES = 777_224;
+// TC-2771: canonical run 43041191918 measures 777823 (+599); Naomi approved zero headroom.
+export const MAX_WORKER_GZIP_BYTES = 777_823;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
@@ -51,7 +52,8 @@ export const MAX_WORKER_GZIP_BYTES = 777_224;
 // preserves every root, initial, activation and gated ceiling.
 // host SIWE expiry (TC-2691): final pinned source-WASM bytes; Naomi approved zero headroom.
 // TC-2773: canonical run 42939305043 measures 771106 (+34), approved by Naomi with zero headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 771_106;
+// TC-2771: the same canonical run measures 771732 (+626); Naomi approved zero headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 771_732;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 

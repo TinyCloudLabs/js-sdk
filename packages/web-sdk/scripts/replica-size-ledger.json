@@ -241,6 +241,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#920",
+      "ticket": "TC-2771",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "TC-2771: zero owned charge; exact +239 ESM / +189 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43041191918 at c0a4fe6eba305b53292b82e8e0fe2502182f4611. budget-ruling: Naomi, TC-2771."
     }
   ],
   "phase2Ratchet": {
@@ -2938,5 +2945,83 @@
       }
     },
     "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
+  },
+  "tc2771PriorityLanesRoot": {
+    "label": "foreground/background request priority (TC-2771, #920)",
+    "ruling": "Naomi, 2026-11-11: exact canonical web-sdk root ceilings 1515748 ESM and 1450705 CJS gzip bytes, zero headroom. budget-ruling: Naomi, TC-2771.",
+    "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
+    "sourceCommits": [
+      "db305013b51d73e7b9403770aecddef2ad815ba8",
+      "c0a4fe6eba305b53292b82e8e0fe2502182f4611"
+    ],
+    "canonicalCI": {
+      "run": "43041191918",
+      "jobs": [
+        "130593110552",
+        "130593111010"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 239,
+        "index.cjs": 170
+      },
+      "ceiling": {
+        "index.mjs": 1515748,
+        "index.cjs": 1450705
+      }
+    },
+    "reason": "The eager root contains only guarded lazy-loader dispatch, operation retirement/abort fencing, automatic post-restore background selection, browser foreground 4 s configuration, and the streaming-safe destination-verification JSON fix. Scheduling, streamed response tracking and invocation retry implementation live in a deferred sibling. The worker-only consolidation does not change root sources. Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the exact ceilings above, +239/+170 over the merged TC-2234 root row. Same-path local controls attribute +229 ESM and -202 CJS to B relative to released master 1533d3bb; absolute local bytes differ from canonical CI. Historical rows and all other buckets remain unchanged.",
+    "measuredGrowth": {
+      "index.mjs": 239,
+      "index.cjs": 189
+    },
+    "ownedEntry": {
+      "pr": "#920",
+      "ticket": "TC-2771",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "TC-2771: zero owned charge; exact +239 ESM / +189 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43041191918 at c0a4fe6eba305b53292b82e8e0fe2502182f4611. budget-ruling: Naomi, TC-2771."
+    }
+  },
+  "tc2771PriorityLanesWorker": {
+    "label": "foreground/background request priority (TC-2771, #920)",
+    "ruling": "Naomi, 2026-11-11: exact canonical worker ceiling 777823 gzip bytes, +599, zero headroom. budget-ruling: Naomi, TC-2771.",
+    "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
+    "sourceCommits": [
+      "c0a4fe6eba305b53292b82e8e0fe2502182f4611"
+    ],
+    "canonicalCI": {
+      "run": "43041191918",
+      "jobs": [
+        "130593110552",
+        "130593111010"
+      ]
+    },
+    "worker": {
+      "delta": 599,
+      "ceiling": 777823
+    },
+    "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority. Canonical source-WASM Node 22 / Bun 1.3.14 / rustc 1.99.0 measures the exact ceiling above. Same-path local controls attribute released master drift +57 KV / +56 replica bytes; B adds +593 KV / +661 replica above released master. Consolidation aliases the shared KV/context source graph and uses a ready-module loader inside self-contained workers, removing duplicated retry/error helpers and unnecessary deferred bootstrap. Historical rows and all other buckets remain unchanged."
+  },
+  "tc2771PriorityLanesReplicaWorker": {
+    "label": "foreground/background request priority (TC-2771, #920)",
+    "ruling": "Naomi, 2026-11-11: exact canonical replicaWorker ceiling 771732 gzip bytes, +626, zero headroom. budget-ruling: Naomi, TC-2771.",
+    "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
+    "sourceCommits": [
+      "c0a4fe6eba305b53292b82e8e0fe2502182f4611"
+    ],
+    "canonicalCI": {
+      "run": "43041191918",
+      "jobs": [
+        "130593110552",
+        "130593111010"
+      ]
+    },
+    "replicaWorker": {
+      "delta": 626,
+      "ceiling": 771732
+    },
+    "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority. Canonical source-WASM Node 22 / Bun 1.3.14 / rustc 1.99.0 measures the exact ceiling above. Same-path local controls attribute released master drift +57 KV / +56 replica bytes; B adds +593 KV / +661 replica above released master. Consolidation aliases the shared KV/context source graph and uses a ready-module loader inside self-contained workers, removing duplicated retry/error helpers and unnecessary deferred bootstrap. Historical rows and all other buckets remain unchanged."
   }
 }

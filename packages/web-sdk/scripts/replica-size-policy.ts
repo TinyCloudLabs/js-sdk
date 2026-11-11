@@ -448,6 +448,9 @@ export type Ledger = {
   tc2691HostExpiry?: LogoutRatchet;
   tc2773LazyRestoreRoot?: LogoutRatchet;
   tc2234InvitationPolicyRoot?: LogoutRatchet;
+  tc2771PriorityLanesRoot?: LogoutRatchet & { measuredGrowth: GzipSizes; ownedEntry: LedgerEntry };
+  tc2771PriorityLanesReplicaWorker?: NonNullable<Ledger["tc2773LazyRestoreReplicaWorker"]>;
+  tc2771PriorityLanesWorker?: WorkerRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1066,6 +1069,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2773LazyRestoreReplicaWorker !== undefined) pins.push({ row: "tc2773LazyRestoreReplicaWorker", pin: root.tc2773LazyRestoreReplicaWorker.sourceCommits.at(-1)! });
   if (root.tc2773LazyRestoreRoot !== undefined) pins.push({ row: "tc2773LazyRestoreRoot", pin: root.tc2773LazyRestoreRoot.sourceCommits.at(-1)! });
   if (root.tc2234InvitationPolicyRoot !== undefined) pins.push({ row: "tc2234InvitationPolicyRoot", pin: root.tc2234InvitationPolicyRoot.sourceCommits.at(-1)! });
+  if (root.tc2771PriorityLanesRoot !== undefined) pins.push({ row: "tc2771PriorityLanesRoot", pin: root.tc2771PriorityLanesRoot.sourceCommits.at(-1)! });
+  if (root.tc2771PriorityLanesReplicaWorker !== undefined) pins.push({ row: "tc2771PriorityLanesReplicaWorker", pin: root.tc2771PriorityLanesReplicaWorker.sourceCommits.at(-1)! });
+  if (root.tc2771PriorityLanesWorker !== undefined) pins.push({ row: "tc2771PriorityLanesWorker", pin: root.tc2771PriorityLanesWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1156,6 +1162,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
     ["tc2773LazyRestoreRoot", root.tc2773LazyRestoreRoot?.root.ceiling],
     ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
+    ["tc2771PriorityLanesRoot", root.tc2771PriorityLanesRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3068,6 +3075,87 @@ export const approvedTc2234InvitationPolicyRoot: LogoutRatchet = {
   "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
 };
 
+export const approvedTc2771PriorityLanesRoot: NonNullable<Ledger["tc2771PriorityLanesRoot"]> = {
+  "label": "foreground/background request priority (TC-2771, #920)",
+  "ruling": "Naomi, 2026-11-11: exact canonical web-sdk root ceilings 1515748 ESM and 1450705 CJS gzip bytes, zero headroom. budget-ruling: Naomi, TC-2771.",
+  "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
+  "sourceCommits": [
+    "db305013b51d73e7b9403770aecddef2ad815ba8",
+    "c0a4fe6eba305b53292b82e8e0fe2502182f4611"
+  ],
+  "canonicalCI": {
+    "run": "43041191918",
+    "jobs": [
+      "130593110552",
+      "130593111010"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 239,
+      "index.cjs": 170
+    },
+    "ceiling": {
+      "index.mjs": 1515748,
+      "index.cjs": 1450705
+    }
+  },
+  "reason": "The eager root contains only guarded lazy-loader dispatch, operation retirement/abort fencing, automatic post-restore background selection, browser foreground 4 s configuration, and the streaming-safe destination-verification JSON fix. Scheduling, streamed response tracking and invocation retry implementation live in a deferred sibling. The worker-only consolidation does not change root sources. Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the exact ceilings above, +239/+170 over the merged TC-2234 root row. Same-path local controls attribute +229 ESM and -202 CJS to B relative to released master 1533d3bb; absolute local bytes differ from canonical CI. Historical rows and all other buckets remain unchanged.",
+  "measuredGrowth": {
+    "index.mjs": 239,
+    "index.cjs": 189
+  },
+  "ownedEntry": {
+    "pr": "#920",
+    "ticket": "TC-2771",
+    "index.mjs": 0,
+    "index.cjs": 0,
+    "note": "TC-2771: zero owned charge; exact +239 ESM / +189 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43041191918 at c0a4fe6eba305b53292b82e8e0fe2502182f4611. budget-ruling: Naomi, TC-2771."
+  }
+};
+
+export const approvedTc2771PriorityLanesWorker: WorkerRatchet = {
+  "label": "foreground/background request priority (TC-2771, #920)",
+  "ruling": "Naomi, 2026-11-11: exact canonical worker ceiling 777823 gzip bytes, +599, zero headroom. budget-ruling: Naomi, TC-2771.",
+  "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
+  "sourceCommits": [
+    "c0a4fe6eba305b53292b82e8e0fe2502182f4611"
+  ],
+  "canonicalCI": {
+    "run": "43041191918",
+    "jobs": [
+      "130593110552",
+      "130593111010"
+    ]
+  },
+  "worker": {
+    "delta": 599,
+    "ceiling": 777823
+  },
+  "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority. Canonical source-WASM Node 22 / Bun 1.3.14 / rustc 1.99.0 measures the exact ceiling above. Same-path local controls attribute released master drift +57 KV / +56 replica bytes; B adds +593 KV / +661 replica above released master. Consolidation aliases the shared KV/context source graph and uses a ready-module loader inside self-contained workers, removing duplicated retry/error helpers and unnecessary deferred bootstrap. Historical rows and all other buckets remain unchanged."
+};
+
+export const approvedTc2771PriorityLanesReplicaWorker: NonNullable<Ledger["tc2773LazyRestoreReplicaWorker"]> = {
+  "label": "foreground/background request priority (TC-2771, #920)",
+  "ruling": "Naomi, 2026-11-11: exact canonical replicaWorker ceiling 771732 gzip bytes, +626, zero headroom. budget-ruling: Naomi, TC-2771.",
+  "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
+  "sourceCommits": [
+    "c0a4fe6eba305b53292b82e8e0fe2502182f4611"
+  ],
+  "canonicalCI": {
+    "run": "43041191918",
+    "jobs": [
+      "130593110552",
+      "130593111010"
+    ]
+  },
+  "replicaWorker": {
+    "delta": 626,
+    "ceiling": 771732
+  },
+  "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority. Canonical source-WASM Node 22 / Bun 1.3.14 / rustc 1.99.0 measures the exact ceiling above. Same-path local controls attribute released master drift +57 KV / +56 replica bytes; B adds +593 KV / +661 replica above released master. Consolidation aliases the shared KV/context source graph and uses a ready-module loader inside self-contained workers, removing duplicated retry/error helpers and unnecessary deferred bootstrap. Historical rows and all other buckets remain unchanged."
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3207,6 +3295,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2773LazyRestoreReplicaWorker: approvedTc2773LazyRestoreReplicaWorker,
   tc2773LazyRestoreRoot: approvedTc2773LazyRestoreRoot,
   tc2234InvitationPolicyRoot: approvedTc2234InvitationPolicyRoot,
+  tc2771PriorityLanesRoot: approvedTc2771PriorityLanesRoot,
+  tc2771PriorityLanesReplicaWorker: approvedTc2771PriorityLanesReplicaWorker,
+  tc2771PriorityLanesWorker: approvedTc2771PriorityLanesWorker,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3595,6 +3686,23 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2773LazyRestoreRoot ||
         JSON.stringify(value.tc2234InvitationPolicyRoot) !== JSON.stringify(approvedTc2234InvitationPolicyRoot))) {
     throw new Error("Only Naomi's exact TC-2234 root admission is approved.");
+  }
+  if (value.tc2771PriorityLanesRoot !== undefined &&
+      (!value.tc2234InvitationPolicyRoot || JSON.stringify(value.tc2771PriorityLanesRoot) !== JSON.stringify(approvedTc2771PriorityLanesRoot))) {
+    throw new Error("Only Naomi's exact TC-2771 root admission is approved.");
+  }
+  const priorityEntries = value.entries.filter((entry) => entry.pr === "#920");
+  if (value.tc2771PriorityLanesRoot !== undefined || priorityEntries.length > 0) {
+    if (priorityEntries.length !== 1) throw new Error("The TC-2771 root admission requires its one exact owned entry.");
+    validateTc2771PriorityLanesRootEntry(priorityEntries[0], approvedTc2771PriorityLanesRoot.measuredGrowth, value.tc2771PriorityLanesRoot);
+  }
+  if (value.tc2771PriorityLanesReplicaWorker !== undefined &&
+      (!value.tc2773LazyRestoreReplicaWorker || JSON.stringify(value.tc2771PriorityLanesReplicaWorker) !== JSON.stringify(approvedTc2771PriorityLanesReplicaWorker))) {
+    throw new Error("Only Naomi's exact TC-2771 replicaWorker admission is approved.");
+  }
+  if (value.tc2771PriorityLanesWorker !== undefined &&
+      (!value.tc2691HostExpiryWorker || JSON.stringify(value.tc2771PriorityLanesWorker) !== JSON.stringify(approvedTc2771PriorityLanesWorker))) {
+    throw new Error("Only Naomi's exact TC-2771 worker admission is approved.");
   }
 }
 
@@ -4346,5 +4454,42 @@ export function validateTc2773LazyRestoreRootTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2773LazyRestoreRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2773 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** TC-2771's exact growth is charged to its absolute admission, preserving the old cumulative budget. */
+export function validateTc2771PriorityLanesRootEntry(
+  entry: LedgerEntry, observed: GzipSizes, admission: Ledger["tc2771PriorityLanesRoot"],
+): void {
+  if (JSON.stringify(admission) !== JSON.stringify(approvedTc2771PriorityLanesRoot) ||
+      JSON.stringify(entry) !== JSON.stringify(approvedTc2771PriorityLanesRoot.ownedEntry) ||
+      formats.some((format) => observed[format] !== approvedTc2771PriorityLanesRoot.measuredGrowth[format])) {
+    throw new Error("The TC-2771 zero owned charge requires its exact measured growth, entry and canonical admission.");
+  }
+}
+
+/** The TC-2771 root admission is introduced once and immutable afterwards. */
+export function validateTc2771PriorityLanesRootTransition(
+  base?: Ledger["tc2771PriorityLanesRoot"], current?: Ledger["tc2771PriorityLanesRoot"],
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2771PriorityLanesRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2771 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2771 worker admission is introduced once and immutable afterwards. */
+export function validateTc2771PriorityLanesWorkerTransition(base?: Ledger["tc2771PriorityLanesWorker"], current?: Ledger["tc2771PriorityLanesWorker"]): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2771PriorityLanesWorker) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2771 worker admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2771 replicaWorker admission is introduced once and immutable afterwards. */
+export function validateTc2771PriorityLanesReplicaWorkerTransition(base?: Ledger["tc2771PriorityLanesReplicaWorker"], current?: Ledger["tc2771PriorityLanesReplicaWorker"]): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2771PriorityLanesReplicaWorker) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2771 replicaWorker admission may be introduced once and cannot change later.");
   }
 }
