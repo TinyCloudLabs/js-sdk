@@ -436,12 +436,13 @@ export function assertNotPaired(profile: Profile, handle: string): void {
  * this command changed is written, so a pairing, revocation or key rotation made by another command meanwhile is kept. `profile` is
  * updated to the saved result. A profile built from scratch overwrites the file (first init, key rotation).
  */
-export function saveProfile(profile: Profile): void {
-  withProfileLock(() => saveProfileUnlocked(profile));
+export function saveProfile(profile: Profile, beforeSave?: (disk: Profile | undefined) => void): void {
+  withProfileLock(() => saveProfileUnlocked(profile, beforeSave));
 }
 
-function saveProfileUnlocked(profile: Profile): void {
+function saveProfileUnlocked(profile: Profile, beforeSave?: (disk: Profile | undefined) => void): void {
   const file = profilePath('profile.json');
+  beforeSave?.(fs.existsSync(file) ? readProfile(profileDir()) : undefined);
   const base = baselines.get(profile);
   let result: Profile = profile;
   if (base && fs.existsSync(file)) {
