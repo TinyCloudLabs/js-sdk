@@ -30,7 +30,9 @@ export default defineConfig([
     dts: true,
     clean: false,
     sourcemap: true,
-    noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
+    // Feature negotiation loads ownership only when the transport runs. Keep
+    // that canonical sibling deferred in Node/CJS; workers remain self-contained.
+    noExternal: [/^@tinycloud\/sdk-services(?:$|\/(?!internal\/response-body$))/],
     splitting: false,
   },
   {
