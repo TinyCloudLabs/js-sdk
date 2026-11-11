@@ -1032,6 +1032,8 @@ const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
  * `forceWalletSign`, whose wallet path activates as part of signing.
  */
 export interface DelegateToOptions {
+  /** Request lane for activating the delegated grant. */
+  priority?: RequestPriority;
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
   /** Force the wallet-signed SIWE path even if the caps are derivable. Default false. */
@@ -8157,6 +8159,7 @@ export class TinyCloudNode {
         onPrepared,
         options?.disableSubDelegation === true,
         options?.requireActivation === true,
+        options?.priority,
       );
       return { delegation, prompted: false };
     }
@@ -8175,6 +8178,7 @@ export class TinyCloudNode {
       onPrepared,
       options?.disableSubDelegation === true,
       options?.requireActivation === true,
+      options?.priority,
     );
     return { delegation, prompted: false };
   }
@@ -8342,7 +8346,10 @@ export class TinyCloudNode {
           entries,
           options,
           options?.renewalOnly ? this.currentTinyCloudSession() : undefined,
-          this,
+          {
+            delegateTo: (did, permissions, delegateOptions) =>
+              this.delegateTo(did, permissions, { ...delegateOptions, priority: "background" }),
+          },
         ),
     });
   }
@@ -8476,6 +8483,7 @@ export class TinyCloudNode {
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
     requireActivation = false,
+    priority?: RequestPriority,
   ): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -8601,7 +8609,7 @@ export class TinyCloudNode {
     // a backend calling useDelegation) can find it by CID when building
     // their invoker SIWE. The host validates the UCAN's parent chain
     // (session key → wallet SIWE) to confirm authority.
-    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal, priority);
     graph.assertActive();
     assertDelegationActivated(activateResult, delegation, requireActivation);
 
@@ -8617,6 +8625,7 @@ export class TinyCloudNode {
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
     requireActivation = false,
+    priority?: RequestPriority,
   ): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -8652,7 +8661,7 @@ export class TinyCloudNode {
       await onPrepared(delegation);
     }
 
-    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+    const activateResult = await this.activateRoutedDelegation(delegation, graph.signal, priority);
     graph.assertActive();
     assertDelegationActivated(activateResult, delegation, requireActivation);
 
