@@ -1,5 +1,6 @@
 import {
   ServiceContext,
+  inheritResourceRouting,
   type FetchFunction,
   type FetchRequestInit,
   type FetchResponse,
@@ -108,7 +109,7 @@ class RecordingServiceContext extends ServiceContext {
   /** Per-call recording; `_fetch` is read at access time, so overrides apply. */
   override get fetch(): FetchFunction {
     const raw = super.fetch;
-    return (url, init) => this.recordCall(raw, url, init);
+    return inheritResourceRouting((url, init) => this.recordCall(raw, url, init), raw);
   }
 
   /** Transport without per-call recording. */

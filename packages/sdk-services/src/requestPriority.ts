@@ -2,20 +2,25 @@ import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { retryInvocation, type RetryInvocationOptions } from "./retryInvocation";
 import { ErrorCodes, type FetchRequestInit, type FetchResponse } from "./types";
+import { routesRequests, resolvedDispatch, type ResolvedDispatch } from "./resolvedDispatch";
+import type { FetchFunction } from "./types";
 
 const FOREGROUND_QUIET_MS = 400;
 const scheduled = Symbol.for("@tinycloud/sdk-services/scheduled-request");
 const lanesKey = Symbol.for("@tinycloud/sdk-services/request-lanes");
+const foregroundOperation = Symbol.for("@tinycloud/sdk-services/foreground-operation");
 
 export type RequestPriority = "foreground" | "background";
-type Request = FetchRequestInit & { [scheduled]?: true };
+type Operation = { hosts: Set<string>; finished: Promise<number> };
+type Request = FetchRequestInit & { [scheduled]?: string; [foregroundOperation]?: Operation; [resolvedDispatch]?: ResolvedDispatch };
 
-export function isScheduled(init: FetchRequestInit | undefined): boolean {
-  return (init as Request | undefined)?.[scheduled] === true;
+export function isScheduled(init: FetchRequestInit | undefined, url?: string): boolean {
+  const host = (init as Request | undefined)?.[scheduled];
+  return host !== undefined && (url === undefined || host === new URL(url, browser.location?.href).origin);
 }
 
-export function scheduledRequest(init: FetchRequestInit, priority: RequestPriority): Request {
-  return { ...init, priority: priority === "foreground" ? "high" : "low", [scheduled]: true };
+export function scheduledRequest(init: FetchRequestInit, priority: RequestPriority, url: string): Request {
+  return { ...init, priority: priority === "foreground" ? "high" : "low", [scheduled]: new URL(url, browser.location?.href).origin };
 }
 
 type BrowserLocks = {
@@ -103,7 +108,7 @@ async function sendResponse(
   resolve: (response: FetchResponse) => void,
 ): Promise<number> {
   const response = await pending;
-  const pause = await busyPause(response);
+  const pause = busyPause(response);
   const tracked = trackResponse(response);
   resolve(tracked.response);
   await tracked.finished;
@@ -133,10 +138,11 @@ function nodeRequest(lane: Lane, foreground: boolean, send: () => Promise<FetchR
 }
 
 /** Hold foreground activity through retries. Browser Web Locks also reach replica workers. */
-export async function foregroundRequest(
+export function foregroundRequest(
   url: string,
   signal: AbortSignal,
   send: () => Promise<FetchResponse>,
+  operation?: Operation,
 ): Promise<FetchResponse> {
   const host = new URL(url, browser.location?.href).origin;
   const locks = browser.navigator?.locks;
@@ -145,7 +151,14 @@ export async function foregroundRequest(
       void locks.request(`tinycloud:foreground:${host}`, { mode: "shared", signal }, async () => {
         let pause = FOREGROUND_QUIET_MS;
         try {
-          pause = Math.max(pause, await sendResponse(send(), resolve));
+          if (operation) {
+            const tracked = trackResponse(await send());
+            resolve(tracked.response);
+            await tracked.finished;
+            pause = Math.max(pause, await operation.finished);
+          } else {
+            pause = Math.max(pause, await sendResponse(send(), resolve));
+          }
         } catch (error) {
           reject(error);
         }
@@ -154,7 +167,23 @@ export async function foregroundRequest(
     });
   }
 
-  return nodeRequest(laneFor(host), true, send);
+  const lane = laneFor(host);
+  if (operation) {
+    lane.foreground++;
+    let body = Promise.resolve();
+    const pending = send().then((response) => {
+      const tracked = trackResponse(response);
+      body = tracked.finished;
+      return tracked.response;
+    });
+    void operation.finished.then(async (pause) => {
+      await body;
+      lane.foreground--;
+      lane.resumeAt = Math.max(lane.resumeAt, performance.now() + Math.max(FOREGROUND_QUIET_MS, pause));
+    });
+    return pending;
+  }
+  return nodeRequest(lane, true, send);
 }
 
 export async function backgroundRequest(
@@ -196,12 +225,23 @@ export async function backgroundRequest(
 }
 
 /** Keep the foreground lease across all invocation retries. */
-export function invokeWithPriority(options: RetryInvocationOptions): Promise<FetchResponse> {
+export async function invokeWithPriority(options: RetryInvocationOptions): Promise<FetchResponse> {
   if (options.priority === "background") return retryInvocation(options);
-  return foregroundRequest(options.url, options.signal, () => retryInvocation({
-    ...options,
-    build: async () => scheduledRequest(await options.build(), "foreground"),
-  }));
+  let finish!: (pause: number) => void;
+  const operation: Operation = { hosts: new Set(), finished: new Promise<number>((resolve) => { finish = resolve; }) };
+  try {
+    const response = await retryInvocation({
+      ...options,
+      build: async () => ({ ...await options.build(), [foregroundOperation]: operation }),
+    });
+    const pause = busyPause(response);
+    const tracked = trackResponse(response);
+    void Promise.all([tracked.finished, pause]).then(([, pause]) => finish(pause), () => finish(0));
+    return tracked.response;
+  } catch (error) {
+    finish(0);
+    throw error;
+  }
 }
 
 /** Nested dispatches retain their existing lease. */
@@ -210,8 +250,21 @@ export function dispatchRequest(
   init: FetchRequestInit & { signal: AbortSignal },
   priority: RequestPriority,
   send: (request: FetchRequestInit) => Promise<FetchResponse>,
+  transport?: FetchFunction,
 ): Promise<FetchResponse> {
-  if (isScheduled(init)) return send(init);
-  const run = priority === "foreground" ? foregroundRequest : backgroundRequest;
-  return run(url, init.signal, () => send(scheduledRequest(init, priority)));
+  const dispatch: ResolvedDispatch = (init as Request)[resolvedDispatch] ?? ((fetch, target, request) => dispatchRequest(target, {
+    ...request, signal: request.signal ?? init.signal,
+  }, priority, (next) => fetch(target, next)));
+  const routed = { ...init, [resolvedDispatch]: dispatch };
+  if ((transport as FetchFunction & { [routesRequests]?: boolean } | undefined)?.[routesRequests]) {
+    return send(routed);
+  }
+  if (isScheduled(init, url)) return send(routed);
+  const request = scheduledRequest(routed, priority, url);
+  if (priority === "background") return backgroundRequest(url, init.signal, () => send(request));
+  const operation = (init as Request)[foregroundOperation];
+  const host = new URL(url, browser.location?.href).origin;
+  if (operation?.hosts.has(host)) return send(request);
+  operation?.hosts.add(host);
+  return foregroundRequest(url, init.signal, () => send(request), operation);
 }

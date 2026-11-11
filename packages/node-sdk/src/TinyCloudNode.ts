@@ -4,6 +4,7 @@ import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
 import {
   backgroundFetch,
+  inheritResourceRouting,
   type RequestPriority,
   createResourceRoutingFetch,
   routeResourceRequest,
@@ -627,7 +628,9 @@ class ServiceGraphLifetime {
     private readonly fetchFn: FetchFunction,
     private readonly observeContext: (context: ServiceContext) => void,
     readonly requestSink?: RequestSink,
-  ) {}
+  ) {
+    inheritResourceRouting(this.fetch, this.fetchFn);
+  }
 
   readonly invoke: InvokeFunction = (session, service, path, action, facts) => {
     this.assertActive();

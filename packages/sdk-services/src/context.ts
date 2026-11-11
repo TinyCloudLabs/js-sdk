@@ -22,6 +22,7 @@ import { tinyCloudDebugLogger } from "./debug";
 import { projectDiagnosticData } from "./diagnostics";
 import type { RequestPriority } from "./requestPriority";
 import { loadRequestPriority } from "./requestPriorityLoader";
+import { inheritResourceRouting } from "./resolvedDispatch";
 
 export type { RequestPriority } from "./requestPriority";
 
@@ -130,6 +131,10 @@ export class ServiceContext implements IServiceContext {
    */
   setSession(session: ServiceSession | null): void {
     this.assertActive();
+    if (session !== this._session) {
+      this._abortController.abort();
+      this._abortController = new AbortController();
+    }
     this._session = session;
     this.emit('session.changed', { authenticated: session !== null });
 
@@ -442,14 +447,14 @@ export class ServiceContext implements IServiceContext {
   }
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
-    return async (url, init) => {
+    return inheritResourceRouting(async (url: string, init?: FetchRequestInit) => {
       this.assertActive();
       const signal = this.combineSignals(init?.signal);
       const request = { ...init, signal };
       const { dispatchRequest } = await loadRequestPriority();
       this.assertActive();
-      return dispatchRequest(url, request, this._priority, (request) => this.send(fetchFn, url, request));
-    };
+      return dispatchRequest(url, request, this._priority, (request) => this.send(fetchFn, url, request), fetchFn);
+    }, fetchFn);
   }
 
   private async send(fetchFn: FetchFunction, url: string, request: FetchRequestInit): Promise<FetchResponse> {

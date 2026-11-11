@@ -1,4 +1,5 @@
 import type { FetchFunction, FetchResponse, ServiceHeaders, ServiceSession } from "./types";
+import { fetchResolved, routesRequests } from "./resolvedDispatch";
 
 export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
@@ -155,6 +156,10 @@ export function routingResourceOf(uri: string): string {
   throw new ResourceNotRoutedError(uri);
 }
 
+async function discardResponse(response: FetchResponse | undefined): Promise<void> {
+  await (response?.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.().catch(() => undefined);
+}
+
 function invocationResources(authorization: string): Array<{ resource: string; access: ResourceAccess }> {
   const encoded = authorization.split(".")[1];
   if (!encoded) throw new ResourceNotRoutedError("invalid invocation");
@@ -211,6 +216,7 @@ export async function routeResourceRequest(
       try {
         response = await send(target);
         if (response.ok || response.status !== 404) return response;
+        if (target !== targets.at(-1)) await discardResponse(response);
       } catch (error) {
         if (!(error instanceof NodeNotRespondingError)) throw error;
         failure = error;
@@ -227,15 +233,25 @@ export async function routeResourceRequest(
   for (const target of targets) {
     try {
       const result = await send(target);
-      if (result.ok) { succeeded.push(target.url); response ??= result; }
-      else { failed.push({ url: target.url, status: result.status }); failureResponse ??= result; }
+      if (result.ok) {
+        succeeded.push(target.url);
+        if (response) await discardResponse(result);
+        else response = result;
+      } else {
+        failed.push({ url: target.url, status: result.status });
+        if (failureResponse) await discardResponse(result);
+        else failureResponse = result;
+      }
     } catch (error) {
       if (!routingFailure(error) && succeeded.length === 0) throw error;
       failed.push({ url: target.url, cause: error });
     }
   }
   if (failed.length > 0) {
-    if (succeeded.length > 0 || targets.length > 1) throw new PartialNodeWriteError(succeeded, failed);
+    if (succeeded.length > 0 || targets.length > 1) {
+      await Promise.all([discardResponse(response), discardResponse(failureResponse)]);
+      throw new PartialNodeWriteError(succeeded, failed);
+    }
     if (failureResponse) return failureResponse;
     if (failed[0]?.cause && !(failed[0].cause instanceof NodeNotRespondingError)) throw failed[0].cause;
     throw new NodeNotRespondingError(targets.map(({ url }) => url), failed[0]?.cause);
@@ -245,7 +261,7 @@ export async function routeResourceRequest(
 
 /** Route only locally generated data invocations through a captured share session. */
 export function createResourceTransportInvocationFetch(transport: ResourceTransport, session: ServiceSession): FetchFunction {
-  return async (url, init) => {
+  return Object.assign(async (url: string, init?: Parameters<FetchFunction>[1]) => {
     const parsed = new URL(url);
     if (parsed.pathname !== "/invoke") throw new ResourceNotRoutedError(parsed.pathname);
     const authorization = authorizationOf(init?.headers);
@@ -255,16 +271,16 @@ export function createResourceTransportInvocationFetch(transport: ResourceTransp
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
         .filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
-      return target.fetch(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
+      return fetchResolved(target.fetch, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
     }, { invocationSession: session });
-  };
+  }, { [routesRequests]: true });
 }
 
 /** Route signed /invoke traffic. Non-invocation endpoints retain their own resource-specific adapters. */
 export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: ResourceRoutingConfig): FetchFunction {
-  return async (url, init) => {
+  return Object.assign(async (url: string, init?: Parameters<FetchFunction>[1]) => {
     const parsed = new URL(url);
-    if (parsed.pathname !== "/invoke") return fetchFn(url, init);
+    if (parsed.pathname !== "/invoke") return fetchResolved(fetchFn, url, init);
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
     const resources = invocationResources(authorization);
@@ -278,7 +294,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
       const timeout = AbortSignal.timeout(5_000);
       const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
       try {
-        return await fetchFn(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
+        return await fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
       } catch (error) {
         if (init?.signal?.aborted) throw error;
         if (routingFailure(error)) throw error;
@@ -286,5 +302,5 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
       }
     };
     return routeResourceRequest(resources, routing, send);
-  };
+  }, { [routesRequests]: true });
 }
