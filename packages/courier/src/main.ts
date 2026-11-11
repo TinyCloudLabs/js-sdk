@@ -16,6 +16,7 @@ import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
 import { courierVersion } from './version.js';
 import { cmdStart } from './guided.js';
+import { cmdStatus } from './status.js';
 import { cmdInvite, cmdJoin } from './invitation.js';
 
 function usage(): string {
@@ -60,6 +61,7 @@ Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
               [--intent request|ask|answer|update|inform] [--ask "…"]… [--constraint "…"]…
               [--reply-to <messageId>] [--task-ref <taskId>]…
+  status [--peer <peer>] [--json]   Saved per-side expiry
   inbox [--json] [--peek]          New counterparty messages; --peek skips receipt updates
   read <threadId> [--peer p] [--json]
                                    The merged thread: both sides' messages + tasks
@@ -182,6 +184,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'pair': return cmdPair(sub);
     case 'revoke': return cmdRevoke(sub);
     case 'send': return cmdSend(sub);
+    case 'status': return cmdStatus(sub);
     case 'inbox': return cmdInbox(sub);
     case 'read': return cmdRead(sub);
     case 'task': return cmdTask(sub);
