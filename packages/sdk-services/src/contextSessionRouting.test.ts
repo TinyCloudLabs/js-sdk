@@ -9,6 +9,19 @@ const session = (name: string): ServiceSession => ({
   spaceId: "tinycloud:pkh:eip155:1:0x1:default", verificationMethod: name, jwk: {},
 });
 
+test.each(["foreground", "background"] as const)("%s direct fetch is cancelled when its session changes during lane loading", async (priority) => {
+  let sends = 0;
+  const context = new ServiceContext({
+    hosts: [`https://${priority}-fetch-session.invalid`], session: session("A"), priority,
+    invoke: () => ({}), fetch: async () => { sends++; return new Response("ok"); },
+  });
+  const signal = context.abortSignal;
+  const pending = context.fetch(`${context.hosts[0]}/invoke`);
+  context.setSession(session("B"));
+  await expect(pending).rejects.toBe(signal.reason);
+  expect(sends).toBe(0);
+});
+
 test.each(["foreground", "background"] as const)("%s KV request cannot switch signers while its lane loads", async (priority) => {
   const a = session("A");
   const b = session("B");

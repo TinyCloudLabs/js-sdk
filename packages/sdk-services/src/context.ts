@@ -449,10 +449,12 @@ export class ServiceContext implements IServiceContext {
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return inheritResourceRouting(async (url: string, init?: FetchRequestInit) => {
       this.assertActive();
+      const operationSignal = this.abortSignal;
       const signal = this.combineSignals(init?.signal);
       const request = { ...init, signal };
       const { dispatchRequest } = await loadRequestPriority();
       this.assertActive();
+      operationSignal.throwIfAborted();
       return dispatchRequest(url, request, this._priority, (request) => this.send(fetchFn, url, request), fetchFn);
     }, fetchFn);
   }
