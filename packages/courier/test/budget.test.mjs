@@ -9,11 +9,14 @@ import { Watcher } from '../dist/watch.js';
 import { buildMessage } from '../dist/a2a.js';
 import { cmdPause, cmdResume, nextNoticeId, postPausedInform, writePauseMarker } from '../dist/pause.js';
 import { createNotifier, noticeText, appendNotice, MAX_NOTICE_LOG_BYTES } from '../dist/notify.js';
-import { k, PREFIX } from '../dist/keys.js';
+import { k as keyLayout, PREFIX, watchStateKey } from '../dist/keys.js';
 import { notifyConfig } from '../dist/watch-cmd.js';
 import { parseArgs } from '../dist/args.js';
 import { getJson, putCreate, putMatch } from '../dist/store.js';
 import { memoryKv } from './memory-kv.mjs';
+
+const FIXTURE_COURIER_DID = 'did:key:zFixtureCourier';
+const k = { ...keyLayout, watchState: watchStateKey(FIXTURE_COURIER_DID) };
 
 const DAY = 24 * 3600 * 1000;
 
@@ -32,7 +35,7 @@ function side({ handle, peerHandle, mine, theirs, clock, budget = 3, notifyFails
   const events = [];
   let failures = notifyFails;
   const peer = peerRecord(peerHandle, handle);
-  const watcher = new Watcher({
+  const watcher = new Watcher({ courierDid: FIXTURE_COURIER_DID,
     selfKv: mine, spaceId: 's', selfHooks: {}, peerHooks: async () => ({}),
     loadPeers: () => [peer], kvFor: async () => theirs,
     wake: async (request) => { wakes.push(request); },

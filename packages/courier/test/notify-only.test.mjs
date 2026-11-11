@@ -14,10 +14,12 @@ import { spawnRunner } from '../dist/wake.js';
 import { k } from '../dist/keys.js';
 import { memoryKv } from './memory-kv.mjs';
 
+const FIXTURE_COURIER_DID = 'did:key:zFixtureCourier';
+
 function fixture(home, clock = { t: Date.now() }) {
   const selfKv = memoryKv(), peerKv = memoryKv(); const notices = []; const events = [];
   const threadId = ulid(); let wakes = 0;
-  const watcher = new Watcher({ selfKv, spaceId: 'dummy', selfHooks: {}, peerHooks: async () => ({}),
+  const watcher = new Watcher({ courierDid: FIXTURE_COURIER_DID, selfKv, spaceId: 'dummy', selfHooks: {}, peerHooks: async () => ({}),
     loadPeers: () => [{ handle: 'bob', status: 'paired', inbound: { cid: 'test' }, theirHandleForMe: 'alice' }], kvFor: async () => peerKv,
     notifyOnly: true, notificationHome: home, now: () => clock.t,
     wake: async () => { wakes++; throw new Error('D mode invoked a wake adapter'); },

@@ -6,6 +6,8 @@ import { verifyApproval, consumeApproval, approvalIsUsed } from '../dist/approva
 import { Watcher } from '../dist/watch.js';
 import { k } from '../dist/keys.js';
 
+const FIXTURE_COURIER_DID = 'did:key:zFixtureCourier';
+
 test('canonical JSON: shared vector with the /courier view', () => {
   const canonical = canonicalJson({ b: 1, a: [{ d: 2, c: 'x' }] });
   assert.equal(canonical, '{"a":[{"c":"x","d":2}],"b":1}');
@@ -90,7 +92,7 @@ test('an approval is single use: the second consume fails and a peek sees it as 
 });
 
 function watcherWith(selfKv, wakes, clock) {
-  return new Watcher({
+  return new Watcher({ courierDid: FIXTURE_COURIER_DID,
     selfKv, spaceId: 's', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => [], kvFor: async () => selfKv,
     wake: async (r) => { wakes.push(r); }, log: () => {}, now: () => clock.t,
   }, { debounceMs: 30_000, pollMs: 60_000, ticketSeconds: 25 });
