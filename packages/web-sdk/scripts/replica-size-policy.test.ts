@@ -5509,7 +5509,7 @@ describe("TC-2771 exact web-sdk root admission", () => {
   it("admits the canonical root measurements and refuses the next byte", () => {
     validateLedger(shipped);
     expect(row).toEqual(approvedTc2771PriorityLanesRoot);
-    for (const [format, measured] of [["index.mjs", 1516029], ["index.cjs", 1450558]] as const) {
+    for (const [format, measured] of [["index.mjs", 1516613], ["index.cjs", 1451136]] as const) {
       const active = rootCeilingFor(shipped, format);
       expect(active.row).toBe("tc2771PriorityLanesRoot");
       expect(active.ceiling).toBe(measured);
@@ -5522,7 +5522,7 @@ describe("TC-2771 exact web-sdk root admission", () => {
   });
 
   it("records only the exact root deltas above its immutable predecessor", () => {
-    expect(row.root.delta).toEqual({ "index.mjs": 520, "index.cjs": 23 });
+    expect(row.root.delta).toEqual({ "index.mjs": 1104, "index.cjs": 601 });
     expect(shipped.tc2234InvitationPolicyRoot).toEqual(approvedTc2234InvitationPolicyRoot);
     for (const format of ["index.mjs", "index.cjs"] as const) {
       expect(row.root.ceiling[format] - shipped.tc2234InvitationPolicyRoot!.root.ceiling[format]).toBe(row.root.delta[format]);
@@ -5566,10 +5566,10 @@ describe("TC-2771 exact worker admission", () => {
   it("admits its canonical bytes and refuses the next byte", () => {
     validateLedger(shipped);
     expect(row).toEqual(approvedTc2771PriorityLanesWorker);
-    expect(row.worker).toEqual({ delta: 1158, ceiling: 778382 });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(778382);
-    expect(778382 <= row.worker.ceiling).toBe(true);
-    expect(778382 + 1 > row.worker.ceiling).toBe(true);
+    expect(row.worker).toEqual({ delta: 1331, ceiling: 778555 });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(778555);
+    expect(778555 <= row.worker.ceiling).toBe(true);
+    expect(778555 + 1 > row.worker.ceiling).toBe(true);
     expect(ancestryPins(shipped, false)).toContainEqual({ row: "tc2771PriorityLanesWorker", pin: row.sourceCommits.at(-1)! });
   });
 
@@ -5610,10 +5610,10 @@ describe("TC-2771 exact replicaWorker admission", () => {
   it("admits its canonical bytes and refuses the next byte", () => {
     validateLedger(shipped);
     expect(row).toEqual(approvedTc2771PriorityLanesReplicaWorker);
-    expect(row.replicaWorker).toEqual({ delta: 1196, ceiling: 772302 });
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(772302);
-    expect(772302 <= row.replicaWorker.ceiling).toBe(true);
-    expect(772302 + 1 > row.replicaWorker.ceiling).toBe(true);
+    expect(row.replicaWorker).toEqual({ delta: 1406, ceiling: 772512 });
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(772512);
+    expect(772512 <= row.replicaWorker.ceiling).toBe(true);
+    expect(772512 + 1 > row.replicaWorker.ceiling).toBe(true);
     expect(ancestryPins(shipped, false)).toContainEqual({ row: "tc2771PriorityLanesReplicaWorker", pin: row.sourceCommits.at(-1)! });
   });
 
@@ -5651,7 +5651,7 @@ describe("TC-2771 exact replicaWorker admission", () => {
 describe("TC-2771 exact zero-owned-charge accounting", () => {
   const admission = () => structuredClone(approvedTc2771PriorityLanesRoot);
   const entry = () => structuredClone(admission().ownedEntry);
-  const observed = () => ({ "index.mjs": 520, "index.cjs": 42 });
+  const observed = () => ({ "index.mjs": 1104, "index.cjs": 620 });
 
   it("uses its exact absolute admission without changing the cumulative allowance", () => {
     expect(shipped.allowance).toEqual({ "index.mjs": 391, "index.cjs": 861 });

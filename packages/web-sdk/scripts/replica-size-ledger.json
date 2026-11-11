@@ -247,7 +247,7 @@
       "ticket": "TC-2771",
       "index.mjs": 0,
       "index.cjs": 0,
-      "note": "TC-2771: zero owned charge; exact +520 ESM / +42 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43055513537 at 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2. budget-ruling: Naomi, TC-2771."
+      "note": "TC-2771: zero owned charge; exact +1104 ESM / +620 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43065938868 at f98f0db3f919a542aee30eaf0813443c155feda1. budget-ruling: Naomi, TC-2771."
     }
   ],
   "phase2Ratchet": {
@@ -2948,83 +2948,89 @@
   },
   "tc2771PriorityLanesRoot": {
     "label": "foreground/background request priority (TC-2771, #920)",
-    "ruling": "Naomi, 2026-11-11: final exact canonical web-sdk root ceilings 1516029 ESM and 1450558 CJS gzip bytes, zero headroom; +281/-147 from the first admission. The two P1 security fixes justify the bytes. budget-ruling: Naomi, TC-2771.",
+    "ruling": "Naomi, 2026-11-11: exact canonical residual security-fix root ceilings 1516613 ESM and 1451136 CJS, zero headroom; +584/+578 above the prior admission. Every byte is the required session/body security work; master drift is zero. budget-ruling: Naomi, TC-2771.",
     "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
     "sourceCommits": [
       "db305013b51d73e7b9403770aecddef2ad815ba8",
       "c0a4fe6eba305b53292b82e8e0fe2502182f4611",
-      "36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2"
+      "36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2",
+      "491a6d09d3ca0db3851b12611ffa3a145c321b22",
+      "f98f0db3f919a542aee30eaf0813443c155feda1"
     ],
     "canonicalCI": {
-      "run": "43055513537",
+      "run": "43065938868",
       "jobs": [
-        "130643786835",
-        "130643787414"
+        "130680766999",
+        "130680766974"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 520,
-        "index.cjs": 23
+        "index.mjs": 1104,
+        "index.cjs": 601
       },
       "ceiling": {
-        "index.mjs": 1516029,
-        "index.cjs": 1450558
+        "index.mjs": 1516613,
+        "index.cjs": 1451136
       }
     },
-    "reason": "The eager root contains guarded lazy-loader dispatch, session/dispatch cancellation fences, routing-marker inheritance and physical dispatch hooks, fetch-owned reply cleanup, automatic post-restore background selection, browser foreground 4 s configuration, and streaming-safe metadata JSON. Scheduling, streamed response tracking and retry implementation remain in a deferred sibling. Prior root-cut source db305013b in run 43037414364 and consolidated source c0a4fe6eb in run 43041191918 measured 1515748/1450705. Final source 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2 in canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM run 43055513537 measures 1516029/1450558 (+281/-147 from c0 on the same released-master base). The two P1 fixes cancel stale-principal dispatch, acquire lanes at resolved destinations, and retain foreground leases/response ownership. Relative to TC-2234 ceilings the final admission is +520/+23; observed source growth against master is +520/+42. No scheduler implementation is pulled into root. Historical rows and owned allowance 391/861 remain unchanged.",
+    "reason": "The eager root contains guarded lazy-loader dispatch, session/dispatch cancellation fences, routing-marker inheritance and physical dispatch hooks, fetch-owned reply cleanup, automatic post-restore background selection, browser foreground 4 s configuration, and streaming-safe metadata JSON. Scheduling, streamed response tracking and retry implementation remain in a deferred sibling. Prior root-cut source db305013b in run 43037414364 and consolidated source c0a4fe6eb in run 43041191918 measured 1515748/1450705. Final source 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2 in canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM run 43055513537 measures 1516029/1450558 (+281/-147 from c0 on the same released-master base). The two P1 fixes cancel stale-principal dispatch, acquire lanes at resolved destinations, and retain foreground leases/response ownership. Relative to TC-2234 ceilings the final admission is +520/+23; observed source growth against master is +520/+42. No scheduler implementation is pulled into root. Historical rows and owned allowance 391/861 remain unchanged. Residual source 491a6d09d and master-only merge f98f0db3f919a542aee30eaf0813443c155feda1 in canonical run 43065938868 measure 1516613/1451136, identical on SQLite/PostgreSQL. Root growth +584/+578 from the prior admission binds KV readiness/builders/error metadata, SQL migration continuations and identity-qualified locks, Hooks retry sessions, standalone Encryption cancellation, Secrets vault pagination, and the Node named-key lazy proxy to entry authority; discarded SDK bodies release their slots. The named-key client implementation stays in its optional entry. Master drift is zero. Final deltas above TC-2234 ceilings are +1104/+601 and observed master growth is +1104/+620; owned charge is zero and allowance 391/861 stays unchanged.",
     "measuredGrowth": {
-      "index.mjs": 520,
-      "index.cjs": 42
+      "index.mjs": 1104,
+      "index.cjs": 620
     },
     "ownedEntry": {
       "pr": "#920",
       "ticket": "TC-2771",
       "index.mjs": 0,
       "index.cjs": 0,
-      "note": "TC-2771: zero owned charge; exact +520 ESM / +42 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43055513537 at 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2. budget-ruling: Naomi, TC-2771."
+      "note": "TC-2771: zero owned charge; exact +1104 ESM / +620 CJS measured growth is admitted by tc2771PriorityLanesRoot, canonical run 43065938868 at f98f0db3f919a542aee30eaf0813443c155feda1. budget-ruling: Naomi, TC-2771."
     }
   },
   "tc2771PriorityLanesWorker": {
     "label": "foreground/background request priority (TC-2771, #920)",
-    "ruling": "Naomi, 2026-11-11: final exact canonical worker ceiling 778382 gzip bytes, +559 from the first admission, zero headroom. The two P1 security fixes justify the bytes. budget-ruling: Naomi, TC-2771.",
+    "ruling": "Naomi, 2026-11-11: exact canonical residual security-fix worker ceiling 778555, +173 above the prior admission, zero headroom. Every byte is the required session/body security work; master drift is zero. budget-ruling: Naomi, TC-2771.",
     "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
     "sourceCommits": [
       "c0a4fe6eba305b53292b82e8e0fe2502182f4611",
-      "36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2"
+      "36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2",
+      "491a6d09d3ca0db3851b12611ffa3a145c321b22",
+      "f98f0db3f919a542aee30eaf0813443c155feda1"
     ],
     "canonicalCI": {
-      "run": "43055513537",
+      "run": "43065938868",
       "jobs": [
-        "130643786835",
-        "130643787414"
+        "130680766999",
+        "130680766974"
       ]
     },
     "worker": {
-      "delta": 1158,
-      "ceiling": 778382
+      "delta": 1331,
+      "ceiling": 778555
     },
-    "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority, plus the P1 session/dispatch fences and resolved-host foreground operation leases. Prior source c0a4fe6eb in canonical run 43041191918 measured 777823; final source 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2 in run 43055513537 measures 778382 (+559 on the unchanged master base), identical in SQLite/PostgreSQL. The source aliases and ready-module loader preserve one retry/error graph per worker; each has one nodeRetryError definition. The first consolidation retained local released-master drift attribution +57 KV/+56 replica bytes; the new canonical marginal is the required P1 correctness work. No external dependency or historical row changes."
+    "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority, plus the P1 session/dispatch fences and resolved-host foreground operation leases. Prior source c0a4fe6eb in canonical run 43041191918 measured 777823; final source 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2 in run 43055513537 measures 778382 (+559 on the unchanged master base), identical in SQLite/PostgreSQL. The source aliases and ready-module loader preserve one retry/error graph per worker; each has one nodeRetryError definition. The first consolidation retained local released-master drift attribution +57 KV/+56 replica bytes; the new canonical marginal is the required P1 correctness work. No external dependency or historical row changes. Residual source 491a6d09d3ca0db3851b12611ffa3a145c321b22 and master-only merge f98f0db3f919a542aee30eaf0813443c155feda1 in canonical run 43065938868 measure 778555 (+173 from the prior admission), identical on SQLite/PostgreSQL. KV entry/readiness session snapshots, captured deferred builders and SDK-owned body cleanup execute in this worker. SQL and DuckDB remain excluded. Master drift is zero; no historical rows or dependencies change."
   },
   "tc2771PriorityLanesReplicaWorker": {
     "label": "foreground/background request priority (TC-2771, #920)",
-    "ruling": "Naomi, 2026-11-11: final exact canonical replicaWorker ceiling 772302 gzip bytes, +570 from the first admission, zero headroom. The two P1 security fixes justify the bytes. budget-ruling: Naomi, TC-2771.",
+    "ruling": "Naomi, 2026-11-11: exact canonical residual security-fix replicaWorker ceiling 772512, +210 above the prior admission, zero headroom. Every byte is the required session/body security work; master drift is zero. budget-ruling: Naomi, TC-2771.",
     "base": "1533d3bb3c0cff47d8722d809363554fefa98594",
     "sourceCommits": [
       "c0a4fe6eba305b53292b82e8e0fe2502182f4611",
-      "36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2"
+      "36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2",
+      "491a6d09d3ca0db3851b12611ffa3a145c321b22",
+      "f98f0db3f919a542aee30eaf0813443c155feda1"
     ],
     "canonicalCI": {
-      "run": "43055513537",
+      "run": "43065938868",
       "jobs": [
-        "130643786835",
-        "130643787414"
+        "130680766999",
+        "130680766974"
       ]
     },
     "replicaWorker": {
-      "delta": 1196,
-      "ceiling": 772302
+      "delta": 1406,
+      "ceiling": 772512
     },
-    "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority, plus the P1 session/dispatch fences and resolved-host foreground operation leases. Prior source c0a4fe6eb in canonical run 43041191918 measured 771732; final source 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2 in run 43055513537 measures 772302 (+570 on the unchanged master base), identical in SQLite/PostgreSQL. The source aliases and ready-module loader preserve one retry/error graph per worker; each has one nodeRetryError definition. The first consolidation retained local released-master drift attribution +57 KV/+56 replica bytes; the new canonical marginal is the required P1 correctness work. No external dependency or historical row changes."
+    "reason": "Executed per-host lanes / Web Locks, streamed-body slot lifetime, NODE_BUSY pause and fetch priority, plus the P1 session/dispatch fences and resolved-host foreground operation leases. Prior source c0a4fe6eb in canonical run 43041191918 measured 771732; final source 36fb6e1b95fc1a7ca7627aeea7975ad3e4aa31f2 in run 43055513537 measures 772302 (+570 on the unchanged master base), identical in SQLite/PostgreSQL. The source aliases and ready-module loader preserve one retry/error graph per worker; each has one nodeRetryError definition. The first consolidation retained local released-master drift attribution +57 KV/+56 replica bytes; the new canonical marginal is the required P1 correctness work. No external dependency or historical row changes. Residual source 491a6d09d3ca0db3851b12611ffa3a145c321b22 and master-only merge f98f0db3f919a542aee30eaf0813443c155feda1 in canonical run 43065938868 measure 772512 (+210 from the prior admission), identical on SQLite/PostgreSQL. KV entry/readiness session snapshots, captured deferred builders and SDK-owned body cleanup execute in this worker. SQL and DuckDB remain excluded. Master drift is zero; no historical rows or dependencies change."
   }
 }
