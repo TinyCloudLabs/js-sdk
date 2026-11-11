@@ -148,6 +148,37 @@ async function withBrowserOrigin<T>(run: (
 }
 
 describe("replica gate: restore", () => {
+  test("restores from stored authority with no requests before a replica consumer", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = replicatedNode(dir);
+    const ordinary = new TinyCloudNode({
+      host: RESTORE_HOST,
+      tinycloudRegistryUrl: locationRegistry.url.origin,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+    const realFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(String(input));
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      await ordinary.restoreSession(proof);
+      await node.restoreSession({ ...proof, replicaStamp });
+      expect(node.spaceId).toBe(proof.spaceId);
+      expect(requests).toEqual([]);
+      await node.replication!.status();
+      expect(requests).toContain(`${RESTORE_HOST}/info`);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("restores when the persisted stamp matches the profile gate", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
@@ -201,12 +232,13 @@ describe("replica gate: restore", () => {
     await node.restoreSession({ ...proof, replicaStamp });
     expect(node.address).toBe(proof.address);
     expect(node.spaceId).toBe(proof.spaceId);
-    expect(node.replicaStamp).toBeUndefined();
+    expect(node.replicaStamp).toEqual(replicaStamp);
     expect((await node.replication!.status())[0]).toMatchObject({
       state: "gated",
       gate: "gate_unavailable",
       errorCode: "REPLICA_GATED",
     });
+    expect(node.replicaStamp).toBeUndefined();
   });
 
   test("restores the network session but gates a stamp that predates sign-out", async () => {
@@ -407,6 +439,8 @@ describe("browser replica gate without a profile directory", () => {
       });
 
       await node.restoreSession({ ...proof, replicaStamp: stamp });
+      expect(boundStamp).toBeUndefined();
+      await node.replication!.status();
       expect(boundStamp).toEqual(stamp);
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
       await node.signOut();

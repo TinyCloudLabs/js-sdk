@@ -349,6 +349,11 @@ export class TinyCloudWeb {
   private prepareSignInToken = 0;
   /** How long a restore waits for the node's hosting answer. */
   private spaceHostingCapMs = 5_000;
+  private restoredNetworkWork?: {
+    hosting: Promise<void>;
+    cachedHosting: SpaceHosting;
+    isCurrent(): boolean;
+  };
   private preparedSignIn?: {
     node: TinyCloudNode;
     request: PreparedOpenKeyAuthorization;
@@ -780,7 +785,11 @@ export class TinyCloudWeb {
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
   /** The node's last answer for whether the primary space is hosted (`"unknown"` until it has answered). */
-  get spaceHosting(): SpaceHosting { return this._node?.spaceHosting ?? "unknown"; }
+  get spaceHosting(): SpaceHosting {
+    const observed = this._node?.spaceHosting ?? "unknown";
+    const work = this.restoredNetworkWork;
+    return observed === "unknown" && work?.isCurrent() ? work.cachedHosting : observed;
+  }
   get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
@@ -955,6 +964,9 @@ export class TinyCloudWeb {
       const node = await this.ensureNode();
       assertNotSignedOut();
       const was = node.spaceId;
+      const priorHosting = this.spaceHosting;
+      const priorHost = node.hosts?.[0];
+      const priorAccount = node.restorableSession;
       try {
         await node.restoreSession(restoreDataFromPersisted(loaded.data));
       } finally {
@@ -962,32 +974,16 @@ export class TinyCloudWeb {
         if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
       }
       assertNotSignedOut();
-      // Grants the panel requested earlier come back with the session: the same key, no signer. Each is verified from
-      // its signed bytes and must be exactly a panel grant. Never fails the restore and never waits long for the node.
-      const grantStore = this.runtimeGrantStore();
-      if (grantStore !== undefined) {
-        const owner = { address: loaded.data.address, chainId: loaded.data.chainId };
-        await reuseRuntimeGrants(
-          grantStore,
-          restoreAddress,
-          (grant) =>
-            activateValidatedRuntimeDelegationOnNode(node, grant, {
-              host: node.hosts[0]!,
-              authorize: (permissions) => {
-                if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
-                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
-                }
-                return true;
-              },
-            }),
-          { isCurrent: () => this.signOutCount === signOuts && this.signOutInFlight === 0 },
-        );
-      }
-      // One bounded node read: the restored session's primary space may not be hosted. Never prompts, never fails the restore.
-      await this.probeSpaceHosting(node);
-      assertNotSignedOut();
       this.resetSessionScopedCaches();
-      this.uiClient.armPrefetch(this);
+      const data = loaded.data;
+      const restoredHost = node.hosts?.[0];
+      const cachedHosting = priorAccount?.address === data.address && priorAccount.chainId === data.chainId &&
+        was === node.spaceId && priorHost === restoredHost && priorHosting !== "unknown"
+        ? priorHosting
+        : restoredHost && data.tinycloudHosts?.[0] === restoredHost && data.tinycloudSession?.spaceId === node.spaceId
+          ? data.spaceHosting ?? "unknown"
+          : "unknown";
+      this.startRestoredNetworkWork(node, restoreAddress, data, cachedHosting, signOuts);
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -1010,6 +1006,53 @@ export class TinyCloudWeb {
     } finally {
       this.untrackRestoreAddress(restoreAddress);
     }
+  }
+
+  private startRestoredNetworkWork(
+    node: TinyCloudNode,
+    address: string,
+    data: PersistedSessionData,
+    cachedHosting: SpaceHosting,
+    signOuts: number,
+  ): void {
+    const session = node.restorableSession;
+    const nextTask = new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const isCurrent = () => this.restoredNetworkWork === work && this._node === node &&
+      node.restorableSession === session && this.signOutCount === signOuts && this.signOutInFlight === 0;
+    const work: NonNullable<TinyCloudWeb["restoredNetworkWork"]> = {
+      cachedHosting,
+      isCurrent,
+      hosting: nextTask.then(async () => {
+        if (!isCurrent()) return;
+        await this.probeSpaceHosting(node);
+        if (isCurrent()) work.cachedHosting = "unknown";
+      }),
+    };
+    this.restoredNetworkWork = work;
+    void nextTask.then(async () => {
+      if (!isCurrent()) return;
+      const grantStore = this.runtimeGrantStore();
+      if (grantStore !== undefined) {
+        const owner = { address: data.address, chainId: data.chainId };
+        await reuseRuntimeGrants(
+          grantStore,
+          address,
+          (grant) =>
+            activateValidatedRuntimeDelegationOnNode(node, grant, {
+              host: node.hosts[0]!,
+              authorize: (permissions) => {
+                if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
+                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
+                }
+                return true;
+              },
+            }),
+          { isCurrent },
+        );
+      }
+    }).finally(() => {
+      if (isCurrent()) this.uiClient.armPrefetch(this);
+    }).catch(() => undefined);
   }
 
   /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */
@@ -1059,6 +1102,8 @@ export class TinyCloudWeb {
     const cancellation = () => new Error("Space hosting was cancelled by sign-out.");
     try {
       return await this.dispatchCurrentNode(async (node, assertCurrent) => {
+        await this.restoredNetworkWork?.hosting;
+        assertCurrent();
         const hosting = node.spaceHosting;
         if (hosting !== "not-hosted") return hosting;
         const session = node.restorableSession;
@@ -1159,6 +1204,7 @@ export class TinyCloudWeb {
     if (restored.status === "restored" && restored.session) {
       const permissions = this.configuredManifestPermissions(node);
       if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
+        await this.restoredNetworkWork?.hosting;
         assertCurrent();
         return;
       }
@@ -1228,6 +1274,7 @@ export class TinyCloudWeb {
         assertNotSignedOut();
         const permissions = this.configuredManifestPermissions(restoredNode);
         if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
+          await this.restoredNetworkWork?.hosting;
           assertNotSignedOut();
           return restoredNode.spaceHosting === "not-hosted"
             ? this.restoredSessionNotHosted(restored.session)
@@ -1240,6 +1287,7 @@ export class TinyCloudWeb {
       node = await this.ensureNode();
       assertNotSignedOut();
     }
+    this.restoredNetworkWork = undefined;
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
     try {
@@ -1301,6 +1349,7 @@ export class TinyCloudWeb {
       closeActiveModal();
       this.runtimeSigner = undefined;
       this.spaceHostingInFlight = undefined;
+      this.restoredNetworkWork = undefined;
       this.invalidatePreparedSignIn();
       this.signOutInFlight++;
       this.persistedRestoreBlocked = true;
