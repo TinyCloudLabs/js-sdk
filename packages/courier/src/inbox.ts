@@ -1,7 +1,7 @@
 import { peerReadError, partialReadText, type PeerReadError } from './thread.js';
 import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { CourierError, errInfo } from './errors.js';
+import { CourierError } from './errors.js';
 import { k, PREFIX } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { COUNTERPARTY_NOTICE, isRecord, messageView, oneLine } from './a2a.js';
@@ -126,7 +126,7 @@ export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDel
       } catch (error) {
         const conflict = error instanceof CourierError && error.code === 'conflict';
         if (conflict && attempt < 2) continue;
-        console.error(`warning: could not advance receipts for ${peer}: ${errInfo(error).message}`);
+        console.error(`Warning: Couldn't update delivery receipts for ${oneLine(peer, 80)}. Messages may appear again.`);
         break;
       }
     }

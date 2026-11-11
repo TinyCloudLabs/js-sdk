@@ -61,8 +61,8 @@ Threads (agents run these):
               [--intent request|ask|answer|update|inform] [--ask "…"]… [--constraint "…"]…
               [--reply-to <messageId>] [--task-ref <taskId>]…
   inbox [--json] [--peek]          New counterparty messages; --peek skips receipt updates
-  read <threadId> [--peer p] [--json]
-                                   The merged thread: both sides' messages + tasks
+  read <threadId> [--peer p] [--message id]… [--json]
+                                   The merged archive; --message reads exact messages only (requires --peer; max 20).
   task <taskId|new> --peer p --thread <id> --state <s> [--note …] [--artifact f]… [--ask a1]
                                    Create or update a task (A2A states; updates use if-match)
   request <threadId> --peer p --task <id> --verb merge|deploy|publish|spend|other --target <t>

@@ -19,7 +19,7 @@ export const COMMAND_FLAGS: Record<string, readonly string[]> = {
   revoke: [],
   send: ['new', 'thread', 'intent', 'ask', 'constraint', 'reply-to', 'task-ref', ...TEXT],
   inbox: ['json', 'peek'],
-  read: ['peer', 'json'],
+  read: ['peer', 'message', 'json'],
   task: ['peer', 'thread', 'state', 'note', 'artifact', 'ask', 'request-message'],
   request: ['task', 'why', 'peer', 'verb', 'target', 'summary', 'head-sha', 'base', 'risk', 'action'],
   orders: ['json'],
