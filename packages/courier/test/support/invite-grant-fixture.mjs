@@ -36,7 +36,7 @@ const bindingLine = (request) => `Request ID: urn:tinycloud:approval-request:${r
  * for `holder`, ending `lifetimeMs` from `issuedAt`. `bind` puts the request's `Request ID:` field into the signed message
  * (a string inserts that exact line; false leaves it out; `lines` adds raw lines for duplicate/malformed cases).
  */
-export async function inviteGrant(owner, holder, { shareId = shareIdOf(), request, bind = true, lines = [], lifetimeMs = 3_000_000, issuedAt = new Date(), rawAbilities, networkOwner = owner.did } = {}) {
+export async function inviteGrant(owner, holder, { shareId = shareIdOf(), request, bind = true, lines = [], lifetimeMs = 3_000_000, issuedAt = new Date(), rawAbilities, networkOwner = owner.did, rewrite } = {}) {
   const network = ownerEncryptionNetwork(networkOwner);
   const prepared = wasm.prepareSession({
     abilities: {}, rawAbilities: rawAbilities ?? { [`${network}/share/${shareId}`]: KEY_ACTIONS },
@@ -46,6 +46,8 @@ export async function inviteGrant(owner, holder, { shareId = shareIdOf(), reques
   let siwe = prepared.siwe;
   const extra = [...(bind && request ? [typeof bind === 'string' ? bind : bindingLine(request)] : []), ...lines];
   if (extra.length > 0) siwe = siwe.replace(/\nResources:/, `\n${extra.join('\n')}\nResources:`);
+  // A test may replace lines of the canonical text before the owner signs it (the signer accepts what the verifier's parser does not).
+  if (rewrite) siwe = rewrite(siwe, { binding: request ? bindingLine(request) : undefined });
   const signature = await owner.signer.signMessage(siwe);
   const session = wasm.completeSessionSetup({ ...prepared, siwe, signature });
   return {

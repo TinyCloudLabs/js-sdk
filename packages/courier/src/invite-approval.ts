@@ -118,6 +118,13 @@ export function invitationContext(pending: PendingInvite): ShareInvitationApprov
   };
 }
 
+/** A host that could not be reached (or a registry that did not answer): says nothing about the approval, so it is retried, never refused. */
+const TRANSIENT_ACTIVATION_CODES = new Set(['NODE_NOT_RESPONDING', 'registry_unavailable', 'ACTIVATION_TRANSPORT_FAILED']);
+function activationUnavailable(error: unknown): boolean {
+  const { reason, code } = (error ?? {}) as { reason?: unknown; code?: unknown };
+  return reason === 'activation_unavailable' || (typeof code === 'string' && TRANSIENT_ACTIVATION_CODES.has(code));
+}
+
 /** A share key id belongs to exactly one invitation, so a stored approval is never reusable for a second one. */
 function keyIdUsedElsewhere(shareId: string, invitationId: string): boolean {
   let names: string[];
@@ -175,7 +182,11 @@ async function activateInviteGrant(node: TinyCloudNode, profile: Profile, pendin
       authorize: (effective) => { try { return assertInvitationApprovalGrant(effective, times, bounds) === shareId; } catch { return false; } },
     });
   } catch (error) {
-    throw new CourierError('bad-grant', `The invitation approval could not be installed for this Courier key (${(error as { code?: string }).code ?? 'refused'}).`);
+    // The host could not be reached (or answered with a transient status): the approval is fine and is kept; the next run installs it.
+    if (activationUnavailable(error)) {
+      throw new CourierError('activation-unavailable', 'The TinyCloud host could not be reached to install the invitation approval; nothing was sent. Run the command again to continue with the same approval.');
+    }
+    throw new CourierError('bad-grant', `The invitation approval could not be installed for this Courier key (${(error as { code?: string; reason?: string }).reason ?? (error as { code?: string }).code ?? 'refused'}).`);
   }
   return { shareId, expiresAt: verified.expiresAt };
 }
@@ -244,8 +255,9 @@ export async function obtainInviteKey(options: ObtainOptions): Promise<ObtainRes
       try {
         activated = await activateInviteGrant(node, profile, pending, result.payload, clock());
       } catch (error) {
-        // A result that is not this request's valid approval is never retried against the same request.
-        if (error instanceof CourierError) closePending(pending);
+        // A result that is not this request's valid approval is never retried against the same request. A host that could not be reached
+        // says nothing about the approval, so the pending invitation stays and the result is fetched again on the next run.
+        if (error instanceof CourierError && error.code !== 'activation-unavailable') closePending(pending);
         throw error;
       }
       if (keyIdUsedElsewhere(activated.shareId, pending.invitationId)) {
@@ -290,7 +302,8 @@ export function claimInviteSend(pending: PendingInvite): void {
     fs.closeSync(fs.openSync(path.join(pendingDir(), `${pending.invitationId}.sending`), 'wx', 0o600));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      closePending(pending);
+      // A concurrent run that already finished the send has recorded it as sent: that is never overwritten with closed.
+      if (loadPendingInvite(pending.invitationId)?.status !== 'sent') closePending(pending);
       throw new CourierError('invite-in-progress', 'This invitation was already sent or an earlier attempt did not finish; nothing more was sent. Run the command again to start a new invitation (a new owner approval).');
     }
     throw error;

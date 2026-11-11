@@ -8,7 +8,7 @@ import { assertApprovalRequestBinding, assertInvitationApprovalGrant, parseAppro
 import { PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
 import { runInvite as cmdInvite } from '../dist/invitation.js';
-import { loadInviteGrant, loadPendingInvite } from '../dist/invite-approval.js';
+import { claimInviteSend, loadInviteGrant, loadPendingInvite } from '../dist/invite-approval.js';
 import { loadGrant, profileDir, saveKey, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 import { DAY, HOST, KEY_ACTIONS, bodyCidOf, courierNodeFor, inviteGrant, newAgent, newOwner, requestIdOf, shareIdOf, stubActivation } from './support/invite-grant-fixture.mjs';
@@ -100,6 +100,13 @@ test('a Request ID injected where the EIP-4361 parser does not read it never bin
     ['inside the address line', siwe.replace(/(\n0x[0-9a-fA-F]{40})\n/, `$1\n${line}\n`)]]) {
     assert.throws(() => assertApprovalRequestBinding(text, mine), { code: 'bad-grant' }, name);
     assert.throws(() => parseApprovalSiwe(text), { code: 'bad-grant' }, `${name} (parse)`);
+  }
+  // REPLACEMENT of the blank lines (index 2 and 4) on the real owner-signed unbound text: the attack shape the signer accepts.
+  for (const index of [2, 4]) {
+    for (const replacement of [line, `Issued At: ${new Date(Date.now() - 10 * DAY).toISOString()}`]) {
+      const replaced = rows.map((row, at) => (at === index ? replacement : row)).join('\n');
+      assert.throws(() => assertApprovalRequestBinding(replaced, mine), { code: 'bad-grant' }, `replace ${index} with ${replacement.slice(0, 12)}`);
+    }
   }
   // The unmodified unbound message parses but carries no binding.
   assert.equal(parseApprovalSiwe(siwe).requestId, undefined);
@@ -264,7 +271,45 @@ test('two runs racing on one approved invitation send exactly once', async () =>
   assert.equal(results.filter((error) => error?.code === 'invite-in-progress').length, 1);
 });
 
+test('a claim that finds the marker never overwrites a send already recorded as sent', async () => {
+  const { argv, events, deps, approve } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [context] = events.created;
+  approve({ lifetimeMs: lifetimeFor(context) });
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(events.sent.length, 1);
+  assert.equal(loadPendingInvite(context.invitationId).status, 'sent');
+  // A concurrent run holding a stale in-memory copy still says awaiting: its claim is refused and the recorded status is untouched.
+  const stale = { ...loadPendingInvite(context.invitationId), status: 'awaiting' };
+  assert.throws(() => claimInviteSend(stale), { code: 'invite-in-progress' });
+  assert.equal(loadPendingInvite(context.invitationId).status, 'sent');
+});
+
+test('a host that cannot be reached while installing the approval keeps the pending invitation; the next run installs the same approval', async () => {
+  const { argv, events, deps, approve } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [context] = events.created;
+  approve({ lifetimeMs: lifetimeFor(context) });
+  const working = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (new URL(input instanceof Request ? input.url : String(input)).pathname === '/delegate') throw new TypeError('fetch failed');
+    return working(input, init);
+  };
+  let down;
+  try { down = await failure(quiet(() => cmdInvite(argv(), deps))); } finally { globalThis.fetch = working; }
+  assert.equal(down?.code, 'activation-unavailable', down?.message);
+  assert.equal(loadPendingInvite(context.invitationId).status, 'awaiting', 'the approved pending invitation is kept');
+  assert.equal(events.sent.length, 0);
+  assert.equal(events.created.length, 1, 'no new approval is requested');
+  assert.equal(fs.existsSync(path.join(profileDir(), 'pending-invites', `${context.invitationId}.sending`)), false, 'nothing was claimed');
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(events.sent.length, 1, 'the same approval is used once the host answers');
+  assert.equal(events.sent[0].body.id, context.invitationId);
+  assert.equal(events.created.length, 1);
+});
+
 // What is refused, and that a refused result closes the pending invitation but never deletes anything approved.
+const replaceRow = (index, replacement) => (siwe, { binding }) => siwe.split('\n').map((row, at) => (at === index ? replacement(binding) : row)).join('\n');
 const lifetimeFor = (context) => Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000;
 for (const [name, options, code] of [
   ['an approval issued to another key', (context) => ({ holder: stranger, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
@@ -272,6 +317,11 @@ for (const [name, options, code] of [
   ['an approval with more authority than one key', (context) => ({ rawAbilities: { [keyPath(shareIdOf())]: KEY_ACTIONS, [keyPath(shareIdOf())]: KEY_ACTIONS }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
   ['an approval that outlasts the invitation', (context) => ({ lifetimeMs: lifetimeFor(context) + 2 * 3_600_000 }), 'grant-too-long'],
   ['an approval signed without the request binding', (context) => ({ bind: false, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+  // The owner really signs a message whose blank line 2 or 4 is REPLACED (not inserted) by a Request ID or Issued At line: the strict parse refuses it, nothing is installed.
+  ...[2, 4].flatMap((index) => [
+    [`an approval whose blank line ${index} is replaced by the Request ID`, (context) => ({ bind: false, rewrite: replaceRow(index, (binding) => binding), lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+    [`an approval whose blank line ${index} is replaced by an Issued At`, (context) => ({ rewrite: replaceRow(index, () => `Issued At: ${new Date(Date.now() - 10 * DAY).toISOString()}`), lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+  ]),
   ['an approval whose binding names another request id', (context) => ({ request: { requestId: requestIdOf(), bodyCid: 'x' }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
 ]) {
   test(`email invite refuses ${name}: nothing is created or sent and the pending invitation is closed`, async () => {
