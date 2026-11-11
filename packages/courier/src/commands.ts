@@ -500,7 +500,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Pro
 
 async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void): Promise<PortableDelegation | undefined> {
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true });
-  if (result.reason === 'no-extension') fail('renew-throttled', `Current access cannot be extended within your saved approval. Run \`${cmd('init --request')}\` to request new approval.`);
+  if (result.reason === 'no-extension') fail('renew-throttled', `Courier can't extend this access under your current approval. Run \`${cmd('init --request')}\` to request a new one.`);
   if (result.state === 'lapsed') fail('peer-expired', `Sharing with ${oneLine(peer.handle)} has expired. A new pairing is required.`);
   if (result.state === 'revoked' || result.state === 'owner-revoked') fail('peer-revoked', `Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
   if (result.state === 'unavailable') fail('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
