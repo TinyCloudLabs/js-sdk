@@ -69,6 +69,7 @@
     "tc-2671-share-sender-settings",
     "tc-2687-published-signin",
     "tc-2691-host-expiry",
+    "tc-2748-courier-read-isolation",
     "tc2380-q2",
     "tidy-names-openkey-grant",
     "vfs-bridge-timeout"
