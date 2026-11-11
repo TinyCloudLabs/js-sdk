@@ -26,7 +26,12 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { verifyMessage } from "viem";
 import { pkhDid } from "./identity";
-import { canonicalLocationPayload } from "./location";
+import {
+  canonicalLocationPayload,
+  validateLocationRecordV2,
+  verifyLocationRecordV2,
+  type LocationRecordV2,
+} from "./location";
 
 export type RegistryVerdictStatus = "registered" | "unregistered" | "unavailable";
 
@@ -67,8 +72,9 @@ export type RegistryUnavailableReason =
   | "invalid-signature"
   /** The record's sequence is below the remembered sequence. */
   | "rollback"
-  /** The registry said "not found" for a subject remembered as registered. */
-  | "not-found-after-registered";
+  | "not-found-after-registered"
+  /** The owner has only a recognized record in the legacy registry format. */
+  | "unsupported-format";
 
 export interface RegisteredRegistryVerdict {
   readonly status: "registered";
@@ -76,8 +82,12 @@ export interface RegisteredRegistryVerdict {
   readonly source: RegistryVerdictSource;
   /** Sequence of the accepted record. Callers persist the maximum they have seen. */
   readonly sequence: number;
+  /** Present for accepted signed-v2 records; absent for legacy classifiers. */
+  readonly record?: LocationRecordV2;
   /** Listed hosts in record order. Empty when the record lists no usable host. */
   readonly hosts: readonly RegistryHost[];
+  /** Routing used a reverified cache younger than one hour after an eligible outage. */
+  readonly offline?: true;
 }
 
 export interface UnregisteredRegistryVerdict {
@@ -85,6 +95,8 @@ export interface UnregisteredRegistryVerdict {
   readonly subject: string;
   readonly source: RegistryVerdictSource;
   readonly hosts: readonly [];
+  /** Cold transport outage compatibility, not an authenticated registry absence. */
+  readonly offline?: true;
 }
 
 export interface UnavailableRegistryVerdict {
@@ -119,6 +131,8 @@ export interface ClassifyRegistryLookupOptions {
    * or an older record is `unavailable`, never `unregistered`.
    */
   rememberedSequence?: number | null;
+  /** v1 remains available to non-routing callers; owner routing requests v2. */
+  recordVersion?: 1 | 2;
 }
 
 export type RegistryLookupInputErrorCode =
@@ -164,17 +178,14 @@ const RFC3339_DATE_TIME =
   /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(Z|[+-]([0-9]{2}):([0-9]{2}))$/;
 
 /**
- * Classify one off-chain location registry v1 response for `subject`.
+ * Classify one off-chain location registry response for `subject`. The
+ * default is v1 for legacy non-routing callers; v2 owner routing selects
+ * `recordVersion: 2` and receives a verified owner record with node-bound
+ * hosts.
  *
- * Checks run in this order, and the first failure decides the reason:
- * transport (`network-error`, `timeout`); status other than 200 or 404
- * (`http-status`); body over 65536 UTF-8 bytes (`oversize-response`). A 404
- * is `unregistered` only if its body, with leading and trailing JSON
- * whitespace removed, is exactly {@link REGISTRY_NOT_FOUND_BODY} and no
- * sequence is remembered. A 200 must be strict JSON holding a valid v1
- * `record` (`malformed-response`) for exactly `subject`
- * (`subject-mismatch`) whose signature verifies (`invalid-signature`) and
- * whose sequence is not below the remembered one (`rollback`).
+ * Both formats share strict transport, status, body-size, not-found, and
+ * rollback classification. V2 additionally rejects unknown fields and binds
+ * owner membership, node origins, and encryption destination to its signature.
  *
  * A 404 is unauthenticated: its exact bytes are the only evidence that the
  * registry itself answered.
@@ -256,6 +267,52 @@ export async function classifyRegistryLookup(
     }
     return { status: "unregistered", subject, source: "offchain", hosts: [] };
   }
+
+  if (options.recordVersion === 2) {
+    let record: LocationRecordV2;
+    try {
+      record = parseRecordResponseV2(response.body);
+    } catch (error) {
+      return unavailable(
+        "malformed-response",
+        error instanceof Error ? error.message : "location registry response is invalid",
+      );
+    }
+    if (registryOwnerKeyV2(record.subject) !== registryOwnerKeyV2(subject)) {
+      return unavailable(
+        "subject-mismatch",
+        "location record owner does not match requested owner key",
+      );
+    }
+    let signatureValid = false;
+    try {
+      signatureValid = await verifyLocationRecordV2(record);
+    } catch {
+      signatureValid = false;
+    }
+    if (!signatureValid) {
+      return unavailable("invalid-signature", "location record signature is invalid");
+    }
+    if (remembered !== null && record.sequence < remembered) {
+      return unavailable(
+        "rollback",
+        `location record sequence ${record.sequence} is below remembered sequence ${remembered}`,
+      );
+    }
+    return {
+      status: "registered",
+      subject,
+      source: "offchain",
+      sequence: record.sequence,
+      record,
+      hosts: record.nodes.map(({ did, url }) => ({
+        nodeDid: did,
+        urls: [url],
+        source: "offchain",
+      })),
+    };
+  }
+
 
   let record: V1Record;
   try {
@@ -455,6 +512,32 @@ function parseStrictJson(text: string): JsonValue {
   const value = parseValue(0);
   skipWhitespace();
   if (i !== text.length) fail("trailing data");
+  return value;
+}
+
+/** Settled chain-independent key shared by lookup, cache storage and signature owner binding. */
+export function registryOwnerKeyV2(subject: string): string {
+  return subject.startsWith("did:pkh:")
+    ? subject.slice(subject.lastIndexOf(":") + 1)
+    : subject;
+}
+
+function parseRecordResponseV2(body: string): LocationRecordV2 {
+  const root = parseStrictJson(body);
+  if (!(root instanceof Map) || root.size !== 1 || !root.has("record")) {
+    throw new SyntaxError("location registry v2 response must contain only a record field");
+  }
+  return validateLocationRecordV2(toNativeJson(root.get("record")!));
+}
+
+function toNativeJson(value: JsonValue): unknown {
+  if (value instanceof JsonInteger) return Number(value.lexeme);
+  if (Array.isArray(value)) return value.map(toNativeJson);
+  if (value instanceof Map) {
+    return Object.fromEntries(
+      Array.from(value, ([key, entry]) => [key, toNativeJson(entry)]),
+    );
+  }
   return value;
 }
 

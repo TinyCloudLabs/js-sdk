@@ -5,11 +5,14 @@ const owner = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
 const network = `urn:tinycloud:encryption:${owner}:default`;
 const ID = "a1".repeat(16);
 const now = Date.parse("2026-11-11T12:00:00.000Z");
-const accept = new Date(now + 3_600_000).toISOString();
-const inHour = new Date(now + 3_000_000).toISOString();
+const iso = (ms: number) => new Date(ms).toISOString();
+const accept = iso(now + 3_600_000);
+const issued = iso(now - 1000);
+const inHour = iso(now + 3_000_000);
 const entry = (path: string, actions: string[], extra: Record<string, unknown> = {}) => ({ service: "tinycloud.encryption", space: "encryption", path, actions, ...extra });
 const both = ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"];
-const read = (permissions: unknown[], expiresAt = inHour) => invitationKeyFromGrant(permissions as never, { ownerDid: owner, expiresAt, acceptanceExpiresAt: accept, now });
+const read = (permissions: unknown[], expiresAt = inHour, issuedAt = issued, acceptance = accept) =>
+  invitationKeyFromGrant(permissions as never, { ownerDid: owner, issuedAt, expiresAt, acceptanceExpiresAt: acceptance, now });
 
 test("one key.create + decrypt pair on one canonical key yields its id, whichever space it is reported under", () => {
   expect(read([entry(`${network}/share/${ID}`, both)])).toBe(ID);
@@ -32,10 +35,14 @@ test.each([
   expect(() => read(permissions)).toThrow(/invitation/);
 });
 
-test("refuses an approval that has expired, runs past the acceptance window, or lasts more than a day", () => {
-  const key = [entry(`${network}/share/${ID}`, both)];
-  expect(() => read(key, new Date(now - 1000).toISOString())).toThrow(/expired/);
-  expect(() => read(key, new Date(now + 3_600_000 + 6 * 60_000).toISOString())).toThrow(/longer than the invitation/);
-  expect(() => invitationKeyFromGrant(key as never, { ownerDid: owner, expiresAt: new Date(now + 2 * 86_400_000).toISOString(), acceptanceExpiresAt: new Date(now + 3 * 86_400_000).toISOString(), now }))
-    .toThrow(/longer than the invitation/);
+const key = [entry(`${network}/share/${ID}`, both)];
+
+test("the bounds are exact: expired, one second past the acceptance window, or lasting more than a day is refused; the window's last second is accepted", () => {
+  expect(() => read(key, iso(now - 1000))).toThrow(/expired/);
+  expect(read(key, accept)).toBe(ID);
+  expect(() => read(key, iso(Date.parse(accept) + 1000))).toThrow(/longer than the invitation/);
+  const longIssue = iso(now - 86_400_000 + 1000);
+  expect(read(key, iso(now + 1000), longIssue, iso(now + 2 * 86_400_000))).toBe(ID);
+  expect(() => read(key, iso(now + 2000), longIssue, iso(now + 2 * 86_400_000))).toThrow(/longer than the invitation/);
+  expect(() => read(key, inHour, iso(now + 600_000))).toThrow(/future/);
 });

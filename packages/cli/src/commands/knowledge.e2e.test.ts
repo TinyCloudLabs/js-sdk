@@ -7,10 +7,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { appsAgentScopeNotice, describeAction } from "../lib/apps-agent-preset.js";
+import { startUnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+import type { UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+import { KNOWLEDGE_CATALOG_FIXTURE_ENV, startKnowledgeCatalogFixture } from "../../test-support/knowledge-catalog-fixture";
+import type { KnowledgeCatalogFixture } from "../../test-support/knowledge-catalog-fixture";
 
 // Runs against a real TinyCloud node binary (the variable the node-sdk e2e tests use).
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const cliEntry = join(import.meta.dir, "../index.ts");
+const TEST_BOOTSTRAP = join(import.meta.dir, "../../../operations/test-support/test-bootstrap.mjs");
+const CATALOG_PRELOAD = join(import.meta.dir, "../../test-support/knowledge-catalog-fixture.ts");
 
 const HEALTH = "xyz.test.health";
 const RECIPES = "xyz.test.recipes";
@@ -38,6 +44,8 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
   let host: string;
   let node: ChildProcess;
   let ownerSpace: string;
+  let registry: UnregisteredLocationRegistry;
+  let catalog: KnowledgeCatalogFixture;
 
   const home = (profile: string) => join(root, `home-${profile}`);
 
@@ -45,7 +53,12 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     const env: Record<string, string | undefined> = { ...process.env, HOME: home(profile), TC_HOME: home(profile) };
     delete env.TC_HOST;
     delete env.TC_PRIVATE_KEY;
-    const child = Bun.spawn([process.execPath, cliEntry, "--host", host, "--profile", profile, ...args], {
+    const preloads = ["--preload", TEST_BOOTSTRAP];
+    if (args[0] === "apps" && args[1] === "install") {
+      env[KNOWLEDGE_CATALOG_FIXTURE_ENV] = catalog.descriptorPath;
+      preloads.push("--preload", CATALOG_PRELOAD);
+    }
+    const child = Bun.spawn([process.execPath, ...preloads, cliEntry, "--host", host, "--profile", profile, ...args], {
       env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, exitCode] = await Promise.all([
@@ -79,7 +92,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
   async function newAgent(name: string): Promise<void> {
     await mkdir(home(name), { recursive: true });
-    const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent"]);
+    const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent", "--registry-url", registry.url.origin]);
     // A setup failure names its cause instead of an anonymous "Expected: 0".
     if (created.exitCode !== 0) throw new Error(`profile create ${name} exited ${created.exitCode}: ${created.stderr.slice(0, 500)}`);
   }
@@ -92,6 +105,8 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "tc-knowledge-e2e-"));
+    registry = startUnregisteredLocationRegistry();
+    catalog = await startKnowledgeCatalogFixture(root);
     const port = await new Promise<number>((resolve, reject) => {
       const server = createServer();
       server.once("error", reject);
@@ -127,7 +142,10 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
     // The user: a local-key owner profile that installed two apps' bundles and one table.
     await mkdir(home("owner"), { recursive: true });
-    expect((await cli("owner", ["init", "--key-only"])).exitCode).toBe(0);
+    expect((await cli("owner", ["init", "--name", "owner", "--key-only"])).exitCode).toBe(0);
+    const ownerProfilePath = join(home("owner"), ".tinycloud", "profiles", "owner", "profile.json");
+    const ownerProfile = JSON.parse(await readFile(ownerProfilePath, "utf8"));
+    await writeFile(ownerProfilePath, JSON.stringify({ ...ownerProfile, tinycloudRegistryUrl: registry.url.origin }));
     expect((await cli("owner", ["auth", "login", "--method", "local"])).exitCode).toBe(0);
     const caps = [
       "--cap", "tinycloud.kv:applications::get,list,put,del",
@@ -149,8 +167,18 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
   }, 120_000);
 
   afterAll(async () => {
-    node?.kill("SIGTERM");
-    await rm(root, { recursive: true, force: true });
+    try {
+      if (node?.exitCode === null && node.signalCode === null) {
+        const exited = Promise.withResolvers<void>();
+        node.once("exit", () => exited.resolve());
+        node.kill("SIGTERM");
+        await exited.promise;
+      }
+    } finally {
+      catalog?.stop();
+      registry?.stop(true);
+      if (root) await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("a read-only grant for one app: list --app and read work; another app and a whole-space list are exit 5 with the real app id in the hint", async () => {
@@ -418,31 +446,25 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     }
   }
 
-  test("an entry smuggled into the request file is listed once, needs --yes, and the printed set is the signed set", async () => {
+  test("an entry smuggled into the request file is listed once, signed without --yes, and the printed set is the signed set", async () => {
     const smuggle = (request: Record<string, unknown>) => {
       (request.requested as unknown[]).push({
         service: "tinycloud.delegation", space: "applications", path: "", actions: ["tinycloud.delegation/create"],
       });
     };
 
-    // Without --yes and without a terminal the owner signs nothing, and the refusal says so without repeating the list.
     await newAgent("smuggler");
     const requestFile = join(root, "smuggler-request.json");
     expect((await cli("smuggler", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", requestFile])).exitCode).toBe(0);
     const artifact = JSON.parse(await readFile(requestFile, "utf8")) as Record<string, unknown>;
     smuggle(artifact);
     await writeFile(requestFile, JSON.stringify(artifact));
-    const refused = await cli("owner", ["auth", "grant", requestFile]);
-    expect(refused.exitCode).toBe(2);
-    expect(refused.stderr).toContain("MORE than the apps-agent preset");
-    expect(refused.stderr.split("can give other people or agents access on your behalf")).toHaveLength(2);
-    expect(refused.stdout).toBe("");
-    expect(refused.error().message).toContain("Nothing was signed");
 
-    // With --yes it is signed; the printed lines are the signed resources, the extra one first and in words.
-    const signed = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    // Without --yes and without a terminal it is signed; the printed lines are the signed resources, the extra one first and in words.
+    const signed = await cli("owner", ["auth", "grant", requestFile]);
     expect(signed.exitCode).toBe(0);
     expect(signed.stderr).toContain("MORE than the apps-agent preset");
+    expect(signed.stderr.split("can give other people or agents access on your behalf")).toHaveLength(2);
     expect(bulletLines(signed.stderr)[0]).toStartWith("! ");
     expect(bulletLines(signed.stderr)[0]).toContain("can give other people or agents access on your behalf");
     const grant = signed.json();
@@ -459,7 +481,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect(bulletLines(plain.stderr)).toHaveLength(0);
   }, 180_000);
 
-  test("an entry with no space is the owner's applications space: listed as that, gated, signs nothing without --yes", async () => {
+  test("an entry with no space is the owner's applications space: listed as that and signed without --yes", async () => {
     await newAgent("nospace");
     const requestFile = join(root, "nospace-request.json");
     expect((await cli("nospace", ["auth", "request", "--preset", "apps-agent", "--app", RECIPES, "--emit", requestFile])).exitCode).toBe(0);
@@ -468,16 +490,12 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     artifact.requested.push({ service: "tinycloud.kv", path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del"] });
     await writeFile(requestFile, JSON.stringify(artifact));
 
-    const refused = await cli("owner", ["auth", "grant", requestFile]);
-    expect(refused.exitCode).toBe(2);
-    expect(refused.stdout).toBe("");
-    expect(refused.stderr).toContain("MORE than the apps-agent preset");
-    expect(refused.stderr).toContain("delete files");
-    expect(refused.stderr).toContain("ALL apps in your `applications` space");
-    expect(refused.stderr).not.toContain("space ``");
-
-    const signed = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    const signed = await cli("owner", ["auth", "grant", requestFile]);
     expect(signed.exitCode).toBe(0);
+    expect(signed.stderr).toContain("MORE than the apps-agent preset");
+    expect(signed.stderr).toContain("delete files");
+    expect(signed.stderr).toContain("ALL apps in your `applications` space");
+    expect(signed.stderr).not.toContain("space ``");
     expectPrintedToEqualSigned(signed.stderr, signed.json());
     // what was signed is that whole-space entry, in the owner's applications space
     const wholeSpace = signed.json().delegation.resources.find((resource: { service: string; path: string }) => resource.service === "kv" && resource.path === "");
@@ -488,7 +506,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     // An empty space is refused outright.
     artifact.requested[artifact.requested.length - 1]!.space = "";
     await writeFile(requestFile, JSON.stringify(artifact));
-    const empty = await cli("owner", ["auth", "grant", requestFile, "--yes"]);
+    const empty = await cli("owner", ["auth", "grant", requestFile]);
     expect(empty.exitCode).toBe(2);
     expect(empty.stdout).toBe("");
     expect(empty.error().message).toContain("empty space");
@@ -536,7 +554,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     // `redirect` is the documented `auth grant req.json > grant.json`: stdout goes to a file, stderr is still the terminal.
     const onPty = async (artifact: unknown, redirect = false, yes = true): Promise<{ exitCode: number; output: string }> => {
       await writeFile(requestFile, JSON.stringify(artifact));
-      const args = [process.execPath, cliEntry, "--host", host, "--profile", "owner", "auth", "grant", requestFile, ...(yes ? ["--yes"] : [])];
+      const args = [process.execPath, "--preload", TEST_BOOTSTRAP, cliEntry, "--host", host, "--profile", "owner", "auth", "grant", requestFile, ...(yes ? ["--yes"] : [])];
       const command = `${args.map(quote).join(" ")}${redirect ? ` > ${quote(join(root, "pty-stdout.json"))}` : ""}`;
       const env: Record<string, string | undefined> = { ...process.env, HOME: home("owner"), TC_HOME: home("owner") };
       delete env.TC_HOST;

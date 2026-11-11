@@ -16,9 +16,16 @@ export interface OperationWarningOutput {
 }
 
 function warningLine(warnings: readonly OperationWarningOutput[]): string {
-  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
-  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`;
+  const cached = warnings.some(({ code, reason }) => code === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code }) => code !== "REGISTRY_UNAVAILABLE");
+  const parts: string[] = [];
+  if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
+  if (skipped.length > 0) {
+    const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+    const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
+    parts.push(`${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME} auth grants remove <cid>.`);
+  }
+  return parts.join(" ");
 }
 
 /**

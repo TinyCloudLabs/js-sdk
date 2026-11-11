@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     core: 'src/core.ts',
     'encryption-keys': 'src/encryption-keys.ts',
+    'space-hosting': 'src/space-hosting.ts',
     'credential-pending-store': 'src/credential-pending-store.ts',
     credentials: 'src/credentials/index.ts',
     'credentials-core': 'src/credentials/core.ts',
@@ -28,6 +29,7 @@ export default defineConfig({
     '@tinycloud/sdk-services/kv/replication',
     '@tinycloud/sdk-services/encryption/named-keys',
     './encryption-keys.js',
+    './space-hosting.js',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',
@@ -39,15 +41,25 @@ export default defineConfig({
     './replication/authority',
     './replication/gated-network',
   ],
+  esbuildPlugins: [{
+    // NodeUserAuthorization lives one directory down; both loaders share the one dist file.
+    name: 'lazy-space-hosting',
+    setup(build) {
+      build.onResolve({ filter: /^\.\.\/space-hosting\.js$/ }, () => ({ path: './space-hosting.js', external: true }));
+    },
+  }],
   async onSuccess() {
-    // tsup preserves this external dynamic import in both formats. Point CJS
-    // entrypoints at the CJS subpath so they share its exported error class.
+    // tsup preserves these external dynamic imports in both formats. Point CJS
+    // entrypoints at the CJS subpath so they share its exports.
     for (const entry of ['index.cjs', 'core.cjs']) {
       const path = fileURLToPath(new URL(`./dist/${entry}`, import.meta.url));
-      const source = await readFile(path, 'utf8');
-      const esmImport = 'import("./encryption-keys.js")';
-      if (!source.includes(esmImport)) throw new Error(`${entry} has no named-key import`);
-      await writeFile(path, source.replaceAll(esmImport, 'import("./encryption-keys.cjs")'));
+      let source = await readFile(path, 'utf8');
+      for (const lazy of ['encryption-keys', 'space-hosting']) {
+        const esmImport = `import("./${lazy}.js")`;
+        if (!source.includes(esmImport)) throw new Error(`${entry} has no ${lazy} import`);
+        source = source.replaceAll(esmImport, `import("./${lazy}.cjs")`);
+      }
+      await writeFile(path, source);
     }
   },
 });

@@ -1,5 +1,398 @@
 # @tinycloud/operations
 
+## 0.9.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/sdk-core@3.12.0-beta.14
+  - @tinycloud/node-sdk@3.12.0-beta.14
+
+## 0.9.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/sdk-core@3.12.0-beta.13
+  - @tinycloud/node-sdk@3.12.0-beta.13
+
+## 0.9.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [693676e]
+  - @tinycloud/sdk-core@3.12.0-beta.12
+  - @tinycloud/node-sdk@3.12.0-beta.12
+
+## 0.9.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [5f271e5]
+  - @tinycloud/node-sdk@3.12.0-beta.11
+
+## 0.9.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [593f051]
+  - @tinycloud/sdk-services@3.12.0-beta.10
+  - @tinycloud/node-sdk@3.12.0-beta.10
+  - @tinycloud/sdk-core@3.12.0-beta.10
+
+## 0.9.0-beta.13
+
+### Patch Changes
+
+- e409bef: Add explicit owner-authorized signed-v2 storage-settings publication through `publishLocationRecordV2` from `@tinycloud/sdk-core/registry-publication` and `tinycloud registry publish <space...> --server <url>`. The SDK entry is opt-in so publication code does not enter the Web root. Sign-in does not publish records automatically.
+
+  Publish only explicitly selected memberships while preserving existing spaces, server mappings and the decryption service. Verify the owner's signature and destination identities, advance the accepted sequence, and refuse malformed absence, rollback and conflicting updates without automatic write retries. Refuse redirects on registry and identity requests.
+
+  Preserve registration history across supported storage-settings formats without changing the existing routing policy.
+
+  Show the full public result before confirmation and disclose that anyone who knows the account ID can look up its servers and plaintext space names. Agent keys cannot replace the owner's signing key. Successful CLI publication saves the verified local copy for inspection and the existing bounded outage policy; a local persistence failure after publication reports that remote publication already happened.
+
+  Distinguish a successful change from an already-published no-op with JSON `changed: true` or `changed: false`. No-op output retains the public-lookup disclosure without a misleading change marker or an extra PUT. Interactive confirmation states that disclosure once.
+
+  Details: TC-2657
+
+- Updated dependencies [e409bef]
+  - @tinycloud/sdk-core@3.12.0-beta.9
+  - @tinycloud/node-sdk@3.12.0-beta.9
+
+## 0.9.0-beta.12
+
+### Patch Changes
+
+- e7a370e: The notice on `tinycloud_sql_execute` no longer says that approving `tinycloud.sql/write` grants "full read/write/schema mutation authority". It now says a write grant lets the agent read, insert, update and delete any row in the exact database, that nodes enforcing the schema split (the default) also stop it changing the tables, and that nodes which do not enforce it let it. The tool still accepts only one parameterized INSERT, UPDATE or DELETE. The text appears in the tool description, the required acknowledgement field and the result's `authorityNotice`.
+
+  Details: TC-2454
+
+## 0.9.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-services@3.12.0-beta.8
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+
+## 0.9.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [18288bf]
+  - @tinycloud/sdk-services@3.12.0-beta.7
+  - @tinycloud/node-sdk@3.12.0-beta.7
+  - @tinycloud/sdk-core@3.12.0-beta.7
+
+## 0.9.0-beta.9
+
+### Minor Changes
+
+- 3319ede: The hosted personal-records tools use one layout: the owner's `applications` space, one folder per app (`xyz.tinycloud.tinyapps.<app>/`) with a discovery entry, as the `tc-apps` skill puts a new app. They no longer read or write the older `default`-space folder `xyz.tinycloud.agent-data/`, and `tinycloud_apps_move` (and the `tinycloud.apps.move` operation) is removed. Records already saved in the older folder stay where they are, untouched, and are not shown by the chat tools. A new app now needs one OpenKey request (two for the first new app without the `app` input of `tinycloud_apps_context`), because there is no read-only look at the older app list any more.
+
+  What breaks for callers: `tinycloud.apps.query` has no `layout` input; `tinycloud.apps.context` returns `apps` (app, title, copy) and no longer returns `legacy`, `catalog` or each app's `layout`; keys under `xyz.tinycloud.agent-data/` are refused as invalid personal-record keys; the package no longer exports `TC_APPS_LEGACY_ROOT`, `TC_APPS_LEGACY_DATABASE` or `isTcAppsPermission`. The `tinycloud_apps_context` and `tinycloud_apps_query` tools are no longer annotated destructive (neither deletes a record).
+
+  Same-name apps: if the command-line skill created an older-layout app and a chat app then creates an app with the same name, the skill lists the new app (a discovery entry means the new layout) and not the older records of that name. They are not deleted.
+
+  Details: TC-2416
+
+## 0.9.0-beta.8
+
+### Patch Changes
+
+- 01f5fb6: Use storage-server and storage-settings vocabulary in owner-facing routing errors and offline inspection help. Keep existing error codes, retryability, command behavior, account-identifier parsing and JSON schemas. Display the optional inspection argument as `account-id` and label the human output with account, version, age and decryption service.
+
+  Human inspection displays the saved age in seconds below one minute, minutes through two hours, and hours above two hours. Storage modes read “read and write” or “read only”; server and decryption IDs are labelled while retaining their verified values. Partial permission registration uses the same server vocabulary without changing its code or retry verdict. Developer-facing SDK diagnostic templates are unchanged.
+
+  Use Monica's final warning for verified saved-copy routing without inventing an exact age. Remove the unreachable cold-fallback formatter now that #873 refuses cold routing; retain the approved refusal, warning code and machine-readable saved-copy reason.
+
+  Use one generic unavailable-settings message for an expired saved copy and other unavailable or unverifiable routing settings. Do not claim that every such refusal is caused by a copy older than an hour; keep the distinct no-saved-settings refusal unchanged.
+
+  This presentation-only change is stacked on #873's required cold-device refusal, which must land before stable release; it does not add a fallback or change routing authority.
+
+  Details: TC-2481
+
+## 0.9.0-beta.7
+
+### Patch Changes
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+
+## 0.9.0-beta.6
+
+### Patch Changes
+
+- ccf3347: Refuse live routing when storage settings cannot be reached and none are saved on the device, instead of selecting a configured or default server. Preserve first-time onboarding after a reachable, genuine no-entry response and the existing verified-cache fallback strictly younger than one hour. Keep the registry-unavailable error code and provide a value-free explanation for the cold-device refusal.
+
+  Compatibility: applications that previously continued on a default server during a cold outage must retry after storage settings are reachable. Offline session inspection remains local-only; this change does not add network access to restore or relax server-side verification.
+
+  Preserve typed routing failures through vault deletion and listing instead of reporting missing keys or generic storage errors. Secret get, put, delete and list now share the value-free `REGISTRY_UNAVAILABLE` CLI projection for unreachable storage settings, including the cold-device explanation; genuine HTTP authorization refusals, missing keys and other storage failures retain their existing classification.
+
+  Restore validated local replicas from the persisted session and host hints, retaining the existing capability check. Actual network operations still use current storage settings, including the cold-device refusal.
+
+  Classify the explicit no-saved-settings refusal as offline for replica synchronization, after HTTP and authority denials. Complete local reads retain consent, installed-grant and committed-write checks; unverifiable settings and revocation signals still prevent stale local delivery.
+
+  Details: TC-2481
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/sdk-services@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+
+## 0.9.0-beta.5
+
+### Minor Changes
+
+- b32f52e: Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. Cold unknown-owner HTTP5xx, transport errors and timeouts retain configured/default-host compatibility. Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+### Patch Changes
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; v1-only registrations and registered resources without destinations do not fall back. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/sdk-services@3.12.0-beta.3
+
+## 0.9.0-beta.4
+
+### Minor Changes
+
+- 2a1ac15: The optional personal-app context `app` input accepts `healthlog` and `recipes`. Health Log requests its app-list and database access in one approval, with read-only access when requested. Recipes bundles read access to its notes and requests database reads separately after learning the database name. Tool input descriptions explain `app` and `access`.
+
+  Details: TC-2416
+
+- 2a1ac15: The hosted personal-records rules route meals, food, calories, body weight and recipes to the first-party Health Log and Recipes tiny apps instead of the generic store (the pinned `tc-apps` skill's routing table, now vendored as `TINY-APPS.md`), so a meal saved through the connector lands where the CLI skill puts it. The model logs with fixed, parameterized statements on `xyz.tinycloud.sample.healthlog/healthlog` through `tinycloud_sql_query` and `tinycloud_sql_execute` (`meal` and `weight` tables, `op_id` for idempotence, `day_card` read-back) and reads none of the app's notes, which keeps a first meal at five approvals instead of nine. The first query doubles as the install check: it never installs the app or changes its tables, and when the database or table is missing it tells the owner to open the Health Log tiny-app link once. Recipes are read-only for now (no vetted statements to save one). These tools are not on the public ChatGPT plugin surface, so there the rules say meals and recipes cannot be saved from that connector yet.
+
+  `tinycloud_sql_query` (and the schema inspector) now report a database or table that does not exist as `NODE_ERROR` with `error.details.reason: "sql_database_missing"` and `retryable: false`, instead of a retryable `NODE_ERROR`, and a `404 Space not found` as `NODE_ERROR` with `details.reason: "space_not_hosted"`; permission, quota, network and other SQL errors are unchanged. `tinycloud.apps.context` returns `utc` (the same instant as `now`) for `logged_at`.
+
+  Details: TC-2416
+
+## 0.9.0-beta.3
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+- 592136c: The personal-apps operations follow the `tc-apps` skill 0.3.10 layout, so records saved through the hosted connector land where the CLI skill puts them. A new app is kept in the owner's `applications` space under `xyz.tinycloud.tinyapps.<app>/` (catalog at `<app>/catalog`, kinds at `<app>/catalog/<kind>`, records at `<app>/<kind>/<folder>/<id>`) with a discovery entry at `xyz.tinycloud.tinyapps.catalog/<app>/entry`, written after the app's first kind. Apps already in the older `default` space under `xyz.tinycloud.agent-data/` stay there, readable and writable as before, until a later move (the layout is chosen per app, as the skill's `layout.sh` does). A new app is refused when the older layout already holds it, and a legacy key is refused when its app has moved and the entry is readable. The names `catalog`, `index-stale`, `healthlog` and `recipes` are reserved for new apps.
+
+  Older-layout access to an app also needs the app list (a read of its entry), so a moved app is always recognised, and its older records are no longer served. A discovery entry for an app the older layout still holds is added only by a move (a later change), never by a plain write; a folder that holds another app's `manifest.json` cannot become a generic app, every change to a record in a new-layout app needs the app's catalog record, and a record is not created before the app's discovery entry when the app list is readable.
+
+  Approvals are now per app: `xyz.tinycloud.tinyapps.<app>/` (get, list, put, del), the app list `xyz.tinycloud.tinyapps.catalog/` (get, list, put), and a read-only look at the older catalog `xyz.tinycloud.agent-data/catalog/` (get, list) when an app is created or the app list is read. The fast copy is one SQL database per app, `xyz.tinycloud.tinyapps.<app>/index`.
+
+  What breaks for callers: `tinycloud.apps.query` requires a `layout` (`new` or `legacy`) and one app per call, and the new-layout `entries` view has no `app` column; `tinycloud.apps.context` returns `apps` (app, layout, title, copy) and no longer returns a top-level `copy`; a move now stays inside one app; `tinycloud.apps.read` and `tinycloud.apps.write` accept keys of either layout. The package exports `TC_APPS_LEGACY_ROOT` and `TC_APPS_LEGACY_DATABASE` in place of `TC_APPS_ROOT` and `TC_APPS_DATABASE`.
+  Details: TC-2416
+
+### Patch Changes
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` remain annotated as potentially destructive: context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. They are not read-only. The query accepts one read-only SELECT and does not change canonical records; context only changes the timezone when one is supplied. Only `tinycloud_apps_write` mutates app records.
+  Details: TC-2416
+
+## 0.8.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 0.8.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 0.8.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 0.8.0
+
+### Minor Changes
+
+- 3b759cf: Add explicit reusable read-only consent for selected KV prefixes and exact SQL databases in one owner space, without widening ordinary exact-key GET or HEAD approval requests.
+
+  Add complete, bounded KV and SQL retrieval through `tinycloud.read` / `tinycloud_read`, with digest-bound byte continuations, provenance, independent recipient authorization, and explicit errors for changed sources or mismatched retrieval contexts. Hosted oversized reads now point callers to the bounded retrieval path. Existing acquisition, query, and response limits remain in place.
+
+  Expose opaque KV listing continuations and return nonretryable input errors for rejected cursors, with restart guidance. Preserve handoff identity when optional SQL options are explicitly undefined. Public ChatGPT tool exposure and the native MCP service's signed capability ceiling remain unchanged.
+
+  Details: TC-1401
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-services@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+
+## 0.8.0-beta.3
+
+### Minor Changes
+
+- 3b759cf: Add explicit reusable read-only consent for selected KV prefixes and exact SQL databases in one owner space, without widening ordinary exact-key GET or HEAD approval requests.
+
+  Add complete, bounded KV and SQL retrieval through `tinycloud.read` / `tinycloud_read`, with digest-bound byte continuations, provenance, independent recipient authorization, and explicit errors for changed sources or mismatched retrieval contexts. Hosted oversized reads now point callers to the bounded retrieval path. Existing acquisition, query, and response limits remain in place.
+
+  Expose opaque KV listing continuations and return nonretryable input errors for rejected cursors, with restart guidance. Preserve handoff identity when optional SQL options are explicitly undefined. Public ChatGPT tool exposure and the native MCP service's signed capability ceiling remain unchanged.
+
+  Details: TC-1401
+
+## 0.7.11-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/sdk-services@3.11.0-beta.2
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
+## 0.7.11-beta.1
+
+### Patch Changes
+
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0-beta.1
+  - @tinycloud/sdk-core@3.11.0-beta.1
+
+## 0.7.11-beta.0
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+
+## 0.7.10
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+  - @tinycloud/sdk-services@3.8.3
+
+## 0.7.10-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+
+## 0.7.10-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+
+## 0.7.10-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.1
+- @tinycloud/sdk-core@3.10.0-beta.1
+
+## 0.7.9
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1
+  - @tinycloud/sdk-core@3.9.1
+  - @tinycloud/sdk-services@3.8.2
+
+## 0.7.9-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.9.1-beta.1
+
+## 0.7.9-beta.0
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+  - @tinycloud/node-sdk@3.9.1-beta.0
+  - @tinycloud/sdk-core@3.9.1-beta.0
+
+## 0.7.8
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.9.0
+  - @tinycloud/sdk-core@3.9.0
+  - @tinycloud/sdk-services@3.8.1
+
 ## 0.7.8-beta.7
 
 ### Patch Changes

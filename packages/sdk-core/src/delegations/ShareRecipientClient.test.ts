@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "@noble/hashes/sha256";
-import type { InvokeFunction, ServiceSession } from "@tinycloud/sdk-services";
+import type { FetchFunction, InvokeFunction, ServiceSession } from "@tinycloud/sdk-services";
 import {
   createShareArtifact,
   encodeInlineShareUrl,
@@ -18,6 +18,7 @@ import {
 } from "./share-envelope";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import { MemoryShareCache } from "./ShareCache";
+import type { ShareRecipientClientOptions } from "./recipient-types";
 import nodeVectors from "./fixtures/share-email-v2-vectors.json";
 
 const ORIGIN = "https://node.example.test";
@@ -543,13 +544,20 @@ describe("ShareRecipientClient", () => {
       encryptionKey: PRIVATE_KEY,
     });
     let invocationAuthorization = "";
-    const access = await new ShareRecipientClient({
+    const urls: string[] = [];
+    const recipientFetch: FetchFunction = async (url) => {
+      urls.push(url);
+      return url.endsWith("/delegate") ? Response.json({ activated: [vector.s0.cid] }) : new Response(created.bytes);
+    };
+    const config: ShareRecipientClientOptions = {
       trustedOrigins: [ORIGIN],
       now: () => new Date((s0.payload.nbf + 1) * 1000),
       policySessionPrivateKey: new Uint8Array(32).fill(9),
-      fetch: (async (url: string) => url.endsWith("/delegate")
-        ? Response.json({ activated: [vector.s0.cid] })
-        : new Response(created.bytes)) as never,
+      fetch: recipientFetch,
+      resourceTransport: async (_resources, send) => send({
+        url: ORIGIN, nodeDid: NODE_DID, nodeInfo: { nodeId: NODE_DID }, fetch: recipientFetch,
+        bindAudience: async (authorization) => authorization,
+      }),
       establishPolicySession: async () => ({
         sessionId: vector.s0.cid,
         holderDid: vector.principals.recipientDid,
@@ -576,7 +584,13 @@ describe("ShareRecipientClient", () => {
           return { ok: true, data: { data: new TextEncoder().encode("ordinary"), headers: { etag: "etag-1", contentType: "text/plain" } } };
         },
       })) as never,
-    }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key }));
+    };
+    const unrouted = { ...config };
+    delete unrouted.resourceTransport;
+    const link = encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key });
+    await expect(new ShareRecipientClient(unrouted).open(link)).rejects.toMatchObject({ code: "SHARE_SESSION_ROUTING_REQUIRED" });
+    expect(urls.filter((url) => url.endsWith("/delegate"))).toEqual([]);
+    const access = await new ShareRecipientClient(config).open(link);
     await access.get(path);
     expect(invocationAuthorization).not.toBe(vector.s0.authorization);
     const invocation = parseCompactUcanAuthorization(invocationAuthorization);

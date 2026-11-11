@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 /**
  * Wiring of the named-key client onto a real TinyCloudNode: the client must sign
  * through the node's raw invocation signer with the EXACT key URN as the single
@@ -10,6 +11,7 @@ import { createHash } from "node:crypto";
 import { expect, mock, test, type Mock } from "bun:test";
 
 import type { ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 import { canonicalizeEncryptionJson } from "@tinycloud/sdk-services";
 import type { InlineEncryptedEnvelope } from "@tinycloud/sdk-services";
 
@@ -62,6 +64,7 @@ interface Stubbed {
 function makeNode(): Stubbed {
   const node = new TinyCloudNode({
     host: HOST,
+    tinycloudRegistryUrl: HOST,
     signer: {
       getAddress: async () => ADDRESS,
       getChainId: async () => 1,
@@ -86,6 +89,7 @@ function makeNode(): Stubbed {
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
     nodeIdForHost: (host: string) => (host === HOST ? NODE_DID : undefined),
+    resolveResourceDestinations: async () => [{ url: HOST }],
   };
   const signRaw = mock(async () => ({
     authorization: "Bearer signed",
@@ -169,6 +173,13 @@ test("network-admin and key-admin facts hash their sent bodies with the same rul
   const original = globalThis.fetch;
   const sent: string[] = [];
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(_input instanceof Request ? _input.url : _input);
+    if (url.origin === HOST && (init?.method ?? "GET") === "GET" && /^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) {
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.origin === HOST && url.pathname === "/info") return Response.json({ nodeId: NODE_DID });
+    if (url.origin === HOST && url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     sent.push(String(init?.body));
     return new Response(JSON.stringify({ descriptor: {} }), { status: 200 });
   }) as typeof fetch;

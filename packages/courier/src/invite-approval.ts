@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { TinyCloudNode } from '@tinycloud/node-sdk';
+import { activateValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
+import type { PermissionEntry, PortableDelegation, TinyCloudNode } from '@tinycloud/node-sdk';
 import type { ShareInvitationApprovalContext } from '@tinycloud/share-envelope/links';
-import { assertInvitationApprovalGrant, siweTimes } from './authority.js';
+import { assertApprovalRequestBinding, assertInvitationApprovalGrant, siweTimes } from './authority.js';
 import { CourierError } from './errors.js';
-import { nodeOpts } from './node.js';
 import { mkdirOwnerOnly, profileDir, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
 import type { GrantPayload } from './grant.js';
@@ -129,37 +129,58 @@ function keyIdUsedElsewhere(shareId: string, invitationId: string): boolean {
     .some((name) => readJson<InviteGrant>(path.join(grantDir(), name))?.shareId === shareId);
 }
 
-/** Restore the per-invite node and re-verify the signed grant: holder, owner, one key pair, expiry. Returns the node and key id. */
-async function restoreInviteGrant(profile: Profile, key: AgentKey, pending: PendingInvite, payload: GrantPayload, now: number): Promise<{ node: TinyCloudNode; shareId: string; expiresAt: Date }> {
+/**
+ * Verify the owner-signed grant for THIS pending request and install it as a runtime delegation on the Courier node. The
+ * grant's ReCap is a raw encryption network resource (no space), so it is a grant, not a session: the node-sdk verifies it
+ * (SIWE signature, signer, audience = this node's session key, expiry) and activates it. Order: the request binding, then
+ * the signed authority (exactly one key pair), then the install. Returns the key id from the signed grant.
+ */
+async function activateInviteGrant(node: TinyCloudNode, profile: Profile, pending: PendingInvite, payload: GrantPayload, now: number): Promise<{ shareId: string; expiresAt: Date }> {
+  const state = pending.transport as { requestId?: unknown; bodyCid?: unknown } | undefined;
+  if (typeof state?.requestId !== 'string' || typeof state.bodyCid !== 'string') throw new CourierError('bad-grant', 'No approval request exists for this invitation.');
+  assertApprovalRequestBinding(payload.siwe, { requestId: state.requestId, bodyCid: state.bodyCid });
   const times = siweTimes(payload.siwe);
   if (!times.expiresAt || times.expiresAt.getTime() <= now) throw new CourierError('grant-expired', 'The invitation approval has expired.');
-  const node = new TinyCloudNode(nodeOpts(profile.host));
-  try {
-    await node.restoreSession({
-      delegationHeader: payload.delegationHeader, delegationCid: payload.delegationCid, spaceId: payload.spaceId, jwk: key.jwk,
-      verificationMethod: payload.verificationMethod, address: payload.address, chainId: payload.chainId, siwe: payload.siwe,
-      signature: payload.signature, expiresAt: times.expiresAt.toISOString(), tinycloudHosts: [profile.host],
-    });
-  } catch { throw new CourierError('bad-grant', 'The invitation approval could not be verified for this Courier key.'); }
-  if (node.credentialHolderDid !== profile.courierDid || pending.courierDid !== profile.courierDid) {
-    throw new CourierError('bad-grant', 'The invitation approval was not issued to this Courier key.');
-  }
+  if (pending.courierDid !== profile.courierDid) throw new CourierError('bad-grant', 'The invitation approval was not requested by this Courier key.');
   const owner = `did:pkh:eip155:${payload.chainId}:${payload.address}`;
   if (!profile.ownerDid || owner.toLowerCase() !== profile.ownerDid.toLowerCase() || owner.toLowerCase() !== pending.ownerDid.toLowerCase()) {
     throw new CourierError('bad-grant', 'The invitation approval was given by a different account than the Courier owner.');
   }
-  const shareId = assertInvitationApprovalGrant(node.getVerifiedSessionCapabilities(), times, { ownerDid: owner, acceptanceExpiresAt: new Date(pending.acceptanceExpiresAt), now });
-  return { node, shareId, expiresAt: times.expiresAt };
-}
-
-export async function verifyStoredInviteGrant(profile: Profile, key: AgentKey, pending: PendingInvite, grant: InviteGrant, now: number): Promise<TinyCloudNode> {
-  if (grant.invitationId !== pending.invitationId) throw new CourierError('bad-grant', 'This approval belongs to another invitation.');
-  const restored = await restoreInviteGrant(profile, key, pending, grant.payload, now);
-  if (restored.shareId !== grant.shareId) throw new CourierError('bad-grant', 'The stored approval no longer matches its key.');
-  return restored.node;
+  let verified: ReturnType<TinyCloudNode['verifySessionGrant']>;
+  try {
+    verified = node.verifySessionGrant({
+      delegationHeader: { Authorization: payload.delegationHeader.Authorization }, delegationCid: payload.delegationCid, spaceId: payload.spaceId,
+      address: payload.address, chainId: payload.chainId, siwe: payload.siwe, signature: payload.signature,
+    });
+  } catch { throw new CourierError('bad-grant', 'The invitation approval could not be verified for this Courier key.'); }
+  const signed: PermissionEntry[] = verified.recap.map((entry) => {
+    const service = entry.service.startsWith('tinycloud.') ? entry.service : `tinycloud.${entry.service}`;
+    return { service, space: entry.space, path: entry.path, actions: entry.actions.map((action) => (action.includes('/') ? action : `${service}/${action}`)), ...(entry.caveats?.length ? { caveats: [...entry.caveats] } : {}) };
+  });
+  const bounds = { ownerDid: owner, acceptanceExpiresAt: new Date(pending.acceptanceExpiresAt), now };
+  const shareId = assertInvitationApprovalGrant(signed, times, bounds);
+  const entry = signed[0]!;
+  const delegation: PortableDelegation = {
+    cid: payload.delegationCid, delegationHeader: { Authorization: payload.delegationHeader.Authorization }, spaceId: payload.spaceId,
+    path: entry.path, actions: [...entry.actions], resources: [{ service: 'encryption', space: 'encryption', path: entry.path, actions: [...entry.actions] }],
+    expiry: verified.expiresAt, delegateDID: payload.verificationMethod, ownerAddress: payload.address, chainId: payload.chainId, host: profile.host,
+    siweProof: { siwe: payload.siwe, signature: payload.signature },
+  };
+  try {
+    await activateValidatedRuntimeDelegation(node, delegation, {
+      host: profile.host,
+      // What the node ends up holding must be exactly the one pair, again from the signed bytes it parsed itself.
+      authorize: (effective) => { try { return assertInvitationApprovalGrant(effective, times, bounds) === shareId; } catch { return false; } },
+    });
+  } catch (error) {
+    throw new CourierError('bad-grant', `The invitation approval could not be installed for this Courier key (${(error as { code?: string }).code ?? 'refused'}).`);
+  }
+  return { shareId, expiresAt: verified.expiresAt };
 }
 
 export interface ObtainOptions {
+  /** The Courier node: the approved grant is installed on it as a runtime delegation for that one key. */
+  node: TinyCloudNode;
   profile: Profile;
   key: AgentKey;
   transport: InviteApprovalTransport;
@@ -171,24 +192,31 @@ export interface ObtainOptions {
   onApprovalUrl?: (url: string, pending: PendingInvite) => void;
 }
 
-export type ObtainResult = { status: 'approved'; shareId: string; node: TinyCloudNode } | { status: 'awaiting'; approvalUrl: string };
+export type ObtainResult = { status: 'approved'; shareId: string } | { status: 'awaiting'; approvalUrl: string };
+
+/** A pending invitation whose approval cannot be used any more is closed, so the next run asks afresh. A stored approved grant is never removed. */
+function closePending(pending: PendingInvite): void {
+  pending.status = 'closed';
+  savePendingInvite(pending);
+}
 
 /**
  * Create (once) and await this invitation's approval, then keep the approved per-invite grant. Nothing the caller does
  * after this - relay delegation, state, Share key, link or email - happens unless the result is `approved`.
  */
 export async function obtainInviteKey(options: ObtainOptions): Promise<ObtainResult> {
-  const { profile, key, transport, pending } = options;
+  const { node, profile, key, transport, pending } = options;
   const clock = options.now ?? Date.now;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const stored = loadInviteGrant(pending.invitationId);
   if (stored) {
-    const node = await verifyStoredInviteGrant(profile, key, pending, stored, clock());
-    return { status: 'approved', shareId: stored.shareId, node };
+    if (stored.invitationId !== pending.invitationId) throw new CourierError('bad-grant', 'This approval belongs to another invitation.');
+    const activated = await activateInviteGrant(node, profile, pending, stored.payload, clock());
+    if (activated.shareId !== stored.shareId) throw new CourierError('bad-grant', 'The stored approval no longer matches its key.');
+    return { status: 'approved', shareId: stored.shareId };
   }
   if (Date.parse(pending.acceptanceExpiresAt) <= clock()) {
-    pending.status = 'closed';
-    savePendingInvite(pending);
+    closePending(pending);
     throw new CourierError('invite-expired', 'The approval for this invitation was not given in time; nothing was created.');
   }
   if (pending.transport === undefined) {
@@ -200,28 +228,46 @@ export async function obtainInviteKey(options: ObtainOptions): Promise<ObtainRes
   options.onApprovalUrl?.(pending.approvalUrl!, pending);
   const deadline = clock() + options.waitMs;
   for (;;) {
-    const result = await transport.poll(pending, key);
+    let result;
+    try {
+      result = await transport.poll(pending, key);
+    } catch (error) {
+      // The approver says it does not know this request (or its result): nothing more can come of it.
+      if (error instanceof CourierError && error.code === 'approval-unavailable') closePending(pending);
+      throw error;
+    }
     savePendingInvite(pending);
     if (result.status === 'approved') {
-      const restored = await restoreInviteGrant(profile, key, pending, result.payload, clock());
-      if (keyIdUsedElsewhere(restored.shareId, pending.invitationId)) {
+      let activated;
+      try {
+        activated = await activateInviteGrant(node, profile, pending, result.payload, clock());
+      } catch (error) {
+        // A result that is not this request's valid approval is never retried against the same request.
+        if (error instanceof CourierError) closePending(pending);
+        throw error;
+      }
+      if (keyIdUsedElsewhere(activated.shareId, pending.invitationId)) {
+        closePending(pending);
         throw new CourierError('bad-grant', 'This approval was already used for another invitation; each invitation needs its own approval.');
       }
       secureWrite(grantDir(), pending.invitationId, {
-        v: 1, invitationId: pending.invitationId, shareId: restored.shareId, payload: result.payload,
-        expiresAt: restored.expiresAt.toISOString(), receivedAt: new Date(clock()).toISOString(),
+        v: 1, invitationId: pending.invitationId, shareId: activated.shareId, payload: result.payload,
+        expiresAt: activated.expiresAt.toISOString(), receivedAt: new Date(clock()).toISOString(),
       } satisfies InviteGrant);
       await transport.acknowledge?.(pending, key);
-      return { status: 'approved', shareId: restored.shareId, node: restored.node };
+      return { status: 'approved', shareId: activated.shareId };
     }
     if (result.status === 'denied' || result.status === 'expired') {
-      pending.status = 'closed';
-      savePendingInvite(pending);
+      closePending(pending);
       throw new CourierError('invite-approval-refused', result.status === 'denied' ? 'The owner declined this invitation; nothing was created.' : 'The approval request expired before it was given; nothing was created.');
     }
     if (clock() >= deadline) return { status: 'awaiting', approvalUrl: pending.approvalUrl! };
     await sleep(Math.min(2000, Math.max(0, deadline - clock())));
   }
+}
+
+export function closeInvite(pending: PendingInvite): void {
+  closePending(pending);
 }
 
 export function markInviteSent(pending: PendingInvite): void {

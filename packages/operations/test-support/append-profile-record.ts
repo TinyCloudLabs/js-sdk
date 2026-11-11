@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Appends one auth-request record under the profile lock of the release
 // TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts): through
 // upsertProfileRecord for this release, as an older release's store writer

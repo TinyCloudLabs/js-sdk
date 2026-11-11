@@ -68,16 +68,16 @@ const both = (path) => [keyEntry(path, 'key.create'), keyEntry(path, 'decrypt')]
 const lifetime = { issuedAt: new Date(NOW), expiresAt: new Date(NOW + 30 * DAY) };
 
 test('invitation authority: an existing install (no encryption entries) is checked exactly as before', () => {
-  assert.doesNotThrow(() => assertAgentGrant(split, lifetime, NOW, OWNER));
-  assert.throws(() => assertAgentGrant(split.slice(1), lifetime, NOW, OWNER), { code: 'grant-incomplete' });
-  assert.throws(() => assertAgentGrant([...split, { service: 'tinycloud.kv', space: 'agents', path: `${PREFIX}/`, actions: ['tinycloud.kv/put'] }], lifetime, NOW, OWNER), { code: 'grant-too-broad' });
+  assert.doesNotThrow(() => assertAgentGrant(split, lifetime, NOW));
+  assert.throws(() => assertAgentGrant(split.slice(1), lifetime, NOW), { code: 'grant-incomplete' });
+  assert.throws(() => assertAgentGrant([...split, { service: 'tinycloud.kv', space: 'agents', path: `${PREFIX}/`, actions: ['tinycloud.kv/put'] }], lifetime, NOW), { code: 'grant-too-broad' });
 });
 
-test('invitation authority: key.create + decrypt on one exact canonical share key is accepted; the share/ prefix is not', () => {
-  assert.doesNotThrow(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW, OWNER));
+test('invitation authority: the base grant is exactly AGENT_GRANT; one exact canonical share key and the share/ prefix are both too broad', () => {
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW), { code: 'grant-too-broad' });
   // The prefix is a grant-scope decision that is not made: it stays too broad.
-  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/`)], lifetime, NOW, OWNER), { code: 'grant-too-broad' });
-  // Accepting is opt-in per caller: without the owner even the exact key is too broad, as for every old caller.
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/`)], lifetime, NOW), { code: 'grant-too-broad' });
+  // The standing base grant never carries a share key, for any caller (this case had no owner argument originally).
   assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW), { code: 'grant-too-broad' });
 });
 
@@ -100,21 +100,21 @@ test('invitation authority: anything wider or differently spelled than one share
     { ...keyEntry(`${NETWORK}/share/${SHARE}`, 'decrypt'), caveats: [{ x: 1 }] },
   ];
   for (const extra of wider) {
-    assert.throws(() => assertAgentGrant([...split, extra], lifetime, NOW, OWNER), { code: 'grant-too-broad' }, JSON.stringify(extra));
+    assert.throws(() => assertAgentGrant([...split, extra], lifetime, NOW), { code: 'grant-too-broad' }, JSON.stringify(extra));
   }
 });
 
-test('invitation authority: at most one exact share key, and only as a complete key.create + decrypt pair', () => {
+test('invitation authority: a share key in the base grant is too broad however it is spelled', () => {
   const second = 'b'.repeat(32);
   // A grant that names several exact keys approximates the prefix that has not been decided.
-  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`), ...both(`${NETWORK}/share/${second}`)], lifetime, NOW, OWNER), { code: 'grant-too-broad' });
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`), ...both(`${NETWORK}/share/${second}`)], lifetime, NOW), { code: 'grant-too-broad' });
   // One half of the pair is not an invitation authority.
-  assert.throws(() => assertAgentGrant([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create')], lifetime, NOW, OWNER), { code: 'grant-too-broad' });
-  assert.throws(() => assertAgentGrant([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'decrypt')], lifetime, NOW, OWNER), { code: 'grant-too-broad' });
-  // The same key spelled in one or two entries is one key.
+  assert.throws(() => assertAgentGrant([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create')], lifetime, NOW), { code: 'grant-too-broad' });
+  assert.throws(() => assertAgentGrant([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'decrypt')], lifetime, NOW), { code: 'grant-too-broad' });
+  // The same key spelled in one or two entries is still not accepted.
   const joined = { ...keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create'), actions: ['tinycloud.encryption/key.create', 'tinycloud.encryption/decrypt'] };
-  assert.doesNotThrow(() => assertAgentGrant([...split, joined], lifetime, NOW, OWNER));
-  assert.doesNotThrow(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`), ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW, OWNER));
+  assert.throws(() => assertAgentGrant([...split, joined], lifetime, NOW), { code: 'grant-too-broad' });
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`), ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW), { code: 'grant-too-broad' });
 });
 
 test('invitation authority: both key.create and decrypt must name exactly the key, and a prefix never counts', () => {
@@ -173,6 +173,13 @@ test('peer delegation: lifetime capped at 7 days plus skew', () => {
   assert.throws(() => assertPeerDelegation(signed({ expiry: new Date(NOW + cap + 1000) }), expected, NOW), { code: 'grant-too-long' });
   assert.throws(() => assertPeerDelegation(signed({ expiry: new Date(NOW + 30 * DAY) }), expected, NOW), { code: 'grant-too-long' });
   assert.equal(PEER_DELEGATION_MAX_MS, 7 * DAY);
+});
+
+test('peer delegation: expired grants cannot be installed', () => {
+  assert.throws(
+    () => assertPeerDelegation(signed({ expiry: new Date(NOW - 1) }), expected, NOW),
+    { code: 'grant-expired' },
+  );
 });
 
 test('durationMs recognizes supported units and rejects malformed values', () => {

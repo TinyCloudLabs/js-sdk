@@ -157,20 +157,33 @@ export function assertInvitationApprovalGrant(rawCaps: readonly PermissionEntry[
   const prefix = `${ownerEncryptionNetwork(options.ownerDid)}/share/`;
   const shareId = invitation[0].path.slice(prefix.length);
   if (!holdsInvitationKeyAuthority(caps, options.ownerDid, shareId)) throw new CourierError('bad-grant', 'The approval does not hold key.create and decrypt on one invitation key.');
-  if (!times.issuedAt) throw new CourierError('bad-grant', 'The approval is missing Issued At.');
-  assertLifetime('Invitation approval', times.expiresAt, INVITE_APPROVAL_MAX_MS, now, times.issuedAt);
-  if (times.expiresAt!.getTime() > options.acceptanceExpiresAt.getTime() + CLOCK_SKEW_MS) {
+  const { issuedAt, expiresAt } = times;
+  if (!issuedAt || !expiresAt) throw new CourierError('bad-grant', 'The approval is missing Issued At or its expiry.');
+  if (issuedAt.getTime() > now + CLOCK_SKEW_MS) throw new CourierError('bad-grant', 'The approval was issued in the future.');
+  if (expiresAt.getTime() <= now) throw new CourierError('grant-expired', 'The invitation approval has expired.');
+  // Exact bounds: the approval lasts at most a day, and never past the invitation it was requested for.
+  if (expiresAt.getTime() - issuedAt.getTime() > INVITE_APPROVAL_MAX_MS || expiresAt.getTime() > options.acceptanceExpiresAt.getTime()) {
     throw new CourierError('grant-too-long', 'The approval lasts longer than the invitation it was requested for.');
   }
   return shareId;
 }
 
 /**
- * The fixed Courier authority, plus (only when `ownerDid` is given) optional invitation-key authority. A grant without
- * that addition is checked exactly as before, so installs made before email invitations keep working.
+ * The owner-signed SIWE names the one request it answers: exactly one `Request ID:` field, equal to
+ * `urn:tinycloud:approval-request:<requestId>:<bodyCid>` of THIS agent's own pending request. An approval signed for another
+ * request, or one without the field, is refused before its key is used.
  */
-export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now(), ownerDid?: string): void {
-  assertExactAuthority(splitInvitationAuthority(caps, ownerDid).base, AGENT_GRANT, 'OpenKey grant');
+export function assertApprovalRequestBinding(siwe: string, request: { requestId: string; bodyCid: string }): void {
+  const lines = siwe.split('\n').filter((line) => line.startsWith('Request ID:'));
+  const expected = `Request ID: urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`;
+  if (lines.length !== 1 || lines[0] !== expected) {
+    throw new CourierError('bad-grant', 'The approval was not signed for this invitation request.');
+  }
+}
+
+/** The fixed Courier authority, exactly: any additional entry, including a share-key entry, is grant-too-broad. */
+export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now()): void {
+  assertExactAuthority(caps, AGENT_GRANT, 'OpenKey grant');
   if (!times.issuedAt) throw new CourierError('bad-grant', 'OpenKey grant SIWE is missing Issued At.');
   assertLifetime('OpenKey grant', times.expiresAt, AGENT_GRANT_MAX_MS, now, times.issuedAt);
 }

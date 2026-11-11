@@ -1,4 +1,6 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
@@ -7,6 +9,14 @@ import { TinyCloudNode } from "./TinyCloudNode";
 
 const HOST = "https://signout.test";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
+
+function registryResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (url.origin !== HOST || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return;
+  expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+}
 
 async function signedSession() {
   const wasm = new NodeWasmBindings();
@@ -50,8 +60,10 @@ let requests: string[] = [];
 
 function recordRequests(): void {
   requests = [];
-  globalThis.fetch = mock(async (input: string | URL | Request) => {
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     requests.push(String(input instanceof Request ? input.url : input));
+    const metadata = registryResponse(input, init);
+    if (metadata) return metadata;
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -85,6 +97,7 @@ describe.each([
     const proof = await signedSession();
     const sessionStorage = new MemorySessionStorage();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
@@ -130,6 +143,7 @@ describe.each([
     recordRequests();
     const proof = await signedSession();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
@@ -152,6 +166,7 @@ test("signOut retires authority even when replacement session-key creation fails
   const wasm = new NodeWasmBindings();
   const sessionStorage = new MemorySessionStorage();
   const node = new TinyCloudNode({
+    tinycloudRegistryUrl: HOST,
     host: HOST,
     wasmBindings: wasm,
     sessionStorage,
@@ -188,9 +203,11 @@ test("signOut retires authority even when replacement session-key creation fails
 describe("TinyCloudNode.signIn after signOut", () => {
   function stubNode(): void {
     requests = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       requests.push(url);
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       const body = url.endsWith("/info")
         ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
         : { activated: [], skipped: [] };
@@ -200,6 +217,7 @@ describe("TinyCloudNode.signIn after signOut", () => {
 
   function walletNode(): TinyCloudNode {
     return new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: new PrivateKeySigner(OWNER_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -244,6 +262,7 @@ describe("TinyCloudNode.signOut and delegated authority", () => {
     recordRequests();
     const proof = await signedSession();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
@@ -271,6 +290,7 @@ describe("TinyCloudNode.signOut and delegated authority", () => {
   test("a runtime grant activated across sign-out is not installed", async () => {
     const proof = await signedSession();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: new PrivateKeySigner(OWNER_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -340,6 +360,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
   test("a restore that started before sign-out does not establish its session", async () => {
     recordRequests();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: new PrivateKeySigner(OWNER_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -356,9 +377,11 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
 
   test("a sign-in still persisting its session when sign-out runs is undone", async () => {
     requests = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       requests.push(url);
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       const body = url.endsWith("/info")
         ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
         : { activated: [], skipped: [] };
@@ -375,6 +398,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     }
     const sessionStorage = new SlowStorage();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: new PrivateKeySigner(OWNER_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -406,6 +430,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     const releaseLookup = Promise.withResolvers<void>();
     let holdLookup = true;
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: {
         getAddress: async () => {
@@ -440,6 +465,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
   test("a delegated request in flight is aborted by sign-out", async () => {
     const proof = await signedSession();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
@@ -458,6 +484,9 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     });
     const requested = Promise.withResolvers<AbortSignal | undefined>();
     globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
+      requests.push(String(_input instanceof Request ? _input.url : _input));
+      const metadata = registryResponse(_input, init);
+      if (metadata) return Promise.resolve(metadata);
       requested.resolve(init?.signal ?? undefined);
       const response = Promise.withResolvers<Response>();
       init?.signal?.addEventListener("abort", () => response.reject(new DOMException("aborted", "AbortError")), { once: true });
@@ -477,6 +506,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     const proof = await signedSession();
     const gated = gatedSigner();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: gated.signer,
       wasmBindings: new NodeWasmBindings(),
@@ -500,9 +530,11 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
 
   test("a sign-in waiting on the wallet across sign-out and a new sign-in does not end the new session", async () => {
     requests = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       requests.push(url);
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       const body = url.endsWith("/info")
         ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
         : { activated: [], skipped: [] };
@@ -510,6 +542,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     }) as unknown as typeof fetch;
     const gated = gatedSigner();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: gated.signer,
       wasmBindings: new NodeWasmBindings(),
@@ -536,9 +569,11 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
 
   test("signing in as another account clears recorded requests and notifies onClear listeners", async () => {
     requests = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       requests.push(url);
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       const body = url.endsWith("/info")
         ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
         : { activated: [], skipped: [] };
@@ -546,6 +581,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     }) as unknown as typeof fetch;
     let signer = new PrivateKeySigner(OWNER_KEY);
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: {
         getAddress: () => signer.getAddress(),
@@ -599,9 +635,11 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     },
   ] as const)("a cancelled sign-in's save $name", async ({ hold, secondKey, secondSaveFails }) => {
     requests = [];
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       requests.push(url);
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       const body = url.endsWith("/info")
         ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
         : { activated: [], skipped: [] };
@@ -631,6 +669,7 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     let signatures = 0;
     const secondSignature = Promise.withResolvers<void>();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: HOST,
       host: HOST,
       signer: {
         getAddress: () => signer.getAddress(),

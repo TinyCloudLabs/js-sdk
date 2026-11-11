@@ -514,3 +514,180 @@ describe("scoped first login", () => {
     expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
 });
+
+// TC-2276: the user may now sign a lifetime other than the requested one. The ceiling is the longest lifetime the
+// signed request allows (its grantLifetimeSeconds) plus the clock-skew allowance; today that equals `--expiry`.
+describe("signed expiry ceiling", () => {
+  const HOUR = 3600_000;
+  const MARGIN = 30_000;
+
+  test("the ceiling is the lifetime the request carried plus 30 seconds, unchanged from --expiry", async () => {
+    const received: unknown[] = [];
+    const acquire = (lifetimeMs: number) => async (_did: string, options: unknown) => {
+      received.push(options);
+      return proof({ lifetimeMs });
+    };
+    // 1h is sent to OpenKey as 3600s, and the ceiling is that lifetime + 30 s.
+    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: acquire(HOUR + MARGIN - 1_000) });
+    expect(received[0]).toMatchObject({ expiry: "3600s" });
+    expect(await ProfileManager.getSession("scoped")).not.toBeNull();
+    await ProfileManager.clearSession("scoped");
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: acquire(HOUR + MARGIN + 1_000) }))
+      .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
+  test("a shorter lifetime picked in the approval is accepted and saved as signed", async () => {
+    const picked = await proof({ lifetimeMs: 10 * 60_000 });
+    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: async () => picked });
+    const saved = await ProfileManager.getSession("scoped") as { expiresAt?: string };
+    expect(saved.expiresAt).toBe(/Expiration Time: (.+)/.exec(picked.siwe)?.[1]);
+    expect(Date.parse(saved.expiresAt!) - Date.now()).toBeLessThan(11 * 60_000);
+  });
+
+  test("a pick above the maximum is refused and nothing is saved", async () => {
+    const tooLong = await proof({ lifetimeMs: 2 * HOUR });
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: async () => tooLong }))
+      .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+});
+
+// TC-2276 (PR B): a plain paste link opts in to a user-chosen expiry (`expiryChangeable`), so the CLI accepts the lifetime
+// the owner signed as long as it is more than 60 s away (there is no upper bound) instead of `--expiry` + 30 s. Every path
+// that did not send the opt-in keeps the `--expiry` ceiling.
+describe("paste-link expiry opt-in", () => {
+  const DAY = 86_400_000;
+  const lastLine = (siwe: string) => /Expiration Time: (.+)/.exec(siwe)![1]!;
+  const loginWith = (lifetimeMs: number, options: Record<string, unknown> = {}) =>
+    refreshOpenKeySession("scoped", host, {
+      permissions: requested, paste: true, ...options,
+      openKeyAcquisition: async () => proof({ lifetimeMs }),
+    });
+
+  test("a paste login asks for the opt-in, and a login without --paste does not", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const acquire = async (_did: string, options: unknown) => { seen.push(options as Record<string, unknown>); return proof(); };
+    await refreshOpenKeySession("scoped", host, { permissions: requested, paste: true, expiry: "7d", openKeyAcquisition: acquire });
+    await ProfileManager.clearSession("scoped");
+    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "7d", openKeyAcquisition: acquire });
+    expect(seen[0]).toMatchObject({ paste: true, expiry: "604800s", expiryChangeable: true });
+    expect(seen[1]!.expiryChangeable).toBeUndefined();
+  });
+
+  test("a longer pick is accepted and saved as signed: 30 d and 1 y on --expiry 7d, 9 y on 7d, and 9 y with no --expiry", async () => {
+    for (const [lifetimeMs, expiry] of [[30 * DAY, "7d"], [365 * DAY, "7d"], [9 * 365 * DAY, "7d"], [9 * 365 * DAY, undefined]] as const) {
+      await ProfileManager.clearSession("scoped");
+      const picked = await proof({ lifetimeMs });
+      await refreshOpenKeySession("scoped", host, { permissions: requested, paste: true, ...(expiry ? { expiry } : {}), openKeyAcquisition: async () => picked });
+      const saved = await ProfileManager.getSession("scoped") as { expiresAt?: string };
+      expect(saved.expiresAt).toBe(lastLine(picked.siwe));
+      expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(lifetimeMs - 60_000);
+    }
+  });
+
+  test("there is no upper bound: an 11 year and a 30 year pick are accepted and saved as signed", async () => {
+    for (const [lifetimeMs, expiry] of [[11 * 365 * DAY, "7d"], [30 * 365 * DAY, "7d"], [3651 * DAY, undefined]] as const) {
+      await ProfileManager.clearSession("scoped");
+      const picked = await proof({ lifetimeMs });
+      await refreshOpenKeySession("scoped", host, { permissions: requested, paste: true, ...(expiry ? { expiry } : {}), openKeyAcquisition: async () => picked });
+      const saved = await ProfileManager.getSession("scoped") as { expiresAt?: string };
+      expect(saved.expiresAt).toBe(lastLine(picked.siwe));
+      expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(lifetimeMs - 60_000);
+    }
+  });
+
+  test("a signed expiry of 60 seconds or less is refused; a little over is accepted", async () => {
+    for (const lifetimeMs of [30_000, 55_000]) {
+      await expect(loginWith(lifetimeMs, { expiry: "1h" })).rejects.toMatchObject({
+        code: "OPENKEY_EXPIRY_TOO_SHORT",
+        message: expect.stringContaining("60 seconds"),
+      });
+      expect(await ProfileManager.getSession("scoped")).toBeNull();
+    }
+    await loginWith(90_000, { expiry: "1h" });
+    expect(await ProfileManager.getSession("scoped")).not.toBeNull();
+  });
+
+  test("an already-expired result is still AUTH_EXPIRED", async () => {
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, paste: true, openKeyAcquisition: async () => proof({ expired: true }) }))
+      .rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+  });
+
+  test("an unscoped paste login (no permissions) gets the same rule: a longer pick, even 11 years, is saved as signed; 60 seconds or less is refused", async () => {
+    const unscoped = (lifetimeMs: number, options: Record<string, unknown> = {}) =>
+      refreshOpenKeySession("scoped", host, { paste: true, expiry: "7d", ...options, openKeyAcquisition: async () => proof({ lifetimeMs }) });
+    await unscoped(30 * DAY);
+    const saved = await ProfileManager.getSession("scoped") as { expiresAt?: string; siwe: string };
+    expect(saved.expiresAt).toBe(lastLine(saved.siwe));
+    expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(29 * DAY);
+    await ProfileManager.clearSession("scoped");
+    await unscoped(11 * 365 * DAY);
+    const long = await ProfileManager.getSession("scoped") as { expiresAt?: string; siwe: string };
+    expect(long.expiresAt).toBe(lastLine(long.siwe));
+    expect(Date.parse(long.expiresAt!) - Date.now()).toBeGreaterThan(11 * 365 * DAY - 60_000);
+    await ProfileManager.clearSession("scoped");
+    await expect(unscoped(30_000)).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_TOO_SHORT" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
+  test("an unscoped login without --paste still refuses a longer pick", async () => {
+    await expect(refreshOpenKeySession("scoped", host, { expiry: "7d", openKeyAcquisition: async () => proof({ lifetimeMs: 30 * DAY }) }))
+      .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
+  test("without the opt-in the --expiry ceiling still refuses a longer pick", async () => {
+    for (const lifetimeMs of [30 * DAY, 365 * DAY]) {
+      await expect(refreshOpenKeySession("scoped", host, {
+        permissions: requested, expiry: "7d", openKeyAcquisition: async () => proof({ lifetimeMs }),
+      })).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("--expiry") });
+      expect(await ProfileManager.getSession("scoped")).toBeNull();
+    }
+  });
+
+  describe("with a live session", () => {
+    async function liveThirtyDays() {
+      await refreshOpenKeySession("scoped", host, {
+        permissions: requested, expiry: "30d", openKeyAcquisition: async () => proof({ lifetimeMs: 30 * DAY }),
+      });
+      return await ProfileManager.getSession("scoped") as { expiresAt: string };
+    }
+
+    test("the pre-consent shorten check does not use --expiry for a paste login, so a longer pick can still be made", async () => {
+      const live = await liveThirtyDays();
+      let calls = 0;
+      const picked = await proof({ lifetimeMs: 60 * DAY });
+      await refreshOpenKeySession("scoped", host, {
+        permissions: requested, paste: true, expiry: "7d",
+        openKeyAcquisition: async () => { calls++; return picked; },
+      });
+      expect(calls).toBe(1);
+      const saved = await ProfileManager.getSession("scoped") as { expiresAt: string };
+      expect(saved.expiresAt).toBe(lastLine(picked.siwe));
+      expect(Date.parse(saved.expiresAt)).toBeGreaterThan(Date.parse(live.expiresAt));
+    });
+
+    test("a paste pick shorter than the live session is still refused at commit, from the signed value, and changes nothing", async () => {
+      const live = await liveThirtyDays();
+      let calls = 0;
+      await expect(refreshOpenKeySession("scoped", host, {
+        permissions: requested, paste: true, expiry: "7d",
+        openKeyAcquisition: async () => { calls++; return proof({ lifetimeMs: 1 * DAY }); },
+      })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+      expect(calls).toBe(1);
+      expect(await ProfileManager.getSession("scoped")).toMatchObject({ expiresAt: live.expiresAt });
+    });
+
+    test("without --paste the pre-consent check still refuses a login that would shorten the live session", async () => {
+      const live = await liveThirtyDays();
+      let calls = 0;
+      await expect(refreshOpenKeySession("scoped", host, {
+        permissions: requested, expiry: "7d",
+        openKeyAcquisition: async () => { calls++; return proof({ lifetimeMs: 7 * DAY }); },
+      })).rejects.toMatchObject({ code: "SESSION_IN_USE" });
+      expect(calls).toBe(0);
+      expect(await ProfileManager.getSession("scoped")).toMatchObject({ expiresAt: live.expiresAt });
+    });
+  });
+});

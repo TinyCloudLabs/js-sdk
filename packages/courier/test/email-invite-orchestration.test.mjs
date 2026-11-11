@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ulid } from 'ulid';
 import { NodeWasmBindings } from '@tinycloud/node-sdk';
+import { CourierError } from '../dist/errors.js';
 import { parseArgs } from '../dist/args.js';
 import { ownerEncryptionNetwork } from '../dist/authority.js';
 import { AGENT_GRANT, PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
-import { cmdInvite } from '../dist/invitation.js';
+import { runInvite as cmdInvite } from '../dist/invitation.js';
 import { saveKey, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 
@@ -57,46 +58,29 @@ async function run(fn) {
   try { return await fn(); } finally { globalThis.fetch = fetchTrap; }
 }
 
-for (const [name, capabilities] of [
-  ['no invitation-key authority', split],
-  ['authority for a different exact key', [...split, ...exactKey(SHARE_Y)]],
-  ['key.create alone on the generated key', [...split, exactKey(SHARE_X)[0]]],
+// Every email send asks the owner for its own approval: no session authority, injected key id or earlier grant stands in for it.
+const approvalThat = (behaviour) => ({
+  asked: [],
+  async create(input) { this.asked.push(input.context); if (behaviour === 'unavailable') throw new CourierError('approval-unavailable', 'unreachable'); return { approvalUrl: 'https://openkey.example/a/x', transport: { requestId: 'r'.repeat(26), bodyCid: 'bafy' } }; },
+  async poll() { return behaviour === 'denied' ? { status: 'denied' } : { status: 'pending' }; },
+});
+
+for (const [name, capabilities, behaviour, code] of [
+  ['an approver that cannot be reached', split, 'unavailable', 'invite-authority-missing'],
+  ['a refused approval', split, 'denied', 'invite-authority-missing'],
+  ['an approval still pending', split, 'pending', 'invite-approval-pending'],
+  ['an approval still pending although the session already names an exact key', [...split, ...exactKey(SHARE_X)], 'pending', 'invite-approval-pending'],
+  ['an approval still pending although the session names a different exact key', [...split, ...exactKey(SHARE_Y)], 'pending', 'invite-approval-pending'],
 ]) {
-  test(`cmdInvite --mode email with ${name}: refused before anything is created`, async () => {
+  test(`cmdInvite --mode email with ${name}: nothing is created or sent`, async () => {
     const { kv, node, calls, argv } = setup(capabilities);
-    let generated = 0;
-    const failure = await run(() => cmdInvite(argv(), { node: async () => node, shareId: () => { generated += 1; return SHARE_X; } }).then(() => undefined, (error) => error));
-    assert.equal(failure?.code, 'invite-authority-missing');
-    assert.equal(generated, 1, 'the share id is generated once, before the check');
-    // The check comes first: no relay delegation, no invitation state, nothing of the Share path.
+    const approval = approvalThat(behaviour);
+    const failure = await run(() => cmdInvite(argv(['--wait', '1']), { node: async () => node, approval, send: async () => { calls.push('send'); } }).then(() => undefined, (error) => error));
+    assert.equal(failure?.code, code);
+    assert.equal(approval.asked.length, 1, 'the owner is asked for this invitation');
+    // No relay delegation, no invitation state, nothing of the Share path.
     assert.deepEqual(calls, []);
     assert.deepEqual(inviteState(kv), []);
-    assert.match(failure.message, /nothing was created/);
-    assert.match(failure.message, /pairing relay delegation, invitation state, Share key, link or email/);
+    assert.match(failure.message, /nothing was created|nothing has been created or sent/);
   });
 }
-
-test('cmdInvite --mode email with authority for the generated key: relay and state are created after the check, and the same id reaches the Share step', async () => {
-  const { kv, node, calls, argv } = setup([...split, ...exactKey(SHARE_X)]);
-  const seen = [];
-  let generated = 0;
-  const deps = {
-    node: async () => node,
-    shareId: () => { generated += 1; return SHARE_X; },
-    send: async (sentNode, _profile, body, sendDeps) => { calls.push('send'); seen.push({ node: sentNode, id: sendDeps.shareId(), invitation: body.id, mode: body.mode, recipient: body.recipient }); },
-  };
-  const failure = await run(() => cmdInvite(argv(['--wait', '1']), deps).then(() => undefined, (error) => error));
-  // After sending, the command serves the invitation; with no claimant it ends pending, which proves it got that far.
-  assert.equal(failure?.code, 'invite-pending');
-  assert.equal(generated, 1, 'one share id for the whole invitation');
-  assert.deepEqual(calls, ['delegateTo', 'send'], 'the relay is issued after the authority check and before the Share step');
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0].node, node);
-  assert.equal(seen[0].id, SHARE_X, 'the Share step uses the id the authority was checked for');
-  assert.equal(seen[0].mode, 'email');
-  assert.equal(seen[0].recipient, 'reader@example.com');
-  const [stateKey] = inviteState(kv);
-  assert.equal(inviteState(kv).length, 1);
-  assert.ok(stateKey.endsWith(`${seen[0].invitation}.json`));
-  assert.equal(kv.rows.get(stateKey).value.link, undefined, 'no link is stored');
-});

@@ -152,6 +152,155 @@ var init_constants = __esm({
   }
 });
 
+// src/lib/diagnostic-logs.ts
+import { constants as fsConstants } from "fs";
+import { mkdir, open, readFile, rm, lstat, writeFile } from "fs/promises";
+import { join } from "path";
+function setDiagnosticCommandContext(options) {
+  activeCommand = options.command;
+  activeArgs = [...options.args];
+  activeDisabled = options.disabled;
+  activeCliVersion = options.cliVersion;
+  activeStartedAt = Date.now();
+}
+function redactDiagnosticText(input) {
+  let text = input;
+  let count = 0;
+  const replace = (pattern, replacement) => {
+    text = text.replace(pattern, (...matches) => {
+      count += 1;
+      return typeof replacement === "string" ? replacement : replacement(...matches);
+    });
+  };
+  replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "[ANSI_REMOVED]");
+  replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  replace(/\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@[^\s"'`]+/g, (_match, scheme) => `${scheme}[REDACTED_URL]`);
+  replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, "[REDACTED_TOKEN]");
+  replace(/\b(?:token|api[_-]?key|secret|password|private[_-]?key|authorization)\b(\s*[=:]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^,\s}\]]+)/gi, (_match, separator) => `${separator}"[REDACTED_SECRET]"`);
+  replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/gi, "[REDACTED_SECRET]");
+  replace(/\b(?:0x)?[a-f0-9]{64}\b/gi, "[REDACTED_KEY]");
+  replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
+  replace(/\bdid:[a-z0-9]+:[A-Za-z0-9._:%-]+/gi, "[REDACTED_DID]");
+  replace(/\b0x[a-f0-9]{40}\b/gi, "[REDACTED_ADDRESS]");
+  replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[REDACTED_ID]");
+  replace(/\b(?!(?:127\.|0\.0\.0\.0))(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g, "[REDACTED_ADDRESS]");
+  replace(/(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"'`]+(?:[/\\][^\\\s"'`,}\]]+)*/g, "[REDACTED_PATH]");
+  replace(/(--(?:profile|space|user|owner|account|key|name)(?:=|\s+))(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`])?)(?:"[^"]*"|'[^']*'|`[^`]*`|[^\s,;]+)/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key|name)\s*(?:name)?\s*([:=]\s*)(?!(?:["'`])?\[REDACTED(?:_[A-Z]+)?\](?:["'`]?))[^\s,"'`}]+["'`]?/gi, (_match, label, separator) => `${label}${separator}"[REDACTED_NAME]"`);
+  replace(/\b(profile|space|user|owner|account|key)(?:\s+name)?\s+(?:is\s+)?(?!["'`]\[REDACTED(?:_[A-Z]+)?\]["'`])["'`]([^"'`]+)["'`]/gi, (_match, label) => `${label} "[REDACTED_NAME]"`);
+  replace(/\b(?:eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|z[1-9A-HJ-NP-Za-km-z]{30,}|[A-Za-z0-9_-]{32,})\b/g, "[REDACTED_OPAQUE]");
+  replace(/("(?:name|fullName|user|owner)"\s*:\s*)(?!\[REDACTED(?:_[A-Z]+)?\])"[^"]*"/gi, (_match, prefix) => `${prefix}"[REDACTED_NAME]"`);
+  return { text, count };
+}
+function redactArgs(args) {
+  const values = [];
+  let count = 0;
+  const booleanFlags = /* @__PURE__ */ new Set(["--quiet", "-q", "--verbose", "-v", "--json", "--no-cache", "--no-retry", "--replication", "--no-replication", "--replication-debug", "--no-diagnostic-logs"]);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") break;
+    if (!arg.startsWith("-")) continue;
+    const shortFlag = /^-[A-Za-z]/.exec(arg)?.[0];
+    if (shortFlag && arg.length > shortFlag.length) {
+      values.push(`${shortFlag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
+    const equals7 = arg.indexOf("=");
+    const flag = equals7 < 0 ? arg : arg.slice(0, equals7);
+    if (equals7 >= 0) {
+      values.push(`${flag}=[REDACTED]`);
+      count += 1;
+      continue;
+    }
+    if (booleanFlags.has(arg)) {
+      values.push(arg);
+      continue;
+    }
+    const next = args[index + 1];
+    if (next && next !== "--" && !booleanFlags.has(next)) {
+      values.push(`${arg}=[REDACTED]`);
+      count += 1;
+      index += 1;
+    } else values.push(arg);
+  }
+  return { values, count };
+}
+function redactDiagnosticEntry(entry) {
+  const command = redactDiagnosticText(entry.command);
+  const args = redactArgs(entry.args);
+  const errorCode2 = entry.errorCode ? redactDiagnosticText(entry.errorCode) : void 0;
+  const errorMessage = entry.errorMessage ? redactDiagnosticText(entry.errorMessage) : void 0;
+  return {
+    command: command.text,
+    args: args.values,
+    exitCode: entry.exitCode,
+    ...errorCode2 ? { errorCode: errorCode2.text } : {},
+    ...errorMessage ? { errorMessage: errorMessage.text } : {},
+    cliVersion: entry.cliVersion,
+    nodeVersion: entry.nodeVersion,
+    durationMs: entry.durationMs,
+    localRedactions: command.count + args.count + (errorCode2?.count ?? 0) + (errorMessage?.count ?? 0)
+  };
+}
+async function recordDiagnosticFailure(error, root) {
+  if (!activeCommand || activeCommand === "bug-report" || activeDisabled || process.env.TINYCLOUD_CLI_LOGS === "0") return;
+  await appendDiagnosticLog({
+    root,
+    entry: {
+      command: activeCommand,
+      args: activeArgs,
+      exitCode: error.exitCode,
+      errorCode: error.code,
+      errorMessage: error.message,
+      cliVersion: activeCliVersion,
+      nodeVersion: process.version,
+      durationMs: Date.now() - activeStartedAt
+    }
+  });
+}
+async function appendDiagnosticLog(options) {
+  if (options.disabled) return;
+  const maximum = options.maxBytes ?? MAX_BYTES;
+  await mkdir(options.root, { recursive: true, mode: 448 });
+  const path = join(options.root, FILE_NAME);
+  const line = `${JSON.stringify({ timestamp: (/* @__PURE__ */ new Date()).toISOString(), ...redactDiagnosticEntry(options.entry) })}
+`;
+  const lineBytes = Buffer.byteLength(line);
+  if (lineBytes >= maximum) return;
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile()) throw new Error("Diagnostic log path is not a regular file.");
+    if (current.size + lineBytes > maximum) {
+      const old = await readFile(path);
+      const tail = old.subarray(Math.max(0, old.length - Math.floor(maximum / 2)));
+      const firstNewline = tail.indexOf(10);
+      await writeFile(path, firstNewline < 0 ? Buffer.alloc(0) : tail.subarray(firstNewline + 1), { mode: 384 });
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW, 384);
+  try {
+    await file.chmod(384);
+    await file.write(line);
+  } finally {
+    await file.close();
+  }
+}
+var FILE_NAME, MAX_BYTES, activeCommand, activeArgs, activeDisabled, activeCliVersion, activeStartedAt;
+var init_diagnostic_logs = __esm({
+  "src/lib/diagnostic-logs.ts"() {
+    "use strict";
+    FILE_NAME = "cli-diagnostics.jsonl";
+    MAX_BYTES = 1024 * 1024;
+    activeArgs = [];
+    activeDisabled = false;
+    activeCliVersion = "unknown";
+    activeStartedAt = Date.now();
+  }
+});
+
 // src/output/safe-text.ts
 function escape(match) {
   return `\\u{${match.codePointAt(0).toString(16)}}`;
@@ -244,6 +393,9 @@ function recordWarnings(warnings) {
   const holder = globalThis;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
 }
+function recordRegistryFallbackWarning(_message, reason = "using_default_node") {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
+}
 function drainWarnings() {
   const holder = globalThis;
   const warnings = holder[PENDING_WARNINGS] ?? [];
@@ -261,10 +413,20 @@ var init_warnings = __esm({
 // src/output/formatter.ts
 import ora from "ora";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
+function outputJson(data) {
+  process.stdout.write(safeJsonStringify(data, 2) + "\n");
+}
 function warningLine(warnings) {
-  const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
-  const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
-  return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`;
+  const cached = warnings.some(({ code: code5, reason }) => code5 === "REGISTRY_UNAVAILABLE" && reason === "using_cached_settings");
+  const skipped = warnings.filter(({ code: code5 }) => code5 !== "REGISTRY_UNAVAILABLE");
+  const parts = [];
+  if (cached) parts.push("Couldn't reach your storage settings, so this used the copy saved on this computer in the last hour.");
+  if (skipped.length > 0) {
+    const which = skipped.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
+    const subject = skipped.length === 1 ? "A stored grant was" : `${skipped.length} stored grants were`;
+    parts.push(`${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`);
+  }
+  return parts.join(" ");
 }
 function outputError(code5, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
@@ -417,7 +579,7 @@ var init_storage = __esm({
 
 // src/output/errors.ts
 import { readFileSync, readdirSync } from "fs";
-import { join } from "path";
+import { join as join2 } from "path";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME as CLI_NAME3 } from "@tinycloud/operations/cli-name";
@@ -429,8 +591,25 @@ import {
   SECRET_REQUEST_MAX_NAMES
 } from "@tinycloud/operations/secret-request";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
+import { routingFailure } from "@tinycloud/sdk-services";
 function setActiveProfileName(name) {
   activeProfileName = name;
+}
+function approvalPendingOf(error) {
+  const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : void 0;
+  if (typeof pending !== "object" || pending === null) return void 0;
+  const { step, of, approvalUrl, expiresAt } = pending;
+  if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
+  return { step, of, approvalUrl, expiresAt };
+}
+function registryUnavailableError(error) {
+  const failure = routingFailure(error);
+  if (failure?.code !== "registry_unavailable") return void 0;
+  return new CLIError(
+    "REGISTRY_UNAVAILABLE",
+    failure.meta?.reason === "no-saved-settings" ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes." : "Couldn't get your storage settings. Try again in a few minutes.",
+    ExitCode.ERROR
+  );
 }
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
@@ -468,6 +647,8 @@ function wrapError(error) {
   if (verdict === "forbidden") {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
+  const unavailable = registryUnavailableError(error);
+  if (unavailable) return unavailable;
   if (verdict === void 0 && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
@@ -515,8 +696,17 @@ function storageFullError(error, progress) {
   const { message, hint } = describeStorageRejection(rejection, progress);
   return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
-function handleError(error) {
+async function handleError(error) {
   const cliError = wrapError(error);
+  await recordDiagnosticFailure(cliError, CONFIG_DIR).catch(() => void 0);
+  const pending = approvalPendingOf(cliError);
+  if (pending) {
+    outputJson({ pending });
+    process.stderr.write(`${safeBlock(cliError.message)}
+`);
+    if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+    return closeReplication().then(() => process.exit(cliError.exitCode));
+  }
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
@@ -614,7 +804,7 @@ function capSpecFromAuthMeta(resource, action) {
 function buildNetworkHint() {
   const readHost = (name) => {
     try {
-      const raw = readFileSync(join(PROFILES_DIR, name, "profile.json"), "utf8");
+      const raw = readFileSync(join2(PROFILES_DIR, name, "profile.json"), "utf8");
       return JSON.parse(raw).host;
     } catch {
       return void 0;
@@ -656,7 +846,9 @@ var init_errors = __esm({
     "use strict";
     init_replication_registry();
     init_constants();
+    init_diagnostic_logs();
     init_formatter();
+    init_safe_text();
     init_storage();
     init_warnings();
     GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
@@ -676,13 +868,13 @@ var init_errors = __esm({
 });
 
 // src/config/storage.ts
-import { constants as fsConstants } from "fs";
+import { constants as fsConstants2 } from "fs";
 import { randomUUID } from "crypto";
-import { readFile, writeFile, stat, mkdir, rm, readdir, rename, open } from "fs/promises";
-import { basename, dirname, join as join2 } from "path";
+import { readFile as readFile2, writeFile as writeFile2, stat, mkdir as mkdir2, rm as rm2, readdir, rename, open as open2 } from "fs/promises";
+import { basename, dirname, join as join3 } from "path";
 async function readJson(filePath) {
   try {
-    const data = await readFile(filePath, "utf-8");
+    const data = await readFile2(filePath, "utf-8");
     return JSON.parse(data);
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -693,22 +885,22 @@ async function readJson(filePath) {
 }
 async function writeJson(filePath, data) {
   const directory = dirname(filePath);
-  const tempPath = join2(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const tempPath = join3(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir2(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    await writeFile(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
+    await writeFile2(tempPath, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: PRIVATE_FILE_MODE });
     await rename(tempPath, filePath);
   } catch (err) {
-    await rm(tempPath, { force: true }).catch(() => void 0);
+    await rm2(tempPath, { force: true }).catch(() => void 0);
     throw err;
   }
 }
 async function writeJsonDurable(filePath, data) {
   const directory = dirname(filePath);
-  const tempPath = join2(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const tempPath = join3(directory, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  await mkdir2(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
   try {
-    const file = await open(tempPath, "wx", PRIVATE_FILE_MODE);
+    const file = await open2(tempPath, "wx", PRIVATE_FILE_MODE);
     try {
       await file.writeFile(JSON.stringify(data, null, 2) + "\n", "utf8");
       await file.sync();
@@ -716,14 +908,14 @@ async function writeJsonDurable(filePath, data) {
       await file.close();
     }
     await rename(tempPath, filePath);
-    const parent = await open(directory, "r");
+    const parent = await open2(directory, "r");
     try {
       await parent.sync();
     } finally {
       await parent.close();
     }
   } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => void 0);
+    await rm2(tempPath, { force: true }).catch(() => void 0);
     throw error;
   }
 }
@@ -739,7 +931,7 @@ async function fileExists(filePath) {
   }
 }
 async function ensureDir(dirPath) {
-  await mkdir(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await mkdir2(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
 }
 async function listDirs(dirPath) {
   try {
@@ -887,7 +1079,7 @@ function add(Ah, Al, Bh, Bl) {
   const l = (Al >>> 0) + (Bl >>> 0);
   return { h: Ah + Bh + (l / 2 ** 32 | 0) | 0, l: l | 0 };
 }
-var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, add3L, add3H, add4L, add4H, add5L, add5H;
+var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, rotlSH, rotlSL, rotlBH, rotlBL, add3L, add3H, add4L, add4H, add5L, add5H;
 var init_u64 = __esm({
   "../../node_modules/@noble/hashes/esm/_u64.js"() {
     "use strict";
@@ -899,6 +1091,10 @@ var init_u64 = __esm({
     rotrSL = (h, l, s) => h << 32 - s | l >>> s;
     rotrBH = (h, l, s) => h << 64 - s | l >>> s - 32;
     rotrBL = (h, l, s) => h >>> s - 32 | l << 64 - s;
+    rotlSH = (h, l, s) => h << s | l >>> 32 - s;
+    rotlSL = (h, l, s) => l << s | h >>> 32 - s;
+    rotlBH = (h, l, s) => l << s - 32 | h >>> 64 - s;
+    rotlBL = (h, l, s) => h << s - 32 | l >>> 64 - s;
     add3L = (Al, Bl, Cl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0);
     add3H = (low, Ah, Bh, Ch) => Ah + Bh + Ch + (low / 2 ** 32 | 0) | 0;
     add4L = (Al, Bl, Cl, Dl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0);
@@ -981,11 +1177,11 @@ function bytesToHex(bytes) {
   abytes(bytes);
   if (hasHexBuiltin)
     return bytes.toHex();
-  let hex3 = "";
+  let hex4 = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex3 += hexes[bytes[i]];
+    hex4 += hexes[bytes[i]];
   }
-  return hex3;
+  return hex4;
 }
 function asciiToBase16(ch) {
   if (ch >= asciis._0 && ch <= asciis._9)
@@ -996,21 +1192,21 @@ function asciiToBase16(ch) {
     return ch - (asciis.a - 10);
   return;
 }
-function hexToBytes(hex3) {
-  if (typeof hex3 !== "string")
-    throw new Error("hex string expected, got " + typeof hex3);
+function hexToBytes(hex4) {
+  if (typeof hex4 !== "string")
+    throw new Error("hex string expected, got " + typeof hex4);
   if (hasHexBuiltin)
-    return Uint8Array.fromHex(hex3);
-  const hl = hex3.length;
+    return Uint8Array.fromHex(hex4);
+  const hl = hex4.length;
   const al = hl / 2;
   if (hl % 2)
     throw new Error("hex string expected, got unpadded hex of length " + hl);
   const array = new Uint8Array(al);
   for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
-    const n1 = asciiToBase16(hex3.charCodeAt(hi));
-    const n2 = asciiToBase16(hex3.charCodeAt(hi + 1));
+    const n1 = asciiToBase16(hex4.charCodeAt(hi));
+    const n2 = asciiToBase16(hex4.charCodeAt(hi + 1));
     if (n1 === void 0 || n2 === void 0) {
-      const char = hex3[hi] + hex3[hi + 1];
+      const char = hex4[hi] + hex4[hi + 1];
       throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
     }
     array[ai] = n1 * 16 + n2;
@@ -1084,6 +1280,195 @@ var init_utils = __esm({
     asciis = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
     Hash = class {
     };
+  }
+});
+
+// ../../node_modules/@noble/hashes/esm/sha3.js
+function keccakP(s, rounds = 24) {
+  const B = new Uint32Array(5 * 2);
+  for (let round = 24 - rounds; round < 24; round++) {
+    for (let x = 0; x < 10; x++)
+      B[x] = s[x] ^ s[x + 10] ^ s[x + 20] ^ s[x + 30] ^ s[x + 40];
+    for (let x = 0; x < 10; x += 2) {
+      const idx1 = (x + 8) % 10;
+      const idx0 = (x + 2) % 10;
+      const B0 = B[idx0];
+      const B1 = B[idx0 + 1];
+      const Th = rotlH(B0, B1, 1) ^ B[idx1];
+      const Tl = rotlL(B0, B1, 1) ^ B[idx1 + 1];
+      for (let y = 0; y < 50; y += 10) {
+        s[x + y] ^= Th;
+        s[x + y + 1] ^= Tl;
+      }
+    }
+    let curH = s[2];
+    let curL = s[3];
+    for (let t = 0; t < 24; t++) {
+      const shift = SHA3_ROTL[t];
+      const Th = rotlH(curH, curL, shift);
+      const Tl = rotlL(curH, curL, shift);
+      const PI = SHA3_PI[t];
+      curH = s[PI];
+      curL = s[PI + 1];
+      s[PI] = Th;
+      s[PI + 1] = Tl;
+    }
+    for (let y = 0; y < 50; y += 10) {
+      for (let x = 0; x < 10; x++)
+        B[x] = s[y + x];
+      for (let x = 0; x < 10; x++)
+        s[y + x] ^= ~B[(x + 2) % 10] & B[(x + 4) % 10];
+    }
+    s[0] ^= SHA3_IOTA_H[round];
+    s[1] ^= SHA3_IOTA_L[round];
+  }
+  clean(B);
+}
+var _0n, _1n, _2n, _7n, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
+var init_sha3 = __esm({
+  "../../node_modules/@noble/hashes/esm/sha3.js"() {
+    "use strict";
+    init_u64();
+    init_utils();
+    _0n = BigInt(0);
+    _1n = BigInt(1);
+    _2n = BigInt(2);
+    _7n = BigInt(7);
+    _256n = BigInt(256);
+    _0x71n = BigInt(113);
+    SHA3_PI = [];
+    SHA3_ROTL = [];
+    _SHA3_IOTA = [];
+    for (let round = 0, R = _1n, x = 1, y = 0; round < 24; round++) {
+      [x, y] = [y, (2 * x + 3 * y) % 5];
+      SHA3_PI.push(2 * (5 * y + x));
+      SHA3_ROTL.push((round + 1) * (round + 2) / 2 % 64);
+      let t = _0n;
+      for (let j = 0; j < 7; j++) {
+        R = (R << _1n ^ (R >> _7n) * _0x71n) % _256n;
+        if (R & _2n)
+          t ^= _1n << (_1n << /* @__PURE__ */ BigInt(j)) - _1n;
+      }
+      _SHA3_IOTA.push(t);
+    }
+    IOTAS = split(_SHA3_IOTA, true);
+    SHA3_IOTA_H = IOTAS[0];
+    SHA3_IOTA_L = IOTAS[1];
+    rotlH = (h, l, s) => s > 32 ? rotlBH(h, l, s) : rotlSH(h, l, s);
+    rotlL = (h, l, s) => s > 32 ? rotlBL(h, l, s) : rotlSL(h, l, s);
+    Keccak = class _Keccak extends Hash {
+      // NOTE: we accept arguments in bytes instead of bits here.
+      constructor(blockLen, suffix, outputLen, enableXOF = false, rounds = 24) {
+        super();
+        this.pos = 0;
+        this.posOut = 0;
+        this.finished = false;
+        this.destroyed = false;
+        this.enableXOF = false;
+        this.blockLen = blockLen;
+        this.suffix = suffix;
+        this.outputLen = outputLen;
+        this.enableXOF = enableXOF;
+        this.rounds = rounds;
+        anumber(outputLen);
+        if (!(0 < blockLen && blockLen < 200))
+          throw new Error("only keccak-f1600 function is supported");
+        this.state = new Uint8Array(200);
+        this.state32 = u32(this.state);
+      }
+      clone() {
+        return this._cloneInto();
+      }
+      keccak() {
+        swap32IfBE(this.state32);
+        keccakP(this.state32, this.rounds);
+        swap32IfBE(this.state32);
+        this.posOut = 0;
+        this.pos = 0;
+      }
+      update(data) {
+        aexists(this);
+        data = toBytes(data);
+        abytes(data);
+        const { blockLen, state: state2 } = this;
+        const len = data.length;
+        for (let pos = 0; pos < len; ) {
+          const take = Math.min(blockLen - this.pos, len - pos);
+          for (let i = 0; i < take; i++)
+            state2[this.pos++] ^= data[pos++];
+          if (this.pos === blockLen)
+            this.keccak();
+        }
+        return this;
+      }
+      finish() {
+        if (this.finished)
+          return;
+        this.finished = true;
+        const { state: state2, suffix, pos, blockLen } = this;
+        state2[pos] ^= suffix;
+        if ((suffix & 128) !== 0 && pos === blockLen - 1)
+          this.keccak();
+        state2[blockLen - 1] ^= 128;
+        this.keccak();
+      }
+      writeInto(out) {
+        aexists(this, false);
+        abytes(out);
+        this.finish();
+        const bufferOut = this.state;
+        const { blockLen } = this;
+        for (let pos = 0, len = out.length; pos < len; ) {
+          if (this.posOut >= blockLen)
+            this.keccak();
+          const take = Math.min(blockLen - this.posOut, len - pos);
+          out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
+          this.posOut += take;
+          pos += take;
+        }
+        return out;
+      }
+      xofInto(out) {
+        if (!this.enableXOF)
+          throw new Error("XOF is not possible for this instance");
+        return this.writeInto(out);
+      }
+      xof(bytes) {
+        anumber(bytes);
+        return this.xofInto(new Uint8Array(bytes));
+      }
+      digestInto(out) {
+        aoutput(out, this);
+        if (this.finished)
+          throw new Error("digest() was already called");
+        this.writeInto(out);
+        this.destroy();
+        return out;
+      }
+      digest() {
+        return this.digestInto(new Uint8Array(this.outputLen));
+      }
+      destroy() {
+        this.destroyed = true;
+        clean(this.state);
+      }
+      _cloneInto(to) {
+        const { blockLen, suffix, outputLen, rounds, enableXOF } = this;
+        to || (to = new _Keccak(blockLen, suffix, outputLen, enableXOF, rounds));
+        to.state32.set(this.state32);
+        to.pos = this.pos;
+        to.posOut = this.posOut;
+        to.finished = this.finished;
+        to.rounds = rounds;
+        to.suffix = suffix;
+        to.outputLen = outputLen;
+        to.enableXOF = enableXOF;
+        to.destroyed = this.destroyed;
+        return to;
+      }
+    };
+    gen = (suffix, blockLen, outputLen) => createHasher(() => new Keccak(blockLen, suffix, outputLen));
+    keccak_256 = /* @__PURE__ */ (() => gen(1, 136, 256 / 8))();
   }
 });
 
@@ -1708,6 +2093,7 @@ var init_hmac = __esm({
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
+    init_safe_text();
   }
 });
 
@@ -1739,8 +2125,8 @@ var init_publishing_manifest = __esm({
 });
 
 // src/lib/permissions.ts
-import { appendFile, chmod, readFile as readFile2 } from "fs/promises";
-import { join as join3 } from "path";
+import { appendFile, chmod, readFile as readFile3 } from "fs/promises";
+import { join as join4 } from "path";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact
@@ -1848,11 +2234,11 @@ var init_retry_policy = __esm({
 // src/lib/replication-log.ts
 import { CLI_NAME as CLI_NAME7 } from "@tinycloud/operations/cli-name";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, statSync, writeFileSync } from "fs";
-import { dirname as dirname2, join as join4 } from "path";
+import { dirname as dirname2, join as join5 } from "path";
 function appendReplicationEvent(root, event) {
   mkdirSync(root, { recursive: true, mode: DIR_MODE });
   chmodSync(root, DIR_MODE);
-  const path = join4(root, LOG_FILE);
+  const path = join5(root, LOG_FILE);
   let size = 0;
   try {
     size = statSync(path).size;
@@ -1862,7 +2248,7 @@ function appendReplicationEvent(root, event) {
   const line = `${JSON.stringify(event)}
 `;
   if (size + Buffer.byteLength(line) > MAX_LOG_BYTES) {
-    const rotated = join4(root, ROTATED_LOG_FILE);
+    const rotated = join5(root, ROTATED_LOG_FILE);
     try {
       renameSync(path, rotated);
     } catch (error) {
@@ -1875,7 +2261,7 @@ function appendReplicationEvent(root, event) {
   chmodSync(path, LOG_MODE);
 }
 function replicationLogPath(profileRoot) {
-  return join4(profileRoot, "replication", LOG_FILE);
+  return join5(profileRoot, "replication", LOG_FILE);
 }
 function createReplicationEventSink(profileRoot, options) {
   const pinnedNotices = /* @__PURE__ */ new Set();
@@ -2310,13 +2696,13 @@ function _abytes2(value, length5, title = "") {
   return value;
 }
 function numberToHexUnpadded(num) {
-  const hex3 = num.toString(16);
-  return hex3.length & 1 ? "0" + hex3 : hex3;
+  const hex4 = num.toString(16);
+  return hex4.length & 1 ? "0" + hex4 : hex4;
 }
-function hexToNumber(hex3) {
-  if (typeof hex3 !== "string")
-    throw new Error("hex string expected, got " + typeof hex3);
-  return hex3 === "" ? _0n : BigInt("0x" + hex3);
+function hexToNumber(hex4) {
+  if (typeof hex4 !== "string")
+    throw new Error("hex string expected, got " + typeof hex4);
+  return hex4 === "" ? _0n2 : BigInt("0x" + hex4);
 }
 function bytesToNumberBE(bytes) {
   return hexToNumber(bytesToHex(bytes));
@@ -2331,16 +2717,16 @@ function numberToBytesBE(n, len) {
 function numberToBytesLE(n, len) {
   return numberToBytesBE(n, len).reverse();
 }
-function ensureBytes(title, hex3, expectedLength) {
+function ensureBytes(title, hex4, expectedLength) {
   let res;
-  if (typeof hex3 === "string") {
+  if (typeof hex4 === "string") {
     try {
-      res = hexToBytes(hex3);
+      res = hexToBytes(hex4);
     } catch (e) {
       throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
     }
-  } else if (isBytes(hex3)) {
-    res = Uint8Array.from(hex3);
+  } else if (isBytes(hex4)) {
+    res = Uint8Array.from(hex4);
   } else {
     throw new Error(title + " must be hex string or Uint8Array");
   }
@@ -2369,7 +2755,7 @@ function aInRange(title, n, min, max) {
 }
 function bitLen(n) {
   let len;
-  for (len = 0; n > _0n; n >>= _1n, len += 1)
+  for (len = 0; n > _0n2; n >>= _1n2, len += 1)
     ;
   return len;
 }
@@ -2399,7 +2785,7 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
     k = h(u8of(1), seed);
     v = h();
   };
-  const gen = () => {
+  const gen2 = () => {
     if (i++ >= 1e3)
       throw new Error("drbg: tried 1000 values");
     let len = 0;
@@ -2416,7 +2802,7 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
     reset();
     reseed(seed);
     let res = void 0;
-    while (!(res = pred(gen())))
+    while (!(res = pred(gen2())))
       reseed();
     reset();
     return res;
@@ -2448,16 +2834,16 @@ function memoized(fn) {
     return computed;
   };
 }
-var _0n, _1n, isPosBig, bitMask, notImplemented;
+var _0n2, _1n2, isPosBig, bitMask, notImplemented;
 var init_utils2 = __esm({
   "../../node_modules/@noble/curves/esm/utils.js"() {
     "use strict";
     init_utils();
     init_utils();
-    _0n = /* @__PURE__ */ BigInt(0);
-    _1n = /* @__PURE__ */ BigInt(1);
-    isPosBig = (n) => typeof n === "bigint" && _0n <= n;
-    bitMask = (n) => (_1n << BigInt(n)) - _1n;
+    _0n2 = /* @__PURE__ */ BigInt(0);
+    _1n2 = /* @__PURE__ */ BigInt(1);
+    isPosBig = (n) => typeof n === "bigint" && _0n2 <= n;
+    bitMask = (n) => (_1n2 << BigInt(n)) - _1n2;
     notImplemented = () => {
       throw new Error("not implemented");
     };
@@ -2467,25 +2853,25 @@ var init_utils2 = __esm({
 // ../../node_modules/@noble/curves/esm/abstract/modular.js
 function mod(a, b) {
   const result = a % b;
-  return result >= _0n2 ? result : b + result;
+  return result >= _0n3 ? result : b + result;
 }
 function pow2(x, power, modulo) {
   let res = x;
-  while (power-- > _0n2) {
+  while (power-- > _0n3) {
     res *= res;
     res %= modulo;
   }
   return res;
 }
 function invert(number, modulo) {
-  if (number === _0n2)
+  if (number === _0n3)
     throw new Error("invert: expected non-zero number");
-  if (modulo <= _0n2)
+  if (modulo <= _0n3)
     throw new Error("invert: expected positive modulus, got " + modulo);
   let a = mod(number, modulo);
   let b = modulo;
-  let x = _0n2, y = _1n2, u = _1n2, v = _0n2;
-  while (a !== _0n2) {
+  let x = _0n3, y = _1n3, u = _1n3, v = _0n3;
+  while (a !== _0n3) {
     const q = b / a;
     const r = b % a;
     const m = x - u * q;
@@ -2493,7 +2879,7 @@ function invert(number, modulo) {
     b = a, a = r, x = u, y = v, u = m, v = n;
   }
   const gcd = b;
-  if (gcd !== _1n2)
+  if (gcd !== _1n3)
     throw new Error("invert: does not exist");
   return mod(x, modulo);
 }
@@ -2502,17 +2888,17 @@ function assertIsSquare(Fp2, root, n) {
     throw new Error("Cannot find square root");
 }
 function sqrt3mod4(Fp2, n) {
-  const p1div4 = (Fp2.ORDER + _1n2) / _4n;
+  const p1div4 = (Fp2.ORDER + _1n3) / _4n;
   const root = Fp2.pow(n, p1div4);
   assertIsSquare(Fp2, root, n);
   return root;
 }
 function sqrt5mod8(Fp2, n) {
   const p5div8 = (Fp2.ORDER - _5n) / _8n;
-  const n2 = Fp2.mul(n, _2n);
+  const n2 = Fp2.mul(n, _2n2);
   const v = Fp2.pow(n2, p5div8);
   const nv = Fp2.mul(n, v);
-  const i = Fp2.mul(Fp2.mul(nv, _2n), v);
+  const i = Fp2.mul(Fp2.mul(nv, _2n2), v);
   const root = Fp2.mul(nv, Fp2.sub(i, Fp2.ONE));
   assertIsSquare(Fp2, root, n);
   return root;
@@ -2523,7 +2909,7 @@ function sqrt9mod16(P) {
   const c1 = tn(Fp_, Fp_.neg(Fp_.ONE));
   const c2 = tn(Fp_, c1);
   const c3 = tn(Fp_, Fp_.neg(c1));
-  const c4 = (P + _7n) / _16n;
+  const c4 = (P + _7n2) / _16n;
   return (Fp2, n) => {
     let tv1 = Fp2.pow(n, c4);
     let tv2 = Fp2.mul(tv1, c1);
@@ -2542,13 +2928,13 @@ function sqrt9mod16(P) {
 function tonelliShanks(P) {
   if (P < _3n)
     throw new Error("sqrt is not defined for small field");
-  let Q = P - _1n2;
+  let Q = P - _1n3;
   let S = 0;
-  while (Q % _2n === _0n2) {
-    Q /= _2n;
+  while (Q % _2n2 === _0n3) {
+    Q /= _2n2;
     S++;
   }
-  let Z = _2n;
+  let Z = _2n2;
   const _Fp = Field(P);
   while (FpLegendre(_Fp, Z) === 1) {
     if (Z++ > 1e3)
@@ -2557,7 +2943,7 @@ function tonelliShanks(P) {
   if (S === 1)
     return sqrt3mod4;
   let cc = _Fp.pow(Z, Q);
-  const Q1div2 = (Q + _1n2) / _2n;
+  const Q1div2 = (Q + _1n3) / _2n2;
   return function tonelliSlow(Fp2, n) {
     if (Fp2.is0(n))
       return n;
@@ -2578,7 +2964,7 @@ function tonelliShanks(P) {
         if (i === M)
           throw new Error("Cannot find square root");
       }
-      const exponent = _1n2 << BigInt(M - i - 1);
+      const exponent = _1n3 << BigInt(M - i - 1);
       const b = Fp2.pow(c, exponent);
       M = i;
       c = Fp2.sqr(b);
@@ -2612,19 +2998,19 @@ function validateField(field) {
   return field;
 }
 function FpPow(Fp2, num, power) {
-  if (power < _0n2)
+  if (power < _0n3)
     throw new Error("invalid exponent, negatives unsupported");
-  if (power === _0n2)
+  if (power === _0n3)
     return Fp2.ONE;
-  if (power === _1n2)
+  if (power === _1n3)
     return num;
   let p = Fp2.ONE;
   let d = num;
-  while (power > _0n2) {
-    if (power & _1n2)
+  while (power > _0n3) {
+    if (power & _1n3)
       p = Fp2.mul(p, d);
     d = Fp2.sqr(d);
-    power >>= _1n2;
+    power >>= _1n3;
   }
   return p;
 }
@@ -2646,7 +3032,7 @@ function FpInvertBatch(Fp2, nums, passZero = false) {
   return inverted;
 }
 function FpLegendre(Fp2, n) {
-  const p1mod2 = (Fp2.ORDER - _1n2) / _2n;
+  const p1mod2 = (Fp2.ORDER - _1n3) / _2n2;
   const powered = Fp2.pow(n, p1mod2);
   const yes = Fp2.eql(powered, Fp2.ONE);
   const zero = Fp2.eql(powered, Fp2.ZERO);
@@ -2663,7 +3049,7 @@ function nLength(n, nBitLength) {
   return { nBitLength: _nBitLength, nByteLength };
 }
 function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
-  if (ORDER <= _0n2)
+  if (ORDER <= _0n3)
     throw new Error("invalid field: expected ORDER > 0, got " + ORDER);
   let _nbitLength = void 0;
   let _sqrt = void 0;
@@ -2698,19 +3084,19 @@ function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
     BITS,
     BYTES,
     MASK: bitMask(BITS),
-    ZERO: _0n2,
-    ONE: _1n2,
+    ZERO: _0n3,
+    ONE: _1n3,
     allowedLengths,
     create: (num) => mod(num, ORDER),
     isValid: (num) => {
       if (typeof num !== "bigint")
         throw new Error("invalid field element: expected bigint, got " + typeof num);
-      return _0n2 <= num && num < ORDER;
+      return _0n3 <= num && num < ORDER;
     },
-    is0: (num) => num === _0n2,
+    is0: (num) => num === _0n3,
     // is valid and invertible
     isValidNot0: (num) => !f.is0(num) && f.isValid(num),
-    isOdd: (num) => (num & _1n2) === _1n2,
+    isOdd: (num) => (num & _1n3) === _1n3,
     neg: (num) => mod(-num, ORDER),
     eql: (lhs, rhs) => lhs === rhs,
     sqr: (num) => mod(num * num, ORDER),
@@ -2776,25 +3162,25 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   if (len < 16 || len < minLen || len > 1024)
     throw new Error("expected " + minLen + "-1024 bytes of input, got " + len);
   const num = isLE2 ? bytesToNumberLE(key) : bytesToNumberBE(key);
-  const reduced = mod(num, fieldOrder - _1n2) + _1n2;
+  const reduced = mod(num, fieldOrder - _1n3) + _1n3;
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
-var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
+var _0n3, _1n3, _2n2, _3n, _4n, _5n, _7n2, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
 var init_modular = __esm({
   "../../node_modules/@noble/curves/esm/abstract/modular.js"() {
     "use strict";
     init_utils2();
-    _0n2 = BigInt(0);
-    _1n2 = BigInt(1);
-    _2n = /* @__PURE__ */ BigInt(2);
+    _0n3 = BigInt(0);
+    _1n3 = BigInt(1);
+    _2n2 = /* @__PURE__ */ BigInt(2);
     _3n = /* @__PURE__ */ BigInt(3);
     _4n = /* @__PURE__ */ BigInt(4);
     _5n = /* @__PURE__ */ BigInt(5);
-    _7n = /* @__PURE__ */ BigInt(7);
+    _7n2 = /* @__PURE__ */ BigInt(7);
     _8n = /* @__PURE__ */ BigInt(8);
     _9n = /* @__PURE__ */ BigInt(9);
     _16n = /* @__PURE__ */ BigInt(16);
-    isNegativeLE = (num, modulo) => (mod(num, modulo) & _1n2) === _1n2;
+    isNegativeLE = (num, modulo) => (mod(num, modulo) & _1n3) === _1n3;
     FIELD_FIELDS = [
       "create",
       "isValid",
@@ -2845,7 +3231,7 @@ function calcOffsets(n, window, wOpts) {
   let nextN = n >> shiftBy;
   if (wbits > windowSize) {
     wbits -= maxNumber;
-    nextN += _1n3;
+    nextN += _1n4;
   }
   const offsetStart = window * windowSize;
   const offset = offsetStart + Math.abs(wbits) - 1;
@@ -2875,21 +3261,21 @@ function getW(P) {
   return pointWindowSizes.get(P) || 1;
 }
 function assert0(n) {
-  if (n !== _0n3)
+  if (n !== _0n4)
     throw new Error("invalid wNAF");
 }
 function mulEndoUnsafe(Point, point, k1, k2) {
   let acc = point;
   let p1 = Point.ZERO;
   let p2 = Point.ZERO;
-  while (k1 > _0n3 || k2 > _0n3) {
-    if (k1 & _1n3)
+  while (k1 > _0n4 || k2 > _0n4) {
+    if (k1 & _1n4)
       p1 = p1.add(acc);
-    if (k2 & _1n3)
+    if (k2 & _1n4)
       p2 = p2.add(acc);
     acc = acc.double();
-    k1 >>= _1n3;
-    k2 >>= _1n3;
+    k1 >>= _1n4;
+    k2 >>= _1n4;
   }
   return { p1, p2 };
 }
@@ -2949,7 +3335,7 @@ function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
     throw new Error(`expected valid ${type} CURVE object`);
   for (const p of ["p", "n", "h"]) {
     const val = CURVE[p];
-    if (!(typeof val === "bigint" && val > _0n3))
+    if (!(typeof val === "bigint" && val > _0n4))
       throw new Error(`CURVE.${p} must be positive bigint`);
   }
   const Fp2 = createField(CURVE.p, curveOpts.Fp, FpFnLE);
@@ -2963,14 +3349,14 @@ function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
   CURVE = Object.freeze(Object.assign({}, CURVE));
   return { CURVE, Fp: Fp2, Fn: Fn2 };
 }
-var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
+var _0n4, _1n4, pointPrecomputes, pointWindowSizes, wNAF;
 var init_curve = __esm({
   "../../node_modules/@noble/curves/esm/abstract/curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
-    _0n3 = BigInt(0);
-    _1n3 = BigInt(1);
+    _0n4 = BigInt(0);
+    _1n4 = BigInt(1);
     pointPrecomputes = /* @__PURE__ */ new WeakMap();
     pointWindowSizes = /* @__PURE__ */ new WeakMap();
     wNAF = class {
@@ -2984,11 +3370,11 @@ var init_curve = __esm({
       // non-const time multiplication ladder
       _unsafeLadder(elm, n, p = this.ZERO) {
         let d = elm;
-        while (n > _0n3) {
-          if (n & _1n3)
+        while (n > _0n4) {
+          if (n & _1n4)
             p = p.add(d);
           d = d.double();
-          n >>= _1n3;
+          n >>= _1n4;
         }
         return p;
       }
@@ -3052,7 +3438,7 @@ var init_curve = __esm({
       wNAFUnsafe(W, precomputes, n, acc = this.ZERO) {
         const wo = calcWOpts(W, this.bits);
         for (let window = 0; window < wo.windows; window++) {
-          if (n === _0n3)
+          if (n === _0n4)
             break;
           const { nextN, offset, isZero, isNeg } = calcOffsets(n, window, wo);
           n = nextN;
@@ -3117,19 +3503,19 @@ function edwards(params, extraOpts = {}) {
   let CURVE = validated.CURVE;
   const { h: cofactor } = CURVE;
   _validateObject(extraOpts, {}, { uvRatio: "function" });
-  const MASK = _2n2 << BigInt(Fn2.BYTES * 8) - _1n4;
+  const MASK = _2n3 << BigInt(Fn2.BYTES * 8) - _1n5;
   const modP = (n) => Fp2.create(n);
   const uvRatio2 = extraOpts.uvRatio || ((u, v) => {
     try {
       return { isValid: true, value: Fp2.sqrt(Fp2.div(u, v)) };
     } catch (e) {
-      return { isValid: false, value: _0n4 };
+      return { isValid: false, value: _0n5 };
     }
   });
   if (!isEdValidXY(Fp2, CURVE, CURVE.Gx, CURVE.Gy))
     throw new Error("bad curve params: generator point");
   function acoord(title, n, banZero = false) {
-    const min = banZero ? _1n4 : _0n4;
+    const min = banZero ? _1n5 : _0n5;
     aInRange("coordinate " + title, n, min, MASK);
     return n;
   }
@@ -3146,8 +3532,8 @@ function edwards(params, extraOpts = {}) {
     const y = modP(Y * iz);
     const zz = Fp2.mul(Z, iz);
     if (is0)
-      return { x: _0n4, y: _1n4 };
-    if (zz !== _1n4)
+      return { x: _0n5, y: _1n5 };
+    if (zz !== _1n5)
       throw new Error("invZ was invalid");
     return { x, y };
   });
@@ -3188,7 +3574,7 @@ function edwards(params, extraOpts = {}) {
       const { x, y } = p || {};
       acoord("x", x);
       acoord("y", y);
-      return new Point(x, y, _1n4, modP(x * y));
+      return new Point(x, y, _1n5, modP(x * y));
     }
     // Uses algo from RFC8032 5.1.3.
     static fromBytes(bytes, zip215 = false) {
@@ -3201,16 +3587,16 @@ function edwards(params, extraOpts = {}) {
       normed[len - 1] = lastByte & ~128;
       const y = bytesToNumberLE(normed);
       const max = zip215 ? MASK : Fp2.ORDER;
-      aInRange("point.y", y, _0n4, max);
+      aInRange("point.y", y, _0n5, max);
       const y2 = modP(y * y);
-      const u = modP(y2 - _1n4);
+      const u = modP(y2 - _1n5);
       const v = modP(d * y2 - a);
       let { isValid: isValid4, value: x } = uvRatio2(u, v);
       if (!isValid4)
         throw new Error("bad point: invalid y coordinate");
-      const isXOdd = (x & _1n4) === _1n4;
+      const isXOdd = (x & _1n5) === _1n5;
       const isLastByteOdd = (lastByte & 128) !== 0;
-      if (!zip215 && x === _0n4 && isLastByteOdd)
+      if (!zip215 && x === _0n5 && isLastByteOdd)
         throw new Error("bad point: x=0 and x_0=1");
       if (isLastByteOdd !== isXOdd)
         x = modP(-x);
@@ -3228,7 +3614,7 @@ function edwards(params, extraOpts = {}) {
     precompute(windowSize = 8, isLazy = true) {
       wnaf.createCache(this, windowSize);
       if (!isLazy)
-        this.multiply(_2n2);
+        this.multiply(_2n3);
       return this;
     }
     // Useful in fromAffine() - not for fromBytes(), which always created valid points.
@@ -3260,7 +3646,7 @@ function edwards(params, extraOpts = {}) {
       const { X: X1, Y: Y1, Z: Z1 } = this;
       const A = modP(X1 * X1);
       const B = modP(Y1 * Y1);
-      const C = modP(_2n2 * modP(Z1 * Z1));
+      const C = modP(_2n3 * modP(Z1 * Z1));
       const D = modP(a * A);
       const x1y1 = X1 + Y1;
       const E = modP(modP(x1y1 * x1y1) - A - B);
@@ -3313,9 +3699,9 @@ function edwards(params, extraOpts = {}) {
     multiplyUnsafe(scalar, acc = Point.ZERO) {
       if (!Fn2.isValid(scalar))
         throw new Error("invalid scalar: expected 0 <= sc < curve.n");
-      if (scalar === _0n4)
+      if (scalar === _0n5)
         return Point.ZERO;
-      if (this.is0() || scalar === _1n4)
+      if (this.is0() || scalar === _1n5)
         return this;
       return wnaf.unsafe(this, scalar, (p) => normalizeZ(Point, p), acc);
     }
@@ -3337,14 +3723,14 @@ function edwards(params, extraOpts = {}) {
       return toAffineMemo(this, invertedZ);
     }
     clearCofactor() {
-      if (cofactor === _1n4)
+      if (cofactor === _1n5)
         return this;
       return this.multiplyUnsafe(cofactor);
     }
     toBytes() {
       const { x, y } = this.toAffine();
       const bytes = Fp2.toBytes(y);
-      bytes[bytes.length - 1] |= x & _1n4 ? 128 : 0;
+      bytes[bytes.length - 1] |= x & _1n5 ? 128 : 0;
       return bytes;
     }
     toHex() {
@@ -3379,8 +3765,8 @@ function edwards(params, extraOpts = {}) {
       return this.toBytes();
     }
   }
-  Point.BASE = new Point(CURVE.Gx, CURVE.Gy, _1n4, modP(CURVE.Gx * CURVE.Gy));
-  Point.ZERO = new Point(_0n4, _1n4, _1n4, _0n4);
+  Point.BASE = new Point(CURVE.Gx, CURVE.Gy, _1n5, modP(CURVE.Gx * CURVE.Gy));
+  Point.ZERO = new Point(_0n5, _1n5, _1n5, _0n5);
   Point.Fp = Fp2;
   Point.Fn = Fn2;
   const wnaf = new wNAF(Point, Fn2.BITS);
@@ -3518,7 +3904,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
       const is25519 = size === 32;
       if (!is25519 && size !== 57)
         throw new Error("only defined for 25519 and 448");
-      const u = is25519 ? Fp2.div(_1n4 + y, _1n4 - y) : Fp2.div(y - _1n4, y + _1n4);
+      const u = is25519 ? Fp2.div(_1n5 + y, _1n5 - y) : Fp2.div(y - _1n5, y + _1n5);
       return Fp2.toBytes(u);
     },
     toMontgomerySecret(secretKey) {
@@ -3582,16 +3968,16 @@ function twistedEdwards(c) {
   const EDDSA = eddsa(Point, hash, eddsaOpts);
   return _eddsa_new_output_to_legacy(c, EDDSA);
 }
-var _0n4, _1n4, _2n2, _8n2, PrimeEdwardsPoint;
+var _0n5, _1n5, _2n3, _8n2, PrimeEdwardsPoint;
 var init_edwards = __esm({
   "../../node_modules/@noble/curves/esm/abstract/edwards.js"() {
     "use strict";
     init_utils2();
     init_curve();
     init_modular();
-    _0n4 = BigInt(0);
-    _1n4 = BigInt(1);
-    _2n2 = BigInt(2);
+    _0n5 = BigInt(0);
+    _1n5 = BigInt(1);
+    _2n3 = BigInt(2);
     _8n2 = BigInt(8);
     PrimeEdwardsPoint = class {
       constructor(ep) {
@@ -3669,8 +4055,8 @@ function ed25519_pow_2_252_3(x) {
   const P = ed25519_CURVE_p;
   const x2 = x * x % P;
   const b2 = x2 * x % P;
-  const b4 = pow2(b2, _2n3, P) * b2 % P;
-  const b5 = pow2(b4, _1n5, P) * x % P;
+  const b4 = pow2(b2, _2n4, P) * b2 % P;
+  const b5 = pow2(b4, _1n6, P) * x % P;
   const b10 = pow2(b5, _5n2, P) * b5 % P;
   const b20 = pow2(b10, _10n, P) * b10 % P;
   const b40 = pow2(b20, _20n, P) * b20 % P;
@@ -3678,7 +4064,7 @@ function ed25519_pow_2_252_3(x) {
   const b160 = pow2(b80, _80n, P) * b80 % P;
   const b240 = pow2(b160, _80n, P) * b80 % P;
   const b250 = pow2(b240, _10n, P) * b10 % P;
-  const pow_p_5_8 = pow2(b250, _2n3, P) * x % P;
+  const pow_p_5_8 = pow2(b250, _2n4, P) * x % P;
   return { pow_p_5_8, b2 };
 }
 function adjustScalarBytes(bytes) {
@@ -3712,7 +4098,7 @@ function calcElligatorRistrettoMap(r0) {
   const P = ed25519_CURVE_p;
   const mod2 = (n) => Fp.create(n);
   const r = mod2(SQRT_M1 * r0 * r0);
-  const Ns = mod2((r + _1n5) * ONE_MINUS_D_SQ);
+  const Ns = mod2((r + _1n6) * ONE_MINUS_D_SQ);
   let c = BigInt(-1);
   const D = mod2((c - d * r) * mod2(r + d));
   let { isValid: Ns_D_is_sq, value: s } = uvRatio(Ns, D);
@@ -3723,12 +4109,12 @@ function calcElligatorRistrettoMap(r0) {
     s = s_;
   if (!Ns_D_is_sq)
     c = r;
-  const Nt = mod2(c * (r - _1n5) * D_MINUS_ONE_SQ - D);
+  const Nt = mod2(c * (r - _1n6) * D_MINUS_ONE_SQ - D);
   const s2 = s * s;
   const W0 = mod2((s + s) * D);
   const W1 = mod2(Nt * SQRT_AD_MINUS_ONE);
-  const W2 = mod2(_1n5 - s2);
-  const W3 = mod2(_1n5 + s2);
+  const W2 = mod2(_1n6 - s2);
+  const W3 = mod2(_1n6 + s2);
   return new ed25519.Point(mod2(W0 * W3), mod2(W2 * W1), mod2(W1 * W3), mod2(W0 * W2));
 }
 function ristretto255_map(bytes) {
@@ -3739,7 +4125,7 @@ function ristretto255_map(bytes) {
   const R2 = calcElligatorRistrettoMap(r2);
   return new _RistrettoPoint(R1.add(R2));
 }
-var _0n5, _1n5, _2n3, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
+var _0n6, _1n6, _2n4, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
 var init_ed25519 = __esm({
   "../../node_modules/@noble/curves/esm/ed25519.js"() {
     "use strict";
@@ -3749,9 +4135,9 @@ var init_ed25519 = __esm({
     init_edwards();
     init_modular();
     init_utils2();
-    _0n5 = /* @__PURE__ */ BigInt(0);
-    _1n5 = BigInt(1);
-    _2n3 = BigInt(2);
+    _0n6 = /* @__PURE__ */ BigInt(0);
+    _1n6 = BigInt(1);
+    _2n4 = BigInt(2);
     _3n2 = BigInt(3);
     _5n2 = BigInt(5);
     _8n3 = BigInt(8);
@@ -3784,7 +4170,7 @@ var init_ed25519 = __esm({
     INVSQRT_A_MINUS_D = /* @__PURE__ */ BigInt("54469307008909316920995813868745141605393597292927456921205312896311721017578");
     ONE_MINUS_D_SQ = /* @__PURE__ */ BigInt("1159843021668779879193775521855586647937357759715417654439879720876111806838");
     D_MINUS_ONE_SQ = /* @__PURE__ */ BigInt("40440834346308536858101042469323190826248399146238708352240133220865137265952");
-    invertSqrt = (number) => uvRatio(_1n5, number);
+    invertSqrt = (number) => uvRatio(_1n6, number);
     MAX_255B = /* @__PURE__ */ BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     bytes255ToNumberLE = (bytes) => ed25519.Point.Fp.create(bytesToNumberLE(bytes) & MAX_255B);
     _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint {
@@ -3802,8 +4188,8 @@ var init_ed25519 = __esm({
         return new __RistrettoPoint(ep);
       }
       /** @deprecated use `import { ristretto255_hasher } from '@noble/curves/ed25519.js';` */
-      static hashToCurve(hex3) {
-        return ristretto255_map(ensureBytes("ristrettoHash", hex3, 64));
+      static hashToCurve(hex4) {
+        return ristretto255_map(ensureBytes("ristrettoHash", hex4, 64));
       }
       static fromBytes(bytes) {
         abytes(bytes, 32);
@@ -3814,8 +4200,8 @@ var init_ed25519 = __esm({
         if (!equalBytes(Fp.toBytes(s), bytes) || isNegativeLE(s, P))
           throw new Error("invalid ristretto255 encoding 1");
         const s2 = mod2(s * s);
-        const u1 = mod2(_1n5 + a * s2);
-        const u2 = mod2(_1n5 - a * s2);
+        const u1 = mod2(_1n6 + a * s2);
+        const u2 = mod2(_1n6 - a * s2);
         const u1_2 = mod2(u1 * u1);
         const u2_2 = mod2(u2 * u2);
         const v = mod2(a * d * u1_2 - u2_2);
@@ -3827,17 +4213,17 @@ var init_ed25519 = __esm({
           x = mod2(-x);
         const y = mod2(u1 * Dy);
         const t = mod2(x * y);
-        if (!isValid4 || isNegativeLE(t, P) || y === _0n5)
+        if (!isValid4 || isNegativeLE(t, P) || y === _0n6)
           throw new Error("invalid ristretto255 encoding 2");
-        return new __RistrettoPoint(new ed25519.Point(x, y, _1n5, t));
+        return new __RistrettoPoint(new ed25519.Point(x, y, _1n6, t));
       }
       /**
        * Converts ristretto-encoded string to ristretto point.
        * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
        * @param hex Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
        */
-      static fromHex(hex3) {
-        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex3, 32));
+      static fromHex(hex4) {
+        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex4, 32));
       }
       static msm(points, scalars) {
         return pippenger(__RistrettoPoint, ed25519.Point.Fn, points, scalars);
@@ -4008,7 +4394,7 @@ var init_dist = __esm({
 });
 
 // src/lib/replication-config.ts
-import { join as join5 } from "path";
+import { join as join6 } from "path";
 import { CLI_NAME as CLI_NAME8 } from "@tinycloud/operations/cli-name";
 import { profilePath as profilePath2, withProfileLock as withProfileLock2 } from "@tinycloud/operations/state";
 import { REPLICA_LOGOUT_PENDING_FILE, sqliteReplicaStorage } from "@tinycloud/node-sdk";
@@ -4054,8 +4440,8 @@ function createCliReplicationConfig(profile, settings, output, enabled) {
     grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
     maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
-      dir: join5(root, "replication"),
-      logoutPendingFile: join5(root, REPLICA_LOGOUT_PENDING_FILE),
+      dir: join6(root, "replication"),
+      logoutPendingFile: join6(root, REPLICA_LOGOUT_PENDING_FILE),
       diagnosticFiles: REPLICATION_DIAGNOSTIC_FILES,
       guard: (section) => withProfileLock2(profile, section, { requireProfile: true, timeoutMs: 35e3 })
     }),
@@ -4073,8 +4459,8 @@ var init_replication_config = __esm({
 });
 
 // ../replica/dist/profile-gate.js
-import { mkdir as mkdir2, open as open2, readFile as readFile3, rename as rename2, rm as rm2 } from "fs/promises";
-import { join as join6 } from "path";
+import { mkdir as mkdir3, open as open3, readFile as readFile4, rename as rename2, rm as rm3 } from "fs/promises";
+import { join as join7 } from "path";
 function gatedError(gate, message) {
   return Object.assign(new ReplicaError2(ReplicaErrorCode2.GATED, message, { gate }), { gate });
 }
@@ -4164,7 +4550,7 @@ function isNotFound(error) {
 async function readStoredState(profileDir) {
   let text;
   try {
-    text = await readFile3(join6(profileDir, REPLICA_GATE_FILE), "utf8");
+    text = await readFile4(join7(profileDir, REPLICA_GATE_FILE), "utf8");
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica gate file cannot be read.");
@@ -4174,7 +4560,7 @@ async function readStoredState(profileDir) {
 async function readDenyFloor(profileDir) {
   let record2;
   try {
-    record2 = JSON.parse(await readFile3(join6(profileDir, DENY_FLOOR_FILE), "utf8"));
+    record2 = JSON.parse(await readFile4(join7(profileDir, DENY_FLOOR_FILE), "utf8"));
   } catch (error) {
     if (isNotFound(error)) return void 0;
     throw gateRefusal("gate_unavailable", "The replica deny floor cannot be read.");
@@ -4298,12 +4684,12 @@ var init_profile_gate = __esm({
 // ../replica/dist/sqlite.js
 import { AsyncLocalStorage } from "async_hooks";
 import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync, constants as fsConstants2, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
-import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir3, open as open22, readFile as readFile4, readdir as readdir2, rm as rm3, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
+import { closeSync, constants as fsConstants22, fstatSync, lstatSync, openSync, readdirSync as readdirSync2, readlinkSync } from "fs";
+import { chmod as chmod2, link, lstat as lstat2, mkdir as mkdir4, open as open22, readFile as readFile5, readdir as readdir2, rm as rm4, rmdir as rmdir2, stat as stat2, unlink as unlink2 } from "fs/promises";
 import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
 import { constants as fsConstants3 } from "fs";
-import { lstat, open as open3, readdir as readdir3, rmdir, unlink } from "fs/promises";
-import { join as join7, parse, resolve, sep } from "path";
+import { lstat as lstat3, open as open4, readdir as readdir3, rmdir, unlink } from "fs/promises";
+import { join as join8, parse, resolve, sep } from "path";
 function isReplicaError(error, code5) {
   return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code5 === void 0 || error.code === code5);
 }
@@ -4477,8 +4863,8 @@ async function pathComponents(path) {
   let current = parse(absolute).root;
   const components = [];
   for (const part of ["", ...parts]) {
-    if (part) current = join7(current, part);
-    const details = await lstat(current, { bigint: true });
+    if (part) current = join8(current, part);
+    const details = await lstat3(current, { bigint: true });
     if (details.isSymbolicLink()) throw new Error(`Symlink in replica path: ${current}`);
     if (!details.isDirectory()) throw new Error(`Replica path component is not a directory: ${current}`);
     components.push({ path: current, identity: details });
@@ -4487,10 +4873,10 @@ async function pathComponents(path) {
 }
 async function pinnedDirectory(path, parent, relative = "") {
   const components = process.platform === "linux" ? void 0 : parent?.components ?? await pathComponents(path);
-  const before = await lstat(path, { bigint: true });
+  const before = await lstat3(path, { bigint: true });
   if (before.isSymbolicLink()) throw new Error(`Symlink in replica path: ${path}`);
   if (!before.isDirectory()) throw new Error("Replica directory is not a real directory.");
-  const handle = await open3(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
+  const handle = await open4(path, fsConstants3.O_RDONLY | fsConstants3.O_DIRECTORY | fsConstants3.O_NOFOLLOW);
   try {
     if (!sameFile(before, await handle.stat({ bigint: true }))) {
       throw new Error("Replica directory changed during inspection.");
@@ -4511,14 +4897,14 @@ async function pinnedDirectory(path, parent, relative = "") {
   }
 }
 async function checkDirectory(directory) {
-  const details = await lstat(directory.name, { bigint: true });
+  const details = await lstat3(directory.name, { bigint: true });
   if (!details.isDirectory() || !sameFile(directory.identity, details)) {
     throw new Error(`Replica directory changed: ${directory.relative || directory.name}`);
   }
   if (directory.parent) await checkDirectory(directory.parent);
   else if (directory.components) {
     for (const component of directory.components) {
-      const current = await lstat(component.path, { bigint: true });
+      const current = await lstat3(component.path, { bigint: true });
       if (current.isSymbolicLink() || !current.isDirectory() || !sameFile(component.identity, current)) {
         throw new Error(`Replica path component changed: ${component.path}`);
       }
@@ -4538,8 +4924,8 @@ async function inspect(dir, allowAdapterFence) {
       for (const name of (await readdir3(parent.path)).sort()) {
         await checkDirectory(parent);
         const relative = parent.relative ? `${parent.relative}/${name}` : name;
-        const path = join7(parent.path, name);
-        const details = await lstat(path, { bigint: true });
+        const path = join8(parent.path, name);
+        const details = await lstat3(path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
           throw new Error(`Symlink in replica path: ${relative}`);
         }
@@ -4568,7 +4954,7 @@ async function inspect(dir, allowAdapterFence) {
     await walk(root);
     if (!hasDatabase) {
       unknownPaths.push("replica.db");
-    } else if (!await sourceMirrorSchema(join7(root.path, "replica.db"))) {
+    } else if (!await sourceMirrorSchema(join8(root.path, "replica.db"))) {
       const index = knownEntries.findIndex((entry) => entry.path === "replica.db");
       if (index >= 0) unknownEntries.push(knownEntries.splice(index, 1)[0]);
       unknownPaths.push("replica.db");
@@ -4588,15 +4974,15 @@ async function inspect(dir, allowAdapterFence) {
         if (pathIndex >= 0) unknownPaths.splice(pathIndex, 1);
         continue;
       }
-      const current = await lstat(child.path, { bigint: true });
+      const current = await lstat3(child.path, { bigint: true });
       if (!sameFile(child.identity, current) || fileKind(current) !== child.kind) {
         throw new Error(`Replica child changed during schema inspection: ${child.relative}`);
       }
     }
     for (const name of names) {
       if (root.children.some((child) => child.relative === name)) continue;
-      const path = join7(root.path, name);
-      const details = await lstat(path, { bigint: true });
+      const path = join8(root.path, name);
+      const details = await lstat3(path, { bigint: true });
       if (!/^replica\.db-(?:wal|shm|journal)$/.test(name) || !details.isFile()) {
         throw new Error(`Unexpected replica child during schema inspection: ${name}`);
       }
@@ -4670,7 +5056,7 @@ async function removeSqliteReplicaLayout(dir, options = {}) {
         }
         await options[LAYOUT_FAULTS]?.beforeUnlink?.(child.relative);
         await checkDirectory(directory);
-        const details = await lstat(child.path, { bigint: true });
+        const details = await lstat3(child.path, { bigint: true });
         if (process.platform !== "linux" && details.isSymbolicLink()) {
           throw new Error(`Symlink in replica path: ${child.relative}`);
         }
@@ -4711,7 +5097,7 @@ async function captureNamedPath(path) {
   return identities;
 }
 async function openVerifiedDatabase(path, opener, options = {}) {
-  const leaf = await open22(path, fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+  const leaf = await open22(path, fsConstants22.O_RDONLY | fsConstants22.O_NOFOLLOW);
   let db;
   try {
     const identity = await leaf.stat();
@@ -4840,7 +5226,7 @@ async function unlinkWriterOrphans(root, keep) {
   const touched = /* @__PURE__ */ new Set();
   for (const file of await writerBlobFiles(root)) {
     if (file.hash !== null && keep.has(file.hash)) continue;
-    await rm3(file.path, { force: true });
+    await rm4(file.path, { force: true });
     touched.add(dirname3(file.path));
     removed += 1;
   }
@@ -4853,7 +5239,7 @@ async function unlinkBlobsIn(root, keep) {
     const shardPath = join22(root, shard);
     if (shard === ".tmp") {
       for (const name of await entriesOf(shardPath)) {
-        await rm3(join22(shardPath, name), { force: true });
+        await rm4(join22(shardPath, name), { force: true });
         removed += 1;
       }
       continue;
@@ -4864,7 +5250,7 @@ async function unlinkBlobsIn(root, keep) {
         kept += 1;
         continue;
       }
-      await rm3(join22(shardPath, name), { force: true });
+      await rm4(join22(shardPath, name), { force: true });
       removed += 1;
     }
     if (kept === 0) await rmdir2(shardPath).catch(() => void 0);
@@ -5271,9 +5657,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
         let store;
         let directoryFd;
         try {
-          if (options.create) await mkdir3(dir, { recursive: true, mode: 448 });
+          if (options.create) await mkdir4(dir, { recursive: true, mode: 448 });
           if (process.platform === "linux") {
-            directoryFd = openSync(dir, fsConstants2.O_RDONLY | fsConstants2.O_DIRECTORY | fsConstants2.O_NOFOLLOW);
+            directoryFd = openSync(dir, fsConstants22.O_RDONLY | fsConstants22.O_DIRECTORY | fsConstants22.O_NOFOLLOW);
           }
           const opened = directoryFd === void 0 ? lstatSync(dir, { bigint: true }) : fstatSync(directoryFd, { bigint: true });
           if (!opened.isDirectory() || opened.isSymbolicLink() || options.expectedDirectory && (opened.dev !== BigInt(options.expectedDirectory.dev) || opened.ino !== BigInt(options.expectedDirectory.ino))) {
@@ -5286,9 +5672,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
           const pinnedDir = directoryFd === void 0 ? dir : `/proc/self/fd/${directoryFd}`;
           const dbPath = join22(pinnedDir, "replica.db");
           if (options.create) {
-            await mkdir3(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
+            await mkdir4(join22(pinnedDir, "blobs", ".tmp"), { recursive: true, mode: 448 });
             await Promise.all([chmod2(pinnedDir, 448), chmod2(join22(pinnedDir, "blobs"), 448), chmod2(join22(pinnedDir, "blobs", ".tmp"), 448)]);
-            const handle = await open22(dbPath, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_RDWR | fsConstants2.O_NOFOLLOW, 384).catch((error) => {
+            const handle = await open22(dbPath, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_RDWR | fsConstants22.O_NOFOLLOW, 384).catch((error) => {
               if (errnoOf(error) === "EEXIST") return null;
               throw error;
             });
@@ -5300,7 +5686,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
               }
             }
           }
-          const leaf = await open22(dbPath, fsConstants2.O_RDONLY | fsConstants2.O_NOFOLLOW);
+          const leaf = await open22(dbPath, fsConstants22.O_RDONLY | fsConstants22.O_NOFOLLOW);
           let db;
           try {
             const identity = await leaf.stat();
@@ -5917,11 +6303,11 @@ CREATE TABLE IF NOT EXISTS grant_install (
           );
           if (exists) continue;
           const shard = join22(this.#pinnedDir, "blobs", hash.slice(0, 2));
-          await mkdir3(shard, { mode: 448 }).catch((error) => {
+          await mkdir4(shard, { mode: 448 }).catch((error) => {
             if (errnoOf(error) !== "EEXIST") throw error;
           });
           const temp = join22(this.#pinnedDir, "blobs", ".tmp", `${hash}.${randomBytes2(6).toString("hex")}`);
-          const handle = await open22(temp, fsConstants2.O_CREAT | fsConstants2.O_EXCL | fsConstants2.O_WRONLY, 384);
+          const handle = await open22(temp, fsConstants22.O_CREAT | fsConstants22.O_EXCL | fsConstants22.O_WRONLY, 384);
           try {
             await handle.writeFile(bytes);
             await handle.sync();
@@ -5939,7 +6325,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
           dirs.add(join22(this.#pinnedDir, "blobs"));
         }
         for (const dir of dirs) {
-          const handle = await open22(dir, fsConstants2.O_RDONLY);
+          const handle = await open22(dir, fsConstants22.O_RDONLY);
           try {
             await handle.sync();
           } finally {
@@ -6300,7 +6686,7 @@ CREATE TABLE IF NOT EXISTS grant_install (
       async readContent(hash) {
         if (!isHash(hash)) return void 0;
         try {
-          return new Uint8Array(await readFile4(this.#blobPath(hash)));
+          return new Uint8Array(await readFile5(this.#blobPath(hash)));
         } catch (error) {
           if (errnoOf(error) === "ENOENT") return void 0;
           throw storageError(error, "Reading replica content");
@@ -6387,9 +6773,9 @@ CREATE TABLE IF NOT EXISTS grant_install (
 });
 
 // src/lib/profile-replicas.ts
-import { lstat as lstat3, open as open4, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
+import { lstat as lstat4, open as open5, readdir as readdir4, realpath, rmdir as rmdir3, stat as stat3, unlink as unlink3 } from "fs/promises";
 import { constants as fsConstants4 } from "fs";
-import { dirname as dirname4, join as join8, resolve as resolve3, sep as sep2 } from "path";
+import { dirname as dirname4, join as join9, resolve as resolve3, sep as sep2 } from "path";
 import { ProfileDeletedError as ProfileDeletedError2, profilePath as profilePath3, withProfileLock as withProfileLock3 } from "@tinycloud/operations/state";
 function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
   return new CLIError(
@@ -6401,7 +6787,7 @@ function refuseUnsafeReplicaPath(profile, detail, operation = "logout") {
 async function safeReplicaRoot(profile, root, operation = "logout") {
   let rootStats;
   try {
-    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat3(root);
+    rootStats = root.startsWith("/proc/self/fd/") ? await stat3(root) : await lstat4(root);
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -6419,12 +6805,12 @@ async function safeReplicaRoot(profile, root, operation = "logout") {
   return rootRealPath;
 }
 async function safeReplicaEntry(profile, root, entry, operation = "logout") {
-  const entryPath = join8(root, entry.name);
+  const entryPath = join9(root, entry.name);
   const rootRealPath = await safeReplicaRoot(profile, root, operation);
   if (rootRealPath === null) {
     throw refuseUnsafeReplicaPath(profile, `the replicas directory "${root}" disappeared`, operation);
   }
-  const entryStats = await lstat3(entryPath);
+  const entryStats = await lstat4(entryPath);
   if (entry.isSymbolicLink() || entryStats.isSymbolicLink()) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${entry.name}" is a symlink`, operation);
   }
@@ -6439,7 +6825,7 @@ async function safeReplicaEntry(profile, root, entry, operation = "logout") {
 }
 async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatabase = false) {
   const { path, identity } = await safeReplicaEntry(profile, root, entry);
-  const handle = await open4(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open5(path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinnedEntry = await handle.stat();
     if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino) {
@@ -6455,7 +6841,7 @@ async function inspectLegacyReplica(profile, root, entry, allowUnrecognizedDatab
   }
 }
 async function pinReplicaRoot(profile, named, operation, allowNamedLogout = false) {
-  const initial = await lstat3(named, { bigint: true }).catch((error) => {
+  const initial = await lstat4(named, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
@@ -6466,7 +6852,7 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
   const ancestors = [];
   if (process.platform !== "linux") {
     for (let path = resolve3(named); ; path = dirname4(path)) {
-      const details = await lstat3(path, { bigint: true });
+      const details = await lstat4(path, { bigint: true });
       if (!details.isDirectory() || details.isSymbolicLink()) {
         throw refuseUnsafeReplicaPath(profile, `replica path component "${path}" is not a real directory`, operation);
       }
@@ -6474,17 +6860,17 @@ async function pinReplicaRoot(profile, named, operation, allowNamedLogout = fals
       if (dirname4(path) === path) break;
     }
   }
-  const handle = await open4(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+  const handle = await open5(named, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
   try {
     const pinned = await handle.stat({ bigint: true });
     const assertNamed = async () => {
       for (const component of ancestors) {
-        const details = await lstat3(component.path, { bigint: true });
+        const details = await lstat4(component.path, { bigint: true });
         if (!details.isDirectory() || details.isSymbolicLink() || details.dev !== component.dev || details.ino !== component.ino) {
           throw refuseUnsafeReplicaPath(profile, `replica path component "${component.path}" changed during cleanup`, operation);
         }
       }
-      const current = await lstat3(named, { bigint: true });
+      const current = await lstat4(named, { bigint: true });
       if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== initial?.dev || current.ino !== initial?.ino || current.dev !== pinned.dev || current.ino !== pinned.ino) {
         throw refuseUnsafeReplicaPath(profile, "the replicas directory changed during cleanup", operation);
       }
@@ -6574,8 +6960,8 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
   if (inventory.roots.has(relative)) {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" has conflicting recorded identities`);
   }
-  const path = join8(root, entry.name);
-  const info = await lstat3(path, { bigint: true });
+  const path = join9(root, entry.name);
+  const info = await lstat4(path, { bigint: true });
   const kind = info.isDirectory() ? "directory" : info.isSymbolicLink() ? "symlink" : info.isFile() ? "file" : null;
   if (kind === null || process.platform !== "linux" && kind === "symlink") {
     throw refuseUnsafeReplicaPath(profile, `legacy entry "${entry.name}" cannot be removed safely`);
@@ -6596,7 +6982,7 @@ async function inspectApprovedUnknownRoot(profile, root, entry, inventory) {
 async function removeProfileReplicas(profile, options = {}) {
   const inventory = legacyInventory(profile, options);
   return withProfileLock3(profile, async () => {
-    const namedRoot = join8(profilePath3(profile), "replicas");
+    const namedRoot = join9(profilePath3(profile), "replicas");
     const pinned = await pinReplicaRoot(profile, namedRoot, "logout", true);
     if (!pinned) return [];
     const expectedRoot = inventory?.roots.get("replicas");
@@ -6633,7 +7019,7 @@ async function removeProfileReplicas(profile, options = {}) {
         if (inventory) {
           if (layout) assertRecordedChild(profile, entry.name, layout, inventory, false);
           else {
-            const child = await lstat3(inspected.path, { bigint: true });
+            const child = await lstat4(inspected.path, { bigint: true });
             const recorded = inventory.roots.get(`replicas/${entry.name}`);
             if (!recorded || child.dev.toString() !== recorded.dev || child.ino.toString() !== recorded.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed since the recorded inventory`);
@@ -6654,14 +7040,14 @@ async function removeProfileReplicas(profile, options = {}) {
           if (current.identity.dev !== identity.dev || current.identity.ino !== identity.ino) {
             throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
           }
-          const handle = await open4(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
+          const handle = await open5(current.path, fsConstants4.O_RDONLY | fsConstants4.O_DIRECTORY | fsConstants4.O_NOFOLLOW);
           try {
             const pinnedEntry = await handle.stat();
             if (pinnedEntry.dev !== identity.dev || pinnedEntry.ino !== identity.ino || (await readdir4(process.platform === "linux" ? `/proc/self/fd/${handle.fd}` : current.path)).length !== 0) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed during cleanup`);
             }
             await pinned.assertNamed();
-            const namedEntry = await lstat3(current.path);
+            const namedEntry = await lstat4(current.path);
             if (!namedEntry.isDirectory() || namedEntry.dev !== pinnedEntry.dev || namedEntry.ino !== pinnedEntry.ino) {
               throw refuseUnsafeReplicaPath(profile, `empty replica entry "${entry.name}" changed at removal`);
             }
@@ -6734,7 +7120,7 @@ async function removeProfileReplicas(profile, options = {}) {
             }
             removed.push(entry.name);
           } catch (error) {
-            const replicaStillExists = await lstat3(join8(root, entry.name)).then(
+            const replicaStillExists = await lstat4(join9(root, entry.name)).then(
               () => true,
               (statError) => statError.code !== "ENOENT"
             );
@@ -6750,7 +7136,7 @@ async function removeProfileReplicas(profile, options = {}) {
         }
         for (const { entry, path, identity, layout } of unknownRoots) {
           await pinned.assertNamed();
-          const current = await lstat3(path, { bigint: true });
+          const current = await lstat4(path, { bigint: true });
           const kind = current.isDirectory() ? "directory" : current.isSymbolicLink() ? "symlink" : current.isFile() ? "file" : null;
           if (kind !== identity.kind || current.dev.toString() !== identity.dev || current.ino.toString() !== identity.ino || process.platform !== "linux" && kind === "symlink") {
             throw refuseUnsafeReplicaPath(profile, `approved legacy entry "${entry.name}" changed at removal`);
@@ -6802,8 +7188,8 @@ var init_profile_replicas = __esm({
 });
 
 // src/lib/logout-pending.ts
-import { lstat as lstat4, open as open5, readFile as readFile5, rm as rm4 } from "fs/promises";
-import { join as join9 } from "path";
+import { lstat as lstat5, open as open6, readFile as readFile6, rm as rm5 } from "fs/promises";
+import { join as join10 } from "path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE2, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import { namedProfilePath, profilePath as profilePath4 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE2 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
@@ -6886,7 +7272,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
     const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-    await rm4(join9(profilePath4(name), "approval-pending.json"), { force: true });
+    await rm5(join10(profilePath4(name), "approval-pending.json"), { force: true });
     await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
     let failed = false;
     let error;
@@ -6904,7 +7290,7 @@ async function clearProfileCredentials(name, syncDirectory = false, legacyCleanu
     }
     if (failed) throw error;
     if (syncDirectory) {
-      const directory = await open5(profilePath4(name), "r");
+      const directory = await open6(profilePath4(name), "r");
       try {
         await directory.sync();
       } finally {
@@ -6921,7 +7307,7 @@ async function finishSignedOutCredentialRemoval(name) {
   if (profile?.authSignedOut !== true) return;
   for (const file of ["session.json", "key.json"]) {
     try {
-      await lstat4(join9(profilePath4(name), file));
+      await lstat5(join10(profilePath4(name), file));
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
       throw error;
@@ -6936,12 +7322,12 @@ async function finishSignedOutCredentialRemoval(name) {
 }
 async function recoverPendingLogout(name) {
   try {
-    await lstat4(join9(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
+    await lstat5(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2));
   } catch (error) {
     if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") throw error;
     await finishSignedOutCredentialRemoval(name);
     try {
-      await lstat4(profilePath4(name));
+      await lstat5(profilePath4(name));
     } catch (missing) {
       if (typeof missing === "object" && missing !== null && "code" in missing && missing.code === "ENOENT") return;
       throw missing;
@@ -6953,7 +7339,7 @@ async function recoverPendingLogout(name) {
     if (!profile) {
       for (const child of [REPLICA_GATE_FILE2, "replicas", "replication"]) {
         try {
-          await lstat4(join9(profilePath4(name), child));
+          await lstat5(join10(profilePath4(name), child));
         } catch (childError) {
           if (typeof childError === "object" && childError !== null && "code" in childError && childError.code === "ENOENT") continue;
           throw childError;
@@ -6996,7 +7382,7 @@ async function recoverPendingLogout(name) {
   const report = await ProfileManager.withLock(name, async () => {
     const unreadable = (file) => new CLIError(
       "REPLICA_GATED",
-      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join9(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
+      `A logout is pending on profile "${name}", but its ${file === "profile.json" ? "profile" : "session"} file ${join10(namedProfilePath(name), file)} is unreadable; credentials, replica files and the logout marker were left unchanged, and local replica reads stay blocked.`,
       ExitCode.ERROR
     );
     try {
@@ -7011,7 +7397,7 @@ async function recoverPendingLogout(name) {
       throw unreadable("session.json");
     }
     if (session) {
-      const marker = await readFile5(join9(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text) => {
+      const marker = await readFile6(join10(profilePath4(name), REPLICA_LOGOUT_PENDING_FILE2), "utf8").then((text) => {
         try {
           return JSON.parse(text);
         } catch {
@@ -7074,9 +7460,17 @@ __export(sdk_exports, {
   selectSignerJwk: () => selectSignerJwk,
   storedSessionVerifiesLocally: () => storedSessionVerifiesLocally
 });
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+function configuredRegistryUrl(contextUrl, profile) {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : void 0;
+}
 function jwkHasPrivateParameter(jwk) {
   if (!jwk || typeof jwk !== "object") return false;
   const d = jwk.d;
@@ -7148,7 +7542,12 @@ async function restoreProfileSessionNode(ctx) {
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
@@ -7170,8 +7569,13 @@ async function storedSessionVerifiesLocally(profileName) {
     const session = await ProfileManager.getSession(profileName);
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
+    const tinycloudRegistryUrl = configuredRegistryUrl(void 0, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
@@ -7196,6 +7600,7 @@ async function createSDKInstance(ctx, options) {
     );
   }
   const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile);
   const key = await ProfileManager.getKey(ctx.profile);
   const effectivePrivateKey = options?.privateKey ?? profile?.privateKey;
@@ -7217,7 +7622,11 @@ async function createSDKInstance(ctx, options) {
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node2 = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
       ...cliRetryPolicy(),
+      ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...replication2 ? { replication: replication2 } : {}
@@ -7258,7 +7667,11 @@ async function createSDKInstance(ctx, options) {
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
     ...cliRetryPolicy(),
+    ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
     host: ctx.host,
     privateKey: options?.privateKey,
     ...replication ? { replication } : {}
@@ -7576,9 +7989,9 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm5 } from "fs/promises";
+import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 import {
   assertRealProfileDirectory,
   ProfileSymlinkError as ProfileSymlinkError2,
@@ -7634,7 +8047,7 @@ var init_profiles = __esm({
       /** Owner-only profile directory (0700), created or tightened before any write into it. */
       static async ensureProfileDir(name) {
         const profileDir = profilePath5(name);
-        if (profileDir !== join10(PROFILES_DIR, name)) {
+        if (profileDir !== join11(PROFILES_DIR, name)) {
           await chmod3(profileDir, PRIVATE_DIR_MODE);
           return profileDir;
         }
@@ -7668,7 +8081,7 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join10(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -7683,25 +8096,25 @@ var init_profiles = __esm({
        */
       static async setProfile(name, data) {
         await _ProfileManager.withLock(name, async () => {
-          await writeJson(join10(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Publish explicit logout provenance (or its verified-login clear) durably under the profile lock. */
       static async setProfileDurable(name, data) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJsonDurable(join10(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
+          await writeJsonDurable(join11(await _ProfileManager.ensureProfileDir(name), "profile.json"), data);
         });
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
        */
       static async profileExists(name) {
-        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join10(directory, "profile.json")) : Promise.resolve(false));
+        return withPinnedProfileDirectory2(name, (directory) => directory ? fileExists(join11(directory, "profile.json")) : Promise.resolve(false));
       }
       /**
        * Returns an array of profile directory names.
@@ -7740,22 +8153,22 @@ var init_profiles = __esm({
             `Cannot delete the default profile "${name}". Change the default first with \`${CLI_NAME11} profile default <other>\`.`
           );
         }
-        const kind = await lstat5(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
+        const kind = await lstat6(profileDir).then((stats) => stats.isSymbolicLink() ? "link" : "present", (error) => {
           if (error.code === "ENOENT") return "missing";
           throw error;
         });
         if (kind === "missing") return;
         if (kind === "link") {
-          await rm5(profileDir, { force: true });
+          await rm6(profileDir, { force: true });
           return;
         }
         await _ProfileManager.withLock(name, async () => {
           const directory = profilePath5(name);
-          for (const file of ["session.json", "key.json"]) await rm5(join10(directory, file), { force: true });
+          for (const file of ["session.json", "key.json"]) await rm6(join11(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm5(join10(directory, entry), { recursive: true, force: true });
+            if (entry !== ".lock" && entry !== "profile.json") await rm6(join11(directory, entry), { recursive: true, force: true });
           }
-          await rm5(join10(directory, "profile.json"), { force: true });
+          await rm6(join11(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
         });
       }
@@ -7766,9 +8179,9 @@ var init_profiles = __esm({
       static async getKey(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join10(directory, "profile.json");
+          const profileFile = join11(directory, "profile.json");
           if ((await readJson(profileFile))?.authSignedOut === true) return null;
-          const key = await readJson(join10(directory, "key.json"));
+          const key = await readJson(join11(directory, "key.json"));
           return (await readJson(profileFile))?.authSignedOut === true ? null : key;
         });
       }
@@ -7780,12 +8193,12 @@ var init_profiles = __esm({
       static async setKey(name, jwk) {
         await _ProfileManager.withLock(name, async () => {
           await refuseWriteToDeletedProfile2(name);
-          await writeJson(join10(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
+          await writeJson(join11(await _ProfileManager.ensureProfileDir(name), "key.json"), jwk);
         });
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm6(join11(profilePath5(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -7794,7 +8207,7 @@ var init_profiles = __esm({
       static async getSession(name) {
         return withPinnedProfileDirectory2(name, async (directory) => {
           if (!directory) return null;
-          const profileFile = join10(directory, "profile.json");
+          const profileFile = join11(directory, "profile.json");
           if ((await readJson(profileFile))?.authSignedOut === true) return null;
           const session = await readSession(name);
           return (await readJson(profileFile))?.authSignedOut === true ? null : session;
@@ -7820,10 +8233,10 @@ var init_profiles = __esm({
       static async getCacheDir(name) {
         const alreadyPinned = profilePath5(name) !== namedProfilePath2(name);
         return _ProfileManager.withLock(name, async () => {
-          const cacheDir = join10(await _ProfileManager.ensureProfileDir(name), "cache");
+          const cacheDir = join11(await _ProfileManager.ensureProfileDir(name), "cache");
           await ensureDir(cacheDir);
           await chmod3(cacheDir, PRIVATE_DIR_MODE);
-          return alreadyPinned ? cacheDir : join10(namedProfilePath2(name), "cache");
+          return alreadyPinned ? cacheDir : join11(namedProfilePath2(name), "cache");
         });
       }
       // ── Resolution helpers ──────────────────────────────────────────────
@@ -7832,6 +8245,7 @@ var init_profiles = __esm({
        *
        * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
        * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+       * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
        *
        * Local-node discovery (TC-106) only runs when no explicit host was given
        * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -7851,6 +8265,9 @@ var init_profiles = __esm({
         } catch (error) {
           if (error instanceof ProfileSymlinkError2) throw error;
         }
+        const envRegistryUrl = process.env.TC_REGISTRY_URL;
+        const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+        const tinycloudRegistryUrl = typeof envRegistryUrl === "string" && envRegistryUrl.length > 0 ? envRegistryUrl : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0 ? profileRegistryUrl : void 0;
         const envReplication = process.env.TC_REPLICATION?.toLowerCase();
         const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
         const explicitEnvOff = envReplication === "0" || envReplication === "false" || envReplication === "off";
@@ -7875,6 +8292,7 @@ var init_profiles = __esm({
         return {
           profile,
           host,
+          ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
           verbose: options.verbose ?? false,
           noCache: options.noCache ?? false,
           quiet: options.quiet ?? false,
@@ -13009,14 +13427,14 @@ function _splitEndoScalar(k, basis, n) {
   const c2 = divNearest(-b1 * k, n);
   let k1 = k - c1 * a1 - c2 * a2;
   let k2 = -c1 * b1 - c2 * b2;
-  const k1neg = k1 < _0n6;
-  const k2neg = k2 < _0n6;
+  const k1neg = k1 < _0n7;
+  const k2neg = k2 < _0n7;
   if (k1neg)
     k1 = -k1;
   if (k2neg)
     k2 = -k2;
-  const MAX_NUM = bitMask(Math.ceil(bitLen(n) / 2)) + _1n6;
-  if (k1 < _0n6 || k1 >= MAX_NUM || k2 < _0n6 || k2 >= MAX_NUM) {
+  const MAX_NUM = bitMask(Math.ceil(bitLen(n) / 2)) + _1n7;
+  if (k1 < _0n7 || k1 >= MAX_NUM || k2 < _0n7 || k2 >= MAX_NUM) {
     throw new Error("splitScalar (endomorphism): failed, k=" + k);
   }
   return { k1neg, k1, k2neg, k2 };
@@ -13222,8 +13640,8 @@ function weierstrassN(params, extraOpts = {}) {
       P.assertValidity();
       return P;
     }
-    static fromHex(hex3) {
-      return Point.fromBytes(ensureBytes("pointHex", hex3));
+    static fromHex(hex4) {
+      return Point.fromBytes(ensureBytes("pointHex", hex4));
     }
     get x() {
       return this.toAffine().x;
@@ -13406,9 +13824,9 @@ function weierstrassN(params, extraOpts = {}) {
       const p = this;
       if (!Fn2.isValid(sc))
         throw new Error("invalid scalar: out of range");
-      if (sc === _0n6 || p.is0())
+      if (sc === _0n7 || p.is0())
         return Point.ZERO;
-      if (sc === _1n6)
+      if (sc === _1n7)
         return p;
       if (wnaf.hasCache(this))
         return this.multiply(sc);
@@ -13437,7 +13855,7 @@ function weierstrassN(params, extraOpts = {}) {
      */
     isTorsionFree() {
       const { isTorsionFree } = extraOpts;
-      if (cofactor === _1n6)
+      if (cofactor === _1n7)
         return true;
       if (isTorsionFree)
         return isTorsionFree(Point, this);
@@ -13445,7 +13863,7 @@ function weierstrassN(params, extraOpts = {}) {
     }
     clearCofactor() {
       const { clearCofactor } = extraOpts;
-      if (cofactor === _1n6)
+      if (cofactor === _1n7)
         return this;
       if (clearCofactor)
         return clearCofactor(Point, this);
@@ -13603,7 +14021,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   };
   const defaultSigOpts_format = "compact";
   function isBiggerThanHalfOrder(number) {
-    const HALF = CURVE_ORDER >> _1n6;
+    const HALF = CURVE_ORDER >> _1n7;
     return number > HALF;
   }
   function validateRS(title, num) {
@@ -13642,8 +14060,8 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const s = bytes.subarray(L, L * 2);
       return new Signature(Fn2.fromBytes(r), Fn2.fromBytes(s), recid);
     }
-    static fromHex(hex3, format5) {
-      return this.fromBytes(hexToBytes(hex3), format5);
+    static fromHex(hex4, format5) {
+      return this.fromBytes(hexToBytes(hex4), format5);
     }
     addRecoveryBit(recovery) {
       return new Signature(this.r, this.s, recovery);
@@ -13653,7 +14071,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const { r, s, recovery: rec } = this;
       if (rec == null || ![0, 1, 2, 3].includes(rec))
         throw new Error("recovery id invalid");
-      const hasCofactor = CURVE_ORDER * _2n4 < FIELD_ORDER;
+      const hasCofactor = CURVE_ORDER * _2n5 < FIELD_ORDER;
       if (hasCofactor && rec > 1)
         throw new Error("recovery id is ambiguous for h>1 curve");
       const radj = rec === 2 || rec === 3 ? r + CURVE_ORDER : r;
@@ -13694,11 +14112,11 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     // TODO: remove
     assertValidity() {
     }
-    static fromCompact(hex3) {
-      return Signature.fromBytes(ensureBytes("sig", hex3), "compact");
+    static fromCompact(hex4) {
+      return Signature.fromBytes(ensureBytes("sig", hex4), "compact");
     }
-    static fromDER(hex3) {
-      return Signature.fromBytes(ensureBytes("sig", hex3), "der");
+    static fromDER(hex4) {
+      return Signature.fromBytes(ensureBytes("sig", hex4), "der");
     }
     normalizeS() {
       return this.hasHighS() ? new Signature(this.r, Fn2.neg(this.s), this.recovery) : this;
@@ -13728,7 +14146,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   };
   const ORDER_MASK = bitMask(fnBits);
   function int2octets(num) {
-    aInRange("num < 2^" + fnBits, num, _0n6, ORDER_MASK);
+    aInRange("num < 2^" + fnBits, num, _0n7, ORDER_MASK);
     return Fn2.toBytes(num);
   }
   function validateMsgAndHash(message, prehash) {
@@ -13756,12 +14174,12 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const ik = Fn2.inv(k);
       const q = Point.BASE.multiply(k).toAffine();
       const r = Fn2.create(q.x);
-      if (r === _0n6)
+      if (r === _0n7)
         return;
       const s = Fn2.create(ik * Fn2.create(m + r * d));
-      if (s === _0n6)
+      if (s === _0n7)
         return;
-      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n6);
+      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n7);
       let normS = s;
       if (lowS && isBiggerThanHalfOrder(s)) {
         normS = Fn2.neg(s);
@@ -13904,7 +14322,7 @@ function weierstrass(c) {
   const signs = ecdsa(Point, hash, ecdsaOpts);
   return _ecdsa_new_output_to_legacy(c, signs);
 }
-var divNearest, DERErr, DER, _0n6, _1n6, _2n4, _3n3, _4n2;
+var divNearest, DERErr, DER, _0n7, _1n7, _2n5, _3n3, _4n2;
 var init_weierstrass = __esm({
   "../../node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
     "use strict";
@@ -13913,7 +14331,7 @@ var init_weierstrass = __esm({
     init_utils2();
     init_curve();
     init_modular();
-    divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n4) / den;
+    divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n5) / den;
     DERErr = class extends Error {
       constructor(m = "") {
         super(m);
@@ -13981,14 +14399,14 @@ var init_weierstrass = __esm({
       _int: {
         encode(num) {
           const { Err: E } = DER;
-          if (num < _0n6)
+          if (num < _0n7)
             throw new E("integer: negative integers are not allowed");
-          let hex3 = numberToHexUnpadded(num);
-          if (Number.parseInt(hex3[0], 16) & 8)
-            hex3 = "00" + hex3;
-          if (hex3.length & 1)
+          let hex4 = numberToHexUnpadded(num);
+          if (Number.parseInt(hex4[0], 16) & 8)
+            hex4 = "00" + hex4;
+          if (hex4.length & 1)
             throw new E("unexpected DER parsing assertion: unpadded hex");
-          return hex3;
+          return hex4;
         },
         decode(data) {
           const { Err: E } = DER;
@@ -13999,9 +14417,9 @@ var init_weierstrass = __esm({
           return bytesToNumberBE(data);
         }
       },
-      toSig(hex3) {
+      toSig(hex4) {
         const { Err: E, _int: int, _tlv: tlv } = DER;
-        const data = ensureBytes("signature", hex3);
+        const data = ensureBytes("signature", hex4);
         const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
         if (seqLeftBytes.length)
           throw new E("invalid signature: left bytes after parsing");
@@ -14019,9 +14437,9 @@ var init_weierstrass = __esm({
         return tlv.encode(48, seq);
       }
     };
-    _0n6 = BigInt(0);
-    _1n6 = BigInt(1);
-    _2n4 = BigInt(2);
+    _0n7 = BigInt(0);
+    _1n7 = BigInt(1);
+    _2n5 = BigInt(2);
     _3n3 = BigInt(3);
     _4n2 = BigInt(4);
   }
@@ -14096,6 +14514,9 @@ var init_p256 = __esm({
 // ../share-envelope/dist/links.js
 var links_exports = {};
 __export(links_exports, {
+  APPROVAL_POLL_INTERVAL_MS: () => APPROVAL_POLL_INTERVAL_MS,
+  APPROVAL_RESULT_CLIENT_ID: () => APPROVAL_RESULT_CLIENT_ID,
+  ApprovalClientError: () => ApprovalClientError,
   DEFAULT_LINKS_API_ORIGIN: () => DEFAULT_LINKS_API_ORIGIN,
   DEFAULT_SHARE_ORIGINS: () => DEFAULT_SHARE_ORIGINS,
   FULL_LINK_PATH: () => FULL_LINK_PATH,
@@ -14113,16 +14534,24 @@ __export(links_exports, {
   LinkError: () => LinkError,
   MAX_LINK_BODY_BYTES: () => MAX_LINK_BODY_BYTES,
   MAX_LINK_REQUEST_BYTES: () => MAX_LINK_REQUEST_BYTES,
+  ackApprovalResult: () => ackApprovalResult,
+  approvalSessionProof: () => approvalSessionProof,
   assertDidKeySignature: () => assertDidKeySignature,
   buildFullLink: () => buildFullLink,
   buildShortLink: () => buildShortLink,
+  checkApprovalResultBinding: () => checkApprovalResultBinding,
   checkLinkBody: () => checkLinkBody,
   checkLinkHeaderLife: () => checkLinkHeaderLife,
   checkLinkRecord: () => checkLinkRecord,
+  collectApprovalResult: () => collectApprovalResult,
   createApprovalRequest: () => createApprovalRequest,
   createLink: () => createLink,
   deleteLink: () => deleteLink,
+  discoverApprovalResult: () => discoverApprovalResult,
   ed25519KeyProblem: () => ed25519KeyProblem,
+  fetchApprovalResult: () => fetchApprovalResult,
+  generateRelayKey: () => generateRelayKey,
+  isApprovalClientError: () => isApprovalClientError,
   isLinkError: () => isLinkError,
   linkDeleteRequestV1Schema: () => linkDeleteRequestV1Schema,
   linkHeaderV1Schema: () => linkHeaderV1Schema,
@@ -14133,6 +14562,7 @@ __export(links_exports, {
   linkTypeSchema: () => linkTypeSchema,
   normalizeLinkId: () => normalizeLinkId,
   openLinkRecord: () => openLinkRecord,
+  openRelayResult: () => openRelayResult,
   parseApprovalRequest: () => parseApprovalRequest,
   parseLink: () => parseLink,
   parseLinkTimestamp: () => parseLinkTimestamp,
@@ -14205,7 +14635,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open6(blob, key32) {
+async function open7(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -14622,7 +15052,7 @@ async function openRecordChecked(record2, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open6(body, key);
+    plaintext = await open7(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -14927,7 +15357,204 @@ function signerFromJwk(jwk) {
   if (signer.did !== didKeyFromEd25519PublicKey(publicKey)) throw new LinkError("invalid_argument", "the JWK public key does not match its private key");
   return signer;
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS;
+function isApprovalClientError(value) {
+  return value instanceof ApprovalClientError;
+}
+function pathFor(action, requestId, resultRef) {
+  return action === "discover" ? `/api/approval-requests/${requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
+}
+function approvalSessionProof(state2, action, resultRef = "", ackId = "") {
+  const jwk = state2.signingKey;
+  const thumbprint = toBase64Url(sha2562(utf8Bytes2(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x }))));
+  const header = toBase64Url(utf8Bytes2(JSON.stringify({ alg: "EdDSA", kid: thumbprint, typ: "openkey-session-proof+jwt" })));
+  const payload = toBase64Url(utf8Bytes2(JSON.stringify({
+    client_id: APPROVAL_RESULT_CLIENT_ID,
+    cred_hash: toBase64Url(sha2562(utf8Bytes2(JSON.stringify([action, state2.requestId, state2.bodyCid, resultRef, ackId])))),
+    htm: "POST",
+    htu: state2.apiOrigin + pathFor(action, state2.requestId, resultRef),
+    iat: Math.floor(Date.now() / 1e3),
+    jti: toBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(24)))
+  })));
+  const input = `${header}.${payload}`;
+  return `${input}.${toBase64Url(ed25519.sign(utf8Bytes2(input), fromBase64Url2(jwk.d)))}`;
+}
+async function post(state2, action, resultRef, ackId, options) {
+  const body = action === "discover" ? { bodyCid: state2.bodyCid, header: state2.record.header, signature: state2.record.signature } : { requestId: state2.requestId, bodyCid: state2.bodyCid, ...action === "ack" ? { ackId } : {} };
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS);
+  try {
+    return await (options.fetch ?? globalThis.fetch)(state2.apiOrigin + pathFor(action, state2.requestId, resultRef), {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      headers: {
+        "content-type": "application/json",
+        "OpenKey-Session-Proof": approvalSessionProof(state2, action, resultRef, ackId)
+      },
+      body: JSON.stringify(body),
+      signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    throw new ApprovalClientError("network", `OpenKey could not be reached to ${action} the approval result.`);
+  }
+}
+async function refuse(response, action) {
+  const body = await response.json().catch(() => null);
+  const code22 = typeof body?.code === "string" ? body.code : "";
+  const status = response.status;
+  if (code22 === "expired_request" || code22 === "invalid_request" && action === "discover") throw new ApprovalClientError("request_expired", "This approval request expired before it was approved.", status);
+  if (code22 === "expired_result") throw new ApprovalClientError("result_expired", "The approved result expired before it was collected.", status);
+  if (code22 === "acknowledged") throw new ApprovalClientError("acknowledged", "OpenKey has already acknowledged this result.", status);
+  if (code22 === "not_found") throw new ApprovalClientError("not_found", "OpenKey cannot find this approval request or result.", status);
+  if (code22 === "ack_conflict") throw new ApprovalClientError("ack_conflict", "OpenKey rejected a conflicting acknowledgement for this result.", status);
+  if (code22 === "request_binding" || code22 === "invalid_proof") {
+    throw new ApprovalClientError("request_binding", "OpenKey rejected the request or requester binding.", status);
+  }
+  throw new ApprovalClientError("unavailable", `OpenKey could not ${action} this approval result (HTTP ${status}).`, status);
+}
+async function discoverApprovalResult(state2, options = {}) {
+  const response = await post(state2, "discover", "", "", options);
+  if (response.status === 202) return { status: "pending" };
+  if (!response.ok) return refuse(response, "discover");
+  const found = await response.json().catch(() => null);
+  if (typeof found?.resultRef !== "string" || !RESULT_REF_PATTERN.test(found.resultRef) || typeof found.expiresAt !== "string" || !Number.isFinite(Date.parse(found.expiresAt))) {
+    throw new ApprovalClientError("result_invalid", "OpenKey returned an invalid approval result reference.");
+  }
+  return { status: "ready", resultRef: found.resultRef, expiresAt: found.expiresAt };
+}
+async function fetchApprovalResult(state2, found, options = {}) {
+  const response = await post(state2, "fetch", found.resultRef, "", options);
+  if (!response.ok) return refuse(response, "fetch");
+  const result = await response.json().catch(() => null);
+  if (!result || result.requestId !== state2.requestId || result.bodyCid !== state2.bodyCid || result.resultRef !== found.resultRef || result.expiresAt !== found.expiresAt || !result.relay || typeof result.relay !== "object") {
+    throw new ApprovalClientError("result_invalid", "The approval result does not match this request.");
+  }
+  return result.relay;
+}
+async function ackApprovalResult(state2, resultRef, ackId, options = {}) {
+  const response = await post(state2, "ack", resultRef, ackId, options);
+  const body = await response.clone().json().catch(() => null);
+  if (!response.ok && (body?.code === "expired_result" || body?.code === "not_found" || body?.code === "acknowledged")) return "settled";
+  if (!response.ok) return refuse(response, "ack");
+  if (body?.ackId !== ackId || body.status !== "acknowledged") {
+    throw new ApprovalClientError("unavailable", `OpenKey did not confirm the acknowledgement (HTTP ${response.status}).`, response.status);
+  }
+  return "acknowledged";
+}
+function bounded(options, now) {
+  if (options.deadline === void 0) return options;
+  return { ...options, timeoutMs: Math.min(options.timeoutMs ?? REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, options.deadline - now() + 1e3)) };
+}
+async function collectApprovalResult(state2, options = {}) {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? defaultSleep;
+  const interval = options.intervalMs ?? APPROVAL_POLL_INTERVAL_MS;
+  let found = options.known;
+  for (; ; ) {
+    if (!found) {
+      let discovered;
+      try {
+        discovered = await discoverApprovalResult(state2, bounded(options, now));
+      } catch (error) {
+        if (!isApprovalClientError(error) || error.code !== "network") throw error;
+      }
+      if (discovered?.status === "ready") {
+        found = { resultRef: discovered.resultRef, expiresAt: discovered.expiresAt };
+        await options.onDiscovered?.(found);
+      }
+    }
+    if (found) {
+      try {
+        return { status: "result", ...found, relay: await fetchApprovalResult(state2, found, bounded(options, now)) };
+      } catch (error) {
+        if (!isApprovalClientError(error) || error.code !== "network") throw error;
+      }
+    }
+    if (options.deadline !== void 0 && now() >= options.deadline) return { status: "deadline" };
+    const wait = options.deadline === void 0 ? interval : Math.min(interval, Math.max(0, options.deadline - now()));
+    await sleep(wait);
+    if (options.signal?.aborted) throw options.signal.reason;
+  }
+}
+function generateRelayKey() {
+  const privateKey = p2562.utils.randomPrivateKey();
+  const point = p2562.getPublicKey(privateKey, false);
+  return {
+    privateKey: toBase64Url(privateKey),
+    publicJwk: { kty: "EC", crv: "P-256", x: toBase64Url(point.subarray(1, 33)), y: toBase64Url(point.subarray(33)) }
+  };
+}
+function invalidResult(message) {
+  return new ApprovalClientError("result_invalid", message);
+}
+function strictBytes2(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw invalidResult(`OpenKey returned an invalid ${label}.`);
+  try {
+    return fromBase64Url2(value);
+  } catch {
+    throw invalidResult(`OpenKey returned an invalid ${label}.`);
+  }
+}
+async function openRelayResult(envelope, requestId, relayPrivateKey) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  const relay = envelope;
+  if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResult("OpenKey returned an unsupported encrypted relay result.");
+  const peer = relay.ephemeralPublicJwk;
+  if (!peer || typeof peer !== "object" || peer.kty !== "EC" || peer.crv !== "P-256" || "d" in peer) throw invalidResult("OpenKey returned an invalid relay key.");
+  const x = strictBytes2(peer.x, "relay key");
+  const y = strictBytes2(peer.y, "relay key");
+  const nonce = strictBytes2(relay.nonce, "relay nonce");
+  const ciphertext = strictBytes2(relay.ciphertext, "relay ciphertext");
+  if (x.length !== 32 || y.length !== 32) throw invalidResult("OpenKey returned an invalid relay key.");
+  if (nonce.length !== 12 || ciphertext.length <= 16) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  let secret;
+  try {
+    const point = new Uint8Array(65);
+    point[0] = 4;
+    point.set(x, 1);
+    point.set(y, 33);
+    p2562.ProjectivePoint.fromHex(point).assertValidity();
+    secret = p2562.getSharedSecret(fromBase64Url2(relayPrivateKey), point, true).subarray(1);
+  } catch {
+    throw invalidResult("OpenKey returned an invalid relay key.");
+  }
+  const salt = utf8Bytes2(requestId);
+  const key = hmac(sha2562, hmac(sha2562, salt, secret), Uint8Array.from([...utf8Bytes2(RELAY_INFO), 1]));
+  let value;
+  try {
+    const aes = await globalThis.crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
+    const plain = await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: salt, tagLength: 128 },
+      aes,
+      ciphertext
+    );
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plain));
+  } catch {
+    throw invalidResult("OpenKey returned an unreadable encrypted relay result.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  return value;
+}
+function checkApprovalResultBinding(opened, expected) {
+  const { ownerDid, delegationExpiresAt, delegation } = opened;
+  const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) && new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
+  const differing = [
+    ["resultVersion", opened.resultVersion === 1],
+    ["requestId", opened.requestId === expected.requestId],
+    ["requestDigest", opened.requestDigest === expected.bodyCid],
+    ["requesterDid", opened.requesterDid === expected.request.issuer],
+    ["targetDid", opened.targetDid === expected.request.targetDid],
+    ["ownerDid", typeof ownerDid === "string" && ownerDid.length > 0],
+    ["delegationExpiresAt", expiryValid],
+    ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)]
+  ].filter(([, matches]) => !matches).map(([field]) => field);
+  if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
+  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid, delegationExpiresAt, delegation };
+}
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -14945,6 +15572,10 @@ var init_links = __esm({
     init_p256();
     init_zod();
     init_ed25519();
+    init_ed25519();
+    init_p256();
+    init_hmac();
+    init_sha256();
     SHA256_CODE2 = 18;
     ENVELOPE_AAD_LABEL2 = "tinycloud-share-envelope-v1";
     SEALED_BLOB_VERSION = 1;
@@ -15087,6 +15718,24 @@ var init_links = __esm({
     errorBodySchema = external_exports2.object({ error: external_exports2.string() }).passthrough();
     KEY_PARAMETER = /[#&]k=([A-Za-z0-9_-]{43})(?:&|$)/;
     DEFAULT_SHARE_ORIGINS = ["https://share.tinycloud.xyz"];
+    APPROVAL_RESULT_CLIENT_ID = "openkey-approval-result-v1";
+    APPROVAL_POLL_INTERVAL_MS = 2e3;
+    REQUEST_TIMEOUT_MS = 1e4;
+    MIN_REQUEST_TIMEOUT_MS = 1e3;
+    RESULT_REF_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+    RELAY_INFO = "openkey-device-relay-v1";
+    ApprovalClientError = class extends Error {
+      code;
+      /** HTTP status of the OpenKey reply, when there was one. */
+      status;
+      constructor(code22, message, status) {
+        super(message);
+        this.name = "ApprovalClientError";
+        this.code = code22;
+        this.status = status;
+      }
+    };
+    defaultSleep = (ms) => new Promise((resolve6) => setTimeout(resolve6, ms));
   }
 });
 
@@ -20849,6 +21498,8 @@ init_blake3();
 init_ed25519();
 init_sha256();
 init_sha256();
+init_sha256();
+init_sha3();
 var __defProp3 = Object.defineProperty;
 var __export3 = (target, all) => {
   for (var name in all)
@@ -26273,7 +26924,7 @@ async function seal2(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH2 + nonce.length);
   return { blob, cid: await computeCid2(blob) };
 }
-async function open7(blob, key32) {
+async function open8(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -26848,7 +27499,7 @@ async function resolveLegacyV2(link4, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open7(sealed, parsed.key32);
+      plaintext = await open8(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -26983,6 +27634,172 @@ var SharePublishError = class extends Error {
     this.code = code32;
   }
 };
+var AddressedContentSourceError = class extends TypeError {
+  code;
+  constructor(code32, message) {
+    super(message);
+    this.name = "AddressedContentSourceError";
+    this.code = code32;
+  }
+};
+var SHARE_ID = /^[a-z0-9][a-z0-9_-]{15,63}$/;
+var NETWORK = /^urn:tinycloud:encryption:(.+):default$/;
+var OWNER_PKH = /^did:pkh:eip155:([1-9][0-9]*):(0x[0-9a-fA-F]{40})$/;
+var OWNER_KEY = /^did:key:[A-Za-z0-9]+$/;
+var ENVELOPE_FIELDS = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "aad", "metadata"];
+var ENVELOPE_ALG = "x25519-aes256gcm/v1";
+var HEX_DIGEST = /^[0-9a-f]{64}$/;
+var BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+var textEncoder = new TextEncoder();
+function hex2(bytes3) {
+  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function checksumAddress(address) {
+  const lower = address.toLowerCase().slice(2);
+  const hash = keccak_256(textEncoder.encode(lower));
+  let out = "0x";
+  for (let index = 0; index < lower.length; index++) {
+    const nibble = hash[index >> 1] >> (index % 2 === 0 ? 4 : 0) & 15;
+    out += nibble >= 8 ? lower[index].toUpperCase() : lower[index];
+  }
+  return out;
+}
+function pathBoundKeyPath(shareId) {
+  if (typeof shareId !== "string" || !SHARE_ID.test(shareId)) {
+    throw new AddressedContentSourceError("share-id-invalid", "addressed share id is invalid: 16 to 64 characters from lowercase letters, digits, '_' and '-', starting with a letter or digit (a lowercase UUID, hyphens included, is valid)");
+  }
+  return `share/${shareId}`;
+}
+function assertEncryptionNetwork(network) {
+  const match = typeof network === "string" ? NETWORK.exec(network) : null;
+  if (match === null) {
+    throw new AddressedContentSourceError("network-invalid", "encryption network must be the owner's default network: urn:tinycloud:encryption:<did>:default");
+  }
+  const owner = match[1];
+  const pkh = OWNER_PKH.exec(owner);
+  if (pkh !== null) {
+    if (pkh[2] !== checksumAddress(pkh[2])) {
+      throw new AddressedContentSourceError("network-not-checksummed", "encryption network address must be EIP-55 checksummed; use defaultEncryptionNetworkForOwner(ownerDid)");
+    }
+  } else if (!OWNER_KEY.test(owner)) {
+    throw new AddressedContentSourceError("network-invalid", "encryption network owner must be a did:pkh:eip155 address or a did:key");
+  }
+  return network;
+}
+var assertNetwork = assertEncryptionNetwork;
+function decodeWrappedKey(encryptedSymmetricKey) {
+  if (typeof encryptedSymmetricKey !== "string" || !BASE64.test(encryptedSymmetricKey)) {
+    throw new AddressedContentSourceError("envelope-invalid", "wrapped content key is not strict base64");
+  }
+  try {
+    return fromBase64Url3(encryptedSymmetricKey.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new AddressedContentSourceError("envelope-invalid", "wrapped content key is not strict base64");
+  }
+}
+function decodeBase64(value) {
+  try {
+    return fromBase64Url3(value.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope field is not strict base64");
+  }
+}
+function wrappedKeyDigestHex(encryptedSymmetricKey) {
+  return hex2(sha2562(decodeWrappedKey(encryptedSymmetricKey)));
+}
+function canonicalKeyHashHex(encryptedSymmetricKey) {
+  return hex2(sha2562(textEncoder.encode(canonicalize3(encryptedSymmetricKey))));
+}
+function pathBoundSessionPermissions(input) {
+  const encryptionNetwork = assertNetwork(input.encryptionNetwork);
+  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }];
+}
+function planPathBoundShare(input) {
+  const keyPath = pathBoundKeyPath(input.shareId);
+  const encryptionNetwork = assertNetwork(input.encryptionNetwork);
+  const keyResource = `${encryptionNetwork}/${keyPath}`;
+  return {
+    shareId: input.shareId,
+    encryptionNetwork,
+    keyPath,
+    keyResource,
+    registrationPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
+    encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...extra?.metadata === void 0 ? {} : { metadata: { ...extra.metadata } } })
+  };
+}
+function pathBoundStoredBytes(envelope) {
+  return textEncoder.encode(canonicalize3(envelope));
+}
+function assertEnvelope(plan, envelope) {
+  if (envelope === null || typeof envelope !== "object" || envelope.v !== 2) {
+    throw new AddressedContentSourceError("envelope-invalid", "path-bound content must be a v2 named-key envelope (encrypt with keys.encrypt, not encryptToNetwork)");
+  }
+  if (envelope.networkId !== plan.encryptionNetwork || envelope.keyPath !== plan.keyPath) {
+    throw new AddressedContentSourceError("key-path-mismatch", "envelope network or key path does not match the share's plan");
+  }
+  if (!Number.isSafeInteger(envelope.keyVersion) || envelope.keyVersion < 1) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope key version is invalid");
+  }
+  wrappedKeyDigestHex(envelope.encryptedSymmetricKey);
+  if (envelope.encryptedSymmetricKeyHash !== canonicalKeyHashHex(envelope.encryptedSymmetricKey)) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope key hash does not match its wrapped key");
+  }
+  const record2 = envelope;
+  if (Object.keys(record2).some((key) => !ENVELOPE_FIELDS.includes(key)) || record2.alg !== ENVELOPE_ALG) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope has a field or algorithm the recipient does not accept");
+  }
+  if (typeof record2.ciphertext !== "string" || !BASE64.test(record2.ciphertext) || decodeBase64(record2.ciphertext).length < 28) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope ciphertext is not strict base64 of at least 28 bytes");
+  }
+  if (record2.aad !== void 0 && (typeof record2.aad !== "string" || !BASE64.test(record2.aad))) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope aad is not strict base64");
+  }
+  if (record2.metadata !== void 0 && (record2.metadata === null || typeof record2.metadata !== "object" || Array.isArray(record2.metadata) || Object.values(record2.metadata).some((entry) => typeof entry !== "string"))) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope metadata must be an object of strings");
+  }
+}
+function bindPathBoundContentSource(input) {
+  const { plan, envelope } = input;
+  assertEnvelope(plan, envelope);
+  const expected = pathBoundStoredBytes(envelope);
+  if (input.storedBytes.length !== expected.length || input.storedBytes.some((byte, index) => byte !== expected[index])) {
+    throw new AddressedContentSourceError("stored-bytes-mismatch", "uploaded bytes are not the canonical v2 envelope; upload pathBoundStoredBytes(envelope)");
+  }
+  return {
+    shareId: plan.shareId,
+    kvResource: input.kvResource,
+    selector: input.selector,
+    encryptionNetwork: plan.encryptionNetwork,
+    encryptionKeyPath: plan.keyPath,
+    encryptedSymmetricKeyDigestHex: wrappedKeyDigestHex(envelope.encryptedSymmetricKey),
+    keyVersion: envelope.keyVersion,
+    mode: "immutable",
+    initialCiphertextDigestHex: hex2(sha2562(expected))
+  };
+}
+async function encryptAddressedShareContent(input) {
+  const { plan, keys } = input;
+  const byteLength = input.plaintext.byteLength;
+  const envelope = await keys.encrypt(plan.keyPath, input.plaintext, plan.encryptOptions(input.metadata === void 0 ? void 0 : { metadata: input.metadata }));
+  assertEnvelope(plan, envelope);
+  const storedBytes = pathBoundStoredBytes(envelope);
+  return { envelope, storedBytes, byteLength };
+}
+function assertPathBoundContentSource(source, shareId) {
+  if (source === void 0 || source === null || typeof source !== "object") {
+    throw new AddressedContentSourceError("key-path-required", "addressed content source is missing");
+  }
+  if (source.encryptionKeyPath === void 0) {
+    throw new AddressedContentSourceError("key-path-required", "addressed content source must name its key (encryptionKeyPath: share/<shareId>); a network-wide source is not accepted");
+  }
+  if (source.encryptionKeyPath !== pathBoundKeyPath(shareId)) {
+    throw new AddressedContentSourceError("key-path-mismatch", "addressed content source key path must be share/<shareId> of this share");
+  }
+  if (typeof source.encryptedSymmetricKeyDigestHex !== "string" || !HEX_DIGEST.test(source.encryptedSymmetricKeyDigestHex)) {
+    throw new AddressedContentSourceError("digest-invalid", "addressed content source needs encryptedSymmetricKeyDigestHex: 64 lowercase hex characters");
+  }
+  assertEncryptionNetwork(source.encryptionNetwork);
+}
 function authorizationMethodForTarget(target) {
   if (target.kind === "recipientDid") return "openkey-device";
   if (target.kind === "email") return "email-claim";
@@ -27452,7 +28269,7 @@ var POLICY_CAPABILITY_V1_DOMAIN2 = "xyz.tinycloud.policy/PolicyCapability/v1\0";
 var CONTENT_SOURCE_V1_DOMAIN2 = "xyz.tinycloud.policy/ContentSource/v1\0";
 var NATIVE_PROJECTION_V1_DOMAIN2 = "xyz.tinycloud.policy/NativeProjection/v1\0";
 var ENVELOPE_V3_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
-var textEncoder = new TextEncoder();
+var textEncoder2 = new TextEncoder();
 function targetMatcher(target) {
   if (target.kind === "recipientDid") return { kind: "recipientDid", value: target.did };
   if (target.kind === "email") return { kind: "exactEmail", value: target.address };
@@ -27463,17 +28280,18 @@ function targetKind(target) {
 }
 var OWNER_SHARE_ACTIONS = /* @__PURE__ */ new Set(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"]);
 function assertSafeInput(input) {
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
+  pathBoundKeyPath(input.shareId);
+  assertPathBoundContentSource(input.contentSource, input.shareId);
   if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
   if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
   if (input.artifact === "html" && (input.resource.kind !== "prefix" || !input.actions.includes("read") || !input.actions.includes("list"))) throw new TypeError("html artifacts require a readable prefix");
   if (input.contentSource.shareId !== input.shareId || input.contentSource.selector !== input.resource.kind) throw new TypeError("addressed content source is not bound to the share");
 }
-function hex2(bytes3) {
+function hex3(bytes3) {
   return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function digestHex(value, domain) {
-  return hex2(sha2562(textEncoder.encode(`${domain}${canonicalize3(value)}`)));
+  return hex3(sha2562(textEncoder2.encode(`${domain}${canonicalize3(value)}`)));
 }
 function sortCanonical(values) {
   return [...values].sort((left, right) => canonicalize3(left).localeCompare(canonicalize3(right)));
@@ -27517,19 +28335,20 @@ async function createPolicy(options, capabilities) {
   const unsigned = options.credentialRequirement === void 0 ? { schema: "xyz.tinycloud.policy/policy/v1", ...fields } : { schema: "xyz.tinycloud.policy/policy/v2", ...fields, credentialRequirement: options.credentialRequirement };
   const domain = options.credentialRequirement === void 0 ? POLICY_V1_DOMAIN : POLICY_V2_DOMAIN;
   const policyDigestHex = digestHex(unsigned, domain);
-  const signature = await options.authority.sign(sha2562(textEncoder.encode(`${domain}${canonicalize3(unsigned)}`)));
+  const signature = await options.authority.sign(sha2562(textEncoder2.encode(`${domain}${canonicalize3(unsigned)}`)));
   if (signature.byteLength !== 64) throw new TypeError("policy signature must be Ed25519");
   const policy = {
     ...unsigned,
     policyId: `pol_${base32Lower2(Uint8Array.from(policyDigestHex.match(/../g), (byte) => Number.parseInt(byte, 16)))}`,
     signature: { suite: "Ed25519", signerDid: options.authority.ownerDid, value: toBase64Url2(signature) }
   };
-  return { policy, policyCid: await computeCid2(textEncoder.encode(canonicalize3(policy))), policyDigestHex };
+  return { policy, policyCid: await computeCid2(textEncoder2.encode(canonicalize3(policy))), policyDigestHex };
 }
 function addressedPlan(options) {
   const capabilities = sortCanonical([
     { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
-    { kind: "encryption", resource: options.contentSource.encryptionKeyPath === void 0 ? options.contentSource.encryptionNetwork : `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" }
+    // Only this share's one key: there is no network-scope capability.
+    { kind: "encryption", resource: `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" }
   ]);
   return {
     expiry: rfc3339Seconds(options.expiresAt),
@@ -27617,7 +28436,7 @@ function mailboxCredentialCommitment(target) {
   return {
     type: "TinyCloudPolicyCredentialRequirement",
     version: 1,
-    requirementDigest: toBase64Url2(sha2562(textEncoder.encode(canonicalize3(requirement)))),
+    requirementDigest: toBase64Url2(sha2562(textEncoder2.encode(canonicalize3(requirement)))),
     descriptorDigest: target.kind === "email" ? EMAIL_DESCRIPTOR_DIGEST : EMAIL_DOMAIN_DESCRIPTOR_DIGEST,
     issuerDid: EMAIL_CREDENTIAL_ISSUER_DID,
     issuerKid: EMAIL_CREDENTIAL_ISSUER_KID,
@@ -27707,11 +28526,11 @@ async function publishAddressedShare(input) {
     expiry
   });
   unsignedShareEnvelopeV3Schema2.parse(unsigned);
-  const envelopeSignature = await options.authority.sign(sha2562(textEncoder.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize3(unsigned)}`)));
+  const envelopeSignature = await options.authority.sign(sha2562(textEncoder2.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize3(unsigned)}`)));
   if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
   const envelope = signedAddressedEnvelope(unsigned, options.authority.ownerDid, envelopeSignature);
   shareEnvelopeV3Schema2.parse(envelope);
-  const envelopeBytes = textEncoder.encode(canonicalize3(envelope));
+  const envelopeBytes = textEncoder2.encode(canonicalize3(envelope));
   const envelopeKeyBytes = generateKey2();
   const sealed = await seal2(envelopeBytes, envelopeKeyBytes);
   const envelopeKey = toBase64Url2(envelopeKeyBytes);
@@ -27791,7 +28610,7 @@ function rootAuthorizationBound(input) {
     nnc: "A".repeat(36),
     prf: []
   };
-  return `${toBase64Url2(textEncoder.encode(canonicalize3(header)))}.${toBase64Url2(textEncoder.encode(canonicalize3(payload)))}.${"A".repeat(86)}`;
+  return `${toBase64Url2(textEncoder2.encode(canonicalize3(header)))}.${toBase64Url2(textEncoder2.encode(canonicalize3(payload)))}.${"A".repeat(86)}`;
 }
 async function sealedBodyUpperBound(options) {
   const plan = addressedPlan(options);
@@ -27839,7 +28658,7 @@ async function sealedBodyUpperBound(options) {
     expiry: plan.expiry
   });
   const envelope = signedAddressedEnvelope(unsigned, options.ownerDid, signature);
-  return (await seal2(textEncoder.encode(canonicalize3(envelope)), generateKey2())).blob.length;
+  return (await seal2(textEncoder2.encode(canonicalize3(envelope)), generateKey2())).blob.length;
 }
 async function assertSealedBodyFits(options) {
   if (await sealedBodyUpperBound(options) > await linkBodyLimit()) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
@@ -27849,12 +28668,15 @@ async function addressedShareBodyUpperBound(input) {
   const deliveryEmail = input.deliveryEmail ?? (target.kind === "email" && isEnvelopeDeliveryEmail(target.address) ? target.address : void 0);
   const artifactStorage = "artifactId" in input.storage ? input.storage : void 0;
   const path = "path" in input.storage ? input.storage.path : `${ARTIFACT_ROOT2}/${input.storage.artifactId}/versions/${Number.MAX_SAFE_INTEGER}/${input.storage.storageName}`;
+  const keyPath = pathBoundKeyPath(input.shareId);
+  assertEncryptionNetwork(input.encryptionNetwork);
+  if (input.encryptionKeyPath !== void 0 && input.encryptionKeyPath !== keyPath) throw new AddressedContentSourceError("key-path-mismatch", "addressed content source key path must be share/<shareId> of this share");
   const contentSource = {
     shareId: input.shareId,
     kvResource: `${input.spaceId}/kv/${path}`,
     selector: input.resource.kind,
     encryptionNetwork: input.encryptionNetwork,
-    ...input.encryptionKeyPath === void 0 ? {} : { encryptionKeyPath: input.encryptionKeyPath },
+    encryptionKeyPath: keyPath,
     encryptedSymmetricKeyDigestHex: "f".repeat(64),
     keyVersion: Number.MAX_SAFE_INTEGER,
     mode: "immutable",
@@ -28633,6 +29455,14 @@ async function deliverCredentialInvitation(input) {
   }
   return { status: "accepted" };
 }
+var ShareRevocationIncompleteError = class extends Error {
+  constructor(revoked, failed) {
+    super(`share revocation incomplete: ${failed.map((failure) => failure.targetRole).join(", ")} not revoked`);
+    this.revoked = revoked;
+    this.failed = failed;
+    this.name = "ShareRevocationIncompleteError";
+  }
+};
 function targetKind2(record2) {
   if (record2.targetKind !== void 0) return record2.targetKind;
   return record2.recipientMatcher.kind === "exactEmail" ? "email" : record2.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record2.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
@@ -28648,22 +29478,49 @@ function policyNodeAudience(record2) {
 async function revokeShare(input) {
   const target = targetKind2(input.record);
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
-  const scope = input.scope ?? "direct";
-  const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
-  if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+  let delegationCid;
+  let roots;
   if (target === "bearer") {
+    const scope = input.scope ?? "direct";
+    const selected = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
+    if (selected === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
     if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
+    await input.adapter.revokeDelegation({ delegationCid: selected, scope, record: input.record });
+    delegationCid = selected;
   } else {
-    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
-    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokePolicyRoot({
-      rootCid: delegationCid,
-      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
-      ownerDid: input.record.ownerDid,
-      nodeOrigin: input.record.target.origin,
-      nodeAudience: policyNodeAudience(input.record)
-    });
+    const requests = [
+      [input.record.enforcementDelegationCid, "policy-enforcement"],
+      [input.record.ownerDelegationCid, "policy-authority"]
+    ].flatMap(([rootCid, targetRole]) => rootCid === void 0 ? [] : [{ rootCid, targetRole }]);
+    const first = requests[0];
+    if (first === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+    const ownerDid = input.record.ownerDid;
+    if (ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    const revokePolicyRoot = input.adapter.revokePolicyRoot;
+    if (revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    const nodeAudience = policyNodeAudience(input.record);
+    roots = [];
+    const failed = [];
+    for (const request of requests) {
+      try {
+        const outcome = await revokePolicyRoot({ ...request, ownerDid, nodeOrigin: input.record.target.origin, nodeAudience });
+        if (outcome === "left-live") {
+          if (request.targetRole !== "policy-authority") throw new Error("the enforcement root cannot be left live");
+          roots.push({ rootCid: request.rootCid, targetRole: "policy-authority", state: "left-live", expiresAt: input.record.expiresAt });
+        } else if (outcome === void 0) {
+          roots.push({ ...request, state: "revoked" });
+        } else {
+          throw new Error("root revocation returned an unknown outcome");
+        }
+      } catch (error) {
+        failed.push({ ...request, error });
+      }
+    }
+    const revoked = roots.flatMap((root) => root.state === "revoked" ? [root.rootCid] : []);
+    if (failed.length > 0 || revoked.length === 0) {
+      throw new ShareRevocationIncompleteError(revoked, failed.length > 0 ? failed : roots.map((root) => ({ rootCid: root.rootCid, targetRole: root.targetRole, error: new Error("no root was revoked") })));
+    }
+    delegationCid = first.rootCid;
   }
   let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
@@ -28674,7 +29531,7 @@ async function revokeShare(input) {
     revokedAt = latest?.revokedAt ?? revokedAt;
     await input.records.put({ ...latest ?? input.record, revokedAt });
   }
-  return { state: "revoked", target, delegationCid, revokedAt };
+  return { state: "revoked", target, delegationCid, ...roots === void 0 ? {} : { roots }, revokedAt };
 }
 function redactRecord(record2, revealLink, link4) {
   const matcher = record2.recipientMatcher;
@@ -30077,68 +30934,6 @@ var unsignedShareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.superRef
 var shareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.extend({ signature: signatureSchema3 }).strict().superRefine(validateV3Invariants3);
 var ENVELOPE_AAD_LABEL4 = "tinycloud-share-envelope-v1";
 var AAD4 = utf8Bytes4(ENVELOPE_AAD_LABEL4);
-function isPlainRecord4(value) {
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
-function assertNoLoneSurrogates4(text) {
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i);
-    if (unit >= 56320 && unit <= 57343) {
-      throw new TypeError(
-        `cannot canonicalize string with unpaired low surrogate at index ${i}`
-      );
-    }
-    if (unit >= 55296 && unit <= 56319) {
-      const next = text.charCodeAt(i + 1);
-      if (!(next >= 56320 && next <= 57343)) {
-        throw new TypeError(
-          `cannot canonicalize string with unpaired high surrogate at index ${i}`
-        );
-      }
-      i++;
-    }
-  }
-}
-function serializeString4(text) {
-  assertNoLoneSurrogates4(text);
-  return JSON.stringify(text);
-}
-function serialize4(value) {
-  if (value === null) return "null";
-  switch (typeof value) {
-    case "boolean":
-      return JSON.stringify(value);
-    case "string":
-      return serializeString4(value);
-    case "number":
-      if (!Number.isFinite(value)) {
-        throw new TypeError(`cannot canonicalize non-finite number: ${value}`);
-      }
-      return JSON.stringify(value);
-    case "object":
-      break;
-    default:
-      throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => serialize4(item)).join(",")}]`;
-  }
-  if (!isPlainRecord4(value)) {
-    throw new TypeError("cannot canonicalize non-plain object");
-  }
-  const keys = Object.keys(value).sort();
-  const members = [];
-  for (const key of keys) {
-    const member = value[key];
-    if (member === void 0) continue;
-    members.push(`${serializeString4(key)}:${serialize4(member)}`);
-  }
-  return `{${members.join(",")}}`;
-}
-function canonicalize4(value) {
-  return serialize4(value);
-}
 var LABEL2 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 function isCanonicalEmailDomain2(value) {
   if (value.length === 0 || value.length > 253) return false;
@@ -30277,9 +31072,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat6, mkdir as mkdir4, mkdtemp, open as open8, readFile as readFile6, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm6, unlink as unlink4 } from "fs/promises";
+import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open9, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
-import { basename as basename2, join as join11, resolve as resolve4, sep as sep3 } from "path";
+import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -30311,7 +31106,7 @@ function shareFilename(value) {
     throw new CLIError(
       "UNSAFE_FILENAME",
       hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
-      8
+      2
     );
   }
 }
@@ -30324,7 +31119,7 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const path = resolve4(input);
   const info = await stat4(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile6(path));
+  const bytes = new Uint8Array(await readFile7(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
@@ -30333,9 +31128,9 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join11(current, segment) : join11(current, segment);
+    current = current === sep3 ? join12(current, segment) : join12(current, segment);
     try {
-      const info = await lstat6(current);
+      const info = await lstat7(current);
       if (info.isSymbolicLink()) {
         const canonical = await realpath2(current);
         if (current !== "/tmp" && current !== "/var") throw new Error("OUTPUT_EXISTS");
@@ -30343,8 +31138,8 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir4(current, { mode: 448 });
-      const created = await lstat6(current);
+      await mkdir5(current, { mode: 448 });
+      const created = await lstat7(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
   }
@@ -30353,31 +31148,31 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve4(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open8(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open9(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
-  const outputPath = join11(stableDirectory, safeName);
+  const outputPath = join12(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat4(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join11(stableDirectory, ".tinycloud-share-stage-"));
-  const stagingInfo = await lstat6(stagingDirectory);
+  const stagingDirectory = await mkdtemp(join12(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingInfo = await lstat7(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join11(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
+  const stagingPath = join12(stagingDirectory, `.tinycloud-share-${randomBytes3(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
     await assertStableDirectory();
     try {
-      const existing = await lstat6(outputPath);
+      const existing = await lstat7(outputPath);
       if (existing.isSymbolicLink()) throw new Error("UNSAFE_FILENAME");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open8(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open9(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -30399,10 +31194,10 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink4(temporaryPath);
     } catch {
     }
-    await rm6(stagingDirectory, { recursive: true, force: true });
+    await rm7(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join11(outputDirectory, safeName);
+  return join12(outputDirectory, safeName);
 }
 
 // src/share/artifact-store.ts
@@ -30621,10 +31416,11 @@ init_profiles();
 init_constants();
 init_errors();
 init_session_expired();
-import { chmod as chmod4, link as link3, open as open9, readFile as readFile7, stat as stat5, unlink as unlink5 } from "fs/promises";
-import { dirname as dirname5, join as join12 } from "path";
+init_warnings();
+import { chmod as chmod4, link as link3, open as open10, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
+import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
-import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
@@ -30793,8 +31589,8 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   const observedProfiles = /* @__PURE__ */ new Set();
   let preparedKeys;
   let preparedKey;
-  const path = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
-  const legacyPath = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
+  const path = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
+  const legacyPath = async (profile) => join13(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
   const b64 = (value) => Buffer.from(value).toString("base64url");
   const unb64 = (value) => {
     if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
@@ -30830,7 +31626,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   };
   const readIfPresent = async (file) => {
     try {
-      return await readFile7(file);
+      return await readFile8(file);
     } catch (error) {
       if (error.code === "ENOENT") return void 0;
       throw new ShareHistoryReadError();
@@ -30978,7 +31774,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       await link3(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink5(found.file);
-      const directory = await open9(dirname5(found.file), "r");
+      const directory = await open10(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -31122,16 +31918,22 @@ function createShareAuthorityAdapters(input = {}) {
     if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
       throw new Error("share Policy/v3 revocation is not bound to the active owner node");
     }
-    await revokePolicyRootV3({
-      nodeOrigin: activeNode.origin,
-      rootCid: request.rootCid,
-      targetRole: request.targetRole,
-      ownerDid: node.credentialHolderDid,
-      issuerDid: node.credentialHolderDid,
-      nodeAudience: activeNode.nodeDid,
-      reason: "share revoked",
-      sign: (digest) => node.signSessionBytes(digest)
-    });
+    try {
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest) => node.signSessionBytes(digest),
+        spaceId: node.spaceId,
+        resourceTransport: node.resourceTransport
+      });
+    } catch (error) {
+      if (!(error instanceof Error && "status" in error && error.status === 409 && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
+    }
   });
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
@@ -31187,11 +31989,9 @@ function createShareAuthorityAdapters(input = {}) {
       throw new TypeError("email credential descriptor and issuer are required");
     }
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? void 0 : targetInput.target.kind === "email" ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    const emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : void 0;
-    if (addressedEncryptionNetwork !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(
-      node,
-      emailKeyPath === void 0 ? addressedEncryptionNetwork : `${addressedEncryptionNetwork}/${emailKeyPath}`
-    )) {
+    const shareId = crypto.randomUUID().replaceAll("-", "");
+    const pathPlan = addressedEncryptionNetwork === void 0 ? void 0 : planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork });
+    if (pathPlan !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, pathPlan.keyResource)) {
       throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
     const config = await publicConfig();
@@ -31200,7 +32000,6 @@ function createShareAuthorityAdapters(input = {}) {
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
     }
-    const shareId = emailKeyPath?.slice("share/".length) ?? crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === void 0 || targetInput.files.length === 0 ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }] : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? "exact";
     if (targetInput.target.kind === "bearer") {
@@ -31322,7 +32121,6 @@ function createShareAuthorityAdapters(input = {}) {
       resource: { kind: resourceKind },
       storage: artifact === void 0 ? { path: resourcePath } : { artifactId: artifact.id, storageName },
       encryptionNetwork: addressedEncryptionNetwork,
-      ...emailKeyPath === void 0 ? {} : { encryptionKeyPath: emailKeyPath },
       actions,
       policyActions,
       ...deliveryEmail === void 0 ? {} : { deliveryEmail },
@@ -31337,16 +32135,14 @@ function createShareAuthorityAdapters(input = {}) {
       const rejected = error instanceof LocationRecordValidationError || error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = addressedEncryptionNetwork;
-    const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, {
-      ...emailKeyPath === void 0 ? {} : { keyPath: emailKeyPath },
+    const pathPlanForShare = pathPlan;
+    const encrypted = await encryptAddressedShareContent({
+      plan: pathPlanForShare,
+      keys: node.keys,
+      plaintext: file.bytes,
       metadata: { contentType: mediaType }
     });
-    if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
-    if (emailKeyPath !== void 0 && (encrypted.data.networkId !== encryptionNetwork || encrypted.data.keyPath !== emailKeyPath)) {
-      throw new Error("email share encryption was rejected");
-    }
-    const storedBytes = new TextEncoder().encode(canonicalize4(encrypted.data));
+    const storedBytes = encrypted.storedBytes;
     let artifactVersion;
     if (artifact !== void 0) {
       artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
@@ -31373,17 +32169,13 @@ function createShareAuthorityAdapters(input = {}) {
         throwKvUploadFailure(stored.error);
       }
     }
-    const contentSource = {
-      shareId,
+    const contentSource = bindPathBoundContentSource({
+      plan: pathPlanForShare,
+      envelope: encrypted.envelope,
+      storedBytes,
       kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
-      selector: resourceKind,
-      encryptionNetwork: encrypted.data.networkId,
-      ...emailKeyPath === void 0 ? {} : { encryptionKeyPath: emailKeyPath },
-      encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
-      keyVersion: encrypted.data.keyVersion,
-      mode: "immutable",
-      initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex")
-    };
+      selector: resourceKind
+    });
     const addressedOptions = {
       shareId,
       shareOrigin: config.shareOrigin,
@@ -31558,13 +32350,38 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const nativeReader = async (link4) => {
     const { TinyCloudNode: TinyCloudNode2 } = await import("@tinycloud/node-sdk");
-    const sharing = input.nativeSharing ?? ((host) => new TinyCloudNode2({ ...host === void 0 ? {} : { host }, autoDiscoverLocalNode: false }).sharing);
+    let sharing = input.nativeSharing;
+    if (sharing === void 0) {
+      const selectedProfile2 = await profileName();
+      const selected = await ProfileManager.profileExists(selectedProfile2) ? await ProfileManager.getProfile(selectedProfile2) : void 0;
+      const registry = selected === void 0 ? {} : {
+        registryCacheStore: createProfileRegistryCacheStore2(selectedProfile2),
+        registrySequenceStore: createProfileRegistrySequenceStore2(selectedProfile2),
+        tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || selected.tinycloudRegistryUrl
+      };
+      sharing = () => new TinyCloudNode2({
+        ...registry,
+        newUserHost: null,
+        autoDiscoverLocalNode: false,
+        onRegistryFallback: recordRegistryFallbackWarning
+      }).sharing;
+    }
     const token = parseNativeShareUrl(link4);
-    const decoded = sharing(void 0).decodeLink(token);
-    if (typeof decoded.host !== "string") throw new Error("native share has no owner Node");
-    const received = await sharing(canonicalOrigin2(decoded.host, "owner node origin")).receive(token, { autoSubdelegate: false, useSessionKey: false });
+    const share = sharing();
+    const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
     const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
+    const cause = failure?.cause;
+    if (failure?.code === "node_not_found" && typeof cause === "object" && cause !== null && "code" in cause && cause.code === "node_not_found" && "verdict" in cause) {
+      const verdict = cause.verdict;
+      if (typeof verdict === "object" && verdict !== null && "status" in verdict && verdict.status === "unregistered" && !("offline" in verdict && verdict.offline === true)) {
+        throw new CLIError(
+          "SHARE_SENDER_UNREGISTERED",
+          "The account that shared this hasn't published its storage settings. Ask them to publish them (with tinycloud registry publish), then try again.",
+          ExitCode.NOT_FOUND
+        );
+      }
+    }
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
       throw new CLIError("SHARE_REVOKED", "This share link has been revoked by its sender.", ExitCode.NOT_FOUND);
     }
@@ -31619,8 +32436,8 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync } from "fs";
-import { lstat as lstat7, open as open10, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
-import { basename as basename3, dirname as dirname6, isAbsolute, join as join13, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
+import { lstat as lstat8, open as open11, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
+import { basename as basename3, dirname as dirname6, isAbsolute, join as join14, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -31915,9 +32732,9 @@ var NAMED_CHARACTERS = {
   newline: "\n"
 };
 function decodeAttributeValue(value) {
-  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex3, decimal, name) => {
+  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex4, decimal, name) => {
     if (name !== void 0) return NAMED_CHARACTERS[name.toLowerCase()] ?? whole;
-    const point = Number.parseInt(hex3 ?? decimal ?? "", hex3 === void 0 ? 10 : 16);
+    const point = Number.parseInt(hex4 ?? decimal ?? "", hex4 === void 0 ? 10 : 16);
     return point > 0 && point <= 1114111 && !(point >= 55296 && point <= 57343) ? String.fromCodePoint(point) : "\uFFFD";
   });
 }
@@ -31974,9 +32791,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open11 = html.indexOf("<", index);
-    if (open11 === -1) return;
-    index = open11 + 1;
+    const open12 = html.indexOf("<", index);
+    if (open12 === -1) return;
+    index = open12 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -32224,10 +33041,10 @@ function normalizeCssEscapes(source) {
           }
           if (next === "\n" || next === "\r" || next === "\f") break;
           escaped = true;
-          const hex3 = /^[0-9a-fA-F]{1,6}/.exec(source.slice(cursor + 1, cursor + 7));
-          if (hex3 !== null) {
-            const point = Number.parseInt(hex3[0], 16);
-            cursor += 1 + hex3[0].length;
+          const hex4 = /^[0-9a-fA-F]{1,6}/.exec(source.slice(cursor + 1, cursor + 7));
+          if (hex4 !== null) {
+            const point = Number.parseInt(hex4[0], 16);
+            cursor += 1 + hex4[0].length;
             if (source[cursor] === "\r" && source[cursor + 1] === "\n") cursor += 2;
             else if (/[ \t\n\r\f]/.test(source[cursor] ?? "")) cursor += 1;
             decoded += point === 0 || point > 1114111 || point >= 55296 && point <= 57343 ? "\uFFFD" : String.fromCodePoint(point);
@@ -32562,7 +33379,7 @@ async function linuxDescriptorPath(fd) {
 async function parentChainIsRealDirectories(root, path) {
   let current = dirname6(path);
   while (current !== root && isWithinFolder(root, current)) {
-    const info = await lstat7(current);
+    const info = await lstat8(current);
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
     current = dirname6(current);
   }
@@ -32575,9 +33392,9 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
   let before;
   try {
     await hooks.beforeOpen?.();
-    before = await lstat7(path);
+    before = await lstat8(path);
     await hooks.afterLstat?.();
-    handle = await open10(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open11(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -32615,7 +33432,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.afterRead?.();
     if (byDescriptor === void 0) {
       try {
-        const again = await lstat7(path);
+        const again = await lstat8(path);
         if (again.isSymbolicLink() || again.dev !== info.dev || again.ino !== info.ino || !await parentChainIsRealDirectories(root, path)) return problem(CHANGED);
       } catch (error) {
         if (isRaceError(error)) return problem(CHANGED);
@@ -32632,11 +33449,11 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
   const descriptorPath = hooks.descriptorPath ?? linuxDescriptorPath;
   try {
     await hooks.beforeOpen?.();
-    const before = await lstat7(absolute);
+    const before = await lstat8(absolute);
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open10(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open11(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -32650,7 +33467,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
       const real = await realpath3(absolute);
       if (real !== absolute || absolute !== root && !isWithinFolder(root, real)) return problem("symbolic link");
       const entries = await readdir6(absolute, { withFileTypes: true });
-      const after = await lstat7(absolute);
+      const after = await lstat8(absolute);
       if (after.isSymbolicLink() || after.dev !== info.dev || after.ino !== info.ino) return problem(CHANGED);
       if (absolute !== root && !await parentChainIsRealDirectories(root, absolute)) return problem(CHANGED);
       return { entries };
@@ -32670,7 +33487,7 @@ function problemError(problems) {
   return new CLIError(
     first.code,
     `folder has ${problems.length} ${noun}: ${listed}${more}`,
-    first.code === "UNSAFE_PATH" ? 8 : 2,
+    2,
     { hint: first.code === "UNSAFE_PATH" ? "Rename these files to plain names without control, invisible or direction-changing characters." : "Symbolic links and special files are never followed or read; copy the real files into the folder." }
   );
 }
@@ -32693,7 +33510,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join13(absolute, entry.name);
+      const child = join14(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -32743,7 +33560,7 @@ function htmlFolderError(error) {
   return new CLIError(
     pathProblem ? "UNSAFE_PATH" : "INVALID_ARGUMENT",
     `folder cannot be published as one page: ${error.message.replace(/^artifact /, "")}${file === "" ? "" : ` (${file}${reference})`}`,
-    pathProblem ? 8 : 2
+    2
   );
 }
 async function jsdomParser() {
@@ -32858,6 +33675,14 @@ function shareCliError(error, operation = "publish") {
       { hint: `Run \`${CLI_NAME12} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
     );
   }
+  if (error instanceof ShareRevocationIncompleteError) {
+    return new CLIError(
+      "REVOCATION_INCOMPLETE",
+      `the share was not fully revoked: ${error.failed.map((failure) => `${failure.targetRole} root ${failure.rootCid}`).join(", ")} is still live`,
+      1,
+      { hint: error.revoked.length > 0 ? "Recipient access has already ended. Run the same command again to revoke the rest." : "Run the same command again." }
+    );
+  }
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
     const profileName = "profileName" in failure ? failure.profileName : void 0;
@@ -32954,8 +33779,8 @@ function shareCliError(error, operation = "publish") {
   const nodeCode = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
   const known = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 2 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 2 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
     AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
@@ -33315,7 +34140,7 @@ function registerShareCommand(program2) {
       return handleError(shareCliError(error, "notify"));
     }
   });
-  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Bearer shares: revoke the owner delegation ancestry (addressed shares always revoke every root)").option("--json", "Print versioned JSON").action(async (id, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
@@ -33377,10 +34202,22 @@ async function loadCourierEntry() {
 
 // src/index.ts
 init_retry_policy();
+init_constants();
+init_diagnostic_logs();
 var { version } = JSON.parse(
   readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
 );
 var program = new Command2();
+var commandStartedAt = Date.now();
+function fullCommandName(command) {
+  const names = [];
+  let current = command;
+  while (current && current !== program) {
+    names.push(current.name());
+    current = current.parent;
+  }
+  return names.reverse().join(" ");
+}
 var shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch
@@ -33394,20 +34231,27 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr");
-program.hook("preAction", async (thisCommand) => {
-  const opts = thisCommand.optsWithGlobals();
+program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr").option("--no-diagnostic-logs", "Don't record a CLI log for this command");
+program.hook("preAction", async (hookedCommand, actionCommand) => {
+  const opts = hookedCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
   applyNoRetryFlag(opts);
-  const parentName = thisCommand.parent?.name();
-  const isShareCommand = parentName === "share" || thisCommand.name() === "share";
+  const parentName = hookedCommand.parent?.name();
+  const isShareCommand = parentName === "share" || hookedCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
-  const commandName = thisCommand.name();
-  const isRootCommand = thisCommand === program;
-  const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
-  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create";
+  const commandName = hookedCommand.name();
+  const isRootCommand = hookedCommand === program;
+  const fullCommand = fullCommandName(hookedCommand);
+  setDiagnosticCommandContext({
+    command: fullCommandName(actionCommand),
+    args: process.argv.slice(2),
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || opts.diagnosticLogs === false,
+    cliVersion: version
+  });
+  commandStartedAt = Date.now();
+  const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) || fullCommand === "profile create" || fullCommand === "registry show";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();
@@ -33425,8 +34269,21 @@ program.hook("preAction", async (thisCommand) => {
     }
   }
 });
-program.hook("postAction", () => {
+program.hook("postAction", async (_hookedCommand, actionCommand) => {
   outputWarnings([]);
+  if (actionCommand.name() === "bug-report") return;
+  await appendDiagnosticLog({
+    root: CONFIG_DIR,
+    disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || actionCommand.optsWithGlobals().diagnosticLogs === false,
+    entry: {
+      command: fullCommandName(actionCommand),
+      args: process.argv.slice(2),
+      exitCode: 0,
+      cliVersion: version,
+      nodeVersion: process.version,
+      durationMs: Date.now() - commandStartedAt
+    }
+  }).catch(() => void 0);
 });
 configureShareCommandServices({
   targetAdapter: shareAuthority.targetAdapter,
@@ -33482,6 +34339,12 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 `;
 });
 var commandToken = firstCommandToken(argv);
+setDiagnosticCommandContext({
+  command: commandToken ?? "unknown",
+  args: argv,
+  disabled: process.env.TINYCLOUD_CLI_LOGS === "0" || argv.includes("--no-diagnostic-logs"),
+  cliVersion: version
+});
 if (argv[0] === "courier") {
   const code5 = await (await loadCourierEntry()).runCourier(argv.slice(1));
   if (code5 !== 0) process.exit(code5);

@@ -70,10 +70,12 @@ export async function rememberRuntimeGrants(
   store: RuntimeGrantStore,
   address: string,
   grants: readonly PortableDelegation[],
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const own = grants.filter((grant) => isPanelGrant(grant, address));
   if (own.length === 0) return;
   const known = await store.loadRuntimeGrants(address);
+  if (!isCurrent()) return;
   const added = new Set(own.map((grant) => grant.cid));
   await store.saveRuntimeGrants(address, [...known.filter((grant) => !added.has(grant.cid)), ...own]);
 }

@@ -13,10 +13,6 @@ const descriptor = ((JSON.parse(await readFile(new URL("../../../sdk-core/test-f
 }).vectors.find((vector) => vector.name === "email")!.descriptor);
 
 const stop = new Error("stopped after the encryption step");
-const keyNode = {
-  keys: { createKey: async (path: string) => { events.push(`key-node createKey ${path}`); return { ok: true as const }; } },
-  encryption: { encryptToNetwork: async (_network: string, _bytes: Uint8Array, options?: { keyPath?: string }) => { events.push(`key-node encrypt ${options?.keyPath}`); throw stop; } },
-};
 const node = {
   credentialHolderDid: ownerDid,
   isSessionOnly: true,
@@ -30,8 +26,8 @@ const node = {
   getDefaultEncryptionNetworkId: () => `urn:tinycloud:encryption:${ownerDid}:default`,
   getEncryptionNetworkIdForSpace: () => `urn:tinycloud:encryption:${ownerDid}:default`,
   hasRuntimePermissions: () => holdsDecrypt,
-  keys: { createKey: async () => { events.push("main createKey"); return { ok: true as const }; } },
-  encryption: { encryptToNetwork: async (_network: string, _bytes: Uint8Array, options?: { keyPath?: string }) => { events.push(`main encrypt ${options?.keyPath}`); throw stop; } },
+  // The v2 path-bound sender encrypts through the node's named-key service; nothing here ever creates a key.
+  keys: { encrypt: async (path: string) => { events.push(`encrypt ${path}`); throw stop; }, createKey: async () => { events.push("createKey"); return { ok: true as const }; } },
 };
 mock.module("../config/profiles.js", () => ({
   ProfileManager: { resolveContext: async ({ profile }: { profile: string }) => ({ profile, host: "https://node.example" }), getProfile: async () => ({ authMethod: "openkey" }) },
@@ -62,18 +58,17 @@ afterEach(() => {
 });
 
 describe("per-invitation approval for a session-only email share", () => {
-  it("asks for the approval with the recipient, file name and expiry before any request, then creates and uses only the approved key", async () => {
+  it("asks for the approval with the recipient, file name and expiry before any request, then encrypts under only the approved key and never creates one", async () => {
     const asked: unknown[] = [];
     const error = await adapter(async (request) => {
       asked.push({ ...request, node: undefined });
       expect(requests).toEqual([]);
       expect(events).toEqual([]);
-      return { shareId: APPROVED_ID, keyNode };
+      return { shareId: APPROVED_ID };
     }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
     expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date("2030-01-01T00:00:00.000Z") }]);
-    // The approver's key id, and only the key node, create the key and encrypt: the session's own node never encrypts.
-    expect(events).toEqual(["registry record", `key-node createKey share/${APPROVED_ID}`, `key-node encrypt share/${APPROVED_ID}`]);
+    expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
   });
 
   it("stops with nothing created or requested when the approval is refused", async () => {
@@ -84,12 +79,14 @@ describe("per-invitation approval for a session-only email share", () => {
     expect(events).toEqual([]);
   });
 
-  it("does not ask when the session already holds decrypt for the share key", async () => {
+  it("does not ask when the session already holds decrypt for the share key, and is refused as before without an approver", async () => {
     holdsDecrypt = true;
     let asked = 0;
-    const error = await adapter(async () => { asked += 1; return { shareId: APPROVED_ID, keyNode }; }).publish(input).then(() => undefined, (caught: unknown) => caught);
+    const error = await adapter(async () => { asked += 1; return { shareId: APPROVED_ID }; }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
     expect(asked).toBe(0);
-    expect(events.at(-1)).toMatch(/^main encrypt share\/[0-9a-f]{32}$/);
+    expect(events.at(-1)).toMatch(/^encrypt share\/[0-9a-f]{32}$/);
+    holdsDecrypt = false;
+    await expect(adapter().publish(input)).rejects.toThrow("decrypt-not-held");
   });
 });

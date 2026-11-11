@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TC_APPS_ROOT } from "../tc-apps.js";
+import { parseKey, parsePrefix, type KeyParts } from "./layout.js";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type JsonObject = { [key: string]: Json };
@@ -13,51 +13,44 @@ export function isObject(value: unknown): value is JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function validPath(key: string, prefix = false): boolean {
-  if (!key.startsWith(TC_APPS_ROOT) || !/^[A-Za-z0-9/._~:+@=,-]+$/.test(key)) return false;
-  const relative = key.slice(TC_APPS_ROOT.length);
-  if (prefix && relative === "") return true;
-  const segments = (prefix && relative.endsWith("/") ? relative.slice(0, -1) : relative).split("/");
-  if (segments.some((part) => part === "" || part === "." || part === "..")) return false;
-  const [first, second, third] = segments;
-  if (first === "catalog" || first === "index-stale") {
-    return (prefix || segments.length === 2 || segments.length === 3) &&
-      (second === undefined || validApp(second)) && (third === undefined || name.test(third)) && segments.length <= 3;
-  }
-  return validApp(first!) && (second === undefined || name.test(second)) &&
-    (third === undefined || name.test(third)) && (prefix ? segments.length <= 4 : segments.length === 4);
-}
-function validApp(value: string): boolean { return name.test(value) && value !== "catalog" && value !== "index-stale"; }
-export const KeySchema = z.string().refine((key) => validPath(key), "Invalid personal-record key.");
-export const RecordKeySchema = KeySchema.refine((key) => !key.startsWith(`${TC_APPS_ROOT}catalog/`) && !key.startsWith(`${TC_APPS_ROOT}index-stale/`), "A record key is required.");
-export const PrefixSchema = z.string().refine((key) => validPath(key, true), "Invalid personal-record prefix.");
+export const KeySchema = z.string().refine((key) => parseKey(key) !== undefined, "Invalid personal-record key.");
+export const RecordKeySchema = KeySchema.refine((key) => parseKey(key)?.area === "record", "A record key is required.");
+export const PrefixSchema = z.string().refine((prefix) => parsePrefix(prefix) !== undefined, "Invalid personal-record prefix.");
 export const EtagSchema = z.string().regex(/^"blake3-[0-9a-f]{64}"$/, "A strong TinyCloud BLAKE3 ETag is required.");
 
-export function catalogParts(key: string): { app: string; kind?: string } | undefined {
-  if (!key.startsWith(`${TC_APPS_ROOT}catalog/`)) return undefined;
-  const [app, kind] = key.slice(`${TC_APPS_ROOT}catalog/`.length).split("/");
-  return { app: app!, ...(kind === undefined ? {} : { kind }) };
+export type RecordParts = Extract<KeyParts, { area: "record" }>;
+/** The parts of a key already validated by a schema. */
+export function keyParts(key: string): KeyParts {
+  const parts = parseKey(key);
+  if (!parts) throw new TypeError("Invalid personal-record key.");
+  return parts;
 }
-export function recordParts(key: string): { app: string; kind: string; folder: string; id: string } {
-  const [app, kind, folder, id] = key.slice(TC_APPS_ROOT.length).split("/");
-  return { app: app!, kind: kind!, folder: folder!, id: id! };
+export function recordParts(key: string): RecordParts {
+  const parts = keyParts(key);
+  if (parts.area !== "record") throw new TypeError("A record key is required.");
+  return parts;
 }
 
 export function valueSyntax(key: string, value: JsonObject): string | undefined {
+  const parts = keyParts(key);
+  if (parts.area === "discovery") {
+    if (Object.keys(value).some((field) => !["v", "app", "id", "title"].includes(field)) || Object.keys(value).length !== 4) return "a discovery entry holds only v, app, id and title";
+    if (value.v !== 1 || value.app !== parts.app || value.id !== `xyz.tinycloud.tinyapps.${parts.app}` || typeof value.title !== "string") return "a discovery entry is {v:1, app, id, title} for its own app";
+    return undefined;
+  }
   if (Object.prototype.hasOwnProperty.call(value, "by")) return "by is set by the server";
-  const catalog = catalogParts(key);
-  if (!catalog) {
-    if (key.startsWith(`${TC_APPS_ROOT}index-stale/`)) return "stale markers are server owned";
+  if (parts.area === "stale") return "stale markers are server owned";
+  if (parts.area === "record") {
     if (!isObject(value.data)) return "record data must be an object";
     if (value.v !== undefined && (!Number.isInteger(value.v) || (value.v as number) < 1)) return "record v must be a positive integer";
     if (value.at !== undefined && typeof value.at !== "string") return "record at must be text";
     if (Object.keys(value).some((field) => !["v", "at", "data"].includes(field))) return "record fields are v, at and data";
     return undefined;
   }
-  if (value.app !== catalog.app) return "catalog app must match its key";
+  if (value.app !== parts.app) return "catalog app must match its key";
   if (typeof value.about !== "string" || typeof value.created !== "string") return "catalog requires about and created";
-  if (!catalog.kind) return typeof value.title === "string" ? undefined : "app requires title";
-  if (value.kind !== catalog.kind) return "catalog kind must match its key";
+  if (!parts.kind) return typeof value.title === "string" ? undefined : "app requires title";
+  if (value.kind !== parts.kind) return "catalog kind must match its key";
   if (!Number.isInteger(value.v) || (value.v as number) < 1 || !isObject(value.fields)) return "kind requires positive v and fields object";
   if (Object.values(value.fields).some((field) => typeof field !== "string")) return "field descriptions must be text";
   if (value.shape === "log" && (value.per === "day" || value.per === "time")) return undefined;
@@ -67,13 +60,17 @@ export function valueSyntax(key: string, value: JsonObject): string | undefined 
 
 const WriteValueSchema = z.object({
   by: z.never({ invalid_type_error: "by is set by the server; omit it from the write value." }).optional(),
-}).catchall(JsonSchema).describe("Record or catalog value without top-level by. Remove by from read-back values before edits or moves; the server supplies it.");
+}).catchall(JsonSchema).describe("Record, catalog or discovery-entry value without top-level by. Remove by from read-back values before edits or moves; the server supplies it.");
 const PutSchema = z.object({ op: z.literal("put"), key: KeySchema, value: WriteValueSchema, etag: EtagSchema.optional() }).strict();
 const MoveSchema = z.object({ op: z.literal("move"), from: RecordKeySchema, to: RecordKeySchema, value: WriteValueSchema, etag: EtagSchema }).strict();
 const DeleteSchema = z.object({ op: z.literal("delete"), key: RecordKeySchema, etag: EtagSchema.optional() }).strict();
 export const WriteInputSchema = z.object({ ops: z.array(z.discriminatedUnion("op", [PutSchema, MoveSchema, DeleteSchema])).min(1).max(10) }).strict().superRefine((input, context) => {
   input.ops.forEach((op, index) => {
     if (op.op === "delete") return;
+    const target = parseKey(op.op === "move" ? op.to : op.key);
+    const from = op.op === "move" ? parseKey(op.from) : undefined;
+    if (!target || (op.op === "move" && !from)) return;
+    if (from && from.app !== target.app) context.addIssue({ code: "custom", path: ["ops", index, "to"], message: "a move stays inside one app" });
     const reason = valueSyntax(op.op === "move" ? op.to : op.key, op.value);
     if (reason) context.addIssue({ code: "custom", path: ["ops", index, "value"], message: reason });
   });

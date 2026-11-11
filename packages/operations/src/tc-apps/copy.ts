@@ -1,35 +1,34 @@
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
-import type { OperationContext, RuntimeOperationContext } from "../contract.js";
+import type { OperationContext } from "../contract.js";
 import { OperationInvocationError, operationError } from "../errors.js";
-import { TC_APPS_COPY_ACTIONS, TC_APPS_DATABASE, TC_APPS_ROOT } from "../tc-apps.js";
+import { TC_APPS_COPY_ACTIONS } from "../tc-apps.js";
 import { normalizeQueryResult } from "../operations/sql.js";
-import { appsAuthority, appsFailure, appsSpace, listAppsKeys, markAppsKindStale, readAppsRecords, requireKv, type AppsKv } from "./kv.js";
+import { appsFailure, appsSpace, listAppsKeys, markAppsKindStale, readAppsRecords, requireKv, type AppsKv } from "./kv.js";
+import { copyKey, indexDatabase, recordPrefix, staleKey, stalePrefix } from "./layout.js";
 import { isObject, type JsonObject } from "./records.js";
 
 export type AppsDatabase = ReturnType<ReturnType<TinyCloudNode["sqlForSpace"]>["db"]>;
 export interface CopyKind { app: string; kind: string }
+/** `k` is the key as stored in the copy, relative to the app root. */
 export interface CopyRow { k: string; r?: JsonObject }
 export const COPY_REQUEST_LIMIT = 1.5 * 1024 * 1024;
 export const COPY_INSERT = "INSERT OR REPLACE INTO records (key, rec) SELECT json_extract(value, '$.k'), json_extract(value, '$.r') FROM json_each(?) WHERE json_extract(value, '$.r') IS NOT NULL";
 export const COPY_DELETE = "DELETE FROM records WHERE key IN (SELECT json_extract(value, '$.k') FROM json_each(?) WHERE json_extract(value, '$.r') IS NULL)";
 const CREATE_TABLE = "CREATE TABLE IF NOT EXISTS records (key TEXT PRIMARY KEY, rec TEXT NOT NULL)";
-const CREATE_VIEW = "CREATE VIEW IF NOT EXISTS entries AS SELECT key, app, kind, substr(r2, 1, instr(r2, '/') - 1) AS folder, substr(r2, instr(r2, '/') + 1) AS id, substr(r2, instr(r2, '/') + 1, 10) AS day, json_extract(rec, '$.v') AS v, json_extract(rec, '$.at') AS at, json_extract(rec, '$.by') AS by, json_extract(rec, '$.data') AS data, rec FROM (SELECT key, rec, app, substr(r1, 1, instr(r1, '/') - 1) AS kind, substr(r1, instr(r1, '/') + 1) AS r2 FROM (SELECT key, rec, substr(p, 1, instr(p, '/') - 1) AS app, substr(p, instr(p, '/') + 1) AS r1 FROM (SELECT key, rec, substr(key, 26) AS p FROM records)))";
+const APP_VIEW = "CREATE VIEW IF NOT EXISTS entries AS SELECT key, kind, substr(r2, 1, instr(r2, '/') - 1) AS folder, substr(r2, instr(r2, '/') + 1) AS id, substr(r2, instr(r2, '/') + 1, 10) AS day, json_extract(rec, '$.v') AS v, json_extract(rec, '$.at') AS at, json_extract(rec, '$.by') AS by, json_extract(rec, '$.data') AS data, rec FROM (SELECT key, rec, substr(key, 1, instr(key, '/') - 1) AS kind, substr(key, instr(key, '/') + 1) AS r2 FROM records)";
 
-export function copyPermission(context: OperationContext) {
-  return { service: "tinycloud.sql", space: appsSpace(context), path: TC_APPS_DATABASE, actions: [...TC_APPS_COPY_ACTIONS] };
+export function copyPermission(context: OperationContext, app: string) {
+  return { service: "tinycloud.sql", space: appsSpace(context), path: indexDatabase(app), actions: [...TC_APPS_COPY_ACTIONS] };
 }
-export async function appsQueryAuthority(context: RuntimeOperationContext) {
-  return [...await appsAuthority(context), copyPermission(context)];
-}
-export function hasCopyAuthority(context: OperationContext): boolean {
-  const expected = copyPermission(context);
+export function hasCopyAuthority(context: OperationContext, app: string): boolean {
+  const expected = copyPermission(context, app);
   return context.runtime!.granted.some((grant) => {
     const actions = grant.actions;
     return grant.service === expected.service && grant.space === expected.space && grant.path === expected.path && Array.isArray(actions) && expected.actions.every((action) => actions.includes(action));
   });
 }
-export function appsDatabase(context: OperationContext): AppsDatabase {
-  return (context.runtime!.node as TinyCloudNode).sqlForSpace(appsSpace(context)).db(TC_APPS_DATABASE);
+export function appsDatabase(context: OperationContext, app: string): AppsDatabase {
+  return (context.runtime!.node as TinyCloudNode).sqlForSpace(appsSpace(context)).db(indexDatabase(app));
 }
 function missingSchema(error: unknown): boolean {
   return isObject(error) && (error.code === "SQL_DATABASE_NOT_FOUND" || (typeof error.message === "string" && /no such (?:table|view)/i.test(error.message)));
@@ -46,7 +45,7 @@ async function execute(db: AppsDatabase, sql: string, params: string[] = []): Pr
 }
 async function createSchema(db: AppsDatabase): Promise<void> {
   await execute(db, CREATE_TABLE);
-  await execute(db, CREATE_VIEW);
+  await execute(db, APP_VIEW);
 }
 /** Each parameter is a JSON array; size includes its second escaping in the SDK request body. */
 export function copyRowChunks(rows: readonly CopyRow[], limit = COPY_REQUEST_LIMIT): string[] {
@@ -108,12 +107,12 @@ async function countCopy(db: AppsDatabase, prefix: string): Promise<number> {
   if (result.rows.length !== 1 || typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) throw copyFailure(undefined);
   return count;
 }
-/** Finishes a started kind, but never starts another after the elapsed-time budget. */
+/** Finishes a started kind, but never starts another after the elapsed-time budget. All kinds belong to one app. */
 export async function checkCopyKinds(kv: AppsKv, db: AppsDatabase, kinds: readonly CopyKind[], clock: () => number = Date.now): Promise<{ kinds: (CopyKind & { records: number })[] } | { outcome: "COPY_PARTIAL"; remaining: CopyKind[] }> {
   const started = clock();
   const checked: (CopyKind & { records: number })[] = [];
   try {
-    const stale = new Set(await listAppsKeys(kv, `${TC_APPS_ROOT}index-stale/`));
+    const stale = new Set(await listAppsKeys(kv, stalePrefix(kinds[0]!.app)));
     for (let index = 0; index < kinds.length; index++) {
       if (clock() - started >= 60_000) {
         const remaining = kinds.slice(index);
@@ -121,24 +120,25 @@ export async function checkCopyKinds(kv: AppsKv, db: AppsDatabase, kinds: readon
         return { outcome: "COPY_PARTIAL", remaining };
       }
       const kind = kinds[index]!;
-      const prefix = `${TC_APPS_ROOT}${kind.app}/${kind.kind}/`;
-      const marker = `${TC_APPS_ROOT}index-stale/${kind.app}/${kind.kind}`;
-      const count = await countCopy(db, prefix);
+      const prefix = recordPrefix(kind.app, kind.kind);
+      const marker = staleKey(kind.app, kind.kind);
+      const indexPrefix = copyKey(kind.app, prefix);
+      const count = await countCopy(db, indexPrefix);
       const keys = await listAppsKeys(kv, prefix);
       if (stale.has(marker) || count !== keys.length) {
         await markAppsKindStale(kv, kind.app, kind.kind, new Date().toISOString());
         const marked = (await readAppsRecords(kv, [marker]))[0]!;
         if (!("value" in marked)) throw copyFailure(undefined);
-        await execute(db, "DELETE FROM records WHERE instr(key, ?) = 1", [prefix]);
+        await execute(db, "DELETE FROM records WHERE instr(key, ?) = 1", [indexPrefix]);
         for (let offset = 0; offset < keys.length; offset += 100) {
           const records = await readAppsRecords(kv, keys.slice(offset, offset + 100));
           const rows: CopyRow[] = records.map((record) => {
             if (!("value" in record)) throw new OperationInvocationError(operationError("NODE_ERROR", "A listed record disappeared or is malformed; the kind remains stale."));
-            return { k: record.key, r: record.value };
+            return { k: copyKey(kind.app, record.key), r: record.value };
           });
           await syncCopyRows(db, rows);
         }
-        const verifiedCount = await countCopy(db, prefix);
+        const verifiedCount = await countCopy(db, indexPrefix);
         const verifiedKeys = await listAppsKeys(kv, prefix);
         const original = new Set(keys);
         if (verifiedCount !== keys.length || verifiedKeys.length !== keys.length || verifiedKeys.some((key) => !original.has(key))) throw new OperationInvocationError(operationError("NODE_ERROR", "The records changed during the rebuild; the kind remains stale.", { retryable: true }));

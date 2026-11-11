@@ -1,7 +1,8 @@
 import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { ExitCode, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
+import { ExitCode, CONFIG_DIR, CONFIG_FILE, PROFILES_DIR, DEFAULT_PROFILE } from "../config/constants.js";
+import { recordDiagnosticFailure } from "../lib/diagnostic-logs.js";
 import { ProfileDeletedError, ProfileLockTimeoutError, ProfileSymlinkError } from "@tinycloud/operations/state";
 import { isSafeRecovery } from "@tinycloud/operations/recovery";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -12,10 +13,12 @@ import {
   isValidSecretName,
   SECRET_REQUEST_MAX_NAMES,
 } from "@tinycloud/operations/secret-request";
-import { operationWarnings, outputError, type ErrorOutputDetails } from "./formatter.js";
+import { operationWarnings, outputError, outputJson, type ErrorOutputDetails } from "./formatter.js";
+import { safeBlock } from "./safe-text.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
+import { routingFailure } from "@tinycloud/sdk-services";
 
 let activeProfileName: string | undefined;
 
@@ -26,6 +29,24 @@ export function setActiveProfileName(name: string): void {
 
 /** Every command that reports `GRANT_REVOKED` exits with this (documented: 5, a refused grant). */
 export const GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
+
+/** What an agent needs while an OpenKey approval is still outstanding: the link to send and when it stops working. */
+export interface ApprovalPending {
+  readonly step: number;
+  readonly of: number;
+  readonly approvalUrl: string;
+  readonly expiresAt: string;
+}
+
+/** The `pending` object of an APPROVAL_PENDING error, rebuilt field by field, or undefined for any other error. */
+export function approvalPendingOf(error: { code: string; metadata?: Record<string, unknown> }): ApprovalPending | undefined {
+  const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : undefined;
+  if (typeof pending !== "object" || pending === null) return undefined;
+  const { step, of, approvalUrl, expiresAt } = pending as Record<string, unknown>;
+  if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) ||
+    typeof approvalUrl !== "string" || typeof expiresAt !== "string") return undefined;
+  return { step, of, approvalUrl, expiresAt };
+}
 
 export class CLIError extends Error {
   readonly status?: number;
@@ -41,6 +62,19 @@ export class CLIError extends Error {
     if (typeof metadata?.status === "number" && Number.isInteger(metadata.status) &&
       metadata.status >= 400 && metadata.status <= 599) this.status = metadata.status;
   }
+}
+
+/** Keep registry failures uniform and value-free across service and thrown errors. */
+function registryUnavailableError(error: unknown): CLIError | undefined {
+  const failure = routingFailure(error);
+  if (failure?.code !== "registry_unavailable") return undefined;
+  return new CLIError(
+    "REGISTRY_UNAVAILABLE",
+    failure.meta?.reason === "no-saved-settings"
+      ? "Couldn't reach your storage settings, and none are saved on this computer yet, so this didn't run. Try again in a few minutes."
+      : "Couldn't get your storage settings. Try again in a few minutes.",
+    ExitCode.ERROR,
+  );
 }
 
 /**
@@ -65,6 +99,10 @@ export function cliErrorFromService(
   const status = error.status ?? error.statusCode;
   if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) meta.status = status;
   const verdict = authorizationVerdictOf({ ...error, meta });
+  if (verdict === undefined) {
+    const unavailable = registryUnavailableError(error);
+    if (unavailable) return unavailable;
+  }
   if (verdict === undefined && message.includes("Missing private key parameter in JWK")) {
     return missingPrivateKeyError();
   }
@@ -138,6 +176,8 @@ export function wrapError(error: unknown): CLIError {
   if (verdict === "forbidden") {
     return new CLIError("PERMISSION_DENIED", message, ExitCode.PERMISSION_DENIED);
   }
+  const unavailable = registryUnavailableError(error);
+  if (unavailable) return unavailable;
 
   // A genuinely untyped signer restore failure is local auth state. Never
   // interpret HTTP response text (or a command's deliberate CLIError) as JWK state.
@@ -205,8 +245,17 @@ export function storageFullError(error: unknown, progress?: string): CLIError | 
   return new CLIError(rejection.code, message, ExitCode.STORAGE_FULL, { hint });
 }
 
-export function handleError(error: unknown): Promise<never> {
+export async function handleError(error: unknown): Promise<never> {
   const cliError = wrapError(error);
+  await recordDiagnosticFailure(cliError, CONFIG_DIR).catch(() => undefined);
+  const pending = approvalPendingOf(cliError);
+  if (pending) {
+    // Not a failure: the owner has not answered yet. stdout carries the one JSON object an agent acts on.
+    outputJson({ pending });
+    process.stderr.write(`${safeBlock(cliError.message)}\n`);
+    if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+    return closeReplication().then(() => process.exit(cliError.exitCode));
+  }
   // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
   // hint) takes precedence over the derived auth/network hints.
   const prebuilt = typeof cliError.metadata?.hint === "string"

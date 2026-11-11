@@ -5,12 +5,17 @@ import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.auth-resources.test";
 
 const metadata = ["urn:tinycloud:recipients:eyJ2IjoxfQ"];
 let originalFetch: typeof fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
+    const registryResponse = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (registryResponse) return registryResponse;
     const url = String(input);
     if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     if (url.endsWith("/delegate") && init?.method === "POST") {
@@ -43,6 +48,7 @@ function fixture(siweConfig?: SiweConfig, preparedSiwe?: (siwe: string) => strin
   signer.signMessage = async (message) => { signed.push(message); return sign(message); };
   const storage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer, wasmBindings: wasm, siweConfig,
     domain: "example.com", tinycloudHosts: ["https://tinycloud.test"],
     signStrategy: { type: "auto-sign" }, sessionStorage: storage,
