@@ -12,6 +12,7 @@ const descriptor = ((JSON.parse(await readFile(new URL("../../../sdk-core/test-f
   vectors: { name: string; descriptor: unknown }[];
 }).vectors.find((vector) => vector.name === "email")!.descriptor);
 
+const EXPIRES = new Date(Math.floor((Date.now() + 86_400_000) / 1000) * 1000);
 const stop = new Error("stopped after the encryption step");
 const node = {
   credentialHolderDid: ownerDid,
@@ -39,7 +40,7 @@ const { createShareAuthorityAdapters } = await import("./adapters.js");
 const input: TargetPublishInput = {
   source: new TextEncoder().encode("only me"), filename: "note.md", target: { kind: "email", address: "owner@example.com" },
   credentialDescriptor: descriptor, issuerDid: "did:web:issuer.credentials.org", issuerKid: "did:web:issuer.credentials.org#controller",
-  expiresAt: new Date("2030-01-01T00:00:00.000Z"), origin: "https://share.example", mediaType: "text/markdown",
+  expiresAt: EXPIRES, origin: "https://share.example", mediaType: "text/markdown",
 } as TargetPublishInput;
 
 const adapter = (approveEmailInviteKey?: EmailInviteApprover) =>
@@ -67,14 +68,28 @@ describe("per-invitation approval for a session-only email share", () => {
       return { shareId: APPROVED_ID, accessExpiresAt: input.expiresAt.toISOString() };
     }).publish(input).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBe(stop);
-    expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date("2030-01-01T00:00:00.000Z") }]);
+    expect(asked).toEqual([{ node: undefined, profile: "test", recipientEmail: "owner@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: EXPIRES }]);
     expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
   });
 
+  it("refuses a file that would stay readable longer than 30 days before asking for anything, and accepts exactly 30 days", async () => {
+    let asked = 0;
+    const approver = async (request: { accessExpiresAt: Date }) => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: request.accessExpiresAt.toISOString() }; };
+    const past = { ...input, expiresAt: new Date(Date.now() + 30 * 86_400_000 + 5000) } as TargetPublishInput;
+    await expect(adapter(approver as never).publish(past)).rejects.toThrow("invite-access-too-long");
+    expect(asked).toBe(0);
+    expect(requests).toEqual([]);
+    expect(events).toEqual([]);
+    const within = { ...input, expiresAt: new Date(Date.now() + 30 * 86_400_000 - 5000) } as TargetPublishInput;
+    const error = await adapter(approver as never).publish(within).then(() => undefined, (caught: unknown) => caught);
+    expect(asked).toBe(1);
+    expect(error).toBe(stop);
+  });
+
   it("refuses an approval whose signed access date is not the expiry the share is issued with, before anything is requested or encrypted", async () => {
-    for (const accessExpiresAt of ["2029-12-31T23:59:59.000Z", "2030-01-01T00:00:01.000Z"]) {
+    for (const accessExpiresAt of [new Date(EXPIRES.getTime() - 1000).toISOString(), new Date(EXPIRES.getTime() + 1000).toISOString()]) {
       const error = await adapter(async () => ({ shareId: APPROVED_ID, accessExpiresAt })).publish(input).then(() => undefined, (caught: unknown) => caught);
-      expect(String(error)).toContain("decrypt-not-held");
+      expect(String(error)).toContain("invalid-request");
       expect(requests).toEqual([]);
       expect(events).toEqual([]);
     }

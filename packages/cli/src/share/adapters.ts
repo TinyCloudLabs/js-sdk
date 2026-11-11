@@ -4,7 +4,7 @@ import { createShareLinks, type ShareLinks } from "./short-links.js";
 import type { EmailInviteApprover } from "./invite-approval.js";
 import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
-import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, EMAIL_INVITE_ACCESS_MAX_MS } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
 import { chmod, link, open, readFile, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -757,6 +757,11 @@ export function createShareAuthorityAdapters(input: {
       if (input.approveEmailInviteKey === undefined || targetInput.target.kind !== "email" || activeProfileName === undefined) {
         throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
       }
+      // The owner approves one invitation for a file that stays readable at most 30 days (OpenKey's own limit). A longer share is refused
+      // here, clearly and before any request; the chosen expiry is never shortened.
+      if (expiresAt.getTime() - Date.now() > EMAIL_INVITE_ACCESS_MAX_MS) {
+        throw new SharePublishAuthorityError({ kind: "invite-access-too-long", limitDays: EMAIL_INVITE_ACCESS_MAX_MS / 86_400_000 });
+      }
       // The approver chooses the key: its id replaces the one generated above, which was never used.
       const approved = await input.approveEmailInviteKey({
         node, profile: activeProfileName, recipientEmail: targetInput.target.address, subjectName: targetInput.filename,
@@ -764,7 +769,7 @@ export function createShareAuthorityAdapters(input: {
       });
       // What the owner signed as the file's access date must be the expiry this share is issued with: no silent shortening, no extension.
       if (approved.accessExpiresAt !== expiresAt.toISOString()) {
-        throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+        throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "the approval's access date is not this share's expiry; nothing was published" });
       }
       shareId = approved.shareId;
       pathPlan = planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork! });

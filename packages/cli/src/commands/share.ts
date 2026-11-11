@@ -250,6 +250,9 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "decrypt-not-held") {
       return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME} auth login --paste --manifest builtin:share-publishing`, 5);
     }
+    if (failure.kind === "invite-access-too-long") {
+      return new CLIError("INVALID_ARGUMENT", `an email share that needs your approval can stay readable for at most ${failure.limitDays} days; use a shorter --expires value (the expiry you chose was not changed, and nothing was requested or shared)`, 2);
+    }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
     }
