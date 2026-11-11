@@ -250,6 +250,9 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "decrypt-not-held") {
       return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME} auth login --paste --manifest builtin:share-publishing`, 5);
     }
+    if (failure.kind === "invite-access-too-long") {
+      return new CLIError("INVALID_ARGUMENT", `Couldn't create the invitation: file access can last at most ${failure.limitDays} days, and you asked for ${failure.requestedDays} days. Choose ${failure.limitDays} days or less and try again. Run it again with --expires ${failure.limitDays}d or less.`, 2);
+    }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
     }
@@ -343,6 +346,11 @@ export async function inspectShareInputOnce(
 
 function jsonOutput(options: { readonly json?: boolean }, command: Command): boolean {
   return options.json === true || command.optsWithGlobals().json === true;
+}
+
+/** The exact duration of a relative expiry like "7d" or "36h"; undefined for a date, which is its own absolute choice. */
+function relativeExpiryMs(value: string): number | undefined {
+  return /^\d+(m|h|d|w)$/.test(value) ? parseDuration(value) : undefined;
 }
 
 function expires(value: string): Date {
@@ -522,6 +530,8 @@ export function registerShareCommand(program: Command): void {
           actions,
           expiresAt: expires(options.expires ?? "7d"),
           expiryWasExplicit: options.expires !== undefined,
+          // The duration the user chose ("7d", or the default), so a rerun of the same choice resumes an open approval with its own absolute date.
+          ...(relativeExpiryMs(options.expires ?? "7d") === undefined ? {} : { expiresInMs: relativeExpiryMs(options.expires ?? "7d")! }),
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
