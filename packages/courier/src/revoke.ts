@@ -1,18 +1,26 @@
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
+import { oneLine } from './a2a.js';
 import { bareDid } from './authority.js';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { peerReadPermissions } from './keys.js';
 import type { Profile } from './profile.js';
 
+function nodeFailure(code: string): string {
+  if (code === 'PERMISSION_DENIED') return 'the node refused';
+  if (code === 'NETWORK_ERROR' || code === 'CHAIN_TOO_DEEP') return "the node couldn't be reached";
+  return 'unexpected node response';
+}
+
 /** Reconcile node-issued children, including replacements not yet saved in the local ledger. */
 export async function revokePeer(node: TinyCloudNode, profile: Profile, handle: string, save: () => void): Promise<void> {
   const peer = profile.peers[handle]!;
+  const shown = oneLine(handle);
   const failed = (reason: string): never => {
-    throw new CourierError('revoke-failed', `Couldn't finish revoking ${handle}: ${reason}. The pairing is kept, so run \`${cmd(`revoke ${handle}`)}\` again to finish.`);
+    throw new CourierError('revoke-failed', `Couldn't finish revoking ${shown}: ${reason}. The pairing is kept, so run \`${cmd(`revoke ${shown}`)}\` again to finish.`);
   };
   const listed = await node.delegationManager.queryAllIssued({ space: profile.spaceId! });
-  if (!listed.ok) return failed(listed.error.message);
+  if (!listed.ok) return failed(nodeFailure(listed.error.code));
   const expected = peerReadPermissions(handle, profile.spaceId!, peer.sessionId).flatMap((p) =>
     p.actions.map((action) => JSON.stringify([`${p.space}/${p.service.replace('tinycloud.', '')}/${p.path}`, action]))).sort();
   const matches = listed.data.filter((record) => {
@@ -24,7 +32,7 @@ export async function revokePeer(node: TinyCloudNode, profile: Profile, handle: 
   const byCid = new Map(matches.map((r) => [r.cid, r]));
   // A local CID alone is never authority to revoke another holder or another mailbox.
   for (const entry of peer.outbound) {
-    if (!entry.revokedAt && !byCid.has(entry.cid)) failed(`Cannot verify issued delegation ${entry.cid}`);
+    if (!entry.revokedAt && !byCid.has(entry.cid)) failed('unexpected node response');
   }
   for (const record of matches) {
     const current = profile.peers[handle]!;
@@ -36,7 +44,7 @@ export async function revokePeer(node: TinyCloudNode, profile: Profile, handle: 
       save();
     }
     const result = await node.delegationManager.revokeIssued(record.cid);
-    if (!result.ok) failed(result.error.message);
+    if (!result.ok) failed(nodeFailure(result.error.code));
     profile.peers[handle]!.outbound.find((e) => e.cid === record.cid)!.revokedAt = new Date().toISOString();
     save();
   }
