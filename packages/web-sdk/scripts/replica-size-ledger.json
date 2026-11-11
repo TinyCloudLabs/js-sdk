@@ -2889,27 +2889,28 @@
   },
   "tc2773LazyRestoreRoot": {
     "label": "local session restore (TC-2773)",
-    "ruling": "Naomi, 2026-11-11: exact web-sdk root increases of 411 ESM and 185 CJS gzip bytes, zero headroom, measured in canonical run 42940528019 at 70161ce38. budget-ruling: Naomi, TC-2773.",
+    "ruling": "Naomi, 2026-11-11: final exact web-sdk root ceilings 1515460 ESM and 1450535 CJS gzip bytes, zero headroom. C1 adds 152 ESM and 112 CJS above the first TC-2773 admission, measured at c6ea90023 in canonical run 42949525988. budget-ruling: Naomi, TC-2773.",
     "base": "603bc970cceeb0f6bc490442354f78d8d69750f9",
     "sourceCommits": [
-      "70161ce380e4f42412b314095905202635dc6541"
+      "70161ce380e4f42412b314095905202635dc6541",
+      "c6ea90023765eec29dfeecbfcfc089747d17d073"
     ],
     "canonicalCI": {
-      "run": "42940528019",
+      "run": "42949525988",
       "jobs": [
-        "130260977836"
+        "130290295953"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 411,
-        "index.cjs": 185
+        "index.mjs": 563,
+        "index.cjs": 297
       },
       "ceiling": {
-        "index.mjs": 1515308,
-        "index.cjs": 1450423
+        "index.mjs": 1515460,
+        "index.cjs": 1450535
       }
     },
-    "reason": "Local restore schedules automatic post-restore hosting and panel-grant refresh, retains stale-session guards, and displays a stored account/space/host-bound hosting hint until the probe completes. Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures ESM 1515308 and CJS 1450423 gzip bytes. Moving refresh into a deferred module did not reduce the single-chunk root consistently. No dependencies are added."
+    "reason": "Local restore schedules automatic hosting and panel-grant refresh with an account/space/host-bound display hint. The C1 review adds a bounded panel wait, serialized per-store mutations, latest-state refused-CID cleanup and final queued sign-out cleanup. Canonical source-WASM run 42940528019 at 70161ce38 measured ESM 1515308 and CJS 1450423. Run 42949525988 at c6ea90023 measures ESM 1515460 and CJS 1450535, adding 152/112 for C1. The queue uses one settled tail per weakly keyed live store after consolidation. No dependencies are added."
   }
 }

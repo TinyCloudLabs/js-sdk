@@ -5340,7 +5340,7 @@ describe("TC-2773 exact web-sdk root admission", () => {
 
   it("admits the canonical root measurements and refuses the next byte", () => {
     validateLedger(shipped);
-    for (const [format, measured] of [["index.mjs", 1515308], ["index.cjs", 1450423]] as const) {
+    for (const [format, measured] of [["index.mjs", 1515460], ["index.cjs", 1450535]] as const) {
       const active = rootCeilingFor(shipped, format);
       expect(active.row).toBe("tc2773LazyRestoreRoot");
       expect(active.ceiling).toBe(measured);
