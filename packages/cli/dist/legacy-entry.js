@@ -28462,13 +28462,57 @@ function shortLinkId(link5) {
   }
 }
 
-// src/share/email-publish-v3.ts
-import {
-  canonicalDigest,
-  createEmailCredentialRequirement,
-  credentialRequirementDigest,
-  validateCredentialFlowDescriptor
-} from "@tinycloud/sdk-core";
+// src/share/adapters.ts
+import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
+
+// src/share/errors.ts
+var SharePublishAuthorityError = class extends Error {
+  constructor(failure, options) {
+    super(failure.kind, options);
+    this.failure = failure;
+    this.name = "SharePublishAuthorityError";
+  }
+};
+var ShareHistoryRetryError = class extends Error {
+  constructor(profile) {
+    super("sender history changed during the operation");
+    this.profile = profile;
+    this.name = "ShareHistoryRetryError";
+  }
+  code = "SHARE_HISTORY_RETRY";
+};
+var ShareHistoryUnreadableError = class extends Error {
+  constructor() {
+    super("share history is unavailable");
+    this.name = "ShareHistoryUnreadableError";
+  }
+};
+var ShareHistoryReadError = class extends Error {
+  constructor() {
+    super("share history could not be read");
+    this.name = "ShareHistoryReadError";
+  }
+};
+var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
+function shareHistoryReason(error) {
+  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
+  const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code5 === "string" && HISTORY_WRITE_ERROR_CODES[code5] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+}
+
+// src/share/adapters.ts
+init_storage2();
+init_profiles();
+init_constants();
+init_errors();
+init_session_expired();
+init_warnings();
+import { chmod as chmod4, link as link2, open as open10, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
+import { dirname as dirname5, join as join13 } from "path";
+import { createHash } from "crypto";
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 
 // ../share-sdk/dist/index.js
 init_sha2();
@@ -35814,54 +35858,7 @@ function parseNativeShareUrl(value4) {
   return token;
 }
 
-// src/share/errors.ts
-var SharePublishAuthorityError = class extends Error {
-  constructor(failure, options) {
-    super(failure.kind, options);
-    this.failure = failure;
-    this.name = "SharePublishAuthorityError";
-  }
-};
-var ShareHistoryRetryError = class extends Error {
-  constructor(profile) {
-    super("sender history changed during the operation");
-    this.profile = profile;
-    this.name = "ShareHistoryRetryError";
-  }
-  code = "SHARE_HISTORY_RETRY";
-};
-var ShareHistoryUnreadableError = class extends Error {
-  constructor() {
-    super("share history is unavailable");
-    this.name = "ShareHistoryUnreadableError";
-  }
-};
-var ShareHistoryReadError = class extends Error {
-  constructor() {
-    super("share history could not be read");
-    this.name = "ShareHistoryReadError";
-  }
-};
-var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
-function shareHistoryReason(error) {
-  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
-  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
-  const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-  return typeof code5 === "string" && HISTORY_WRITE_ERROR_CODES[code5] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
-}
-
 // src/share/adapters.ts
-init_storage2();
-init_profiles();
-init_constants();
-init_errors();
-init_session_expired();
-init_warnings();
-import { chmod as chmod4, link as link2, open as open10, readFile as readFile9, stat as stat4, unlink as unlink4 } from "fs/promises";
-import { dirname as dirname5, join as join13 } from "path";
-import { createHash } from "crypto";
-import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
-import { withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
   LocationRegistryHttpError,
