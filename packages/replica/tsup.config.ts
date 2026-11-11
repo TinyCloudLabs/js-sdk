@@ -16,6 +16,12 @@ const nodeBuiltinsExternal = {
   },
 };
 
+const workerServiceSources: Record<string, string> = {
+  "@tinycloud/sdk-services/context": "../sdk-services/src/context.ts",
+  "@tinycloud/sdk-services/request-priority": "../sdk-services/src/requestPriority.ts",
+  "@tinycloud/sdk-services/kv": "../sdk-services/src/kv/index.ts",
+};
+
 export default defineConfig([
   {
     entry: { index: "src/index.ts", sqlite: "src/sqlite/index.ts", "profile-gate": "src/profile-gate/index.ts" },
@@ -58,11 +64,14 @@ export default defineConfig([
       name: "worker-service-context",
       setup(build) {
         // Bundle the shared source once, before package entries flatten its retry helpers.
-        build.onResolve({ filter: /^@tinycloud\/sdk-services\/(context|request-priority)$/ }, ({ path: request }) => ({
-          path: fileURLToPath(new URL(request.endsWith("context")
-            ? "../sdk-services/src/context.ts"
-            : "../sdk-services/src/requestPriority.ts", import.meta.url)),
+        build.onResolve({ filter: /^@tinycloud\/sdk-services\/(context|request-priority|kv)$/ }, ({ path: request }) => ({
+          path: fileURLToPath(new URL(workerServiceSources[request], import.meta.url)),
         }));
+        build.onResolve({ filter: /^\.\/requestPriorityLoader$/ }, ({ importer }) => {
+          if (importer.startsWith(fileURLToPath(new URL("../sdk-services/src/", import.meta.url)))) {
+            return { path: fileURLToPath(new URL("./src/request-priority-loader.ts", import.meta.url)) };
+          }
+        });
       },
     }],
   },
