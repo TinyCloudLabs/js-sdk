@@ -72,20 +72,6 @@ describe("per-invitation approval for a session-only email share", () => {
     expect(events).toEqual(["registry record", `encrypt share/${APPROVED_ID}`]);
   });
 
-  it("refuses a file that would stay readable longer than 30 days before asking for anything, and accepts exactly 30 days", async () => {
-    let asked = 0;
-    const approver = async (request: { accessExpiresAt: Date }) => { asked += 1; return { shareId: APPROVED_ID, accessExpiresAt: request.accessExpiresAt.toISOString() }; };
-    const past = { ...input, expiresAt: new Date(Date.now() + 30 * 86_400_000 + 5000) } as TargetPublishInput;
-    await expect(adapter(approver as never).publish(past)).rejects.toThrow("invite-access-too-long");
-    expect(asked).toBe(0);
-    expect(requests).toEqual([]);
-    expect(events).toEqual([]);
-    const within = { ...input, expiresAt: new Date(Date.now() + 30 * 86_400_000 - 5000) } as TargetPublishInput;
-    const error = await adapter(approver as never).publish(within).then(() => undefined, (caught: unknown) => caught);
-    expect(asked).toBe(1);
-    expect(error).toBe(stop);
-  });
-
   it("refuses an approval whose signed access date is not the expiry the share is issued with, before anything is requested or encrypted", async () => {
     for (const accessExpiresAt of [new Date(EXPIRES.getTime() - 1000).toISOString(), new Date(EXPIRES.getTime() + 1000).toISOString()]) {
       const error = await adapter(async () => ({ shareId: APPROVED_ID, accessExpiresAt })).publish(input).then(() => undefined, (caught: unknown) => caught);

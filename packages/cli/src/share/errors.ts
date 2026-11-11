@@ -23,13 +23,8 @@ export type SharePublishFailure =
   | { readonly kind: "space-not-ready" }
   /** An addressed share's ceiling includes decrypt on the owner's encryption network; this session does not hold it. Refused before any upload or network call. */
   | { readonly kind: "decrypt-not-held" }
-  /** An email invitation asks the owner for approval only for a file that stays readable at most {@link EMAIL_INVITE_ACCESS_MAX_MS}; a longer access is refused, never shortened. */
-  | { readonly kind: "invite-access-too-long"; readonly limitDays: number }
   /** The sealed envelope was over the link limit after the policy was registered; nothing was linked. `remaining` says what could not be removed. */
   | { readonly kind: "over-limit"; readonly remaining: readonly string[] };
-
-/** The longest a file may stay readable by an email invitation that needs an owner approval (OpenKey refuses longer at /load). */
-export const EMAIL_INVITE_ACCESS_MAX_MS = 30 * 86_400_000;
 
 export class SharePublishAuthorityError extends Error {
   constructor(readonly failure: SharePublishFailure, options?: { readonly cause?: unknown }) {
