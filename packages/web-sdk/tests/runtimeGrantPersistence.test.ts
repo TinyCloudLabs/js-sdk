@@ -176,7 +176,7 @@ describe("post-restore grant mutations", () => {
 
   test("a queued refusal rechecks the session before writing", async () => {
     const { backing, storage } = await signedIn();
-    await rememberRuntimeGrants(storage, ADDRESS, [grant("old")]);
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("old"), grant("kept")]);
     const loaded = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const load = storage.loadRuntimeGrants.bind(storage);
@@ -190,14 +190,14 @@ describe("post-restore grant mutations", () => {
       }
       return grants;
     };
-    const reuse = reuseRuntimeGrants(storage, ADDRESS, async () => {
-      throw rejected("activation_rejected");
+    const reuse = reuseRuntimeGrants(storage, ADDRESS, async (entry) => {
+      if (entry.cid === "old") throw rejected("activation_rejected");
     }, { isCurrent: () => current });
     await loaded.promise;
     current = false;
-    const clear = serializeRuntimeGrantMutation(storage, () => storage.clear(ADDRESS));
+    await storage.clear(ADDRESS);
     release.resolve();
-    await Promise.all([reuse, clear]);
+    await reuse;
 
     expect(backing.keys()).toEqual([]);
     expect(await cids(reloaded(backing))).toEqual([]);

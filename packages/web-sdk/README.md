@@ -66,6 +66,8 @@ space and host. It can be one session stale until the probe corrects it at
 runtime, and updates in storage when the signed session is next persisted.
 Older records start at `"unknown"`. The hint never grants authority or skips
 permission checks. The probe never prompts or fails the restore.
+Panel permission requests wait up to 4 seconds for stored grants to reactivate
+before showing a permission prompt.
 `signIn()` waits for the probe when it restores a session. At fresh sign-in
 the hosting answer comes from the node's activation of the new session.
 `signIn()` on a restored session whose space is `"not-hosted"` returns the
@@ -83,6 +85,8 @@ There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
 Sign-out reports session-storage failures. Replica cleanup has its own recovery markers; sign-out completion alone does not certify local-copy erase. Custom/native session adapters keep their existing storage contract, including the provider's durability and boot-handling responsibilities.
+With an asynchronous custom runtime-grant store, sign-out waits for in-flight
+load/save calls to settle.
 
 ### Runtime permission grants with OpenKey
 
