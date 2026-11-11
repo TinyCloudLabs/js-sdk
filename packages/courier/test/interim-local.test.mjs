@@ -217,7 +217,7 @@ test('local node: interim exact successor, parent clamp and peer collection', { 
     courierDid: alice.profile.courierDid, intentHash: 'old-approved-intent', requestId: pending.requestId, requestHash: requestHash(pending.request), phase: 'requested' });
   writeSecure(path.join(alice.home, 'grant.json'), nextGrant);
   const grantBytes = fs.readFileSync(path.join(alice.home, 'grant.json'), 'utf8');
-  assert.throws(() => assertEpisodeGrant(pending, { siwe: previousGrant.siwe }), /does not extend/);
+  assert.throws(() => assertEpisodeGrant(pending, { siwe: previousGrant.siwe }), /doesn't extend/);
   assert.equal(fs.readFileSync(path.join(alice.home, 'grant.json'), 'utf8'), grantBytes);
   assert.equal((await checkOwner({ request: false })).state, 'live');
   assert.equal(loadOwnerEpisode().phase, 'complete');

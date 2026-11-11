@@ -340,7 +340,7 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
     authorize: (permissions) => {
       assertExactAuthority(permissions, peerReadPermissions(peer.theirHandleForMe!, peer.spaceId, peer.sessionId), 'Pair renewal');
       if (original && canonicalJson(permissions.map(entry => canonicalJson(entry)).sort()) !== canonicalJson(original.effectivePermissions.map(entry => canonicalJson(entry)).sort())) {
-        fail('bad-delegation', 'Pair renewal changes the established authority.');
+        fail('bad-delegation', "Couldn't renew: the renewal would change what the peer can access. Nothing changed.");
       }
       return true;
     },
@@ -430,7 +430,7 @@ async function pairAccept(args: ParsedArgs) {
   if (original) {
     await withProfileTransaction(async (disk, save) => {
       const stored = disk.peers[peer.handle];
-      if (renewalBinding(disk, stored) !== binding) fail('peer-changed', 'Peer pairing changed while collecting renewed access.');
+      if (renewalBinding(disk, stored) !== binding) fail('peer-changed', 'The pairing changed while Courier was renewing. Run the command again.');
       assertInboundLive(stored, original.expiry);
       assertInboundLive(stored, new Date(incoming.expiresAt));
       stored.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
@@ -476,7 +476,7 @@ async function pairRenew(args: ParsedArgs) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
     if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
     const delegation = await renewOutbound(active, peer, args.has('force'));
-    if (!delegation) fail('renew-throttled', `Outbound delegation for ${peer.handle} was renewed within the last 24 hours; use --force to renew it now.`);
+    if (!delegation) fail('renew-throttled', `Access for ${oneLine(peer.handle)} was renewed in the last 24 hours. Use --force to renew it again now.`);
     printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
     return;
   }
@@ -502,7 +502,7 @@ async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true });
   if (result.state === 'lapsed') fail('peer-expired', `Sharing with ${oneLine(peer.handle)} has expired. A new pairing is required.`);
   if (result.state === 'revoked' || result.state === 'owner-revoked') fail('peer-revoked', `Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
-  if (result.state === 'unavailable') fail('renewal-unavailable', 'Courier could not verify renewal authority.');
+  if (result.state === 'unavailable') fail('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   return result.delegation;
 }
 

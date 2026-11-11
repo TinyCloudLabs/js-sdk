@@ -4,6 +4,7 @@ import { canonicalizeRecapCaveats, parseCanonicalRecapResource, parseSignedCompa
 import { canonicalJson } from './canonical.js';
 import { bareDid, siweTimes } from './authority.js';
 import { CourierError } from './errors.js';
+import { cmd } from './program.js';
 import { k, peerReadPermissions } from './keys.js';
 import type { Profile, StoredPeer } from './profile.js';
 import { getJson, putCreate, putMatch } from './store.js';
@@ -38,7 +39,7 @@ function permissions(resources: readonly Resource[]): PermissionEntry[] {
   return resources.map(entry => {
     const { space, path } = parseCanonicalRecapResource(entry.resource);
     const service = entry.resource.slice(space.length + 1).split('/')[0];
-    if (service !== 'kv' && service !== 'hooks') throw new CourierError('renewal-unavailable', 'The issued grant is not a Courier peer grant.');
+    if (service !== 'kv' && service !== 'hooks') throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
     return { space, service: `tinycloud.${service}`, path, actions: [...entry.actions], ...(entry.caveats.some(caveat => Object.keys(caveat).length > 0) ? { caveats: entry.caveats } : {}) };
   });
 }
@@ -82,15 +83,15 @@ function parentOf(node: TinyCloudNode, profile: Profile, now: number): { cid: st
   const session = node.restorableSession;
   const end = session && siweTimes(session.siwe).expiresAt?.getTime();
   if (!session?.delegationCid || !end || !Number.isFinite(end) || end <= now || node.credentialHolderDid !== profile.courierDid) {
-    throw new CourierError('grant-expired', 'Courier needs a new owner approval.');
+    throw new CourierError('grant-expired', `Courier needs your approval again. Run \`${cmd('init --request')}\` to request it.`);
   }
   return { cid: session.delegationCid, end };
 }
 
 async function issued(node: TinyCloudNode, profile: Profile): Promise<AccountDelegationRecord[]> {
   const result = await node.delegationManager.queryAllIssued({ space: profile.spaceId, maxItems: MAX_ISSUED + 1 });
-  if (!result.ok && [401, 403].includes(Number(result.error.meta?.status))) throw new CourierError('owner-authority-refused', 'Courier authority was refused.');
-  if (!result.ok || result.data.length > MAX_ISSUED) throw new CourierError('renewal-unavailable', 'Courier could not verify the complete issued-grant listing.');
+  if (!result.ok && [401, 403].includes(Number(result.error.meta?.status))) throw new CourierError('owner-authority-refused', `Courier's access was refused. Run \`${cmd('init --request')}\` to request new approval.`);
+  if (!result.ok || result.data.length > MAX_ISSUED) throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   return result.data;
 }
 
@@ -157,12 +158,12 @@ async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: Interi
 export function successorRecord(node: Pick<TinyCloudNode, 'computeDelegationCid'>, delegation: PortableDelegation): AccountDelegationRecord {
   const authorization = delegation.delegationHeader.Authorization.replace(/^Bearer\s+/i, '');
   const parts = authorization.split('.');
-  if (parts.length !== 3) throw new CourierError('renewal-unavailable', 'Courier renewal did not return a compact signed grant.');
+  if (parts.length !== 3) throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   parseSignedCompactUcanAttenuation(authorization);
   const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
   if (node.computeDelegationCid(delegation.delegationHeader.Authorization) !== delegation.cid || typeof payload.exp !== 'number'
     || new Date(payload.exp * 1000).getTime() !== delegation.expiry.getTime() || !Array.isArray(payload.prf)) {
-    throw new CourierError('renewal-unavailable', 'Courier renewal bytes do not match its recorded identity or expiry.');
+    throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   }
   const resources = Object.entries(payload.att as Record<string, Record<string, Record<string, unknown>[]>>).flatMap(([resource, abilities]) =>
     Object.entries(abilities).map(([action, caveats]) => ({ resource, actions: [action], caveats })));
@@ -178,7 +179,7 @@ export function successorRecord(node: Pick<TinyCloudNode, 'computeDelegationCid'
     || bareDid(delegation.delegateDID) !== bareDid(payload.aud)
     || (delegation.delegatorDID && bareDid(delegation.delegatorDID) !== bareDid(payload.iss))
     || !owner || Number(owner[1]) !== delegation.chainId || owner[2].toLowerCase() !== delegation.ownerAddress.toLowerCase()) {
-    throw new CourierError('renewal-unavailable', 'Courier renewal metadata does not match its signed authority.');
+    throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   }
   return {
     cid: delegation.cid, direction: 'granted', delegatorDid: bareDid(payload.iss), delegateDid: bareDid(payload.aud),
@@ -193,7 +194,7 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
     || next.parents.length !== 1 || next.parents[0] !== parent.cid
     || liveEnd(next.expiresAt, now) <= liveEnd(prior.expiresAt, now)
     || next.expiresAt!.getTime() > Math.min(now + INTERIM_PERIOD_MS, parent.end)) {
-    throw new CourierError('renewal-unavailable', 'Courier renewal does not preserve the verified peer authority and parent bound.');
+    throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   }
 }
 
@@ -241,7 +242,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
     assertSuccessor(profile, peer, tip, successorRecord(node, next), parentOf(node, profile, Date.now()));
     liveEnd(tip.expiresAt, Date.now());
     const rechecked = await checkSiblings(node, profile, peer, save, Date.now());
-    if ('state' in rechecked) throw new CourierError('renewal-unavailable', 'Courier could not verify the successor before publication.');
+    if ('state' in rechecked) throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
     liveEnd(tip.expiresAt, Date.now());
     parentOf(node, profile, Date.now());
     await putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, before.etag);

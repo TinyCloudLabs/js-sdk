@@ -131,7 +131,7 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
   assertInboundLive(peer, current.expiry);
   await withProfileTransaction(async (disk, save) => {
     if (renewalBinding(disk, disk.peers[peer.handle]) !== original || bareDid(loadKey().did) !== disk.courierDid) {
-      throw new CourierError('peer-changed', 'Peer pairing changed while collecting renewed access.');
+      throw new CourierError('peer-changed', 'The pairing changed while Courier was renewing. Run the command again.');
     }
     const stored = disk.peers[peer.handle];
     assertInboundLive(stored, current.expiry);

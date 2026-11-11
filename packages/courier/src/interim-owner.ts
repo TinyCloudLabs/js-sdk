@@ -9,6 +9,7 @@ import { approvalIntent, matchesApprovalIntent, requestApprovalInTransaction } f
 import { requestHash } from './canonical.js';
 import { siweTimes } from './authority.js';
 import { CourierError } from './errors.js';
+import { cmd } from './program.js';
 import type { InterimPeer } from './interim-renewal.js';
 
 export const OWNER_ASK_AHEAD_MS = 8 * 86_400_000;
@@ -126,14 +127,14 @@ export function assertEpisodeGrant(pending: PendingGrantRequest, payload: GrantP
   const current = loadGrant();
   if (!current) return;
   if (episode.courierDid !== loadProfile().courierDid || episode.requestHash !== requestHash(pending.request)) {
-    throw new CourierError('stale-approval', 'The saved approval no longer matches its Courier renewal episode.');
+    throw new CourierError('stale-approval', `This approval is out of date. Run \`${cmd('init --request')}\` to request a new one.`);
   }
   if (current.delegationCid !== episode.ownerGrantCid) {
     const nextEnd = siweTimes(payload.siwe).expiresAt?.getTime();
     const currentEnd = siweTimes(current.siwe).expiresAt?.getTime();
     const savedEnd = Date.parse(current.expiresAt);
     if (!nextEnd || !currentEnd || !Number.isFinite(savedEnd) || nextEnd <= Math.max(currentEnd, savedEnd)) {
-      throw new CourierError('stale-approval', 'The saved approval does not extend the current Courier grant. Nothing was installed.');
+      throw new CourierError('stale-approval', `This approval doesn't extend Courier's current access, so nothing changed. Run \`${cmd('init --request')}\` to request a new one.`);
     }
   }
 }

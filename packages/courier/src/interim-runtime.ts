@@ -64,12 +64,12 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
     } catch (error) {
       if (isAuthorizationRefusal(error) || (error instanceof CourierError && error.code === 'owner-authority-refused')) {
         await markOwnerRefused();
-        throw new CourierError('owner-authority-refused', 'Courier authority was refused. Automatic renewal and polling have stopped.');
+        throw new CourierError('owner-authority-refused', `Courier's access was refused, so automatic renewal has stopped. Run \`${cmd('init --request')}\` to request new approval.`);
       }
       if (!(error instanceof CourierError)) throw error;
       canRequestApproval = false;
       // Other peers stay independent; the normal requested read still reports this peer's refusal.
-      console.error(`Courier could not renew access for ${oneLine(handle)}; its current saved access is unchanged.`);
+      console.error(`Courier couldn't renew access for ${oneLine(handle)}. Its current access is unchanged.`);
     }
   }
   // Request owner approval only after the current node and every eligible issued lineage were checked.
@@ -107,7 +107,7 @@ export async function createRuntimeNode(): Promise<TinyCloudNode> {
 export async function watchPreflight(node: TinyCloudNode): Promise<void> {
   await prepareOwnerAccess();
   if (loadGrant()?.delegationCid !== node.restorableSession?.delegationCid) {
-    throw new CourierError('owner-grant-changed', 'Courier owner approval changed. Restart the watcher to use it.');
+    throw new CourierError('owner-grant-changed', `Your approval for Courier changed. Run your \`${cmd('watch')}\` command again to use it.`);
   }
   await maintainPeerSet(node);
 }
