@@ -157,13 +157,13 @@ export class KVService extends BaseService implements IKVService {
 
   /** Delay KV routing until an asynchronously loaded read-through is attached. */
   setReadThroughReady(ready: Promise<unknown> | (() => Promise<unknown>)): void {
-    let settled: Promise<void> | undefined;
-    const start = () => settled ??= Promise.resolve()
-      .then(() => typeof ready === "function" ? ready() : ready)
-      .then(() => undefined, () => undefined)
-      .finally(() => {
+    const start = () => {
+      if (typeof ready === "function") ready = Promise.resolve().then(ready);
+      const finish = () => {
         if (this.readThroughReady === start) this.readThroughReady = null;
-      });
+      };
+      return ready.then(finish, finish);
+    };
     this.readThroughReady = start;
     if (typeof ready !== "function") void start();
   }
