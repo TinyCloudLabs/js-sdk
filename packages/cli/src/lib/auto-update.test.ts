@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { checkForUpdate, detectInstallKind, isAutoUpdateEnabled, selectUpdateVersion, updateCommand } from "./auto-update.js";
@@ -82,6 +82,30 @@ test("offline update checks fail open and cache the attempt", async () => {
   try {
     expect(await checkForUpdate({ currentVersion: "1.6.5", cachePath, fetchFn, now: () => 1_000_000 })).toBeNull();
     expect(await checkForUpdate({ currentVersion: "1.6.5", cachePath, fetchFn, now: () => 1_001_000 })).toBeNull();
+    expect(requests).toBe(1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("recovers from an expired malformed update-check lock", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "tc-auto-update-lock-"));
+  const cachePath = join(directory, "cache.json");
+  const lockPath = `${cachePath}.beta.check-lock`;
+  let requests = 0;
+  const fetchFn: typeof fetch = async () => {
+    requests += 1;
+    return Response.json({ version: "1.7.0-beta.31" });
+  };
+  try {
+    await writeFile(lockPath, "{", { mode: 0o600 });
+    const stale = new Date(Date.now() - 121_000);
+    await utimes(lockPath, stale, stale);
+    expect(await checkForUpdate({
+      currentVersion: "1.7.0-beta.30",
+      cachePath,
+      fetchFn,
+    })).toBe("1.7.0-beta.31");
     expect(requests).toBe(1);
   } finally {
     await rm(directory, { recursive: true, force: true });

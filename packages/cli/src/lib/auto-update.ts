@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export function selectUpdateVersion(currentVersion: string, distTags: Record<string, string>): string | null {
@@ -51,6 +51,7 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CHECK_TIMEOUT_MS = 3_000;
+const STALE_LOCK_MS = 120_000;
 
 type UpdateCache = { checkedAt: number; version: string | null };
 type CheckOptions = {
@@ -190,20 +191,39 @@ async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | nu
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
   }
+  let lock: { pid?: number; createdAt?: number };
   try {
-    const lock = JSON.parse(await readFile(lockPath, "utf8")) as { pid?: number; createdAt?: number };
-    if (!Number.isSafeInteger(lock.pid) || typeof lock.createdAt !== "number" || Date.now() - lock.createdAt < 120_000) return null;
-    try {
-      process.kill(lock.pid as number, 0);
-      return null;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return null;
-    }
-    await rm(lockPath, { force: true });
+    lock = JSON.parse(await readFile(lockPath, "utf8"));
+  } catch {
+    return recoverMalformedLock(lockPath);
+  }
+  if (!Number.isSafeInteger(lock.pid) || typeof lock.createdAt !== "number") {
+    return recoverMalformedLock(lockPath);
+  }
+  if (Date.now() - lock.createdAt < STALE_LOCK_MS) return null;
+  try {
+    process.kill(lock.pid as number, 0);
+    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") return null;
+  }
+  await rm(lockPath, { force: true });
+  try {
     const handle = await open(lockPath, "wx", 0o600);
     await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
     await handle.close();
     return async () => { await rm(lockPath, { force: true }); };
+  } catch {
+    return null;
+  }
+}
+
+async function recoverMalformedLock(lockPath: string): Promise<(() => Promise<void>) | null> {
+  try {
+    const lockStat = await stat(lockPath);
+    if (Date.now() - lockStat.mtimeMs < STALE_LOCK_MS) return null;
+    await rm(lockPath, { force: true });
+    return acquireLock(lockPath);
   } catch {
     return null;
   }
