@@ -1,5 +1,6 @@
 import { extractSiweExpiration } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
+import { SiweMessage } from '@tinycloud/sdk-core';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, peerReadPermissions } from './keys.js';
 import { PEER_DELEGATION_EXPIRY } from './pairing.js';
@@ -168,15 +169,39 @@ export function assertInvitationApprovalGrant(rawCaps: readonly PermissionEntry[
   return shareId;
 }
 
+/** An approval SIWE parsed once, strictly: the facts below come only from this parse, and `raw` is exactly the signed text. */
+export interface ParsedApprovalSiwe {
+  raw: string;
+  requestId: string | undefined;
+  issuedAt: Date | undefined;
+  expiresAt: Date | undefined;
+}
+
 /**
- * The owner-signed SIWE names the one request it answers: exactly one `Request ID:` field, equal to
- * `urn:tinycloud:approval-request:<requestId>:<bodyCid>` of THIS agent's own pending request. An approval signed for another
- * request, or one without the field, is refused before its key is used.
+ * Parse an owner-signed SIWE with the EIP-4361 parser, once, and accept it only if re-serialising the parsed message gives
+ * back the identical text: a line the parser skips or reads differently from the signer cannot carry a field. Everything
+ * (binding, times) is then read from this one parse; the same `raw` is what the signature is verified over.
  */
-export function assertApprovalRequestBinding(siwe: string, request: { requestId: string; bodyCid: string }): void {
-  const lines = siwe.split('\n').filter((line) => line.startsWith('Request ID:'));
-  const expected = `Request ID: urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`;
-  if (lines.length !== 1 || lines[0] !== expected) {
+export function parseApprovalSiwe(siwe: string): ParsedApprovalSiwe {
+  let message: SiweMessage;
+  try { message = new SiweMessage(siwe); } catch { throw new CourierError('bad-grant', 'The approval message is not a valid sign-in message.'); }
+  if (message.prepareMessage() !== siwe) throw new CourierError('bad-grant', 'The approval message is not in its canonical form.');
+  return {
+    raw: siwe,
+    requestId: message.requestId,
+    issuedAt: message.issuedAt === undefined ? undefined : new Date(message.issuedAt),
+    expiresAt: message.expirationTime === undefined ? undefined : new Date(message.expirationTime),
+  };
+}
+
+/**
+ * The owner-signed SIWE names the one request it answers: its `Request ID` field is exactly
+ * `urn:tinycloud:approval-request:<requestId>:<bodyCid>` of THIS agent's own pending request. The field is read from the
+ * strict parse only (a string is parsed here, so a direct call cannot be satisfied by an earlier, different parse).
+ */
+export function assertApprovalRequestBinding(siwe: string | ParsedApprovalSiwe, request: { requestId: string; bodyCid: string }): void {
+  const parsed = typeof siwe === 'string' ? parseApprovalSiwe(siwe) : siwe;
+  if (parsed.requestId !== `urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`) {
     throw new CourierError('bad-grant', 'The approval was not signed for this invitation request.');
   }
 }

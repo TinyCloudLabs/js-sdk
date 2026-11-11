@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { parseArgs } from '../dist/args.js';
-import { assertApprovalRequestBinding, assertInvitationApprovalGrant, siweTimes } from '../dist/authority.js';
+import { assertApprovalRequestBinding, assertInvitationApprovalGrant, parseApprovalSiwe, siweTimes } from '../dist/authority.js';
 import { PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
 import { runInvite as cmdInvite } from '../dist/invitation.js';
@@ -83,6 +83,39 @@ test('assertApprovalRequestBinding accepts only the one Request ID of this reque
   const lowercased = { payload: { siwe: good.payload.siwe.replace(line, line.replace('Request ID', 'request id')) } };
   for (const bad of [wrongId, wrongDigest, missing, twice, malformed, padded, lowercased]) {
     assert.throws(() => assertApprovalRequestBinding(bad.payload.siwe, mine), { code: 'bad-grant' });
+  }
+});
+
+// The binding is read only from one strict parse of a canonical message. Each case below calls the binding function directly on its
+// own text, so no earlier or unrelated parse can hide the mutation. The text is a real owner signature WITHOUT the binding field, with
+// a Request ID line for THIS request injected somewhere the parser does not read as that field.
+test('a Request ID injected where the EIP-4361 parser does not read it never binds, whatever else was parsed before', async () => {
+  const mine = request();
+  const unbound = await inviteGrant(owner, agent, { request: mine, bind: false });
+  const siwe = unbound.payload.siwe;
+  const line = `Request ID: urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`;
+  const rows = siwe.split('\n');
+  const inject = (index) => [...rows.slice(0, index), line, ...rows.slice(index)].join('\n');
+  for (const [name, text] of [['line 2', inject(1)], ['line 3', inject(2)], ['line 4', inject(3)], ['after the statement', inject(5)], ['at the end', `${siwe}\n${line}`],
+    ['inside the address line', siwe.replace(/(\n0x[0-9a-fA-F]{40})\n/, `$1\n${line}\n`)]]) {
+    assert.throws(() => assertApprovalRequestBinding(text, mine), { code: 'bad-grant' }, name);
+    assert.throws(() => parseApprovalSiwe(text), { code: 'bad-grant' }, `${name} (parse)`);
+  }
+  // The unmodified unbound message parses but carries no binding.
+  assert.equal(parseApprovalSiwe(siwe).requestId, undefined);
+  assert.throws(() => assertApprovalRequestBinding(siwe, mine), { code: 'bad-grant' });
+});
+
+test('the approval message must be canonical: its re-serialisation is the identical text', async () => {
+  const mine = request();
+  const good = await inviteGrant(owner, agent, { request: mine });
+  const siwe = good.payload.siwe;
+  const parsed = parseApprovalSiwe(siwe);
+  assert.equal(parsed.raw, siwe);
+  assert.equal(parsed.requestId, `urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`);
+  assert.doesNotThrow(() => assertApprovalRequestBinding(parsed, mine));
+  for (const text of [siwe.replace(/\n/g, '\r\n'), `${siwe}\n`, ` ${siwe}`, siwe.replace('Version: 1', 'Version:  1'), siwe.replace(/\n\n/, '\n\n\n')]) {
+    assert.throws(() => parseApprovalSiwe(text), { code: 'bad-grant' });
   }
 });
 
@@ -304,6 +337,32 @@ test('a send that fails closes the pending invitation; the claim stays, so the s
   assert.equal(events.created.length, 2, 'a new approval is requested instead of waiting out the old window');
   assert.notEqual(events.created[1].invitationId, context.invitationId);
   assert.equal(rerun?.code === undefined || rerun.code === 'invite-approval-pending' || rerun.code === 'invite-pending', true);
+});
+
+test('an attempt interrupted after the send claim: the next run closes the stale invitation, keeps the claim and the approval, and asks afresh', async () => {
+  const { argv, events, deps, approve } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [context] = events.created;
+  approve({ lifetimeMs: lifetimeFor(context) });
+  // The earlier process died after claiming and before sending or closing: the marker exists, the pending invitation is still open.
+  fs.writeFileSync(path.join(profileDir(), 'pending-invites', `${context.invitationId}.sending`), '', { mode: 0o600 });
+  assert.equal(loadPendingInvite(context.invitationId).status, 'awaiting');
+  const stale = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(stale?.code, 'invite-in-progress');
+  assert.equal(events.sent.length, 0, 'the claimed approval is never used to send');
+  assert.equal(loadPendingInvite(context.invitationId).status, 'closed');
+  assert.ok(fs.existsSync(path.join(profileDir(), 'pending-invites', `${context.invitationId}.sending`)), 'the claim is kept');
+  assert.ok(loadInviteGrant(context.invitationId), 'the approved grant is kept, never deleted');
+  const fresh = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(events.created.length, 2, 'the retry asks the owner for a new approval');
+  assert.notEqual(events.created[1].invitationId, context.invitationId);
+  // The fixture answers every request as approved, so the retry may complete: only as its OWN invitation under its OWN approval.
+  assert.ok(fresh === undefined || ['invite-approval-pending', 'invite-pending'].includes(fresh.code));
+  for (const sent of events.sent) {
+    assert.notEqual(sent.body.id, context.invitationId, 'the interrupted invitation is never sent');
+    assert.notEqual(sent.shareId, loadInviteGrant(context.invitationId).shareId, 'the stale approval is never used');
+  }
+  assert.ok(events.sent.length <= 1);
 });
 
 test('an approver that no longer knows the request closes the pending invitation', async () => {
