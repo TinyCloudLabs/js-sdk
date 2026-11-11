@@ -89,3 +89,10 @@ test('identity state retains pending work across restarts and woken dedup when r
   assert.equal(a.wakes.length, 1);
   assert.ok(restarted.snapshot().woken.includes(sent.messageId));
 });
+
+test('missing authenticated identity fails explicitly before any state access', () => {
+  for (const courierDid of [undefined, '']) {
+    assert.throws(() => new Watcher({ courierDid, selfKv: { get() { throw new Error('unexpected state access'); } } }),
+      error => error.code === 'bad-identity' && error.message === 'Courier identity is unavailable.');
+  }
+});

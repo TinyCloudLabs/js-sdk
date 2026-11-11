@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { CourierError } from './errors.js';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 
 /** Courier KV layout and the single source of agent grant authority. */
@@ -74,6 +75,8 @@ export const k = {
 
 /** One hosted state key per authenticated Courier agent, shared by its homes and machines. */
 export function watchStateKey(courierDid: string): string {
+  if (typeof courierDid !== 'string' || !courierDid) throw new CourierError('bad-identity', 'Courier identity is unavailable.');
+  // The SDK derives this canonical bare did:key from the session key; base58 is case-sensitive.
   const identity = createHash('sha256').update(courierDid).digest('hex');
   return `${PREFIX}/me/state/watch/${identity}.json`;
 }

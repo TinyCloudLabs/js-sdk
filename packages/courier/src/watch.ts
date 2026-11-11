@@ -176,7 +176,7 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
-  /** Authenticated agent identity; the CLI passes the SDK's verified credentialHolderDid. */
+  /** Canonical bare did:key of the authenticated agent; the CLI passes the SDK's verified credentialHolderDid. */
   courierDid: string;
   selfKv: KV;
   /** Own space id, for the `me/approvals/` subscription. */
