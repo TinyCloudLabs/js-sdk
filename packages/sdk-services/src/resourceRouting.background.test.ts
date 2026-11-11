@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { backgroundFetch } from "./requestPriority";
+import { backgroundFetch } from "./backgroundFetch";
 import { verifyResourceDestination } from "./resourceRouting";
 
 test("background identity checks consume fragmented info before requesting node keys", async () => {

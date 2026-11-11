@@ -1,6 +1,7 @@
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
-import { ErrorCodes, type FetchFunction, type FetchRequestInit, type FetchResponse } from "./types";
+import { retryInvocation, type RetryInvocationOptions } from "./retryInvocation";
+import { ErrorCodes, type FetchRequestInit, type FetchResponse } from "./types";
 
 const FOREGROUND_QUIET_MS = 400;
 const scheduled = Symbol.for("@tinycloud/sdk-services/scheduled-request");
@@ -194,10 +195,23 @@ export async function backgroundRequest(
   return nodeRequest(lane, false, send);
 }
 
-/** Apply the background lane to a node request made outside a ServiceContext. */
-export function backgroundFetch(fetch: FetchFunction): FetchFunction {
-  return (url, init) => {
-    const signal = init?.signal ?? new AbortController().signal;
-    return backgroundRequest(url, signal, () => fetch(url, scheduledRequest({ ...init, signal }, "background")));
-  };
+/** Keep the foreground lease across all invocation retries. */
+export function invokeWithPriority(options: RetryInvocationOptions): Promise<FetchResponse> {
+  if (options.priority === "background") return retryInvocation(options);
+  return foregroundRequest(options.url, options.signal, () => retryInvocation({
+    ...options,
+    build: async () => scheduledRequest(await options.build(), "foreground"),
+  }));
+}
+
+/** Nested dispatches retain their existing lease. */
+export function dispatchRequest(
+  url: string,
+  init: FetchRequestInit & { signal: AbortSignal },
+  priority: RequestPriority,
+  send: (request: FetchRequestInit) => Promise<FetchResponse>,
+): Promise<FetchResponse> {
+  if (isScheduled(init)) return send(init);
+  const run = priority === "foreground" ? foregroundRequest : backgroundRequest;
+  return run(url, init.signal, () => send(scheduledRequest(init, priority)));
 }

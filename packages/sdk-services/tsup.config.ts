@@ -8,6 +8,7 @@ export default defineConfig({
     index: "src/index.ts",
     "kv/index": "src/kv/index.ts",
     context: "src/context.ts",
+    "request-priority": "src/requestPriority.ts",
     "telemetry/requestLog": "src/telemetry/requestLog.ts",
     "kv/replication/index": "src/kv/replication/index.ts",
     "kv/replication/prefix": "src/kv/replication/prefix.ts",
@@ -31,5 +32,5 @@ export default defineConfig({
   // The public entrypoints share this one CJS module. Node's CJS cache is
   // common to require() and import(), so the error retains normal identity
   // across root and `/encryption` in both module systems.
-  external: ["zod", canonicalDecryptTransportError],
+  external: ["zod", canonicalDecryptTransportError, "@tinycloud/sdk-services/request-priority"],
 });

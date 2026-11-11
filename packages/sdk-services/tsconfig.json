@@ -16,6 +16,7 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
+      "@tinycloud/sdk-services/request-priority": ["src/requestPriority.ts"],
       "@tinycloud/sdk-services/internal/decrypt-transport-response-error": [
         "src/encryption/DecryptTransportResponseError.ts"
       ]

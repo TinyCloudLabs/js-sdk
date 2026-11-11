@@ -14,16 +14,14 @@ import {
   FetchRequestInit,
   FetchResponse,
   defaultRetryPolicy,
-  ErrorCodes,
   EventHandler,
   TelemetryEventHandler,
   TelemetryConfig,
 } from "./types";
 import { tinyCloudDebugLogger } from "./debug";
-import { nodeRetryError } from "./errors";
-import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
-import { backgroundRequest, foregroundRequest, isScheduled, scheduledRequest, type RequestPriority } from "./requestPriority";
+import type { RequestPriority } from "./requestPriority";
+import { loadRequestPriority } from "./requestPriorityLoader";
 
 export type { RequestPriority } from "./requestPriority";
 
@@ -425,62 +423,22 @@ export class ServiceContext implements IServiceContext {
     build: () => FetchRequestInit | Promise<FetchRequestInit>,
   ): Promise<FetchResponse> {
     this.assertActive();
-    if (this._priority === "background") return this.retryInvocation(url, build);
-    return foregroundRequest(url, this.abortSignal, () =>
-      this.retryInvocation(url, async () => scheduledRequest(await build(), "foreground")));
-  }
-
-  private async retryInvocation(
-    url: string,
-    build: () => FetchRequestInit | Promise<FetchRequestInit>,
-  ): Promise<FetchResponse> {
-    const policy = this._retryPolicy;
-    const startedAt = Date.now();
-    let backoffMs = 0;
-    let signal: AbortSignal | undefined;
-    for (let attempt = 1; ; attempt++) {
-      const init = await build();
-      signal ??= this.combineSignals(init.signal);
-      const response = await this._fetch(url, init);
-      const done = (): FetchResponse => {
-        try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
-        return response;
-      };
-      if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return done();
-      const text = await response.clone().text().catch(() => "");
-      const error = nodeRetryError("", "", response, text);
-      if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
-        return done();
-      }
-      const busyBudget = error.code === ErrorCodes.NODE_BUSY && this._priority === "foreground"
-        ? policy.foregroundBusyMaxTotalMs
-        : undefined;
-      const budget = Math.min(policy.maxTotalMs ?? Infinity, busyBudget ?? Infinity);
-      const remaining = budget - (Date.now() - startedAt);
-      if (remaining <= 0) return done();
-      const retryAfterMs = error.meta.retryAfterMs;
-      const step = Math.min(
-        policy.maxDelayMs,
-        policy.backoff === "exponential"
-          ? policy.baseDelayMs * 2 ** (attempt - 1)
-          : policy.backoff === "linear"
-            ? policy.baseDelayMs * attempt
-            : 0,
-      );
-      // A retry scheduled outside the budget would also ignore the node's Retry-After.
-      if (busyBudget !== undefined && typeof retryAfterMs === "number" && retryAfterMs >= remaining) {
-        return done();
-      }
-      const delay = Math.min(
-        typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
-        remaining,
-      );
-      if (busyBudget !== undefined && delay >= remaining) return done();
-      (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.()?.catch?.(() => {});
-      await abortableSleep(delay, signal);
-      if (signal.aborted) throw signal.reason;
-      backoffMs += delay;
-    }
+    const operationSignal = this.abortSignal;
+    const { invokeWithPriority } = await loadRequestPriority();
+    this.assertActive();
+    operationSignal.throwIfAborted();
+    return invokeWithPriority({
+      url,
+      build,
+      fetch: this._fetch,
+      policy: this._retryPolicy,
+      priority: this._priority,
+      signal: operationSignal,
+      combineSignals: (signal) => {
+        operationSignal.throwIfAborted();
+        return this.combineSignals(signal);
+      },
+    });
   }
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
@@ -488,9 +446,9 @@ export class ServiceContext implements IServiceContext {
       this.assertActive();
       const signal = this.combineSignals(init?.signal);
       const request = { ...init, signal };
-      if (isScheduled(init)) return this.send(fetchFn, url, request);
-      const run = this._priority === "foreground" ? foregroundRequest : backgroundRequest;
-      return run(url, signal, () => this.send(fetchFn, url, scheduledRequest(request, this._priority)));
+      const { dispatchRequest } = await loadRequestPriority();
+      this.assertActive();
+      return dispatchRequest(url, request, this._priority, (request) => this.send(fetchFn, url, request));
     };
   }
 

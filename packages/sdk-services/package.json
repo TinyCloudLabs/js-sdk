@@ -31,6 +31,11 @@
       "import": "./dist/context.js",
       "require": "./dist/context.cjs"
     },
+    "./request-priority": {
+      "types": "./dist/request-priority.d.ts",
+      "import": "./dist/request-priority.js",
+      "require": "./dist/request-priority.cjs"
+    },
     "./telemetry/requestLog": {
       "import": {
         "types": "./dist/telemetry/requestLog.d.ts",

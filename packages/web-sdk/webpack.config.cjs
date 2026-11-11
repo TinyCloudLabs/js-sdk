@@ -242,6 +242,7 @@ const gatedCjsConfig = {
 // The lazy chunks are their own entries (contracts-ade §1.4 budget applies to the eager root only).
 // The root loads each by relative sibling path, at first use, and never bundles it.
 const LAZY_ENTRIES = [
+  { request: "@tinycloud/sdk-services/request-priority", dir: "../sdk-services/dist", file: "request-priority" },
   { request: "./panel-entry", dir: "src/ui", file: "panel" },
   { request: "./panel-data-entry", dir: "src/ui", file: "panel-data" },
   { request: "./modals-entry", dir: "src/notifications", file: "modals" },
@@ -288,6 +289,10 @@ const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
     callback(null, `${moduleType} ${request}`);
     return;
   }
+  if (request === "@tinycloud/sdk-services/request-priority" && context === path.resolve(__dirname, "../sdk-services/dist")) {
+    callback(null, `${moduleType} ./request-priority.${ext}`);
+    return;
+  }
   // The panel shares the eager root's panel-data singleton, so both loaders see one live source.
   if (request === "./panel-data-entry" && context === uiDir) {
     callback(null, `${moduleType} ./panel-data.${ext}`);
@@ -306,6 +311,7 @@ const rootCjsConfig = {
 // The lazy entries share one compilation per format: they share most of their module graph, and a compilation per
 // entry runs the build out of memory at the default heap.
 const lazyEntries = {
+  "request-priority": "./src/request-priority-entry.ts",
   panel: "./src/ui/panel-entry.ts",
   "panel-data": "./src/ui/panel-data-entry.ts",
   modals: "./src/notifications/modals-entry.ts",

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { ServiceContext } from "./context";
 import type { FetchResponse, RetryPolicy } from "./types";
 
@@ -48,6 +48,10 @@ const busy = (retryAfter?: string) => () => reply(503, BUSY, retryAfter);
 const ok = () => reply(200, "ok");
 
 describe("ServiceContext.invokeWithRetry", () => {
+  beforeAll(async () => {
+    await contextFor(fakeNode([ok]).fetch).fetch("https://node/priority-ready");
+  });
+
   beforeEach(() => {
     jest.useFakeTimers();
     spyOn(Math, "random").mockReturnValue(0.5);

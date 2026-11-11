@@ -54,7 +54,17 @@ export default defineConfig([
     sourcemap: true,
     splitting: false,
     noExternal: [/.*/],
-    esbuildPlugins: [nodeBuiltinsExternal],
+    esbuildPlugins: [nodeBuiltinsExternal, {
+      name: "worker-service-context",
+      setup(build) {
+        // Bundle the shared source once, before package entries flatten its retry helpers.
+        build.onResolve({ filter: /^@tinycloud\/sdk-services\/(context|request-priority)$/ }, ({ path: request }) => ({
+          path: fileURLToPath(new URL(request.endsWith("context")
+            ? "../sdk-services/src/context.ts"
+            : "../sdk-services/src/requestPriority.ts", import.meta.url)),
+        }));
+      },
+    }],
   },
   {
     // The read-through `KVReplicaStorage` (TC-858 Phase 2) and its test-only
