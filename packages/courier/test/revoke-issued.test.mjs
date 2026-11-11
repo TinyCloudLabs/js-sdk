@@ -20,11 +20,11 @@ test('all children and unrecorded current replacement revoked, progress survives
   let fail = true;
   const node = { delegationManager: {
     queryAllIssued: async (opts) => { assert.deepEqual(opts, { space }); return { ok: true, data: [record('one'), record('replacement'), record('foreign', { delegateDid: 'did:key:other' }), record('other-mailbox', { resources: [] })] }; },
-    revokeIssued: async (cid) => { calls.push(cid); return cid === 'replacement' && fail ? { ok: false, error: { message: 'offline' } } : { ok: true, data: { cid, revoked: true } }; },
+    revokeIssued: async (cid) => { calls.push(cid); return cid === 'replacement' && fail ? { ok: false, error: { code: 'NETWORK_ERROR', message: 'https://private.invalid/?secret=unsafe' } } : { ok: true, data: { cid, revoked: true } }; },
   } };
   let disk;
   const save = () => { disk = structuredClone(profile); };
-  await assert.rejects(revokePeer(node, profile, 'bob', save), /offline/);
+  await assert.rejects(revokePeer(node, profile, 'bob', save), /the node couldn.t be reached/);
   assert.ok(disk.peers.bob.outbound[0].revokedAt);
   assert.equal(disk.peers.bob.outbound[1].revokedAt, undefined);
   fail = false;
@@ -38,7 +38,7 @@ test('listing failure and wrong holder/scope keep pairing and revoke nothing', a
     const { profile, record } = fixture();
     let calls = 0;
     const node = { delegationManager: {
-      queryAllIssued: async () => change ? { ok: true, data: [record('one', change)] } : { ok: false, error: { message: 'offline' } },
+      queryAllIssued: async () => change ? { ok: true, data: [record('one', change)] } : { ok: false, error: { code: 'NETWORK_ERROR', message: 'https://private.invalid/?secret=unsafe' } },
       revokeIssued: async () => { calls++; },
     } };
     await assert.rejects(revokePeer(node, profile, 'bob', () => assert.fail('must not save')));
@@ -60,4 +60,21 @@ test('profile transaction holds lock across await, serializes saves and releases
   await first;
   await assert.rejects(second, /expected/);
   await withProfileTransaction(async () => assert.equal(loadProfile().label, 'saved'));
+});
+
+
+test('node failure text and peer controls are never echoed', async () => {
+  for (const [code, reason] of [['PERMISSION_DENIED', 'the node refused'], ['NETWORK_ERROR', "the node couldn't be reached"], ['CHAIN_TOO_DEEP', "the node couldn't be reached"], ['OTHER', 'unexpected node response']]) {
+    const { profile } = fixture();
+    const handle = 'bob\n\x1b[31m';
+    profile.peers[handle] = profile.peers.bob;
+    const node = { delegationManager: { queryAllIssued: async () => ({ ok: false, error: { code, message: 'https://private.invalid/?secret=unsafe\n' } }) } };
+    await assert.rejects(revokePeer(node, profile, handle, () => {}), (e) => {
+      assert.ok(e.message.includes(reason));
+      assert.ok(!/[\n\x1b]/.test(e.message));
+      assert.ok(!e.message.includes('private.invalid'));
+      assert.ok(!e.message.includes('unsafe'));
+      return true;
+    });
+  }
 });

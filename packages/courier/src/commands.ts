@@ -547,14 +547,15 @@ async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
 
 export async function cmdRevoke(args: ParsedArgs) {
   const handle = args.positional[0] ?? fail('usage', `Usage: ${cmd('revoke <peer>')}`);
+  const shown = oneLine(handle);
   await withProfileTransaction(async (profile, save) => {
-    const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${handle}. If you already revoked it, there's nothing left to do.`);
+    const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${shown}. If you already revoked it, there's nothing left to do.`);
     const node = await courierNode(profile);
     await revokePeer(node, profile, handle, save);
     delete profile.peers[handle];
     save();
     try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
-    console.log(`Revoked ${handle} (${peer.courierDid}).`);
+    console.log(`Revoked ${shown} (${peer.courierDid}).`);
   });
 }
 
