@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.18
+
+### Patch Changes
+
+- a6234a9: Add `courier status [--peer <peer>] [--json]` to show saved inbound and outbound grant expiry separately, with warnings within 24 hours of expiry.
+
+  Details: TC-2747, TC-2755
+
 ## 0.6.0-beta.17
 
 ### Patch Changes
