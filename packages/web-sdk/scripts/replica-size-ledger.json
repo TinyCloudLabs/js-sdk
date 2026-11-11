@@ -2912,5 +2912,31 @@
       }
     },
     "reason": "Local restore schedules automatic hosting and panel-grant refresh with an account/space/host-bound display hint. The C1 review adds a bounded panel wait, serialized per-store mutations, latest-state refused-CID cleanup and final queued sign-out cleanup. Canonical source-WASM run 42940528019 at 70161ce38 measured ESM 1515308 and CJS 1450423. Run 42949525988 at c6ea90023 measures ESM 1515460 and CJS 1450535, adding 152/112 for C1. The queue uses one settled tail per weakly keyed live store after consolidation. No dependencies are added."
+  },
+  "tc2234InvitationPolicyRoot": {
+    "label": "invitation policy root limit (TC-2234)",
+    "ruling": "Naomi, 2026-11-11: exact web-sdk root ceiling 1515509 ESM, 49 gzip bytes above the TC-2773 ceiling, and 1450535 CJS unchanged, zero headroom. budget-ruling: Naomi, TC-2234.",
+    "base": "6053273fd26fa064552e2e556166118b3a959cc9",
+    "sourceCommits": [
+      "4395832d18bb956d7f4f40a2fb0ec0089f723d64"
+    ],
+    "canonicalCI": {
+      "run": "43006941073",
+      "jobs": [
+        "130476655749",
+        "130476655844"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 49,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1515509,
+        "index.cjs": 1450535
+      }
+    },
+    "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
   }
 }
