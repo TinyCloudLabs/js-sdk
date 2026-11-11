@@ -93,6 +93,6 @@ test('identity state retains pending work across restarts and woken dedup when r
 test('missing authenticated identity fails explicitly before any state access', () => {
   for (const courierDid of [undefined, '']) {
     assert.throws(() => new Watcher({ courierDid, selfKv: { get() { throw new Error('unexpected state access'); } } }),
-      error => error.code === 'bad-identity' && error.message === 'Courier identity is unavailable.');
+      error => error.code === 'bad-identity' && error.message === 'Courier identity is unavailable. Pass the authenticated courierDid when constructing Watcher.');
   }
 });

@@ -75,7 +75,7 @@ export const k = {
 
 /** One hosted state key per authenticated Courier agent, shared by its homes and machines. */
 export function watchStateKey(courierDid: string): string {
-  if (typeof courierDid !== 'string' || !courierDid) throw new CourierError('bad-identity', 'Courier identity is unavailable.');
+  if (typeof courierDid !== 'string' || !courierDid) throw new CourierError('bad-identity', 'Courier identity is unavailable. Pass the authenticated courierDid when constructing Watcher.');
   // The SDK derives this canonical bare did:key from the session key; base58 is case-sensitive.
   const identity = createHash('sha256').update(courierDid).digest('hex');
   return `${PREFIX}/me/state/watch/${identity}.json`;
