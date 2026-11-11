@@ -174,7 +174,7 @@ jobs:
       - name: Install Playwright Chromium
         if: steps.gate.outputs.run == 'true'
         working-directory: packages/web-sdk
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
       - name: Run browser smoke tests
         if: steps.gate.outputs.run == 'true'
