@@ -378,11 +378,16 @@ export class Watcher {
           : await putCreate(selfKv, k.watchState, sent);
         this.stateEtag = written ?? undefined;
       } catch (error) {
-        if (error instanceof CourierError && error.code === 'conflict') throw this.stateConflict(STATE_CHANGED);
-        // Not refused: the node may have applied it and only the reply was lost (a timeout, a dropped connection,
-        // `outcome_unknown`). The next write reads the state back first.
+        // Unless it was refused, the node may have applied it and only the reply was lost (a timeout, a dropped
+        // connection, `outcome_unknown`). The next write reads the state back first.
         this.unconfirmedState = canonicalJson(sent);
-        throw error;
+        if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+        // A 412 can also answer the SDK's own retry of a write the node had applied (a retried 503). Only the exact
+        // body sent is this watcher's; anything else was written by another process.
+        const got = await getJson<WatchState>(selfKv, k.watchState);
+        if (!got || canonicalJson(got.value) !== this.unconfirmedState) throw this.stateConflict(STATE_CHANGED);
+        this.stateEtag = got.etag ?? undefined;
+        this.unconfirmedState = undefined;
       }
       return result;
     });

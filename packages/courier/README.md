@@ -286,7 +286,9 @@ share an id), a run id and its pid.
   and releases any claim it had taken. A state write that fails without a 412
   (lost reply, timeout, `outcome_unknown`) may still have been applied, so the
   watcher reads the state back before its next write: its own body or no change
-  carries on; anything else stops it with `state-conflict`. The conflict shows
+  carries on; anything else stops it with `state-conflict`. A 412 is checked
+  too, because the SDK retries a node 503 with the same if-match: if the stored
+  state is exactly the body the watcher sent, it carries on. The conflict shows
   at the watcher's next own write (a message, a notice retry, the hourly or
   daily prune), which can be long after the other process wrote.
 
