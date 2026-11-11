@@ -46,7 +46,8 @@ const host = "https://node.example";
 const KEY_ID = "d4".repeat(16);
 const resultRef = "synthetic-result-reference-123456";
 const pair = ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"];
-type Mode = "good" | "extra-authority" | "two-keys" | "other-holder" | "too-long" | "no-binding" | "wrong-binding" | "inner-digest" | "inner-id" | "other-owner";
+type Mode = "good" | "extra-authority" | "two-keys" | "other-holder" | "too-long" | "no-binding" | "wrong-binding" | "inner-digest" | "inner-id" | "other-owner"
+  | "replace-request-id-2" | "replace-request-id-4" | "replace-issued-at-2" | "replace-issued-at-4";
 let mode: Mode = "good";
 let linkPosts = 0;
 let requestId = "";
@@ -66,10 +67,16 @@ async function resultFor(entry: { request: { resultEncryptionPublicJwk: { x: str
   const prepared = wasm.prepareSession({ abilities: {}, rawAbilities, address: signerAddress, chainId: 1, domain: "openkey.example", spaceId: wasm.makeSpaceId(signerAddress, 1, "default"), jwk: holder,
     issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + (mode === "too-long" ? 3 * 86_400_000 : 3_000_000)).toISOString() });
   let siwe = prepared.siwe;
-  const binding = mode === "no-binding" ? undefined
+  const binding = mode === "no-binding" || mode.startsWith("replace-request-id") ? undefined
     : mode === "wrong-binding" ? `Request ID: urn:tinycloud:approval-request:${"z".repeat(26)}:${entry.bodyCid}`
       : `Request ID: urn:tinycloud:approval-request:${entry.requestId}:${entry.bodyCid}`;
   if (binding !== undefined) siwe = siwe.replace(/\nResources:/, `\n${binding}\nResources:`);
+  // The owner really signs a text whose blank line 2 or 4 is REPLACED (not inserted) by a Request ID or an Issued At line.
+  if (mode.startsWith("replace-")) {
+    const index = mode.endsWith("-2") ? 2 : 4;
+    const replacement = mode.startsWith("replace-request-id") ? `Request ID: urn:tinycloud:approval-request:${entry.requestId}:${entry.bodyCid}` : `Issued At: ${new Date(Date.now() - 864_000_000).toISOString()}`;
+    siwe = siwe.split("\n").map((row, at) => (at === index ? replacement : row)).join("\n");
+  }
   const signature = await signer.signMessage(siwe);
   const session = wasm.completeSessionSetup({ ...prepared, siwe, signature });
   const delegation = { ...session, jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did, address: signerAddress, chainId: 1,
@@ -197,6 +204,11 @@ test.each<[Mode, string]>([
   // A correctly owner-signed result whose OWN relay binding is wrong: refused by the relay checks alone, not masked by the signed binding.
   ["inner-digest", "APPROVAL_RESULT_INVALID"],
   ["inner-id", "APPROVAL_RESULT_INVALID"],
+  // The REAL wallet signature over a text with a blank line replaced by a Request ID / Issued At line: the strict parse refuses it at acquisition.
+  ["replace-request-id-2", "APPROVAL_RESULT_INVALID"],
+  ["replace-request-id-4", "APPROVAL_RESULT_INVALID"],
+  ["replace-issued-at-2", "APPROVAL_RESULT_INVALID"],
+  ["replace-issued-at-4", "APPROVAL_RESULT_INVALID"],
 ])("a result that is %s is refused before anything is used", async (bad, code) => {
   mode = bad;
   await expect(acquire(context())).rejects.toMatchObject({ code });
@@ -249,6 +261,9 @@ test("a Request ID injected where the parser does not read it never binds, and a
   expect(parseApprovalSiwe(unbound).requestId).toBeUndefined();
   expect(() => assertApprovalRequestBinding(unbound, mine)).toThrow();
   const bound = await signedText(true);
+  // The equality branch itself: the parser accepts 'Chain ID: 01' (it reads 1) but re-serialising gives 'Chain ID: 1', not the signed text.
+  expect(bound.includes("Chain ID: 1")).toBe(true);
+  expect(() => parseApprovalSiwe(bound.replace("Chain ID: 1", "Chain ID: 01"))).toThrow(/canonical form/);
   for (const text of [bound.replace(/\n/g, "\r\n"), `${bound}\n`, ` ${bound}`, bound.replace("Version: 1", "Version:  1")]) {
     expect(() => parseApprovalSiwe(text)).toThrow();
   }
@@ -337,6 +352,9 @@ test("the same relative choice resumes its open request and absolute date howeve
   expect(await pendingInvitationContext("approval", { ...probe, contentSha256: "sha-two", accessExpiresAt: iso(base + 3_000), requestedDurationMs: DURATION })).toBeUndefined();
   expect(await pendingInvitationContext("approval", { ...probe, recipientEmail: "other@example.com", accessExpiresAt: iso(base + 3_000), requestedDurationMs: DURATION })).toBeUndefined();
   expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: iso(base + 3_000) })).toBeUndefined();
+  // Guards decided at selection: a pending date that is not earlier than the new request's, or has under a minute left, is not resumed.
+  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: iso(base - 5_000), requestedDurationMs: DURATION })).toBeUndefined();
+  expect(await pendingInvitationContext("approval", { ...probe, accessExpiresAt: iso(base + 3_000), requestedDurationMs: DURATION, now: base - 30_000 })).toBeUndefined();
   delegateDown = false;
   const resumed = await ask(base + 5_000);
   expect(resumed).toMatchObject({ shareId: KEY_ID, accessExpiresAt: new Date(base).toISOString(), resumed: true });
@@ -360,6 +378,17 @@ test("a rerun that chose a duration one second longer asks again instead of reus
   expect(second.accessExpiresAt).toBe(new Date(base + 3_000).toISOString());
   expect(linkPosts).toBe(2);
 });
+
+test.each<Mode>(["replace-request-id-2", "replace-request-id-4", "replace-issued-at-2", "replace-issued-at-4"])(
+  "approveEmailInviteKey with the real wallet-signed %s grant: refused at acquisition, nothing installed, nothing acknowledged", async (replaced) => {
+    const node = await realSessionNode();
+    mode = replaced;
+    await expect(approveEmailInviteKey({ node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: new Date(Date.now() + 3_600_000) }))
+      .rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+    expect(node.getRuntimePermissionDelegations()).toEqual([]);
+    expect(acknowledgements).toEqual([]);
+    expect(activations).toEqual([]);
+  });
 
 test("approveEmailInviteKey refuses a profile that records no owner account, and an approval signed by another account", async () => {
   const node = await realSessionNode();

@@ -700,7 +700,10 @@ export async function pendingInvitationContext(profile: string, match: {
       // The same absolute date, or the SAME relative choice the user made then (the exact duration, never inferred from timing): such a rerun
       // resumes the open request and its own absolute date. Any other duration, even by a second, is a new choice and a new request.
       && (context.accessExpiresAt === match.accessExpiresAt
-        || (match.requestedDurationMs !== undefined && entry.invitationMeta?.requestedDurationMs === match.requestedDurationMs)))?.context;
+        // A resumed date is only ever one earlier than the new request's and still usable (more than a minute left): both are decided here,
+        // before anything is installed or taken.
+        || (match.requestedDurationMs !== undefined && entry.invitationMeta?.requestedDurationMs === match.requestedDurationMs
+          && Date.parse(context.accessExpiresAt) < Date.parse(match.accessExpiresAt) && Date.parse(context.accessExpiresAt) > now + 60_000)))?.context;
 }
 
 /**

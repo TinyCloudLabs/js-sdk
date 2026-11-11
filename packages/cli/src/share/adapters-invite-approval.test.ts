@@ -12,16 +12,17 @@ const descriptor = ((JSON.parse(await readFile(new URL("../../../sdk-core/test-f
   vectors: { name: string; descriptor: unknown }[];
 }).vectors.find((vector) => vector.name === "email")!.descriptor);
 
+let sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 const EXPIRES = new Date(Math.floor((Date.now() + 86_400_000) / 1000) * 1000);
 const stop = new Error("stopped after the encryption step");
 const node = {
   credentialHolderDid: ownerDid,
   isSessionOnly: true,
-  restorableSession: {
+  get restorableSession() { return {
     spaceId: "tinycloud:test-space",
-    siwe: "share.example wants you to sign in with your Ethereum account:\n0x0000000000000000000000000000000000000001\n\nSign in to TinyCloud\n\nURI: https://share.example\nVersion: 1\nChain ID: 1\nNonce: 12345678\nIssued At: 2025-01-01T00:00:00.000Z\nExpiration Time: 2099-01-01T00:00:00.000Z",
+    siwe: "share.example wants you to sign in with your Ethereum account:\n0x0000000000000000000000000000000000000001\n\nSign in to TinyCloud\n\nURI: https://share.example\nVersion: 1\nChain ID: 1\nNonce: 12345678\nIssued At: 2025-01-01T00:00:00.000Z\nExpiration Time: " + sessionExpiresAt,
     signature: "signed-proof",
-  },
+  }; },
   activeNodeIdentity: async () => ({ origin: "https://node.example", nodeDid: "did:key:z6MkvRXNYcE7MMduynWTgeKbDaT1iijDSC8pZqXZc8rHPrf2" }),
   publishActiveNodeLocation: async () => { events.push("registry record"); },
   getDefaultEncryptionNetworkId: () => `urn:tinycloud:encryption:${ownerDid}:default`,
@@ -56,6 +57,7 @@ afterEach(() => {
   events.length = 0;
   requests.length = 0;
   holdsDecrypt = false;
+  sessionExpiresAt = "2099-01-01T00:00:00.000Z";
 });
 
 describe("per-invitation approval for a session-only email share", () => {
@@ -101,6 +103,21 @@ describe("per-invitation approval for a session-only email share", () => {
     const later = new Date(EXPIRES.getTime() + 40_000).toISOString();
     await expect(adapter((async () => ({ shareId: APPROVED_ID, accessExpiresAt: later, resumed: true })) as never).publish(input)).rejects.toThrow("invalid-request");
     await expect(adapter((async () => ({ shareId: APPROVED_ID, accessExpiresAt: earlier, resumed: false })) as never).publish(input)).rejects.toThrow("invalid-request");
+  });
+
+  it("passes the user's duration to the approver, but not a default that was clamped to the session's expiry", async () => {
+    const asked: Array<number | undefined> = [];
+    const approver = (async (request: { requestedDurationMs?: number; accessExpiresAt: Date }) => {
+      asked.push(request.requestedDurationMs);
+      return { shareId: APPROVED_ID, accessExpiresAt: request.accessExpiresAt.toISOString(), resumed: false };
+    }) as never;
+    const withDuration = { ...input, expiresInMs: 86_400_000 } as TargetPublishInput;
+    await adapter(approver).publish(withDuration).catch(() => undefined);
+    expect(asked).toEqual([86_400_000]);
+    // A session that ends first clamps the default expiry: the approver must not be told a duration it did not get.
+    sessionExpiresAt = new Date(EXPIRES.getTime() - 3 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, ".000Z");
+    await adapter(approver).publish(withDuration).catch(() => undefined);
+    expect(asked).toEqual([86_400_000, undefined]);
   });
 
   it("refuses an approval whose signed access date is not the expiry the share is issued with, before anything is requested or encrypted", async () => {
