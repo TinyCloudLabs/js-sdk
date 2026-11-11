@@ -1,9 +1,28 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright";
 import { ServiceContext } from "@tinycloud/sdk-services/context";
 import { readSql, syncPrefixes } from "./browser/request-priority.fixture";
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function browserFixture(entrypoint: string): string {
+  const directory = mkdtempSync(join(tmpdir(), "sdk-priority-browser-"));
+  try {
+    const output = join(directory, "fixture.js");
+    // Isolate Bun 1.3's bundler from imported workspace files in the test VM (oven-sh/bun#11123).
+    execFileSync(process.execPath, ["build", entrypoint, "--target=browser", `--outfile=${output}`], {
+      timeout: 10_000,
+      stdio: "pipe",
+    });
+    return readFileSync(output, "utf8");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 function startNode() {
   const firstReplica = Promise.withResolvers<void>();
@@ -123,13 +142,62 @@ test("background concurrency includes streamed response bodies", async () => {
 });
 
 if (process.env.TC_TEST_BROWSER_PRIORITY === "1") {
-  test("Chromium shares foreground priority between the page and two replica workers", async () => {
-    const build = await Bun.build({
-      entrypoints: [`${import.meta.dir}/browser/request-priority.fixture.ts`],
-      target: "browser",
+  test("Chromium pauses sibling background workers on busy while foreground SQL proceeds", async () => {
+    const fixture = browserFixture(`${import.meta.dir}/browser/request-priority.fixture.ts`);
+    const worker = browserFixture(`${import.meta.dir}/browser/request-priority-busy.worker.ts`);
+    const firstBackground = Promise.withResolvers<void>();
+    const backgroundStarts: number[] = [];
+    const app = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/fixture.js") return new Response(fixture, { headers: { "content-type": "text/javascript" } });
+        if (path === "/worker.js") return new Response(worker, { headers: { "content-type": "text/javascript" } });
+        if (path === "/background") {
+          backgroundStarts.push(performance.now());
+          firstBackground.resolve();
+          return backgroundStarts.length === 1
+            ? new Response("unavailable_retryable", { status: 503, headers: { "retry-after": "1" } })
+            : new Response("ready");
+        }
+        if (path === "/invoke") {
+          await sleep(80);
+          return Response.json({ columns: ["1"], rows: [[1]], rowCount: 1 });
+        }
+        return new Response(`<script type="module">import { readSql } from "/fixture.js"; window.readSql = readSql;</script>`, {
+          headers: { "content-type": "text/html" },
+        });
+      },
     });
-    expect(build.success).toBe(true);
-    const fixture = await build.outputs[0]!.text();
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(app.url.href);
+      const idle = await page.evaluate(() => (window as any).readSql(location.origin));
+      const background = page.evaluate(() => Promise.all([0, 1].map(() => new Promise<void>((resolve, reject) => {
+        const worker = new Worker("/worker.js", { type: "module" });
+        worker.onerror = (event) => reject(new Error(event.message));
+        worker.onmessage = ({ data }) => {
+          if (data === "done") resolve();
+          else reject(new Error(data));
+        };
+        worker.postMessage(location.origin);
+      }))));
+      await firstBackground.promise;
+      const loaded = await page.evaluate(() => (window as any).readSql(location.origin));
+      await background;
+      expect(loaded).toBeLessThanOrEqual(idle * 1.5);
+      expect(backgroundStarts).toHaveLength(2);
+      expect(backgroundStarts[1]! - backgroundStarts[0]!).toBeGreaterThanOrEqual(990);
+    } finally {
+      await browser.close();
+      app.stop(true);
+    }
+  }, 15_000);
+
+  test("Chromium shares foreground priority between the page and two replica workers", async () => {
+    const fixture = browserFixture(`${import.meta.dir}/browser/request-priority.fixture.ts`);
     const node = startNode();
     const app = Bun.serve({
       hostname: "127.0.0.1",
