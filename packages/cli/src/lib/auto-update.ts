@@ -191,18 +191,26 @@ async function acquireLock(lockPath: string): Promise<(() => Promise<void>) | nu
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
   }
-  let lock: { pid?: number; createdAt?: number };
+  let lock: unknown;
   try {
     lock = JSON.parse(await readFile(lockPath, "utf8"));
   } catch {
     return recoverMalformedLock(lockPath);
   }
-  if (!Number.isSafeInteger(lock.pid) || typeof lock.createdAt !== "number") {
-    return recoverMalformedLock(lockPath);
-  }
-  if (Date.now() - lock.createdAt < STALE_LOCK_MS) return null;
+  if (!lock || typeof lock !== "object") return recoverMalformedLock(lockPath);
+  const metadata = lock as { pid?: unknown; createdAt?: unknown };
+  const now = Date.now();
+  if (
+    typeof metadata.pid !== "number" ||
+    !Number.isSafeInteger(metadata.pid) ||
+    metadata.pid <= 0 ||
+    typeof metadata.createdAt !== "number" ||
+    !Number.isFinite(metadata.createdAt) ||
+    metadata.createdAt > now
+  ) return recoverMalformedLock(lockPath);
+  if (now - metadata.createdAt < STALE_LOCK_MS) return null;
   try {
-    process.kill(lock.pid as number, 0);
+    process.kill(metadata.pid, 0);
     return null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") return null;

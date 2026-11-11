@@ -111,6 +111,35 @@ test("recovers from an expired malformed update-check lock", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+test.each([
+  ["null lock data", "null"],
+  ["zero pid", JSON.stringify({ pid: 0, createdAt: Date.now() - 121_000 })],
+  ["negative pid", JSON.stringify({ pid: -1, createdAt: Date.now() - 121_000 })],
+  ["future timestamp", JSON.stringify({ pid: process.pid, createdAt: Date.now() + 60_000 })],
+])("recovers invalid update-check lock metadata (%s)", async (_label, contents) => {
+  const directory = await mkdtemp(join(tmpdir(), "tc-auto-update-lock-metadata-"));
+  const cachePath = join(directory, "cache.json");
+  const lockPath = `${cachePath}.beta.check-lock`;
+  let requests = 0;
+  const fetchFn: typeof fetch = async () => {
+    requests += 1;
+    return Response.json({ version: "1.7.0-beta.31" });
+  };
+  try {
+    await writeFile(lockPath, contents, { mode: 0o600 });
+    const stale = new Date(Date.now() - 121_000);
+    await utimes(lockPath, stale, stale);
+    expect(await checkForUpdate({
+      currentVersion: "1.7.0-beta.30",
+      cachePath,
+      fetchFn,
+    })).toBe("1.7.0-beta.31");
+    expect(requests).toBe(1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 
 test("CI and explicit opt-out disable automatic checks", () => {
   expect(isAutoUpdateEnabled({})).toBe(true);
