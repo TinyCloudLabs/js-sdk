@@ -124,8 +124,10 @@ export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRunt
   } catch (error) {
     // The SDK will not evaluate a named-key path as a manifest permission. An exact key is held only through a runtime grant, so ask those.
     if (!/named keys go in manifest\.keys/.test(error instanceof Error ? error.message : "") || node.getRuntimePermissionDelegations === undefined) throw error;
-    return node.getRuntimePermissionDelegations().some((delegation) =>
-      (delegation.resources ?? []).some((resource) => resource.path === networkId && resource.actions.includes("tinycloud.encryption/decrypt")));
+    // Only a live runtime grant that names exactly this key (not a prefix or the network) and carries decrypt counts.
+    const now = Date.now();
+    return node.getRuntimePermissionDelegations().some((delegation) => delegation.expiry.getTime() > now &&
+      (delegation.resources ?? []).some((resource) => resource.service === "encryption" && resource.path === networkId && resource.actions.includes("tinycloud.encryption/decrypt")));
   }
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
