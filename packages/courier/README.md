@@ -288,7 +288,9 @@ share an id), a run id and its pid.
   watcher reads the state back before its next write: its own body or no change
   carries on; anything else stops it with `state-conflict`. A 412 is checked
   too, because the SDK retries a node 503 with the same if-match: if the stored
-  state is exactly the body the watcher sent, it carries on. The conflict shows
+  state is exactly the body the watcher sent, it carries on. Every write
+  carries a `writer` stamp (this run's id and a write sequence), so a state
+  written by any other watcher never matches. The conflict shows
   at the watcher's next own write (a message, a notice retry, the hourly or
   daily prune), which can be long after the other process wrote.
 

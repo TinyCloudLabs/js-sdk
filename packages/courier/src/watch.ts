@@ -138,6 +138,11 @@ export interface WatchState {
   noticeGlobalLog: number[];
   /** Every dispatch attempt, success or failure, per peer for the shared rolling-hour cap. */
   noticeLog: Record<string, number[]>;
+  /**
+   * The run and write that stored this state. Another process's write can then never equal one of ours, so a write
+   * whose outcome is unknown is adopted only when it carries this run's id and the sequence it sent.
+   */
+  writer?: { run: string; seq: string };
 }
 
 /** `tries`: notification dispatch attempts (max 3), or failed inform attempts (max 8). */
@@ -278,8 +283,10 @@ export class Watcher {
   private onFatal: (() => void) | undefined;
   /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
-  /** The state (canonical JSON) of a write whose request failed without a 412: it may have been applied. */
+  /** The state (canonical JSON) of a write whose outcome is unknown: it may have been applied. */
   private unconfirmedState: string | undefined;
+  /** Sequence of this run's state writes, stamped into `writer`. */
+  private writeSeq = 0;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   private readonly metaMirrored = new Set<string>();
   private readonly syncing = new Map<string, { again: boolean; via: Via }>();
@@ -370,6 +377,8 @@ export class Watcher {
       const { selfKv } = this.deps;
       if (this.unconfirmedState !== undefined) await this.confirmState();
       else if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, k.watchState))?.etag ?? null;
+      // Stamped, so no other process's body can equal this one (an older CLI keeps the field but changes the rest).
+      this.state.writer = { run: this.runId, seq: String(++this.writeSeq).padStart(15, '0') }; // fixed width: fixed state size
       // A copy, so the body sent is exactly the one remembered if the outcome is unknown.
       const sent = structuredClone(this.state);
       try {
@@ -383,7 +392,7 @@ export class Watcher {
         this.unconfirmedState = canonicalJson(sent);
         if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
         // A 412 can also answer the SDK's own retry of a write the node had applied (a retried 503). Only the exact
-        // body sent is this watcher's; anything else was written by another process.
+        // body sent, with this run's id and sequence, is this watcher's; anything else was written by another process.
         const got = await getJson<WatchState>(selfKv, k.watchState);
         if (!got || canonicalJson(got.value) !== this.unconfirmedState) throw this.stateConflict(STATE_CHANGED);
         this.stateEtag = got.etag ?? undefined;
@@ -397,7 +406,8 @@ export class Watcher {
 
   /**
    * After a write with an unknown outcome: the stored state is either unchanged (not applied) or exactly the body
-   * this watcher sent (applied). Both are this watcher's own; anything else was written by another process.
+   * this watcher sent, stamp included (applied). Both are this watcher's own; anything else was written by another
+   * process.
    */
   private async confirmState(): Promise<void> {
     const got = await getJson<WatchState>(this.deps.selfKv, k.watchState);

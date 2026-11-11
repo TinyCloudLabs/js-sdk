@@ -109,3 +109,59 @@ test('a retried own write that another writer overtook before the retry still st
   assert.equal(a.watcher.fatalError?.code, 'state-conflict');
   assert.deepEqual(kv.value(k.watchState).woken, ['OTHER'], 'the other writer\'s state is kept');
 });
+
+/** The watcher's first state write is applied; before the SDK's retry, another process rewrites it via `rewrite`. */
+async function overtakenRetry(rewrite) {
+  const w = world();
+  const a = w.mk(100);
+  await a.watcher.loadState();
+  const kv = w.selfKv;
+  const put = kv.put.bind(kv);
+  let overtaken = false;
+  kv.put = async (key, value, options) => {
+    if (key !== k.watchState || overtaken) return put(key, value, options);
+    overtaken = true;
+    await put(key, value, options);
+    const stored = kv.value(key);
+    kv.rows.set(key, { text: JSON.stringify(rewrite(stored)), etag: '"other"' });
+    return put(key, value, options);
+  };
+  w.send(ulid(w.clock.t));
+  await a.watcher.sync(peer, 'poll');
+  return { a, kv };
+}
+
+test('an older CLI that rewrote the applied write, keeping its writer stamp, still stops the watcher', async () => {
+  // Courier 0.5.3 loads the state with `{ ...emptyWatchState(), ...stored }` and writes it back, unknown fields kept.
+  const { a, kv } = await overtakenRetry((stored) => ({ ...stored, woken: [...stored.woken, 'OLD'] }));
+  assert.ok(kv.value(k.watchState).writer, 'the older writer kept the stamp');
+  assert.equal(a.watcher.fatalError?.code, 'state-conflict');
+  assert.deepEqual(kv.value(k.watchState).woken, ['OLD']);
+});
+
+test('the same body without the writer stamp is not the watcher\'s own write', async () => {
+  const { a, kv } = await overtakenRetry(({ writer: _writer, ...rest }) => rest);
+  assert.equal(a.watcher.fatalError?.code, 'state-conflict');
+  assert.equal(kv.value(k.watchState).writer, undefined);
+});
+
+test('a second watcher that makes the same change from the same state still stops the watcher', async () => {
+  // `courier pause` while a long watcher runs, then `courier watch --once`: both see the new marker and write the
+  // same state as their first write, so only the run ids in their stamps differ.
+  const w = world();
+  const earlier = w.mk(50);
+  await earlier.watcher.loadState();
+  w.send(ulid(w.clock.t));
+  await earlier.watcher.sync(peer, 'poll');
+  const a = w.mk(100);
+  const once = w.mk(200);
+  await a.watcher.loadState();
+  await once.watcher.loadState();
+  const thread = ulid(w.clock.t);
+  w.selfKv.rows.set(k.paused('bob', thread), { text: JSON.stringify({ v: 1, peer: 'bob', threadId: thread, by: 'human' }), etag: '"p"' });
+  await once.watcher.syncPaused();
+  const theirs = w.selfKv.rows.get(k.watchState).text;
+  await a.watcher.syncPaused();
+  assert.equal(a.watcher.fatalError?.code, 'state-conflict');
+  assert.equal(w.selfKv.rows.get(k.watchState).text, theirs);
+});
