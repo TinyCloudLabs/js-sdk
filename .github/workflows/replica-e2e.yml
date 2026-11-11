@@ -153,10 +153,6 @@ jobs:
           bun run --cwd packages/node-sdk typecheck:replica-contract
           bun run --cwd packages/cli build
 
-      - name: Enforce hashed kv-storage worker gzip ratchet (TC-858)
-        if: ${{ steps.relevance.outputs.relevant == 'true' && (success() || failure()) }}
-        run: bun packages/replica/scripts/check-worker-size.ts
-
       - name: Check every replica exports target is packed (TC-858)
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun packages/replica/scripts/check-pack-exports.ts
@@ -184,6 +180,10 @@ jobs:
           # No paired OpenCredentials checkout in CI; credentials.integration.test.ts skips with a warning.
           OPENCREDENTIALS_FIXTURE_OPTIONAL: "1"
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
+
+      - name: Enforce hashed kv-storage worker gzip ratchet (TC-858)
+        if: ${{ steps.relevance.outputs.relevant == 'true' && (success() || failure()) }}
+        run: bun packages/replica/scripts/check-worker-size.ts
 
       - name: Size-policy unit tests
         if: ${{ steps.relevance.outputs.relevant == 'true' && (success() || failure()) && matrix.database == 'sqlite' }}
