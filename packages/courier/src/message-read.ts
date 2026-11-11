@@ -1,4 +1,4 @@
-import { isRecord, messageView } from './a2a.js';
+import { isRecord, messageView, oneLine } from './a2a.js';
 import { CourierError, type ResultLike } from './errors.js';
 import type { KV } from './inbox.js';
 import { k } from './keys.js';
@@ -11,9 +11,10 @@ export const MESSAGE_READ_MS = 10_000;
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
 export function validateMessageSelection(threadId: string, peer: string | undefined, ids: string[]): void {
-  if (!peer || peer === 'true') throw new CourierError('usage', '--message requires --peer.');
-  if (!SAFE_ID.test(threadId) || !ids.length || ids.length > MESSAGE_READ_LIMIT || ids.some(id => id === 'true' || !SAFE_ID.test(id))) {
-    throw new CourierError('usage', `Select 1–${MESSAGE_READ_LIMIT} --message ids; thread and message ids must be 1–64 letters, digits, underscores or hyphens.`);
+  if (!peer || peer === 'true') throw new CourierError('usage', '--message needs --peer <peer>.');
+  if (!ids.length || ids.length > MESSAGE_READ_LIMIT) throw new CourierError('usage', 'Up to 20 message IDs at a time.');
+  if (!SAFE_ID.test(threadId) || ids.some(id => id === 'true' || !SAFE_ID.test(id))) {
+    throw new CourierError('usage', 'Thread and message IDs must be 1–64 letters, digits, underscores or hyphens.');
   }
 }
 
@@ -22,6 +23,14 @@ export interface MessageReadOutcome {
   messageId: string;
   side: 'me' | 'peer';
   status: ReadStatus;
+}
+
+export function renderMessageOutcomes(peer: string, outcomes: readonly MessageReadOutcome[]): string {
+  const labels: Record<ReadStatus, string> = {
+    found: 'found', missing: 'not found', unreadable: "couldn't read", 'too-large': 'too large (over 64 KiB)',
+    'timed-out': 'timed out', invalid: 'not a valid message',
+  };
+  return outcomes.map(outcome => `${oneLine(outcome.messageId, 64)} (${outcome.side === 'me' ? 'yours' : `${oneLine(peer, 80)}'s`}): ${labels[outcome.status]}\n`).join('');
 }
 
 /** Exact message reads only: no archive listings, metadata, tasks, receipt or watcher writes. */

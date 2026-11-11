@@ -27,7 +27,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
-import { collectMessages, validateMessageSelection, type MessageReadOutcome } from './message-read.js';
+import { collectMessages, validateMessageSelection, renderMessageOutcomes, type MessageReadOutcome } from './message-read.js';
 import { collectThread, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
@@ -680,7 +680,7 @@ export async function cmdRead(args: ParsedArgs) {
   if (args.has('json')) {
     await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');
   } else {
-    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors) + (result.outcomes ? result.outcomes.map(outcome => `${outcome.messageId} (${outcome.side}): ${outcome.status}\n`).join('') : ''));
+    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors) + (result.outcomes ? renderMessageOutcomes(args.get('peer')!, result.outcomes) : ''));
   }
   for (const error of result.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
 }

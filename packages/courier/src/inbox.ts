@@ -126,7 +126,7 @@ export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDel
       } catch (error) {
         const conflict = error instanceof CourierError && error.code === 'conflict';
         if (conflict && attempt < 2) continue;
-        console.error(`Warning: Couldn't update delivery receipts for ${oneLine(peer, 80)}. Messages may appear again.`);
+        console.error(`Warning: Couldn't update delivery receipts for ${oneLine(peer, 80)}. Messages you've already read may show up again.`);
         break;
       }
     }

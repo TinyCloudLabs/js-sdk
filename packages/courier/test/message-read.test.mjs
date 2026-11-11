@@ -1,7 +1,7 @@
 import { wakePrompt } from '../dist/wake.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectMessages, validateMessageSelection, MESSAGE_READ_LIMIT, MESSAGE_READ_BYTES, MESSAGE_READ_MS } from '../dist/message-read.js';
+import { collectMessages, validateMessageSelection, renderMessageOutcomes, MESSAGE_READ_LIMIT, MESSAGE_READ_BYTES, MESSAGE_READ_MS } from '../dist/message-read.js';
 import { commitReceipts } from '../dist/inbox.js';
 import { memoryKv } from './memory-kv.mjs';
 import { k } from '../dist/keys.js';
@@ -51,7 +51,7 @@ test('CLI accepts repeated --message but requires exact peer and safe bounded id
   assert.deepEqual(args.all('message'), ['M1', 'M2']);
   for (const [thread, handle, ids] of [['T', undefined, ['M']], ['../T', 'good', ['M']], ['T', 'good', ['../M']],
     ['T', 'true', ['M']], ['T', 'good', ['true']], ['T', 'good', Array(MESSAGE_READ_LIMIT + 1).fill('M')]]) {
-    assert.throws(() => validateMessageSelection(thread, handle, ids), /--message|Select/);
+    assert.throws(() => validateMessageSelection(thread, handle, ids), /--message|message IDs|Thread/);
   }
 });
 
@@ -145,4 +145,10 @@ test('wake prompt splits event message ids into bounded exact reads and preserve
     assert.ok([...command.matchAll(/--message /g)].length <= MESSAGE_READ_LIMIT);
   }
   assert.equal(commands.join(' ').match(/--message /g).length, messages.length);
+});
+
+test('outcome text names each side and makes failures readable', () => {
+  const statuses = ['found', 'missing', 'unreadable', 'too-large', 'timed-out', 'invalid'];
+  const text = renderMessageOutcomes('good', statuses.map((status, n) => ({ messageId: `M${n}`, side: n ? 'peer' : 'me', status })));
+  assert.equal(text, "M0 (yours): found\nM1 (good's): not found\nM2 (good's): couldn't read\nM3 (good's): too large (over 64 KiB)\nM4 (good's): timed out\nM5 (good's): not a valid message\n");
 });
