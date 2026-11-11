@@ -135,9 +135,10 @@ export function openKeyInviteTransport(deps: OpenKeyInviteDeps = {}): InviteAppr
         try { response = await post(state, key, 'discover'); } catch { return { status: 'pending' }; }
         if (response.status === 202) return { status: 'pending' };
         if (!response.ok) {
-          const code = ((await response.clone().json().catch(() => null)) as { code?: unknown } | null)?.code;
+          const failed = (await response.clone().json().catch(() => null)) as { code?: unknown; status?: unknown } | null;
+          const code = failed?.code;
+          if (failed?.status === 'denied') return { status: 'denied' };
           if (code === 'expired_request' || code === 'expired_result') return { status: 'expired' };
-          if (code === 'denied') return { status: 'denied' };
           if (code === 'not_found' || code === 'request_binding' || code === 'invalid_proof') throw unavailable('OpenKey does not recognise this approval request.');
           return { status: 'pending' };
         }
