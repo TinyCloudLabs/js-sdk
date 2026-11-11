@@ -10,7 +10,7 @@ function fixture() {
     bob: { handle: 'bob', courierDid: 'did:key:bob', outbound: [{ cid: 'one', issuedAt: '2026-01-01', expiresAt: '2027-01-01' }] },
   } };
   const record = (cid, changes = {}) => ({ cid, delegatorDid: profile.courierDid, delegateDid: 'did:key:bob',
-    resources: peerReadPermissions('bob', space).map((p) => ({ resource: `${space}/${p.service.replace('tinycloud.', '')}/${p.path}`, actions: p.actions, caveats: [] })), ...changes });
+    resources: peerReadPermissions('bob', space).map((p) => ({ resource: `${space}/${p.service.replace('tinycloud.', '')}/${p.path}`, actions: p.actions, caveats: p.actions.map(() => ({})) })), ...changes });
   return { profile, record };
 }
 
