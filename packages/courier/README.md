@@ -283,7 +283,12 @@ share an id), a run id and its pid.
   can be taken over.
 - The state file (`me/state/watch.json`) is written with if-match. A second
   watcher that writes it with a stale etag stops with `state-conflict` (exit 1)
-  and releases any claim it had taken.
+  and releases any claim it had taken. A state write that fails without a 412
+  (lost reply, timeout, `outcome_unknown`) may still have been applied, so the
+  watcher reads the state back before its next write: its own body or no change
+  carries on; anything else stops it with `state-conflict`. The conflict shows
+  at the watcher's next own write (a message, a notice retry, the hourly or
+  daily prune), which can be long after the other process wrote.
 
 Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).
