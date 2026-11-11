@@ -70,7 +70,14 @@ export async function collectMessages(input: {
         if (typeof raw !== 'string') status = 'invalid';
         else if (Buffer.byteLength(raw, 'utf8') > MESSAGE_READ_BYTES) status = 'too-large';
         else {
-          if (typeof body === 'string') body = JSON.parse(body);
+          try {
+            if (typeof body === 'string') body = JSON.parse(body);
+            // Check inside this message's failure boundary, before final output combines healthy messages.
+            JSON.stringify(body);
+          } catch {
+            outcomes.push({ messageId: id, side, status: 'invalid' });
+            return;
+          }
           if (!isRecord(body) || body.contextId !== threadId || body.messageId !== id) status = 'invalid';
           else {
             const invalid = messageView(body).invalid;

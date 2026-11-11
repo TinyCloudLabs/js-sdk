@@ -152,3 +152,15 @@ test('outcome text names each side and makes failures readable', () => {
   const text = renderMessageOutcomes('good', statuses.map((status, n) => ({ messageId: `M${n}`, side: n ? 'peer' : 'me', status })));
   assert.equal(text, "M0 (yours): found\nM1 (good's): not found\nM2 (good's): couldn't read\nM3 (good's): too large (over 64 KiB)\nM4 (good's): timed out\nM5 (good's): not a valid message\n");
 });
+
+test('deep response data cannot make final JSON serialization discard healthy messages', async () => {
+  const raw = '{"contextId":"T","messageId":"M","extra":' + '['.repeat(10000) + '0' + ']'.repeat(10000) + '}';
+  const self = { get: async () => ({ ok: true, data: { data: raw } }) };
+  const remote = memoryKv();
+  await message(remote, 'me', 'M');
+  const result = await collectMessages(input(self, remote));
+  assert.doesNotThrow(() => JSON.stringify(result));
+  assert.deepEqual(result.entries.map(entry => entry.side), ['peer']);
+  assert.deepEqual(result.outcomes.map(outcome => outcome.status), ['invalid', 'found']);
+  assert.equal(result.partial, true);
+});
