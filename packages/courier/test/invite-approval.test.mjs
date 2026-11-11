@@ -121,6 +121,10 @@ test('the approval message must be canonical: its re-serialisation is the identi
   assert.equal(parsed.raw, siwe);
   assert.equal(parsed.requestId, `urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`);
   assert.doesNotThrow(() => assertApprovalRequestBinding(parsed, mine));
+  // The equality branch itself: the EIP-4361 parser accepts 'Chain ID: 01' (it reads 1), but re-serialising gives 'Chain ID: 1', which is not the signed text.
+  const leadingZero = siwe.replace('Chain ID: 1', 'Chain ID: 01');
+  assert.notEqual(leadingZero, siwe);
+  assert.throws(() => parseApprovalSiwe(leadingZero), { code: 'bad-grant', message: /canonical form/ });
   for (const text of [siwe.replace(/\n/g, '\r\n'), `${siwe}\n`, ` ${siwe}`, siwe.replace('Version: 1', 'Version:  1'), siwe.replace(/\n\n/, '\n\n\n')]) {
     assert.throws(() => parseApprovalSiwe(text), { code: 'bad-grant' });
   }
