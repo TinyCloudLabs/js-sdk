@@ -23,7 +23,7 @@ const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
 const { readJson } = await import("../config/storage.js");
 const { acquireApprovalRequest, invitationGrantOf, pendingInvitationContext, takeInvitationApproval } = await import("./approval-request.js");
-const { assertApprovalRequestBinding } = await import("./invitation-key-grant.js");
+const { assertApprovalRequestBinding, parseApprovalSiwe } = await import("./invitation-key-grant.js");
 const { sessionHoldsEncryptionDecrypt } = await import("../share/adapters.js");
 const { approveEmailInviteKey } = await import("../share/invite-approval.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
@@ -201,14 +201,39 @@ test.each<[Mode, string]>([
   expect(acknowledgements).toEqual([]);
 });
 
-test("the request binding check accepts only exactly one Request ID of this request", () => {
-  const mine = { requestId: "a".repeat(26), bodyCid: "bafy-mine" };
-  const line = `Request ID: urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`;
-  const siwe = `message\n${line}\nResources:`;
+// Real owner-signed texts, so the strict parse accepts the base; each mutation calls the binding function directly on its own text.
+async function signedText(bind: boolean): Promise<string> {
+  const prepared = wasm.prepareSession({ abilities: {}, rawAbilities: { [`${network}/share/${KEY_ID}`]: pair }, address, chainId: 1, domain: "openkey.example", spaceId: wasm.makeSpaceId(address, 1, "default"), jwk: key,
+    issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + 3_000_000).toISOString() });
+  return bind ? prepared.siwe.replace(/\nResources:/, `\nRequest ID: ${line}\nResources:`) : prepared.siwe;
+}
+const mine = { requestId: "a".repeat(26), bodyCid: "bafy-mine" };
+const line = `urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`;
+
+test("the request binding check accepts only the one Request ID of this request, from one strict parse", async () => {
+  const siwe = await signedText(true);
   expect(() => assertApprovalRequestBinding(siwe, mine)).not.toThrow();
-  for (const bad of [siwe.replace(line, ""), siwe.replace(line, `${line}\n${line}`), siwe.replace(line, `${line} `), siwe.replace(line, line.replace("bafy-mine", "bafy-other")),
-    siwe.replace(line, line.replace("a".repeat(26), "b".repeat(26))), siwe.replace(line, line.replace("Request ID", "request id")), siwe.replace(line, `Request ID: ${mine.requestId}:${mine.bodyCid}`)]) {
+  expect(parseApprovalSiwe(siwe).requestId).toBe(line);
+  const field = `Request ID: ${line}`;
+  for (const bad of [siwe.replace(field, ""), siwe.replace(field, `${field}\n${field}`), siwe.replace(field, `${field} `), siwe.replace(field, field.replace("bafy-mine", "bafy-other")),
+    siwe.replace(field, field.replace("a".repeat(26), "b".repeat(26))), siwe.replace(field, field.replace("Request ID", "request id")), siwe.replace(field, `Request ID: ${mine.requestId}:${mine.bodyCid}`)]) {
     expect(() => assertApprovalRequestBinding(bad, mine)).toThrow();
+  }
+});
+
+test("a Request ID injected where the parser does not read it never binds, and a non-canonical text is refused", async () => {
+  const unbound = await signedText(false);
+  const rows = unbound.split("\n");
+  const inject = (index: number) => [...rows.slice(0, index), `Request ID: ${line}`, ...rows.slice(index)].join("\n");
+  for (const text of [inject(1), inject(2), inject(3), inject(5), `${unbound}\nRequest ID: ${line}`]) {
+    expect(() => assertApprovalRequestBinding(text, mine)).toThrow();
+    expect(() => parseApprovalSiwe(text)).toThrow();
+  }
+  expect(parseApprovalSiwe(unbound).requestId).toBeUndefined();
+  expect(() => assertApprovalRequestBinding(unbound, mine)).toThrow();
+  const bound = await signedText(true);
+  for (const text of [bound.replace(/\n/g, "\r\n"), `${bound}\n`, ` ${bound}`, bound.replace("Version: 1", "Version:  1")]) {
+    expect(() => parseApprovalSiwe(text)).toThrow();
   }
 });
 

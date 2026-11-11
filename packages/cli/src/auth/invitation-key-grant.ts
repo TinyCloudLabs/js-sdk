@@ -1,4 +1,5 @@
 import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
+import { SiweMessage } from "@tinycloud/sdk-core";
 import { ExitCode } from "../config/constants.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { CLIError } from "../output/errors.js";
@@ -11,14 +12,34 @@ function refuse(message: string): never {
   throw new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
 }
 
+/** An approval SIWE parsed once, strictly: every fact below comes from this one parse, and `raw` is exactly the signed text. */
+export interface ParsedApprovalSiwe {
+  raw: string;
+  requestId: string | undefined;
+  issuedAt: string;
+}
+
 /**
- * The owner-signed SIWE names the one request it answers: exactly one `Request ID:` field equal to
- * `urn:tinycloud:approval-request:<requestId>:<bodyCid>` of THIS profile's own pending request. An approval signed for another
- * request, or one without the field, is refused before its key is used.
+ * Parse an owner-signed SIWE with the EIP-4361 parser, once, and accept it only if re-serialising the parsed message gives back
+ * the identical text, so a line the parser skips or reads differently from the signer cannot carry a field. The binding and the
+ * issue time are read from this parse; the signature is verified over the same `raw`.
  */
-export function assertApprovalRequestBinding(siwe: string, request: { requestId: string; bodyCid: string }): void {
-  const lines = siwe.split("\n").filter((line) => line.startsWith("Request ID:"));
-  if (lines.length !== 1 || lines[0] !== `Request ID: urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`) {
+export function parseApprovalSiwe(siwe: string): ParsedApprovalSiwe {
+  let message: SiweMessage;
+  try { message = new SiweMessage(siwe); } catch { refuse("The approval message is not a valid sign-in message; no invitation was sent."); }
+  if (message.prepareMessage() !== siwe) refuse("The approval message is not in its canonical form; no invitation was sent.");
+  return { raw: siwe, requestId: message.requestId, issuedAt: message.issuedAt ?? "" };
+}
+
+/**
+ * The owner-signed SIWE names the one request it answers: its `Request ID` field is exactly
+ * `urn:tinycloud:approval-request:<requestId>:<bodyCid>` of THIS profile's own pending request, read from the strict parse only (a
+ * string is parsed here, so a direct call cannot be satisfied by an earlier, different parse). An approval signed for another request,
+ * or one without the field, is refused before its key is used.
+ */
+export function assertApprovalRequestBinding(siwe: string | ParsedApprovalSiwe, request: { requestId: string; bodyCid: string }): void {
+  const parsed = typeof siwe === "string" ? parseApprovalSiwe(siwe) : siwe;
+  if (parsed.requestId !== `urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`) {
     refuse("The approval was not signed for this invitation request; no invitation was sent.");
   }
 }
@@ -80,7 +101,9 @@ export function verifyInvitationGrant(
   expected: { targetDid: string; ownerDid: string; request: { requestId: string; bodyCid: string }; acceptanceExpiresAt: string; now?: number },
 ): VerifiedInvitationGrant {
   const text = (value: unknown): string => (typeof value === "string" ? value : refuse("OpenKey did not return a complete, verifiable invitation approval; no invitation was sent."));
-  const siwe = text(data.siwe);
+  // One strict parse: the binding and the issue time are read from it, and the signature is verified over its exact text.
+  const parsed = parseApprovalSiwe(text(data.siwe));
+  const siwe = parsed.raw;
   const signature = text(data.signature);
   const address = text(data.address);
   const delegationCid = text(data.delegationCid);
@@ -90,7 +113,7 @@ export function verifyInvitationGrant(
   if (!Number.isSafeInteger(data.chainId) || typeof header?.Authorization !== "string" || verificationMethod.split("#")[0] !== expected.targetDid.split("#")[0]) {
     refuse("The invitation approval was not issued to this profile's key; no invitation was sent.");
   }
-  assertApprovalRequestBinding(siwe, expected.request);
+  assertApprovalRequestBinding(parsed, expected.request);
   const bindings = new NodeWasmBindings();
   if (typeof bindings.validateSessionGrant !== "function") refuse("This runtime cannot verify invitation approvals; no invitation was sent.");
   let proof: { verifiedRecap?: Array<{ service: string; space: string; path: string; actions: string[]; caveats?: unknown[] }>; expiresAt?: string };
@@ -111,7 +134,7 @@ export function verifyInvitationGrant(
     return { service, space: entry.space, path: entry.path, actions: entry.actions.map((action) => (action.includes("/") ? action : `${service}/${action}`)),
       ...(entry.caveats?.length ? { caveats: [...entry.caveats] as never } : {}) };
   });
-  const issuedAt = /^Issued At:\s*(.+)$/m.exec(siwe)?.[1]?.trim() ?? "";
+  const issuedAt = parsed.issuedAt;
   const shareId = invitationKeyFromGrant(permissions, { ownerDid, issuedAt, expiresAt: proof.expiresAt, acceptanceExpiresAt: expected.acceptanceExpiresAt, now: expected.now });
   return { shareId, ownerDid, issuedAt, expiresAt: proof.expiresAt, permissions };
 }
