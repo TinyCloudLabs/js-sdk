@@ -4,7 +4,7 @@ import { ulid } from 'ulid';
 import { activateValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
 import type { PermissionEntry, PortableDelegation, TinyCloudNode } from '@tinycloud/node-sdk';
 import type { ShareInvitationApprovalContext } from '@tinycloud/share-envelope/links';
-import { assertApprovalRequestBinding, assertInvitationApprovalGrant, siweTimes } from './authority.js';
+import { assertApprovalRequestBinding, assertInvitationApprovalGrant, parseApprovalSiwe } from './authority.js';
 import { CourierError } from './errors.js';
 import { mkdirOwnerOnly, profileDir, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
@@ -138,8 +138,10 @@ function keyIdUsedElsewhere(shareId: string, invitationId: string): boolean {
 async function activateInviteGrant(node: TinyCloudNode, profile: Profile, pending: PendingInvite, payload: GrantPayload, now: number): Promise<{ shareId: string; expiresAt: Date }> {
   const state = pending.transport as { requestId?: unknown; bodyCid?: unknown } | undefined;
   if (typeof state?.requestId !== 'string' || typeof state.bodyCid !== 'string') throw new CourierError('bad-grant', 'No approval request exists for this invitation.');
-  assertApprovalRequestBinding(payload.siwe, { requestId: state.requestId, bodyCid: state.bodyCid });
-  const times = siweTimes(payload.siwe);
+  // One strict parse: the binding and the lifetime are read from it, and the signature is verified over its exact text.
+  const parsed = parseApprovalSiwe(payload.siwe);
+  assertApprovalRequestBinding(parsed, { requestId: state.requestId, bodyCid: state.bodyCid });
+  const times = { ...(parsed.issuedAt ? { issuedAt: parsed.issuedAt } : {}), ...(parsed.expiresAt ? { expiresAt: parsed.expiresAt } : {}) };
   if (!times.expiresAt || times.expiresAt.getTime() <= now) throw new CourierError('grant-expired', 'The invitation approval has expired.');
   if (pending.courierDid !== profile.courierDid) throw new CourierError('bad-grant', 'The invitation approval was not requested by this Courier key.');
   const owner = `did:pkh:eip155:${payload.chainId}:${payload.address}`;
@@ -150,7 +152,7 @@ async function activateInviteGrant(node: TinyCloudNode, profile: Profile, pendin
   try {
     verified = node.verifySessionGrant({
       delegationHeader: { Authorization: payload.delegationHeader.Authorization }, delegationCid: payload.delegationCid, spaceId: payload.spaceId,
-      address: payload.address, chainId: payload.chainId, siwe: payload.siwe, signature: payload.signature,
+      address: payload.address, chainId: payload.chainId, siwe: parsed.raw, signature: payload.signature,
     });
   } catch { throw new CourierError('bad-grant', 'The invitation approval could not be verified for this Courier key.'); }
   const signed: PermissionEntry[] = verified.recap.map((entry) => {
@@ -278,7 +280,9 @@ export function markInviteSent(pending: PendingInvite): void {
 /**
  * Exactly one run may go on to create the relay, the Share key, the link and the email for an approved invitation:
  * the marker is created exclusively and never removed. A run that finds it refuses, so a rerun or a concurrent run can
- * never send a second email for the same approval; a new invitation needs a new approval.
+ * never send a second email for the same approval. It also closes the pending invitation (the marker and any stored approved
+ * grant stay), so an attempt interrupted after the claim does not leave the invitation waiting forever: the next run asks the
+ * owner afresh, and the old approval is never used again.
  */
 export function claimInviteSend(pending: PendingInvite): void {
   mkdirOwnerOnly(pendingDir());
@@ -286,7 +290,8 @@ export function claimInviteSend(pending: PendingInvite): void {
     fs.closeSync(fs.openSync(path.join(pendingDir(), `${pending.invitationId}.sending`), 'wx', 0o600));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new CourierError('invite-in-progress', 'This invitation was already sent or an earlier attempt did not finish; nothing more was sent. Start a new invitation (a new owner approval) to invite again.');
+      closePending(pending);
+      throw new CourierError('invite-in-progress', 'This invitation was already sent or an earlier attempt did not finish; nothing more was sent. Run the command again to start a new invitation (a new owner approval).');
     }
     throw error;
   }
