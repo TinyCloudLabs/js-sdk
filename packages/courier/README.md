@@ -958,6 +958,6 @@ Details: TC-712
 
 ### Pairing access and renewal
 
-Each side of a pairing gives the other read access for up to 30 days at a time. While your own access to TinyCloud is live, Courier renews your side before it runs out. To stop sharing with a peer, revoke the pairing. A renewal Courier already published can stay usable until Courier next runs, and never past its own end date (at most 30 days).
+Each side of a pairing gives the other read access for up to 30 days at a time. While your own access to TinyCloud is live, Courier renews your side before it runs out. To stop sharing with a peer, revoke the pairing.
 
 Courier requests owner approval ahead of the owner's grant ending; approve it in OpenKey, then run `courier init --wait`. After access expires, a new pairing is required. A watcher starting with expired owner access makes no network requests; use `courier init --request` for the normal owner approval flow.

@@ -64,7 +64,7 @@ export function cmdStatus(args: ParsedArgs): void {
   }
   if (owner.state === 'unavailable') console.log(`Courier couldn't create an approval request. Run \`${cmd('init --request')}\` to try again.`);
   if (owner.state === 'requested') console.log(`Courier needs your approval to keep renewing access. Approve the request in OpenKey, then run \`${cmd('init --wait')}\`.`);
-  console.log('To stop sharing with a peer, revoke the pairing. A renewal Courier already published can stay usable until Courier next runs, and never past its own end date (at most 30 days).');
+  console.log('To stop sharing with a peer, revoke the pairing.');
   console.log("Showing saved expiry times only. This doesn't contact peers or check renewals.");
   console.log("Inbound: your access to the peer. Outbound: the peer's access to you (latest saved grant).");
   if (!output.peers.length) console.log('No saved peers.');
