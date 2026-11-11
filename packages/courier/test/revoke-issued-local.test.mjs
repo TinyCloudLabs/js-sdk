@@ -103,7 +103,7 @@ test('local node: healthy peer read, cmdRevoke all children/current replacement,
     if (new URL(input instanceof Request ? input.url : String(input)).pathname === '/revoke' && ++revokes === 2) return new Response('injected local outage', { status: 503 });
     return realFetch(input, init);
   };
-  try { await assert.rejects(cmdRevoke(parseArgs(['bob'])), /pairing retained for retry/); }
+  try { await assert.rejects(cmdRevoke(parseArgs(['bob'])), /The pairing is kept.*revoke bob/); }
   finally { globalThis.fetch = realFetch; }
   const progress = loadProfile().peers.bob;
   assert.ok(progress);
@@ -132,5 +132,6 @@ test('local node: healthy peer read, cmdRevoke all children/current replacement,
   assert.equal(listed.data.find((r) => r.cid === other.delegation.cid)?.status, 'active');
   const again = await na.delegationManager.revokeIssued(replacement.delegation.cid); assert.ok(again.ok);
   t.diagnostic('already-revoked issued CID succeeds idempotently; other mailbox remains active');
+  await assert.rejects(run(a, ['revoke', 'bob']), (e) => /No pairing with bob.*nothing left to do/.test(e.stderr));
   assert.equal(JSON.parse(fs.readFileSync(path.join(a, 'profile.json'))).peers.bob, undefined);
 });
