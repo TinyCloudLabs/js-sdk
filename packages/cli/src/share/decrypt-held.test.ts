@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test";
+import { ManifestValidationError } from "@tinycloud/node-sdk";
 import { sessionHoldsEncryptionDecrypt } from "./adapters.js";
 
 const network = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
 const key = `${network}/share/${"a1".repeat(16)}`;
 const DECRYPT = "tinycloud.encryption/decrypt";
-const named = () => { throw new Error("Manifest validation failed: named keys go in manifest.keys"); };
+const named = () => { throw new ManifestValidationError("named keys go in manifest.keys"); };
 const grant = (path: string, overrides: { expiry?: Date; actions?: string[]; service?: string } = {}) => ({
   expiry: overrides.expiry ?? new Date(Date.now() + 3_600_000),
   resources: [{ service: overrides.service ?? "encryption", space: "encryption", path, actions: overrides.actions ?? [DECRYPT, "tinycloud.encryption/key.create"] }],
@@ -32,6 +33,11 @@ describe("sessionHoldsEncryptionDecrypt: the named-key fallback", () => {
   });
 
   it("rethrows any other error, and the named-key error when no runtime grants can be listed", () => {
+    // Only the SDK\'s own error class with its exact message qualifies: the same text from a plain Error, or another manifest error, is rethrown.
+    const lookalike = new Error("Manifest validation failed: named keys go in manifest.keys");
+    expect(() => sessionHoldsEncryptionDecrypt(node([grant(key)], () => { throw lookalike; }), key)).toThrow(lookalike);
+    const otherManifest = new ManifestValidationError("something else is wrong");
+    expect(() => sessionHoldsEncryptionDecrypt(node([grant(key)], () => { throw otherManifest; }), key)).toThrow(otherManifest);
     const other = new Error("something else failed");
     expect(() => sessionHoldsEncryptionDecrypt(node([grant(key)], () => { throw other; }), key)).toThrow(other);
     expect(() => sessionHoldsEncryptionDecrypt({ hasRuntimePermissions: named } as never, key)).toThrow(/named keys go in manifest\.keys/);

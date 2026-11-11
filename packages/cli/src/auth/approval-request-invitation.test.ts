@@ -53,6 +53,7 @@ let requestId = "";
 const acknowledgements: string[] = [];
 const resultExpiresAt = new Date(Date.now() + 3_600_000).toISOString();
 const activations: string[] = [];
+let delegateDown = false;
 
 /** The approver: what OpenKey signs for one invitation request (a raw key grant with the Request ID field), sealed to the request's own result key. */
 async function resultFor(entry: { request: { resultEncryptionPublicJwk: { x: string; y: string } }; bodyCid: string; requestId: string }) {
@@ -134,14 +135,14 @@ beforeEach(async () => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin === "https://api.tinycloud.xyz" && url.pathname === "/v1/links") return send(server.url.origin + url.pathname, init);
     // The node's activation endpoint and location registry are answered locally; nothing else leaves the process.
-    if (url.origin === host && url.pathname === "/delegate") { activations.push(url.pathname); return Promise.resolve(Response.json({ activated: true })); }
+    if (url.origin === host && url.pathname === "/delegate") { if (delegateDown) throw new TypeError("fetch failed"); activations.push(url.pathname); return Promise.resolve(Response.json({ activated: true })); }
     if (url.origin === "https://registry.tinycloud.xyz" && /^\/v[12]\/locations\//.test(url.pathname)) {
       return Promise.resolve(new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "content-type": "application/json" } }));
     }
     if (url.origin !== server.url.origin) throw new Error(`Only the local fixture may receive requests: ${url.origin}`);
     return send(input, init);
   }, { preconnect: send.preconnect }));
-  mode = "good"; linkPosts = 0; acknowledgements.length = 0; activations.length = 0;
+  mode = "good"; delegateDown = false; linkPosts = 0; acknowledgements.length = 0; activations.length = 0;
   await rm(pendingFile(), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "default", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey", openkeyHost: "https://openkey.example" });
   await ProfileManager.setKey("approval", key);
@@ -207,6 +208,12 @@ async function signedText(bind: boolean): Promise<string> {
     issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + 3_000_000).toISOString() });
   return bind ? prepared.siwe.replace(/\nResources:/, `\nRequest ID: ${line}\nResources:`) : prepared.siwe;
 }
+// The owner really signs the replaced text: the signer accepts it, so the refusal must come from the verifier's own parse.
+async function signedTextFrom(text: string): Promise<string> {
+  const signature = await wallet.signMessage(text);
+  expect(signature.length).toBeGreaterThan(0);
+  return text;
+}
 const mine = { requestId: "a".repeat(26), bodyCid: "bafy-mine" };
 const line = `urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`;
 
@@ -228,6 +235,15 @@ test("a Request ID injected where the parser does not read it never binds, and a
   for (const text of [inject(1), inject(2), inject(3), inject(5), `${unbound}\nRequest ID: ${line}`]) {
     expect(() => assertApprovalRequestBinding(text, mine)).toThrow();
     expect(() => parseApprovalSiwe(text)).toThrow();
+  }
+  // The attack shape the signer accepts: the owner really signs the canonical text with a blank line (index 2 or 4) REPLACED by a
+  // Request ID or an Issued At line. The binding function, on its own text, refuses it.
+  for (const index of [2, 4]) {
+    for (const replacement of [`Request ID: ${line}`, `Issued At: ${new Date(Date.now() - 864_000_000).toISOString()}`]) {
+      const replaced = rows.map((row, at) => (at === index ? replacement : row)).join("\n");
+      const signedReplaced = await signedTextFrom(replaced);
+      expect(() => assertApprovalRequestBinding(signedReplaced, mine)).toThrow();
+    }
   }
   expect(parseApprovalSiwe(unbound).requestId).toBeUndefined();
   expect(() => assertApprovalRequestBinding(unbound, mine)).toThrow();
@@ -277,6 +293,23 @@ test("approveEmailInviteKey: with the real did:pkh owner and did:key session, th
   expect(installed.map((resource) => resource.path)).toEqual([`${network}/share/${KEY_ID}`]);
   expect([...installed[0]!.actions].sort()).toEqual([...pair].sort());
   expect(node.getVerifiedSessionCapabilities().some((entry) => entry.service === "tinycloud.encryption")).toBe(false);
+  expect(acknowledgements).toHaveLength(1);
+  expect(await readJson(pendingFile())).toEqual([]);
+});
+
+test("approveEmailInviteKey: a host that cannot be reached keeps the approved request pending (not taken); the next run installs the same approval", async () => {
+  const node = await realSessionNode();
+  const ask = () => approveEmailInviteKey({ node: node as unknown as TinyCloudNode, profile: "approval", recipientEmail: "reader@example.com", subjectName: "note.md", subjectKind: "file", accessExpiresAt: access });
+  const access = new Date(Math.floor((Date.now() + 3_600_000) / 1000) * 1000);
+  delegateDown = true;
+  await expect(ask()).rejects.toMatchObject({ code: "UNAVAILABLE" });
+  expect(acknowledgements).toEqual([]);
+  expect((await readJson<unknown[]>(pendingFile()))!).toHaveLength(1);
+  expect(node.getRuntimePermissionDelegations()).toEqual([]);
+  expect(linkPosts).toBe(1);
+  delegateDown = false;
+  expect(await ask()).toMatchObject({ shareId: KEY_ID });
+  expect(linkPosts).toBe(1);
   expect(acknowledgements).toHaveLength(1);
   expect(await readJson(pendingFile())).toEqual([]);
 });

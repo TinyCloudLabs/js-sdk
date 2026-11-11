@@ -55,7 +55,7 @@ import {
   revokePolicyRootV3,
   signCompactUcanAuthorization,
 } from "@tinycloud/sdk-core";
-import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
+import { extractSiweExpiration, InvalidRestoredSessionError, ManifestValidationError, type TinyCloudNode } from "@tinycloud/node-sdk";
 import {
   AddressedShareOverLimitError,
   assertAddressedShareFits,
@@ -118,12 +118,14 @@ async function removeOverLimitShare(input: {
 }
 
 /** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
+/** The SDK's own refusal to evaluate a share-key path as a manifest permission (`ManifestValidationError` prefixes its message). */
+const NAMED_KEY_PATH_MESSAGE = "Manifest validation failed: named keys go in manifest.keys";
 export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions"> & Partial<Pick<TinyCloudNode, "getRuntimePermissionDelegations">>, networkId: string): boolean {
   try {
     return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
   } catch (error) {
     // The SDK will not evaluate a named-key path as a manifest permission. An exact key is held only through a runtime grant, so ask those.
-    if (!/named keys go in manifest\.keys/.test(error instanceof Error ? error.message : "") || node.getRuntimePermissionDelegations === undefined) throw error;
+    if (!(error instanceof ManifestValidationError) || error.message !== NAMED_KEY_PATH_MESSAGE || node.getRuntimePermissionDelegations === undefined) throw error;
     // Only a live runtime grant that names exactly this key (not a prefix or the network) and carries decrypt counts.
     const now = Date.now();
     return node.getRuntimePermissionDelegations().some((delegation) => delegation.expiry.getTime() > now &&

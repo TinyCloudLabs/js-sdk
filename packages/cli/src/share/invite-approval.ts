@@ -8,6 +8,11 @@ import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 
 const DAY_MS = 86_400_000;
+const TRANSIENT_ACTIVATION_CODES = new Set(["NODE_NOT_RESPONDING", "registry_unavailable", "ACTIVATION_TRANSPORT_FAILED"]);
+function activationUnavailable(error: unknown): boolean {
+  const { reason, code } = (error ?? {}) as { reason?: unknown; code?: unknown };
+  return reason === "activation_unavailable" || (typeof code === "string" && TRANSIENT_ACTIVATION_CODES.has(code));
+}
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /** A ULID: 48 bits of time, 80 random bits, Crockford base32. */
@@ -75,6 +80,10 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
     ...(request.onApprovalRequest === undefined ? {} : { onApprovalRequest: request.onApprovalRequest }),
   });
   const grant = invitationGrantOf(delegation, key);
+  // Every deterministic check passes before anything is installed or taken: the approval was signed for THIS share's access date.
+  if (context.accessExpiresAt !== accessExpiresAt) {
+    throw new CLIError("APPROVAL_RESULT_INVALID", "The approval was not signed for this share's expiry; nothing was installed or sent.", ExitCode.PERMISSION_DENIED);
+  }
   const entryKey = grant.permissions[0]!;
   const portable: PortableDelegation = {
     cid: delegation.delegationCid, delegationHeader: { Authorization: delegation.delegationHeader.Authorization }, spaceId: delegation.spaceId,
@@ -93,7 +102,11 @@ export const approveEmailInviteKey: EmailInviteApprover = async (request) => {
       },
     });
   } catch (error) {
-    throw new CLIError("APPROVAL_RESULT_INVALID", `The invitation approval could not be installed for this profile (${(error as { code?: string }).code ?? "refused"}); no invitation was sent.`, ExitCode.PERMISSION_DENIED);
+    // A host or registry that could not be reached says nothing about the approval: it stays pending (not taken) and the next run installs it.
+    if (activationUnavailable(error)) {
+      throw new CLIError("UNAVAILABLE", "The TinyCloud host could not be reached to install the invitation approval; nothing was sent. Run the same command again to continue with the same approval.", ExitCode.NETWORK_ERROR);
+    }
+    throw new CLIError("APPROVAL_RESULT_INVALID", `The invitation approval could not be installed for this profile (${(error as { reason?: string; code?: string }).reason ?? (error as { code?: string }).code ?? "refused"}); no invitation was sent.`, ExitCode.PERMISSION_DENIED);
   }
   // Taking the approval makes it single-use: a send that fails from here on needs a new approval.
   await takeInvitationApproval(profile, delegation);
