@@ -27,6 +27,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
+import { collectMessages, validateMessageSelection, renderMessageOutcomes, type MessageReadOutcome } from './message-read.js';
 import { collectThread, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
@@ -661,20 +662,25 @@ export async function cmdInbox(args: ParsedArgs) {
 export type { ThreadEntry } from './thread.js';
 
 export async function cmdRead(args: ParsedArgs) {
+  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--message id]… [--json]')}`);
+  const messageIds = args.all('message');
+  if (args.has('message')) validateMessageSelection(threadId, args.get('peer'), messageIds);
   const { profile, node } = await ctx();
-  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
-  const result = await collectThread({
-    threadId,
-    selfKv: node.kv,
-    peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
-    exactPeer: Boolean(args.get('peer')),
-    kvFor: (peer) => peerKv(node, profile, peer),
-  });
-  if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
+  const result: Awaited<ReturnType<typeof collectThread>> & { outcomes?: MessageReadOutcome[] } = args.has('message')
+    ? await collectMessages({ threadId, peer: getPeer(profile, args.get('peer')!), messageIds, selfKv: node.kv,
+      kvFor: (peer) => peerKv(node, profile, peer) })
+    : await collectThread({
+      threadId,
+      selfKv: node.kv,
+      peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
+      exactPeer: Boolean(args.get('peer')),
+      kvFor: (peer) => peerKv(node, profile, peer),
+    });
+  if (!args.has('message') && !result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
   if (args.has('json')) {
-    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');
+    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, args.has('message') ? undefined : 2) + '\n');
   } else {
-    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors));
+    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors) + (result.outcomes ? renderMessageOutcomes(args.get('peer')!, result.outcomes) : ''));
   }
   for (const error of result.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
 }

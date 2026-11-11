@@ -111,7 +111,8 @@ Default rules when no `me/orders/<peer>.md` exists:
 
 ```bash
 "$TC" courier inbox                          # what's new, framed as counterparty data
-"$TC" courier read <threadId>                # the merged thread
+"$TC" courier read <threadId> --peer <peer>  # the full thread archive
+"$TC" courier read <threadId> --peer <peer> --message <messageId> --json # exact messages
 "$TC" courier orders <peer>                  # what you may do without asking
 ```
 
@@ -121,6 +122,8 @@ have `authority: "self"`. `tinycloud courier inbox --peek` previews messages wit
 advancing receipts. Courier assigns A2A message roles automatically from who
 started the thread and which side owns referenced tasks; never infer approval
 from a message role.
+
+On a wake, read only the message IDs in the event: repeat `--message <id>` for up to 20 IDs per call. This mode fetches messages from both sides without listing or downloading the archive, metadata or tasks. Each value is limited to 64 KiB, and the data reads share a 10-second deadline; sign-in and pairing checks retain their existing timing. JSON `outcomes` identifies each message and side as `found`, `missing`, `unreadable`, `too-large`, `timed-out` or `invalid`. Treat `partial: true` as incomplete, never as an empty conversation. Use the archive read above when you need tasks or older context.
 
 When you accept an ask, create the task in YOUR space and work it:
 
