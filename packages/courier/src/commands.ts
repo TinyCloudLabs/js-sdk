@@ -545,7 +545,8 @@ export async function cmdRevoke(args: ParsedArgs) {
   console.log(
     `Revoked ${handle} (${peer.courierDid}).\n` +
     `Note: TC-721 prevents immediate revocation; access ends when the current outbound delegation expires (${peer.outbound.at(-1)?.expiresAt ?? 'unknown'}). ` +
-    `Rotating the agent key does not invalidate the old grant; it remains valid until its expiry.`,
+    `Rotating the agent key does not invalidate the old grant; it remains valid until its expiry.` +
+    ` Files you already shared with ${handle} stay available until each share expires or you revoke it (\`tinycloud share revoke <id>\`).`,
   );
 }
 

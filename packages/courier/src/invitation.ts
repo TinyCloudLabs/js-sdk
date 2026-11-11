@@ -23,7 +23,10 @@ import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
 import { activateSession, INVITATION_MODES, selectedSession, sessionKey, validSessionId } from './guided.js';
 import type { CourierSession, InvitationMode } from './guided.js';
-import { canonicalInviteEmail, isShareLink, newShareId, receiveEmailInvitation, requireInvitationKeyAuthority, sendEmailInvitation } from './email-invitation.js';
+import { canonicalInviteEmail, isShareLink, receiveEmailInvitation, sendEmailInvitation } from './email-invitation.js';
+import { claimInviteSend, closeInvite, findPendingInvite, markInviteSent, newPendingInvite, obtainInviteKey, savePendingInvite } from './invite-approval.js';
+import type { InviteApprovalTransport, PendingInvite } from './invite-approval.js';
+import { openKeyInviteTransport } from './invite-openkey.js';
 import { inviteNextLine, invitePendingNextLine, inviteServeNextLine, nextOnInvitePending } from './next-line.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
@@ -253,12 +256,12 @@ export async function serveInvitation(node: TinyCloudNode, profile: Profile, bod
 }
 
 /** Build one invitation with its pairing relay and store it as this issuer's state. Sends nothing. */
-export async function issueInvitation(node: TinyCloudNode, profile: Profile, session: CourierSession, mode: CourierInvitation['mode'], recipient: string | undefined): Promise<CourierInvitation> {
-  const id = ulid();
+export async function issueInvitation(node: TinyCloudNode, profile: Profile, session: CourierSession, mode: CourierInvitation['mode'], recipient: string | undefined, fixed?: { id: string; expiresAt: string }): Promise<CourierInvitation> {
+  const id = fixed?.id ?? ulid();
   const manager = new NodeWasmBindings().createSessionManager();
   const keyId = manager.createSessionKey('courier-relay');
   const key: AgentKey = { v: 1, did: manager.getDID(keyId), jwk: JSON.parse(manager.jwk(keyId)!), createdAt: new Date().toISOString() };
-  const expiresAt = new Date(Math.floor(Math.min(Date.now() + 86400000, Date.parse(profile.grantExpiresAt!)) / 1000) * 1000).toISOString();
+  const expiresAt = fixed?.expiresAt ?? new Date(Math.floor(Math.min(Date.now() + 86400000, Date.parse(profile.grantExpiresAt!)) / 1000) * 1000).toISOString();
   const body: CourierInvitation = {
     type: 'courier-invitation', v: 1, id, issuer: profile.courierDid, host: profile.host, session, mode,
     ...(recipient ? { recipient } : {}), expiresAt, artifact: artifactA(profile, `chat-${id}-recipient`, `chat-${id}-issuer`), relay: { key, delegation: '' },
@@ -273,11 +276,18 @@ export async function issueInvitation(node: TinyCloudNode, profile: Profile, ses
 /** Test seams: how the profile's node is opened, where the share id comes from, and the Share step. */
 export interface InviteDeps {
   node?: (profile: Profile) => Promise<TinyCloudNode>;
-  shareId?: () => string;
   send?: typeof sendEmailInvitation;
+  /** The approver for a per-invitation key; OpenKey by default. */
+  approval?: InviteApprovalTransport;
 }
 
-export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promise<void> {
+/** The command. Its collaborators (node, approver, sender) are fixed: nothing the embedder passes can stand in for the owner's approval. */
+export function cmdInvite(args: ParsedArgs): Promise<void> {
+  return runInvite(args, {});
+}
+
+/** Test boundary: the same command with injected collaborators. Not exported from the package entry point. */
+export async function runInvite(args: ParsedArgs, deps: InviteDeps): Promise<void> {
   const profile = loadProfile();
   const node = await (deps.node ?? courierNode)(profile);
   const wait = waitSeconds(args);
@@ -308,16 +318,55 @@ export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promis
   } else if (args.has('recipient')) throw new CourierError('usage', '--recipient is only valid in named mode.');
   const selected = await selectedSession(node, profile, requireFlag(args, 'session', 'courier invite --session <id>'), args.get('peer'));
   const session = { sessionId: selected.sessionId, subject: selected.subject, createdAt: selected.createdAt };
-  // Email invitations decide the share id and check authority for exactly that key BEFORE anything is created: no relay
-  // delegation, no invitation state. The same id then goes to the Share step.
-  const shareId = mode === 'email' ? (deps.shareId ?? newShareId)() : undefined;
-  if (shareId !== undefined) requireInvitationKeyAuthority(node, profile, shareId);
-  const body = await issueInvitation(node, profile, session, mode as CourierInvitation['mode'], recipient);
+  // Email invitations need an owner approval for exactly one Share key, chosen by the approver. Until it is given nothing
+  // is created: no relay delegation, invitation state, Share key, link or email.
+  let shareId: string | undefined;
+  let fixed: { id: string; expiresAt: string } | undefined;
+  let pending: PendingInvite | undefined;
+  if (mode === 'email') {
+    const now = Date.now();
+    pending = findPendingInvite(profile, session.sessionId, recipient!, now) ?? newPendingInvite(profile, { sessionId: session.sessionId, subjectName: session.subject, recipient: recipient! }, now);
+    savePendingInvite(pending);
+    let approved;
+    try {
+      approved = await obtainInviteKey({ node, profile, key: loadKey(), transport: deps.approval ?? openKeyInviteTransport(), pending, waitMs: wait * 1000,
+        onApprovalUrl: (url) => console.error(`Approve this invitation in OpenKey (accept by ${pending!.acceptanceExpiresAt}): ${url}`) });
+    } catch (error) {
+      if (!(error instanceof CourierError) || (error.code !== 'approval-unavailable' && error.code !== 'invite-approval-refused')) throw error;
+      throw new CourierError('invite-authority-missing',
+        "No owner approval for this invitation's share key could be requested, so nothing was created: no pairing relay delegation, invitation state, Share key, link or email.");
+    }
+    if (approved.status === 'awaiting') {
+      throw new CourierError('invite-approval-pending', `Waiting for the owner's approval (accept by ${pending.acceptanceExpiresAt}): ${approved.approvalUrl}. Run the same command again to continue; nothing has been created or sent.`);
+    }
+    if (session.sessionId !== pending.sessionId || session.subject !== pending.subjectName) {
+      closeInvite(pending);
+      throw new CourierError('bad-invitation', 'The session changed since the owner approved this invitation; nothing was sent. Start a new invitation.');
+    }
+    claimInviteSend(pending);
+    shareId = approved.shareId;
+    fixed = { id: pending.invitationId, expiresAt: pending.acceptanceExpiresAt };
+  }
+  let body: CourierInvitation;
+  try {
+    body = await issueInvitation(node, profile, session, mode as CourierInvitation['mode'], recipient, fixed);
+    if (shareId !== undefined) {
+      if (pending && (body.id !== pending.invitationId || body.recipient !== pending.recipient || body.expiresAt !== pending.acceptanceExpiresAt || body.session.sessionId !== pending.sessionId)) {
+        throw new CourierError('bad-invitation', 'The invitation differs from the one that was approved; nothing was sent.');
+      }
+      // The bearer link goes to the mailbox only; it is never printed or stored.
+      await (deps.send ?? sendEmailInvitation)(node, profile, body, { shareId: () => shareId! });
+      if (pending) markInviteSent(pending);
+    }
+  } catch (error) {
+    // A send that failed after the approval was claimed ends this invitation: the claim stays (no second send for the same
+    // approval) and the pending record is closed, so the next run asks the owner again instead of waiting out the window.
+    if (pending) closeInvite(pending);
+    throw error;
+  }
   const id = body.id;
   const expiresAt = body.expiresAt;
   if (shareId !== undefined) {
-    // The bearer link goes to the mailbox only; it is never printed or stored.
-    await (deps.send ?? sendEmailInvitation)(node, profile, body, { shareId: () => shareId });
     console.log(JSON.stringify({ status: 'invitation', invitationId: id, sessionId: session.sessionId, mode, recipient, expiresAt }));
     return serveInvitation(node, profile, body, wait);
   }

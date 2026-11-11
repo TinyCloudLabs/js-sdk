@@ -55,7 +55,7 @@ Setup & pairing (humans run these):
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew both directions; humans or watcher only
   pair renew <peer> --renew-artifact [--force]  Emit renewed C artifact for handoff; receiver runs pair accept
-  revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
+  revoke <peer>                    Stop renewing and remove the peer; their access ends when the current grant expires. Files you already shared stay available until each share expires or you revoke it (\`tinycloud share revoke <id>\`).
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]

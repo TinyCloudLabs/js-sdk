@@ -1,5 +1,6 @@
 import { extractSiweExpiration } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
+import { SiweMessage } from '@tinycloud/sdk-core';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, peerReadPermissions } from './keys.js';
 import { PEER_DELEGATION_EXPIRY } from './pairing.js';
@@ -138,6 +139,71 @@ export function holdsInvitationKeyAuthority(caps: readonly PermissionEntry[], ow
   const key = `${ownerEncryptionNetwork(ownerDid)}/share/${shareId}`;
   const { invitation } = splitInvitationAuthority(caps, ownerDid);
   return SHARE_KEY_ACTIONS.every((action) => invitation.some((entry) => entry.path === key && entry.actions.includes(action)));
+}
+
+const INVITE_APPROVAL_MAX_MS = DAY_MS;
+
+/**
+ * The signed result of ONE per-invitation approval: only `key.create` + `decrypt` on exactly one canonical
+ * `<owner default network>/share/<32 hex>` key and nothing else, issued for this agent and lasting no longer than the
+ * acceptance window (itself at most 24 hours). Returns the key id the approver chose; it is never taken from anywhere else.
+ */
+export function assertInvitationApprovalGrant(rawCaps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, options: { ownerDid: string; acceptanceExpiresAt: Date; now?: number }): string {
+  const now = options.now ?? Date.now();
+  // The path pins the key and its owner; the space an encryption entry is reported under (`encryption`, none, or the
+  // grant's own space) names no further resource, so it is not part of what is compared.
+  const caps = rawCaps.map((entry) => (entry.service === 'tinycloud.encryption' ? { ...entry, space: '' } : entry));
+  const { base, invitation } = splitInvitationAuthority(caps, options.ownerDid);
+  if (base.length > 0 || invitation.length === 0) throw new CourierError('bad-grant', 'The approval does not hold exactly one invitation key and nothing else.');
+  const prefix = `${ownerEncryptionNetwork(options.ownerDid)}/share/`;
+  const shareId = invitation[0].path.slice(prefix.length);
+  if (!holdsInvitationKeyAuthority(caps, options.ownerDid, shareId)) throw new CourierError('bad-grant', 'The approval does not hold key.create and decrypt on one invitation key.');
+  const { issuedAt, expiresAt } = times;
+  if (!issuedAt || !expiresAt) throw new CourierError('bad-grant', 'The approval is missing Issued At or its expiry.');
+  if (issuedAt.getTime() > now + CLOCK_SKEW_MS) throw new CourierError('bad-grant', 'The approval was issued in the future.');
+  if (expiresAt.getTime() <= now) throw new CourierError('grant-expired', 'The invitation approval has expired.');
+  // Exact bounds: the approval lasts at most a day, and never past the invitation it was requested for.
+  if (expiresAt.getTime() - issuedAt.getTime() > INVITE_APPROVAL_MAX_MS || expiresAt.getTime() > options.acceptanceExpiresAt.getTime()) {
+    throw new CourierError('grant-too-long', 'The approval lasts longer than the invitation it was requested for.');
+  }
+  return shareId;
+}
+
+/** An approval SIWE parsed once, strictly: the facts below come only from this parse, and `raw` is exactly the signed text. */
+export interface ParsedApprovalSiwe {
+  raw: string;
+  requestId: string | undefined;
+  issuedAt: Date | undefined;
+  expiresAt: Date | undefined;
+}
+
+/**
+ * Parse an owner-signed SIWE with the EIP-4361 parser, once, and accept it only if re-serialising the parsed message gives
+ * back the identical text: a line the parser skips or reads differently from the signer cannot carry a field. Everything
+ * (binding, times) is then read from this one parse; the same `raw` is what the signature is verified over.
+ */
+export function parseApprovalSiwe(siwe: string): ParsedApprovalSiwe {
+  let message: SiweMessage;
+  try { message = new SiweMessage(siwe); } catch { throw new CourierError('bad-grant', 'The approval message is not a valid sign-in message.'); }
+  if (message.prepareMessage() !== siwe) throw new CourierError('bad-grant', 'The approval message is not in its canonical form.');
+  return {
+    raw: siwe,
+    requestId: message.requestId,
+    issuedAt: message.issuedAt === undefined ? undefined : new Date(message.issuedAt),
+    expiresAt: message.expirationTime === undefined ? undefined : new Date(message.expirationTime),
+  };
+}
+
+/**
+ * The owner-signed SIWE names the one request it answers: its `Request ID` field is exactly
+ * `urn:tinycloud:approval-request:<requestId>:<bodyCid>` of THIS agent's own pending request. The field is read from the
+ * strict parse only (a string is parsed here, so a direct call cannot be satisfied by an earlier, different parse).
+ */
+export function assertApprovalRequestBinding(siwe: string | ParsedApprovalSiwe, request: { requestId: string; bodyCid: string }): void {
+  const parsed = typeof siwe === 'string' ? parseApprovalSiwe(siwe) : siwe;
+  if (parsed.requestId !== `urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`) {
+    throw new CourierError('bad-grant', 'The approval was not signed for this invitation request.');
+  }
 }
 
 /** The fixed Courier authority, exactly: any additional entry, including a share-key entry, is grant-too-broad. */
