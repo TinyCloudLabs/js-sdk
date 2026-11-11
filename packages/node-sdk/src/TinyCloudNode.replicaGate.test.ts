@@ -179,6 +179,45 @@ describe("replica gate: restore", () => {
     }
   });
 
+  test("a rejected replacement cannot cancel lazy binding for the current session", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const binding = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let loads = 0;
+    let binds = 0;
+    class ObservedRuntime extends StubRuntime {
+      override async bind() { binds++; }
+    }
+    registerReplicationLoaders({
+      ...loaders(),
+      runtime: async () => ({ ReplicationRuntime: ObservedRuntime }) as never,
+      authority: async () => {
+        if (++loads === 2) {
+          binding.resolve();
+          await release.promise;
+        }
+        return import("./replication/authority");
+      },
+    });
+    const node = replicatedNode(dir);
+    await node.restoreSession({ ...proof, replicaStamp });
+    const status = node.replication!.status();
+    await binding.promise;
+    try {
+      await expect(node.restoreSession({ ...proof, jwk: {} })).rejects.toThrow();
+    } finally {
+      release.resolve();
+    }
+    await status;
+    expect(binds).toBe(1);
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect(node.replicaStamp).toEqual(replicaStamp);
+  });
+
   test("restores when the persisted stamp matches the profile gate", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
