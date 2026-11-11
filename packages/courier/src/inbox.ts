@@ -1,3 +1,4 @@
+import { peerReadError, partialReadText, type PeerReadError } from './thread.js';
 import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { CourierError, errInfo } from './errors.js';
@@ -97,7 +98,7 @@ export async function collectInbound(input: {
       }
       if (deliveries.length) pending.set(peer.handle, deliveries);
     } catch (error) {
-      errors.push({ peer: peer.handle, ...errInfo(error) });
+      errors.push(peerReadError(peer.handle));
     }
   }
   return { items, errors, pending };
@@ -132,7 +133,8 @@ export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDel
   }
 }
 
-export function renderInboxText(items: readonly InboundItem[]): string {
+export function renderInboxText(items: readonly InboundItem[], errors: readonly PeerReadError[] = []): string {
+  if (!items.length && errors.length) return partialReadText('Inbox', errors);
   if (!items.length) return 'Inbox empty.\n';
   const lines = [COUNTERPARTY_NOTICE, ''];
   for (const item of items) {
@@ -144,7 +146,7 @@ export function renderInboxText(items: readonly InboundItem[]): string {
     lines.push(`   ${oneLine(item.text.split('\n')[0] ?? '')}`);
   }
   lines.push('', `Read a thread: ${cmd('read <threadId>')}. Orders: ${cmd('orders <peer>')}.`, '');
-  return lines.join('\n');
+  return lines.join('\n') + partialReadText('Inbox', errors);
 }
 
 export function writeOut(value: string): Promise<void> {
