@@ -475,32 +475,37 @@ async function pairRenew(args: ParsedArgs) {
     const peer = peers[0]!;
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
     if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
-    const delegation = await renewOutbound(active, peer, args.has('force'));
+    const delegation = await renewOutbound(active, peer, args.has('force'), true);
     if (!delegation) fail('renew-throttled', `Access for ${oneLine(peer.handle)} was renewed in the last 24 hours. Use --force to renew it again now.`);
     printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
     return;
   }
+  const renewed: string[] = [];
   for (const peer of peers) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
-    await renewOutbound(active, peer, args.has('force'));
+    if (await renewOutbound(active, peer, args.has('force'))) renewed.push(peer.handle);
     await installInbound(active, peer);
   }
-  printJson({ ok: true, renewed: peers.map((peer) => peer.handle) });
+  printJson({ ok: true, renewed });
 }
 
-async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<PortableDelegation | undefined> {
+async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, artifact = false): Promise<PortableDelegation | undefined> {
   return withProfileTransaction(async (profile, save) => {
     const current = getPeer(profile, peer.handle);
     if (current.courierDid !== peer.courierDid || profile.courierDid !== active.profile.courierDid) {
       fail('profile-changed', 'Pairing changed while renewal was starting; run the command again.');
     }
-    return issueOutbound({ profile, node: await courierNode(profile) }, current, force, save);
+    return issueOutbound({ profile, node: await courierNode(profile) }, current, force, save, artifact);
   });
 }
 
-async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void): Promise<PortableDelegation | undefined> {
+async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true });
-  if (result.reason === 'no-extension') fail('renew-throttled', `Courier can't extend this access under your current approval. Run \`${cmd('init --request')}\` to request a new one.`);
+  if (result.reason === 'no-extension') {
+    if (artifact) fail('renew-throttled', `Courier can't extend this access under your current approval. Run \`${cmd('init --request')}\` to request a new one.`);
+    console.error(`Courier couldn't extend access for ${oneLine(peer.handle)} yet. Their current access is unchanged.`);
+    return undefined;
+  }
   if (result.state === 'lapsed') fail('peer-expired', `Sharing with ${oneLine(peer.handle)} has expired. A new pairing is required.`);
   if (result.state === 'revoked' || result.state === 'owner-revoked') fail('peer-revoked', `Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
   if (result.state === 'unavailable') fail('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");

@@ -11,7 +11,8 @@ import { TinyCloudNode, NodeWasmBindings, PrivateKeySigner, serializeDelegation 
 import { activateSessionWithHost, DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL } from '@tinycloud/sdk-core';
 import { courierRegistryFixtureEnv, installCourierRegistryFixture } from './support/registry-fixture.mjs';
 import { courierNode, peerKv, nodeOpts } from '../dist/node.js';
-import { cmdRevoke } from '../dist/commands.js';
+import { cmdRevoke, cmdPair, cmdInit } from '../dist/commands.js';
+import { captureStdout } from './support/approval-fixture.mjs';
 import { parseArgs } from '../dist/args.js';
 import { loadProfile, saveProfile, withProfileTransaction } from '../dist/profile.js';
 import { AGENT_GRANT, k, peerReadPermissions } from '../dist/keys.js';
@@ -113,6 +114,45 @@ test('local node: interim exact successor, parent clamp and peer collection', { 
   await peerKv(nb, received, received.peers[happy.bHandle]);
   assert.equal(loadProfile().peers[happy.bHandle].inbound.cid, result.delegation.cid);
   t.diagnostic('proofless issued listing; strictly later exact signed successor; actual parent clamp; conditional publication; independent peer collection');
+  const later = await pair('bulk-later');
+  const remoteRenewal = (await nb.delegateTo(alice.profile.courierDid, peerReadPermissions(happy.bHandle, bob.profile.spaceId, happy.sessionId), { expiry: '10m', requireActivation: true })).delegation;
+  assert.ok((await nb.kv.put(k.peerDelegation(happy.bHandle, happy.sessionId), { v: 0, delegation: serializeDelegation(remoteRenewal) }, { prefix: '' })).ok);
+  process.env.COURIER_HOME = alice.home;
+  const cappedBefore = structuredClone(loadProfile().peers[happy.aHandle].outbound);
+  const publishedBefore = await na.kv.get(k.peerDelegation(happy.aHandle, happy.sessionId), { prefix: '' });
+  const delegateOriginal = TinyCloudNode.prototype.delegateTo; const signedPaths = [];
+  TinyCloudNode.prototype.delegateTo = function (audience, entries, options) {
+    signedPaths.push(...entries.map(entry => entry.path));
+    return delegateOriginal.call(this, audience, entries, options);
+  };
+  try {
+    const bulk = await captureStdout(() => cmdPair(parseArgs(['renew', '--force'])));
+    const bulkOutput = JSON.parse(bulk.stdout);
+    assert.deepEqual(bulkOutput.renewed, [later.aHandle], 'only actual issuance is reported as renewed');
+    assert.deepEqual(loadProfile().peers[happy.aHandle].outbound, cappedBefore);
+    assert.equal(loadProfile().peers[happy.aHandle].inbound.cid, remoteRenewal.cid, 'capped peer still collects its live inbound replacement');
+    assert.ok(!signedPaths.some(value => value.includes(`/to/${happy.aHandle}/`)), 'capped peer is never signed');
+    assert.ok(signedPaths.some(value => value.includes(`/to/${later.aHandle}/`)), 'later eligible peer is signed');
+    const publishedAfter = await na.kv.get(k.peerDelegation(happy.aHandle, happy.sessionId), { prefix: '' });
+    assert.equal(publishedAfter.data.headers.etag, publishedBefore.data.headers.etag, 'capped publication is unchanged');
+  } finally { TinyCloudNode.prototype.delegateTo = delegateOriginal; }
+  const initLater = await pair('init-later');
+  process.env.COURIER_HOME = alice.home;
+  const cappedAtInit = structuredClone(loadProfile().peers[happy.aHandle].outbound);
+  signedPaths.length = 0;
+  TinyCloudNode.prototype.delegateTo = function (audience, entries, options) {
+    signedPaths.push(...entries.map(entry => entry.path));
+    return delegateOriginal.call(this, audience, entries, options);
+  };
+  try {
+    const initialized = await captureStdout(() => cmdInit(parseArgs(['--grant-file', file('same-owner-grant.json', alice.grant)])));
+    assert.equal(JSON.parse(initialized.stdout).ok, true, 'successful grant install is not turned into an init failure');
+    assert.deepEqual(loadProfile().peers[happy.aHandle].outbound, cappedAtInit);
+    assert.ok(!signedPaths.some(value => value.includes(`/to/${happy.aHandle}/`)));
+    assert.ok(signedPaths.some(value => value.includes(`/to/${initLater.aHandle}/`)), 'finishInit continues to the later eligible peer');
+  } finally { TinyCloudNode.prototype.delegateTo = delegateOriginal; }
+  t.diagnostic('bulk and successful init skip a capped peer without signing/publishing, continue later peers, and bulk still collects inbound');
+
   for (const variant of ['action', 'audience', 'caveat', 'parent-end']) {
     const p = await pair(variant); const delegate = na.delegateTo.bind(na); let candidate;
     na.delegateTo = async (audience, entries, options) => {

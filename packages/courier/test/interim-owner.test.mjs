@@ -44,13 +44,13 @@ async function withoutNetwork(fn) {
 test('eight-day threshold asks with at least seven days lead on a daily cadence', async () => {
   assert.equal(OWNER_ASK_AHEAD_MS, 8 * DAY);
   await fixture(20);
-  await withoutNetwork(async calls => { assert.equal((await preflightOwner()).state, 'live'); assert.equal(calls(), 0); });
+  await withoutNetwork(async calls => { assert.equal((await preflightOwner({ request: true })).state, 'live'); assert.equal(calls(), 0); });
 });
 
 test('one failed automatic create is durable across concurrent turns and restart; no repeat or polling', async () => {
   const { home } = await fixture(7);
   await withoutNetwork(async calls => {
-    const results = await Promise.all([preflightOwner(), preflightOwner()]);
+    const results = await Promise.all([preflightOwner({ request: true }), preflightOwner({ request: true })]);
     assert.equal(results[0].state, 'approval-unavailable');
     assert.equal(results[1].state, 'approval-unavailable');
     assert.equal(calls(), 1);
@@ -61,7 +61,7 @@ test('one failed automatic create is durable across concurrent turns and restart
     assert.equal(loadProfile().version, 4);
     assert.equal(fs.statSync(path.join(home, 'renewal-owner.json')).mode & 0o777, 0o600);
     assert.equal(fs.statSync(home).mode & 0o777, 0o700);
-    await preflightOwner();
+    await preflightOwner({ request: true });
     assert.equal(calls(), 1);
   });
 });
@@ -70,8 +70,8 @@ test('lapsed startup makes zero network calls even without a saved episode', asy
   const f = await fixture(7);
   writeSecure(path.join(f.home, 'grant.json'), { ...f.grant, expiresAt: new Date(0).toISOString() });
   await withoutNetwork(async calls => {
-    assert.equal((await preflightOwner()).state, 'approval-required');
-    assert.equal((await preflightOwner()).state, 'approval-required');
+    assert.equal((await preflightOwner({ request: true })).state, 'approval-required');
+    assert.equal((await preflightOwner({ request: true })).state, 'approval-required');
     assert.equal(calls(), 0);
     assert.equal(loadOwnerEpisode(), undefined);
   });
@@ -81,15 +81,15 @@ test('ambiguous creating episode never creates a second request', async () => {
   const f = await fixture(7);
   writeSecure(path.join(f.home, 'renewal-owner.json'), { ownerGrantCid: f.grant.delegationCid, expiresAt: f.grant.expiresAt,
     courierDid: f.profile.courierDid, intentHash: requestHash(approvalIntent(f.profile, f.key)), requestId: null, requestHash: null, phase: 'creating' });
-  await withoutNetwork(async calls => { assert.equal((await preflightOwner()).state, 'approval-unavailable'); assert.equal(calls(), 0); });
+  await withoutNetwork(async calls => { assert.equal((await preflightOwner({ request: true })).state, 'approval-unavailable'); assert.equal(calls(), 0); });
 });
 
 test('owner revocation or a terminal authorization refusal never auto-asks or polls', async () => {
   const f = await fixture(7);
   await markOwnerRefused();
   await withoutNetwork(async calls => {
-    assert.equal((await preflightOwner()).state, 'revoked');
-    assert.equal((await preflightOwner()).state, 'revoked');
+    assert.equal((await preflightOwner({ request: true })).state, 'revoked');
+    assert.equal((await preflightOwner({ request: true })).state, 'revoked');
     assert.equal(calls(), 0);
   });
   assert.equal(loadOwnerEpisode().phase, 'refused');
@@ -100,7 +100,7 @@ test('a changed installed owner CID closes the old episode instead of reusing it
   const f = await fixture(20);
   writeSecure(path.join(f.home, 'renewal-owner.json'), { ownerGrantCid: 'prior-owner-grant', expiresAt: f.grant.expiresAt,
     courierDid: f.profile.courierDid, intentHash: 'prior-intent', requestId: 'old-request', requestHash: 'old-hash', phase: 'requested' });
-  await withoutNetwork(async calls => { assert.equal((await preflightOwner()).state, 'live'); assert.equal(calls(), 0); });
+  await withoutNetwork(async calls => { assert.equal((await preflightOwner({ request: true })).state, 'live'); assert.equal(calls(), 0); });
   assert.equal(loadOwnerEpisode().phase, 'complete');
   assert.equal(loadOwnerEpisode().requestId, 'old-request');
 });
@@ -172,4 +172,11 @@ test('an authorized own-space missing key permits one ask; failed creation is no
     assert.equal(reads, 1);
     assert.equal(calls(), 1);
   });
+});
+
+
+test('owner preflight defaults to local-only even when an owner request is due', async () => {
+  await fixture(7);
+  await withoutNetwork(async calls => { assert.equal((await preflightOwner()).state, 'live'); assert.equal(calls(), 0); });
+  assert.equal(loadOwnerEpisode(), undefined);
 });
