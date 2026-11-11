@@ -97,6 +97,40 @@ function trackResponse(response: FetchResponse): { response: FetchResponse; fini
   return { response: tracked, finished };
 }
 
+async function sendResponse(
+  pending: Promise<FetchResponse>,
+  resolve: (response: FetchResponse) => void,
+): Promise<number> {
+  const response = await pending;
+  const pause = await busyPause(response);
+  const tracked = trackResponse(response);
+  resolve(tracked.response);
+  await tracked.finished;
+  return pause;
+}
+
+function nodeRequest(lane: Lane, foreground: boolean, send: () => Promise<FetchResponse>): Promise<FetchResponse> {
+  if (foreground) lane.foreground++;
+  else lane.background = true;
+  return new Promise<FetchResponse>((resolve, reject) => {
+    void (async () => {
+      try {
+        const pause = await sendResponse(send(), resolve);
+        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + pause);
+      } catch (error) {
+        reject(error);
+      } finally {
+        if (foreground) {
+          lane.foreground--;
+          lane.resumeAt = Math.max(lane.resumeAt, performance.now() + FOREGROUND_QUIET_MS);
+        } else {
+          lane.background = false;
+        }
+      }
+    })();
+  });
+}
+
 /** Hold foreground activity through retries. Browser Web Locks also reach replica workers. */
 export async function foregroundRequest(
   url: string,
@@ -110,11 +144,7 @@ export async function foregroundRequest(
       void locks.request(`tinycloud:foreground:${host}`, { mode: "shared", signal }, async () => {
         let pause = FOREGROUND_QUIET_MS;
         try {
-          const response = await send();
-          pause = Math.max(pause, await busyPause(response));
-          const tracked = trackResponse(response);
-          resolve(tracked.response);
-          await tracked.finished;
+          pause = Math.max(pause, await sendResponse(send(), resolve));
         } catch (error) {
           reject(error);
         }
@@ -123,25 +153,7 @@ export async function foregroundRequest(
     });
   }
 
-  const lane = laneFor(host);
-  lane.foreground++;
-  return new Promise<FetchResponse>((resolve, reject) => {
-    void (async () => {
-      try {
-        const response = await send();
-        const pause = await busyPause(response);
-        const tracked = trackResponse(response);
-        resolve(tracked.response);
-        await tracked.finished;
-        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + pause);
-      } catch (error) {
-        reject(error);
-      } finally {
-        lane.foreground--;
-        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + FOREGROUND_QUIET_MS);
-      }
-    })();
-  });
+  return nodeRequest(laneFor(host), true, send);
 }
 
 export async function backgroundRequest(
@@ -166,11 +178,7 @@ export async function backgroundRequest(
           });
           if (!request) await abortableSleep(25, signal);
         }
-        const response = await request;
-        const pause = await busyPause(response);
-        const tracked = trackResponse(response);
-        resolve(tracked.response);
-        await tracked.finished;
+        const pause = await sendResponse(request, resolve);
         if (pause) await new Promise<void>((resolve) => setTimeout(resolve, pause));
       }).catch(reject);
     });
@@ -183,25 +191,8 @@ export async function backgroundRequest(
     if (!lane.foreground && !lane.background && delay <= 0) break;
     await abortableSleep(lane.foreground || lane.background ? 25 : delay, signal);
   }
-  lane.background = true;
-  return new Promise<FetchResponse>((resolve, reject) => {
-    void (async () => {
-      try {
-        const response = await send();
-        const pause = await busyPause(response);
-        const tracked = trackResponse(response);
-        resolve(tracked.response);
-        await tracked.finished;
-        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + pause);
-      } catch (error) {
-        reject(error);
-      } finally {
-        lane.background = false;
-      }
-    })();
-  });
+  return nodeRequest(lane, false, send);
 }
-
 
 /** Apply the background lane to a node request made outside a ServiceContext. */
 export function backgroundFetch(fetch: FetchFunction): FetchFunction {
