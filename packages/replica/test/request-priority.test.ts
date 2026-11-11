@@ -95,6 +95,33 @@ test("a busy reply pauses other background contexts and bounds foreground retry"
   expect(performance.now() - pausedAt).toBeGreaterThanOrEqual(990);
 });
 
+test("background concurrency includes streamed response bodies", async () => {
+  const host = "https://priority-stream.fixture";
+  let finish!: () => void;
+  const first = new ServiceContext({
+    hosts: [host], invoke: () => ({}), priority: "background",
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("first"));
+        finish = () => controller.close();
+      },
+    })),
+  });
+  let secondStarted = false;
+  const second = new ServiceContext({
+    hosts: [host], invoke: () => ({}), priority: "background",
+    fetch: async () => { secondStarted = true; return new Response("second"); },
+  });
+  const response = await first.fetch(`${host}/invoke`);
+  const controller = new AbortController();
+  const queued = second.fetch(`${host}/invoke`, { signal: controller.signal });
+  await sleep(30);
+  expect(secondStarted).toBe(false);
+  finish();
+  expect(await response.text()).toBe("first");
+  expect(await (await queued).text()).toBe("second");
+});
+
 if (process.env.TC_TEST_BROWSER_PRIORITY === "1") {
   test("Chromium shares foreground priority between the page and two replica workers", async () => {
     const build = await Bun.build({

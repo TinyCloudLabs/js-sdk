@@ -58,6 +58,45 @@ async function busyPause(response: FetchResponse): Promise<number> {
     : 0;
 }
 
+/** Release the lane on body completion or cancellation, preserving streaming and backpressure. */
+function trackResponse(response: FetchResponse): { response: FetchResponse; finished: Promise<void> } {
+  const retry = response.retry;
+  if (!(response instanceof Response) || response.body === null) {
+    return { response, finished: Promise.resolve() };
+  }
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => { finish = resolve; });
+  const reader = response.body.getReader();
+  void reader.closed.then(finish, finish);
+  const body = new ReadableStream({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          finish();
+        } else {
+          controller.enqueue(chunk.value);
+        }
+      } catch (error) {
+        controller.error(error);
+        finish();
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason).finally(finish);
+    },
+  });
+  const tracked = new Response(body, response);
+  if (retry) (tracked as FetchResponse).retry = retry;
+  Object.defineProperties(tracked, {
+    url: { value: response.url },
+    redirected: { value: response.redirected },
+    type: { value: response.type },
+  });
+  return { response: tracked, finished };
+}
+
 /** Hold foreground activity through retries. Browser Web Locks also reach replica workers. */
 export async function foregroundRequest(
   url: string,
@@ -73,7 +112,9 @@ export async function foregroundRequest(
         try {
           const response = await send();
           pause = Math.max(pause, await busyPause(response));
-          resolve(response);
+          const tracked = trackResponse(response);
+          resolve(tracked.response);
+          await tracked.finished;
         } catch (error) {
           reject(error);
         }
@@ -84,14 +125,23 @@ export async function foregroundRequest(
 
   const lane = laneFor(host);
   lane.foreground++;
-  try {
-    const response = await send();
-    lane.resumeAt = Math.max(lane.resumeAt, performance.now() + await busyPause(response));
-    return response;
-  } finally {
-    lane.foreground--;
-    lane.resumeAt = Math.max(lane.resumeAt, performance.now() + FOREGROUND_QUIET_MS);
-  }
+  return new Promise<FetchResponse>((resolve, reject) => {
+    void (async () => {
+      try {
+        const response = await send();
+        const pause = await busyPause(response);
+        const tracked = trackResponse(response);
+        resolve(tracked.response);
+        await tracked.finished;
+        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + pause);
+      } catch (error) {
+        reject(error);
+      } finally {
+        lane.foreground--;
+        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + FOREGROUND_QUIET_MS);
+      }
+    })();
+  });
 }
 
 export async function backgroundRequest(
@@ -118,7 +168,9 @@ export async function backgroundRequest(
         }
         const response = await request;
         const pause = await busyPause(response);
-        resolve(response);
+        const tracked = trackResponse(response);
+        resolve(tracked.response);
+        await tracked.finished;
         if (pause) await new Promise<void>((resolve) => setTimeout(resolve, pause));
       }).catch(reject);
     });
@@ -132,13 +184,22 @@ export async function backgroundRequest(
     await abortableSleep(lane.foreground || lane.background ? 25 : delay, signal);
   }
   lane.background = true;
-  try {
-    const response = await send();
-    lane.resumeAt = Math.max(lane.resumeAt, performance.now() + await busyPause(response));
-    return response;
-  } finally {
-    lane.background = false;
-  }
+  return new Promise<FetchResponse>((resolve, reject) => {
+    void (async () => {
+      try {
+        const response = await send();
+        const pause = await busyPause(response);
+        const tracked = trackResponse(response);
+        resolve(tracked.response);
+        await tracked.finished;
+        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + pause);
+      } catch (error) {
+        reject(error);
+      } finally {
+        lane.background = false;
+      }
+    })();
+  });
 }
 
 
