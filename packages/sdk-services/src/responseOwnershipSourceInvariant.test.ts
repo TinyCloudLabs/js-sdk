@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import ts from "typescript";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "../../..");
@@ -116,7 +115,15 @@ function unscoped(file: string, code: string) {
 }
 
 test("every lane response acquisition uses the single ownership scope", () => {
-  const files = execFileSync("rg", ["--files", ...packages.map((name) => `packages/${name}`), "-g", "*.ts"], { cwd: root, encoding: "utf8" }).trim().split("\n")
+  const ignored = new Set(["node_modules", "dist", "target", "build", ".git", ".turbo"]);
+  function sources(directory: string): string[] {
+    return readdirSync(resolve(root, directory), { withFileTypes: true }).flatMap((entry) => {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) return ignored.has(entry.name) ? [] : sources(path);
+      return entry.isFile() && path.endsWith(".ts") ? [path] : [];
+    });
+  }
+  const files = packages.flatMap((name) => sources(`packages/${name}`))
     .filter((file) => /\/src\//.test(file) && !/(\.test\.|\.spec\.|\.d\.ts$|\/test-support\/|\/fixtures\/|\/tests\/|\/e2e\/)/.test(file));
   const failures: string[] = [];
   for (const path of files) {
