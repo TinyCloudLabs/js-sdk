@@ -58,12 +58,18 @@ expiry. The permission check does not contact the node, so a session the node
 rejects (a 401 after a revocation or a reset, for example) is still restored.
 With OpenKey, `prepareSignIn()` makes the same check.
 
-Restoring a session makes one node read, capped at 5 seconds, to learn whether
-the session's primary space is hosted. It never prompts and never fails the
-restore. Read the answer from `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or
-`"unknown"`). At sign-in the answer comes from the node's activation of the new
-session. `signIn()` on a restored session whose space is `"not-hosted"` returns
-the restored session.
+`restoreSession()` resolves from stored state. It automatically starts a
+background hosting probe, capped at 5 seconds, and reactivates stored panel
+grants. Read `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or `"unknown"`) for
+the current display hint. A stored hint applies only to the same account,
+space and host. It can be one session stale until the probe corrects it at
+runtime, and updates in storage when the signed session is next persisted.
+Older records start at `"unknown"`. The hint never grants authority or skips
+permission checks. The probe never prompts or fails the restore.
+`signIn()` waits for the probe when it restores a session. At fresh sign-in
+the hosting answer comes from the node's activation of the new session.
+`signIn()` on a restored session whose space is `"not-hosted"` returns the
+restored session.
 
 To force a fresh consent, sign out first. `signOut()` clears the stored session
 and blocks restoring until the next sign-in succeeds, so `signIn()` prompts:

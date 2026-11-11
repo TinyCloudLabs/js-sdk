@@ -155,6 +155,38 @@ async function web(options: { node?: ReturnType<typeof stubNode>; manifest?: boo
 const cids = async (storage: BrowserSessionStorage) => (await storage.loadRuntimeGrants(ADDRESS)).map((g) => g.cid);
 
 describe("the panel's request stores the panel's own grant", () => {
+  test("sign-out clears a grant write that was already in flight", async () => {
+    const env = await web({ node: stubNode({ granted: [grant("own")] }) });
+    const writing = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cleared = Promise.withResolvers<void>();
+    const save = env.sessionStorage.saveRuntimeGrants.bind(env.sessionStorage);
+    env.sessionStorage.saveRuntimeGrants = async (address, grants) => {
+      if (grants.length > 0) {
+        writing.resolve();
+        await release.promise;
+      }
+      await save(address, grants);
+    };
+    Object.assign(env.node, {
+      signOut: async () => {
+        await env.sessionStorage.clear(ADDRESS);
+        cleared.resolve();
+      },
+    });
+    env.privately._testHooks = { showModal: async () => ({ approved: true }) };
+    const request = env.privately.requestPanelPermissions([ENTRY], { expiryMs: 1000 });
+    await writing.promise;
+    const signOut = env.tcw.signOut();
+    await cleared.promise;
+    release.resolve();
+    await Promise.all([request, signOut]);
+
+    const keys = Array.from({ length: env.backing.length }, (_, index) => env.backing.key(index));
+    expect(keys.some((key) => key?.includes("runtime-grants"))).toBe(false);
+    expect(await env.sessionStorage.load(ADDRESS)).toBeNull();
+  });
+
   test("approve: the grant is stored with the session", async () => {
     const own = grant("own");
     const { privately, sessionStorage } = await web({ node: stubNode({ granted: [own] }) });
@@ -228,6 +260,42 @@ describe("the panel is offered the request only when the page can show the promp
 });
 
 describe("restore after a reload", () => {
+  test("an immediate panel request waits for reactivation and reuses the stored grant", async () => {
+    const own = grant("own");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let reactivated = false;
+    const node = stubNode();
+    node.know(own);
+    node.hasRuntimePermissions = () => node.installed.length > 0;
+    node.getRuntimePermissionDelegations = () => node.installed;
+    node.useRuntimeDelegation.mockImplementation(async (delegation: PortableDelegation) => {
+      entered.resolve();
+      await release.promise;
+      node.installed.push(delegation);
+      reactivated = true;
+    });
+    const env = await web({ node });
+    await env.sessionStorage.saveRuntimeGrants(ADDRESS, [own]);
+    const showModal = mock(async () => ({ approved: true }));
+    env.privately._testHooks = { showModal };
+    const request = env.tcw.requestPermissions.bind(env.tcw);
+    env.tcw.requestPermissions = async (...args) => {
+      expect(reactivated).toBe(true);
+      return request(...args);
+    };
+
+    expect((await env.tcw.restoreSession(ADDRESS)).status).toBe("restored");
+    await entered.promise;
+    const pending = env.privately.requestPanelPermissions([ENTRY], { expiryMs: 1000 });
+    release.resolve();
+
+    expect(await pending).toEqual({ approved: true });
+    expect(showModal).not.toHaveBeenCalled();
+    expect(node.grantRuntimePermissions).not.toHaveBeenCalled();
+    expect(await cids(new BrowserSessionStorage({ storage: env.backing }))).toEqual(["own"]);
+  });
+
   async function restoreWith(options: {
     node?: ReturnType<typeof stubNode>;
     stored: PortableDelegation[];

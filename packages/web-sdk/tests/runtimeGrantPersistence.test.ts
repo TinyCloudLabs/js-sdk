@@ -13,6 +13,7 @@ import {
   isPanelGrant,
   rememberRuntimeGrants,
   reuseRuntimeGrants,
+  serializeRuntimeGrantMutation,
 } from "../src/modules/runtimeGrantPersistence";
 
 const ADDRESS = "0x1234567890abcdef1234567890abcdef12345678";
@@ -106,6 +107,102 @@ async function signedIn() {
 const reloaded = (backing: MemoryStorage) => new BrowserSessionStorage({ storage: backing });
 const grantKeys = (backing: MemoryStorage) => backing.keys().filter((key) => key.includes("runtime-grants"));
 const cids = async (storage: BrowserSessionStorage) => (await storage.loadRuntimeGrants(ADDRESS)).map((g) => g.cid);
+
+describe("post-restore grant mutations", () => {
+  test("late refusal after the budget preserves a newly stored grant across reload", async () => {
+    const { backing, storage } = await signedIn();
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("old")]);
+    const refusal = Promise.withResolvers<void>();
+    const cleaned = Promise.withResolvers<void>();
+    const save = storage.saveRuntimeGrants.bind(storage);
+    storage.saveRuntimeGrants = async (address, grants) => {
+      await save(address, grants);
+      if (!grants.some((entry) => entry.cid === "old")) cleaned.resolve();
+    };
+
+    await reuseRuntimeGrants(storage, ADDRESS, async () => {
+      await refusal.promise;
+      throw rejected("activation_rejected");
+    }, { budgetMs: 0 });
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("new")]);
+    refusal.resolve();
+    await cleaned.promise;
+
+    expect(await cids(reloaded(backing))).toEqual(["new"]);
+  });
+
+  test("a concurrent store and refusal cleanup both retain their updates", async () => {
+    const { backing, storage } = await signedIn();
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("old")]);
+    const cleaning = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const load = storage.loadRuntimeGrants.bind(storage);
+    let reads = 0;
+    storage.loadRuntimeGrants = async (address) => {
+      const snapshot = await load(address);
+      if (++reads === 2) {
+        cleaning.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    };
+    const reuse = reuseRuntimeGrants(storage, ADDRESS, async () => {
+      throw rejected("activation_rejected");
+    });
+    await cleaning.promise;
+    const remember = rememberRuntimeGrants(storage, ADDRESS, [grant("new")]);
+    release.resolve();
+    await Promise.all([reuse, remember]);
+
+    expect(await cids(reloaded(backing))).toEqual(["new"]);
+  });
+
+  test("activation outside the queue cannot hold later mutations beyond the budget", async () => {
+    const { storage } = await signedIn();
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("old")]);
+    await reuseRuntimeGrants(storage, ADDRESS, () => new Promise(() => undefined), { budgetMs: 0 });
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("new")]);
+    expect(await cids(storage)).toEqual(["old", "new"]);
+  });
+
+  test("a failed mutation settles and releases the queue", async () => {
+    const { storage } = await signedIn();
+    await expect(serializeRuntimeGrantMutation(storage, async () => {
+      throw new Error("storage failed");
+    })).rejects.toThrow("storage failed");
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("new")]);
+    expect(await cids(storage)).toEqual(["new"]);
+  });
+
+  test("a queued refusal rechecks the session before writing", async () => {
+    const { backing, storage } = await signedIn();
+    await rememberRuntimeGrants(storage, ADDRESS, [grant("old")]);
+    const loaded = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const load = storage.loadRuntimeGrants.bind(storage);
+    let reads = 0;
+    let current = true;
+    storage.loadRuntimeGrants = async (address) => {
+      const grants = await load(address);
+      if (++reads === 2) {
+        loaded.resolve();
+        await release.promise;
+      }
+      return grants;
+    };
+    const reuse = reuseRuntimeGrants(storage, ADDRESS, async () => {
+      throw rejected("activation_rejected");
+    }, { isCurrent: () => current });
+    await loaded.promise;
+    current = false;
+    const clear = serializeRuntimeGrantMutation(storage, () => storage.clear(ADDRESS));
+    release.resolve();
+    await Promise.all([reuse, clear]);
+
+    expect(backing.keys()).toEqual([]);
+    expect(await cids(reloaded(backing))).toEqual([]);
+  });
+});
 
 describe("which grants are the panel's own", () => {
   test("exactly the tab's entry, for this owner, is a panel grant", () => {

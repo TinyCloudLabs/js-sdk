@@ -116,7 +116,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
-import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, type RuntimeGrantStore } from "./runtimeGrantPersistence";
+import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, serializeRuntimeGrantMutation, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import { resolveOpenKeySigningKey, type OpenKeyConnection } from "../openkey-signing-key";
@@ -785,7 +785,7 @@ export class TinyCloudWeb {
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
-  /** The node's last answer for whether the primary space is hosted (`"unknown"` until it has answered). */
+  /** Hosting display hint bound to account, space and host, corrected by the automatic background probe. */
   get spaceHosting(): SpaceHosting {
     const observed = this._node?.spaceHosting ?? "unknown";
     const work = this.restoredNetworkWork;
@@ -1367,10 +1367,16 @@ export class TinyCloudWeb {
             this._sessionRestoreStatus = "idle";
             this.uiClient.reset();
             const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
-            if (address) await this.clearOwnPersistedSession(address, ownSignature);
-            for (const pendingAddress of pendingAddresses ?? []) {
-              if (pendingAddress !== address) await this.clearPersistedSession(pendingAddress);
-            }
+            const store = this.runtimeGrantStore();
+            await serializeRuntimeGrantMutation(store, async () => {
+              if (address) await this.clearOwnPersistedSession(address, ownSignature);
+              for (const pendingAddress of pendingAddresses ?? []) {
+                if (pendingAddress !== address) await this.clearPersistedSession(pendingAddress);
+              }
+              if (store && address && await this.sessionStorage?.load(address) === null) {
+                await store.saveRuntimeGrants(address, []);
+              }
+            });
             cleaned = true;
           } finally {
             if (!cleaned) this.signOutCleanupFailed = true;
@@ -1816,6 +1822,7 @@ export class TinyCloudWeb {
     entries: PermissionEntry[],
     options: RequestPermissionsOptions,
   ): Promise<{ approved: boolean }> {
+    await this.restoredNetworkWork?.grants;
     const signOuts = this.signOutCount;
     const result = await this.requestPermissions(entries, options);
     const address = this._node?.address;
