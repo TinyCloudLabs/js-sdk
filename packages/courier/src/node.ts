@@ -59,7 +59,7 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }
-  assertAgentGrant(node.getVerifiedSessionCapabilities(), siweTimes(grant.siwe), Date.now(), `did:pkh:eip155:${grant.chainId}:${grant.address}`);
+  assertAgentGrant(node.getVerifiedSessionCapabilities(), siweTimes(grant.siwe));
   const restored = node.restorableSession;
   const owner = restored ? `did:pkh:eip155:${restored.chainId}:${restored.address}` : '';
   if (profile.ownerDid?.toLowerCase() !== owner.toLowerCase() || profile.spaceId?.toLowerCase() !== restored?.spaceId.toLowerCase()) {
