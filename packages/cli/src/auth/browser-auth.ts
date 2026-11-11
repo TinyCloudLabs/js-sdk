@@ -1,4 +1,5 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import type { ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -24,6 +25,8 @@ export interface AuthFlowOptions {
   jwk?: object;
   host?: string;
   permissions?: PermissionEntry[];
+  /** A share-invitation approval: no permissions and no key id; the approver chooses the key. */
+  invitationContext?: ShareInvitationApprovalContext;
   /**
    * User-facing context shown on the OpenKey approval page. Optional at the
    * OpenKey protocol boundary, but TinyCloud CLI permission-grant call sites

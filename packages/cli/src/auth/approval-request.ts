@@ -5,7 +5,7 @@ import { setTimeout as wait } from "node:timers/promises";
 import { tryOpenBrowser } from "../lib/browser.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
-import { createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
+import { buildShareInvitationApprovalSpec, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
@@ -17,7 +17,8 @@ import * as commandGrants from "../lib/permissions.js";
 import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-preset.js";
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
-import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
+import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin, verifySignedSession, type SignedSession } from "./scoped-login.js";
+import { invitationKeyFromGrant } from "./invitation-key-grant.js";
 
 interface PendingApproval {
   version: 1;
@@ -282,7 +283,7 @@ async function throwRemoteError(profile: string, entry: PendingApproval, respons
 
 function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
   delegation: Record<string, unknown>;
-  session: ReturnType<typeof verifyScopedLogin>["session"];
+  session: SignedSession;
 } {
   if (!entry.resultRef || !entry.resultEnvelope) throw invalid("No encrypted approval result is available.");
   const signer = signerFromJwk(key);
@@ -296,6 +297,15 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
     new Date(opened.delegationExpiresAt).toISOString() !== opened.delegationExpiresAt ||
     !opened.delegation || typeof opened.delegation !== "object") throw invalid("Encrypted result binding does not match this request.");
   const delegation = opened.delegation as Record<string, unknown>;
+  if (entry.request.context) {
+    // The key id and every right come from the signed grant itself, never from the request or the result's own fields.
+    const session = verifySignedSession(delegation, key, entry.request.targetDid, { expectedOwner: entry.expectedOwner ?? opened.ownerDid, purpose: "grant" });
+    invitationKeyFromGrant(session.permissions, { ownerDid: session.ownerDid, expiresAt: session.expiresAt, acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt });
+    if (session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || session.expiresAt !== opened.delegationExpiresAt) {
+      throw invalid("Result owner or expiry differs from its signed delegation.");
+    }
+    return { delegation, session };
+  }
   const verified = verifyScopedLogin(delegation, key, entry.request.targetDid,
     entry.request.permissions as PermissionEntry[], {
       expectedOwner: entry.expectedOwner ?? opened.ownerDid,
@@ -310,7 +320,7 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
 /** Retryable reads never acknowledge or consume. The private result key is synced before the URL is exposed. */
 export async function acquireApprovalRequest(_did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const profile = options.profileName;
-  if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
+  if (!profile || !options.jwk || !options.host || (!options.permissions?.length && !options.invitationContext)) {
     throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
   }
   const signingKey = options.jwk as Ed25519PrivateJwk;
@@ -319,20 +329,25 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   const apiOrigin = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ??
     (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
   const linkApiOrigin = configuredOrigin(process.env.TC_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API_ORIGIN, "Links API");
-  const lifetime = grantLifetimeSeconds(options.expiry);
+  const context = options.invitationContext;
   const targetPublicJwk: OpenKeyApprovalRequestV1["targetPublicJwk"] = {
     kty: signingKey.kty, crv: signingKey.crv, x: signingKey.x,
   };
-  const spec = { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
-    targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
-    ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: lifetime };
+  // An invitation request names no permissions and no key: the approver chooses the key and the result is checked below.
+  const spec = context
+    ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context, now: Date.now() })
+    : { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
+      targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
+      ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry) };
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }
   const matching = (await activePending(profile)).filter((item) => {
     if (item.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
-    const { permissions: nextPermissions, ...next } = spec;
+    const { permissions: nextPermissions, ...nextRaw } = spec;
+    // A resumed invitation keeps its first lifetime; the window is fixed by the context, not by when this run started.
+    const next = context ? { ...nextRaw, grantLifetimeSeconds: prior.grantLifetimeSeconds, suggestedLifetimeSeconds: prior.suggestedLifetimeSeconds } : nextRaw;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin ||
       item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin ||
       priorPermissions.length !== nextPermissions.length) return false;
@@ -358,7 +373,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     const relay = createECDH("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
-    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin,
+      ...(context ? { expiresAt: new Date(context.acceptanceExpiresAt) } : {}) });
     const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
     entry = { version: 1, request, requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link,
       requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,
@@ -487,4 +503,31 @@ export async function completeApprovalResult(profile: string, delegation?: objec
       ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item)
       : items.filter((item) => item.requestId !== entry.requestId));
   }
+}
+
+/** The context of a still-open invitation approval for this recipient and subject, so a rerun resumes it instead of asking again. */
+export async function pendingInvitationContext(profile: string, match: { recipientEmail: string; subjectName: string }): Promise<ShareInvitationApprovalContext | undefined> {
+  const now = Date.now();
+  return (await activePending(profile)).flatMap((entry) => entry.request.context ? [entry.request.context] : [])
+    .find((context) => context.recipientEmail === match.recipientEmail && context.subjectName === match.subjectName && Date.parse(context.acceptanceExpiresAt) > now);
+}
+
+/**
+ * Take an approved invitation grant exactly once: the pending record is removed first, so a rerun or a second process
+ * cannot use the same approval for a second send, and then OpenKey is told the result was received (best effort; its
+ * copy expires on its own). A send that fails after this needs a new approval.
+ */
+export async function takeInvitationApproval(profile: string, delegation: object): Promise<void> {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || !entry.resultRef) throw invalid("This is not an invitation approval that has a result.");
+  const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
+  const key = entry.signingKey ?? profileKey;
+  if (!key || signerFromJwk(key).did !== entry.request.targetDid) throw invalid("The approval was not requested by this profile's key.");
+  let present = false;
+  await updatePending(profile, (items) => {
+    present = items.some((item) => item.requestId === entry.requestId);
+    return items.filter((item) => item.requestId !== entry.requestId);
+  });
+  if (!present) throw invalid("This invitation approval was already used; request a new one.");
+  try { await post(entry, "ack", key); } catch { /* the result expires on its own */ }
 }

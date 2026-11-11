@@ -1,6 +1,7 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { createShareLinks, type ShareLinks } from "./short-links.js";
+import type { EmailInviteApprover } from "./invite-approval.js";
 import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
@@ -535,6 +536,11 @@ export function createShareAuthorityAdapters(input: {
   readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
   /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
   readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
+  /**
+   * A session-only profile that does not already hold decrypt for an email share asks its owner for one approval for
+   * that invitation's key instead of being refused. Without it the refusal below is unchanged.
+   */
+  readonly approveEmailInviteKey?: EmailInviteApprover;
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -721,10 +727,20 @@ export function createShareAuthorityAdapters(input: {
     }
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : targetInput.target.kind === "email"
       ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    const emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : undefined;
+    let emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : undefined;
+    let inviteKeyNode: Pick<TinyCloudNode, "keys" | "encryption"> | undefined;
     if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node,
       emailKeyPath === undefined ? addressedEncryptionNetwork : `${addressedEncryptionNetwork}/${emailKeyPath}`)) {
-      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      if (input.approveEmailInviteKey === undefined || targetInput.target.kind !== "email" || activeProfileName === undefined) {
+        throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      }
+      // The approver chooses the key; this key id replaces the one generated above, which was never used.
+      const approved = await input.approveEmailInviteKey({
+        node, profile: activeProfileName, recipientEmail: targetInput.target.address, subjectName: targetInput.filename,
+        subjectKind: "file", accessExpiresAt: expiresAt,
+      });
+      emailKeyPath = `share/${approved.shareId}`;
+      inviteKeyNode = approved.keyNode;
     }
     const config = await publicConfig();
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
@@ -897,7 +913,8 @@ export function createShareAuthorityAdapters(input: {
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
     const encryptionNetwork = addressedEncryptionNetwork!;
-    const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, {
+    if (inviteKeyNode !== undefined) await inviteKeyNode.keys.createKey(emailKeyPath!);
+    const encrypted = await (inviteKeyNode ?? node).encryption.encryptToNetwork(encryptionNetwork, file.bytes, {
       ...(emailKeyPath === undefined ? {} : { keyPath: emailKeyPath }),
       metadata: { contentType: mediaType },
     });
