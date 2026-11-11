@@ -1,12 +1,35 @@
+var __create = Object.create;
 var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __commonJS = (cb, mod2) => function __require() {
+  return mod2 || (0, cb[__getOwnPropNames(cb)[0]])((mod2 = { exports: {} }).exports, mod2), mod2.exports;
 };
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
 };
+var __copyProps = (to, from5, except, desc) => {
+  if (from5 && typeof from5 === "object" || typeof from5 === "function") {
+    for (let key of __getOwnPropNames(from5))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from5[key], enumerable: !(desc = __getOwnPropDesc(from5, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toESM = (mod2, isNodeMode, target) => (target = mod2 != null ? __create(__getProtoOf(mod2)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod2 || !mod2.__esModule ? __defProp(target, "default", { value: mod2, enumerable: true }) : target,
+  mod2
+));
 
 // src/lib/replication-registry.ts
 function stopForSignal(signal) {
@@ -122,7 +145,7 @@ import {
   tinycloudConfigPath,
   tinycloudHomePath
 } from "@tinycloud/operations/state";
-var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
+var CONFIG_DIR, PROFILES_DIR, CONFIG_FILE, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, DEFAULT_PROFILE, PROFILE_COMMIT_LOCK_TIMEOUT_MS, ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT;
 var init_constants = __esm({
   "src/config/constants.ts"() {
     "use strict";
@@ -130,6 +153,8 @@ var init_constants = __esm({
     PROFILES_DIR = profilesPath();
     CONFIG_FILE = tinycloudConfigPath();
     DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
+    DEFAULT_OPENKEY_HOST = "https://openkey.so";
+    DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_PROFILE = "default";
     PROFILE_COMMIT_LOCK_TIMEOUT_MS = 45e3;
     ExitCode = {
@@ -617,7 +642,7 @@ function nodeRetryError(error) {
   if (code5 !== "NODE_BUSY" && code5 !== "REQUEST_TIMEOUT" && code5 !== "OUTCOME_UNKNOWN") return void 0;
   const details = typeof meta === "object" && meta !== null ? meta : typeof metadata === "object" && metadata !== null ? metadata : {};
   const retryAfterMs = details.retryAfterMs;
-  const wait = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
+  const wait2 = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
   if (code5 === "OUTCOME_UNKNOWN") {
     return new CLIError(
       code5,
@@ -628,7 +653,7 @@ function nodeRetryError(error) {
   }
   return new CLIError(
     code5,
-    code5 === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
+    code5 === "NODE_BUSY" ? `The node is busy, try again ${wait2}.` : `The node timed out before applying anything, try again ${wait2}.`,
     ExitCode.NODE_ERROR,
     details
   );
@@ -987,6 +1012,12 @@ function canonicalizeAddress(address) {
   const trimmed = address.trim();
   return trimmed.startsWith("0x") ? `0x${trimmed.slice(2).toLowerCase()}` : trimmed.toLowerCase();
 }
+function normalizePkhIdentifier(identifier) {
+  return identifier.replace(
+    /(eip155:\d+:)(0x[0-9a-fA-F]{40})(?=[:#]|$)/,
+    (_match, prefix, address) => prefix + address.toLowerCase()
+  );
+}
 function parsePkhDid(did) {
   const match = did.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
   if (!match) return null;
@@ -1056,6 +1087,123 @@ var init_space = __esm({
     init_constants();
     init_safe_text();
     init_profiles();
+  }
+});
+
+// ../../node_modules/ms/index.js
+var require_ms = __commonJS({
+  "../../node_modules/ms/index.js"(exports, module) {
+    "use strict";
+    var s = 1e3;
+    var m = s * 60;
+    var h = m * 60;
+    var d = h * 24;
+    var w = d * 7;
+    var y = d * 365.25;
+    module.exports = function(val, options) {
+      options = options || {};
+      var type = typeof val;
+      if (type === "string" && val.length > 0) {
+        return parse2(val);
+      } else if (type === "number" && isFinite(val)) {
+        return options.long ? fmtLong(val) : fmtShort(val);
+      }
+      throw new Error(
+        "val is not a non-empty string or a valid number. val=" + JSON.stringify(val)
+      );
+    };
+    function parse2(str) {
+      str = String(str);
+      if (str.length > 100) {
+        return;
+      }
+      var match = /^(-?(?:\d+)?\.?\d+) *(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w|years?|yrs?|y)?$/i.exec(
+        str
+      );
+      if (!match) {
+        return;
+      }
+      var n = parseFloat(match[1]);
+      var type = (match[2] || "ms").toLowerCase();
+      switch (type) {
+        case "years":
+        case "year":
+        case "yrs":
+        case "yr":
+        case "y":
+          return n * y;
+        case "weeks":
+        case "week":
+        case "w":
+          return n * w;
+        case "days":
+        case "day":
+        case "d":
+          return n * d;
+        case "hours":
+        case "hour":
+        case "hrs":
+        case "hr":
+        case "h":
+          return n * h;
+        case "minutes":
+        case "minute":
+        case "mins":
+        case "min":
+        case "m":
+          return n * m;
+        case "seconds":
+        case "second":
+        case "secs":
+        case "sec":
+        case "s":
+          return n * s;
+        case "milliseconds":
+        case "millisecond":
+        case "msecs":
+        case "msec":
+        case "ms":
+          return n;
+        default:
+          return void 0;
+      }
+    }
+    function fmtShort(ms2) {
+      var msAbs = Math.abs(ms2);
+      if (msAbs >= d) {
+        return Math.round(ms2 / d) + "d";
+      }
+      if (msAbs >= h) {
+        return Math.round(ms2 / h) + "h";
+      }
+      if (msAbs >= m) {
+        return Math.round(ms2 / m) + "m";
+      }
+      if (msAbs >= s) {
+        return Math.round(ms2 / s) + "s";
+      }
+      return ms2 + "ms";
+    }
+    function fmtLong(ms2) {
+      var msAbs = Math.abs(ms2);
+      if (msAbs >= d) {
+        return plural(ms2, msAbs, d, "day");
+      }
+      if (msAbs >= h) {
+        return plural(ms2, msAbs, h, "hour");
+      }
+      if (msAbs >= m) {
+        return plural(ms2, msAbs, m, "minute");
+      }
+      if (msAbs >= s) {
+        return plural(ms2, msAbs, s, "second");
+      }
+      return ms2 + " ms";
+    }
+    function plural(ms2, msAbs, n, name) {
+      var isPlural = msAbs >= n * 1.5;
+      return Math.round(ms2 / n) + " " + name + (isPlural ? "s" : "");
+    }
   }
 });
 
@@ -2089,16 +2237,73 @@ var init_hmac = __esm({
   }
 });
 
+// ../sdk-core/src/manifest.ts
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+var import_ms, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, KEY_SEGMENT, KEY_APP_ID, KEY_PATH;
+var init_manifest = __esm({
+  "../sdk-core/src/manifest.ts"() {
+    "use strict";
+    import_ms = __toESM(require_ms(), 1);
+    SERVICE_SHORT_TO_LONG = Object.freeze({
+      kv: "tinycloud.kv",
+      space: "tinycloud.space",
+      sql: "tinycloud.sql",
+      duckdb: "tinycloud.duckdb",
+      capabilities: "tinycloud.capabilities",
+      hooks: "tinycloud.hooks",
+      encryption: "tinycloud.encryption",
+      delegation: "tinycloud.delegation"
+    });
+    ENCRYPTION_PERMISSION_SERVICE = "tinycloud.encryption";
+    ENCRYPTION_MANIFEST_SPACE = "encryption";
+    SERVICE_LONG_TO_SHORT2 = Object.freeze(
+      Object.fromEntries(
+        Object.entries(SERVICE_SHORT_TO_LONG).map(([s, l]) => [l, s])
+      )
+    );
+    KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
+    KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
+    KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
+  }
+});
+
 // src/lib/raw-encryption.ts
+function isRawEncryptionPermission(permission2) {
+  return (permission2.service === ENCRYPTION_PERMISSION_SERVICE || permission2.service === "encryption") && typeof permission2.path === "string" && permission2.path.startsWith("urn:tinycloud:encryption:");
+}
+function isVerifiedRawEncryptionPermission(permission2) {
+  return isRawEncryptionPermission(permission2) && (permission2.space === void 0 || permission2.space === "encryption");
+}
+function isDeviceDefaultDecrypt(permission2) {
+  return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
+}
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
+    init_manifest();
     init_safe_text();
   }
 });
 
 // src/lib/owner-did.ts
 import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
+function canonicalOwnerDid(did, label = "--owner") {
+  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did);
+  if (!match) {
+    throw new CLIError("INVALID_ARGUMENT", `${label} "${did}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`, ExitCode.USAGE_ERROR);
+  }
+  return `did:pkh:eip155:${match[1]}:${ensureEip55(match[2])}`;
+}
+function rawEncryptionOwnerMatches(path, ownerDid) {
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
+  if (!match) return false;
+  try {
+    return canonicalOwnerDid(match[1]) === canonicalOwnerDid(ownerDid);
+  } catch {
+    return false;
+  }
+}
 var init_owner_did = __esm({
   "src/lib/owner-did.ts"() {
     "use strict";
@@ -3785,7 +3990,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   });
   const { prehash } = eddsaOpts;
   const { BASE, Fp: Fp2, Fn: Fn2 } = Point;
-  const randomBytes4 = eddsaOpts.randomBytes || randomBytes;
+  const randomBytes8 = eddsaOpts.randomBytes || randomBytes;
   const adjustScalarBytes2 = eddsaOpts.adjustScalarBytes || ((bytes) => bytes);
   const domain = eddsaOpts.domain || ((data, ctx, phflag) => {
     _abool2(phflag, "phflag");
@@ -3818,7 +4023,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
     const msg = concatBytes(...msgs);
     return modN_LE(cHash(domain(msg, ensureBytes("context", context), !!prehash)));
   }
-  function sign(msg, secretKey, options = {}) {
+  function sign2(msg, secretKey, options = {}) {
     msg = ensureBytes("message", msg);
     if (prehash)
       msg = prehash(msg);
@@ -3867,7 +4072,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
     signature: 2 * _size,
     seed: _size
   };
-  function randomSecretKey(seed = randomBytes4(lengths.seed)) {
+  function randomSecretKey(seed = randomBytes8(lengths.seed)) {
     return _abytes2(seed, lengths.seed, "seed");
   }
   function keygen(seed) {
@@ -3923,7 +4128,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   return Object.freeze({
     keygen,
     getPublicKey,
-    sign,
+    sign: sign2,
     verify,
     utils,
     Point,
@@ -14007,7 +14212,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     bits2int: "function",
     bits2int_modN: "function"
   });
-  const randomBytes4 = ecdsaOpts.randomBytes || randomBytes;
+  const randomBytes8 = ecdsaOpts.randomBytes || randomBytes;
   const hmac2 = ecdsaOpts.hmac || ((key, ...msgs) => hmac(hash, key, concatBytes(...msgs)));
   const { Fp: Fp2, Fn: Fn2 } = Point;
   const { ORDER: CURVE_ORDER, BITS: fnBits } = Fn2;
@@ -14162,7 +14367,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     const d = _normFnElement(Fn2, privateKey);
     const seedArgs = [int2octets(d), int2octets(h1int)];
     if (extraEntropy != null && extraEntropy !== false) {
-      const e = extraEntropy === true ? randomBytes4(lengths.secretKey) : extraEntropy;
+      const e = extraEntropy === true ? randomBytes8(lengths.secretKey) : extraEntropy;
       seedArgs.push(ensureBytes("extraEntropy", e));
     }
     const seed = concatBytes(...seedArgs);
@@ -14189,7 +14394,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     }
     return { seed, k2sig };
   }
-  function sign(message, secretKey, opts = {}) {
+  function sign2(message, secretKey, opts = {}) {
     message = ensureBytes("message", message);
     const { seed, k2sig } = prepSig(message, secretKey, opts);
     const drbg = createHmacDrbg(hash.outputLen, Fn2.BYTES, hmac2);
@@ -14262,7 +14467,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     utils,
     lengths,
     Point,
-    sign,
+    sign: sign2,
     verify,
     recoverPublicKey,
     Signature,
@@ -14809,8 +15014,8 @@ function strictBytes(text, length5) {
 }
 function parseLinkTimestamp(text) {
   if (typeof text !== "string" || !TIMESTAMP_PATTERN.test(text)) return null;
-  const ms = Date.parse(text);
-  return Number.isFinite(ms) && new Date(ms).toISOString() === text ? ms : null;
+  const ms2 = Date.parse(text);
+  return Number.isFinite(ms2) && new Date(ms2).toISOString() === text ? ms2 : null;
 }
 function linkIssuerPublicKey(did) {
   if (!DID_KEY_PATTERN.test(did)) return null;
@@ -15028,9 +15233,9 @@ function buildFullLink(input) {
   return link4;
 }
 function toEpochMs(now) {
-  const ms = now === void 0 ? Date.now() : now instanceof Date ? now.getTime() : now;
-  if (Number.isNaN(new Date(ms).getTime())) throw new LinkError("timestamp_format");
-  return ms;
+  const ms2 = now === void 0 ? Date.now() : now instanceof Date ? now.getTime() : now;
+  if (Number.isNaN(new Date(ms2).getTime())) throw new LinkError("timestamp_format");
+  return ms2;
 }
 async function checkLinkRecord(record2, nowMs) {
   if (!isPlainObject(record2)) throw new LinkError("record_shape");
@@ -15490,8 +15695,8 @@ async function collectApprovalResult(state2, options = {}) {
       }
     }
     if (options.deadline !== void 0 && now() >= options.deadline) return { status: "deadline" };
-    const wait = options.deadline === void 0 ? interval : Math.min(interval, Math.max(0, options.deadline - now()));
-    await sleep(wait);
+    const wait2 = options.deadline === void 0 ? interval : Math.min(interval, Math.max(0, options.deadline - now()));
+    await sleep(wait2);
     if (options.signal?.aborted) throw options.signal.reason;
   }
 }
@@ -15765,7 +15970,1257 @@ var init_links = __esm({
         this.status = status;
       }
     };
-    defaultSleep = (ms) => new Promise((resolve6) => setTimeout(resolve6, ms));
+    defaultSleep = (ms2) => new Promise((resolve6) => setTimeout(resolve6, ms2));
+  }
+});
+
+// src/lib/duration.ts
+function parseDuration(input) {
+  const match = input.match(/^(\d+)(m|h|d|w)$/);
+  if (match) {
+    const value = parseInt(match[1], 10);
+    const unit = match[2];
+    const multipliers = {
+      m: 60 * 1e3,
+      h: 60 * 60 * 1e3,
+      d: 24 * 60 * 60 * 1e3,
+      w: 7 * 24 * 60 * 60 * 1e3
+    };
+    return value * multipliers[unit];
+  }
+  const date = new Date(input);
+  if (!isNaN(date.getTime())) {
+    const ms2 = date.getTime() - Date.now();
+    if (ms2 <= 0) {
+      throw new Error(`Expiry date "${input}" is in the past`);
+    }
+    return ms2;
+  }
+  throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
+}
+var init_duration = __esm({
+  "src/lib/duration.ts"() {
+    "use strict";
+  }
+});
+
+// src/lib/browser.ts
+import open12 from "open";
+async function tryOpenBrowser(url) {
+  let launcher;
+  try {
+    launcher = await open12(url);
+  } catch {
+    return false;
+  }
+  return new Promise((resolve6) => {
+    const timer = setTimeout(() => resolve6(true), LAUNCH_CHECK_MS);
+    launcher.once("error", () => {
+      clearTimeout(timer);
+      resolve6(false);
+    });
+    launcher.once("exit", (code5) => {
+      clearTimeout(timer);
+      resolve6(code5 === 0);
+    });
+  });
+}
+var LAUNCH_CHECK_MS;
+var init_browser = __esm({
+  "src/lib/browser.ts"() {
+    "use strict";
+    init_formatter();
+    init_theme();
+    LAUNCH_CHECK_MS = 1e3;
+  }
+});
+
+// src/lib/apps-agent-preset.ts
+import { DEFAULT_EXPIRY, parseExpiry, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE } from "@tinycloud/sdk-core";
+import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
+var APPS_AGENT_EXPIRY_DAYS, APPS_AGENT_EXPIRY;
+var init_apps_agent_preset = __esm({
+  "src/lib/apps-agent-preset.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    init_safe_text();
+    init_raw_encryption();
+    init_space();
+    APPS_AGENT_EXPIRY_DAYS = 7;
+    APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
+  }
+});
+
+// src/auth/refusal.ts
+function carryRefusedDelegation(error, delegation) {
+  if (typeof error === "object" && error !== null) {
+    refusedResults.set(error, typeof delegation === "object" && delegation !== null ? delegation : void 0);
+  }
+}
+function markClockDependent(error) {
+  if (typeof error === "object" && error !== null) clockDependent.add(error);
+}
+function markMaybeGranted(error) {
+  if (typeof error === "object" && error !== null) maybeGranted.add(error);
+  return error;
+}
+function isPermanentRefusal(error) {
+  return error instanceof CLIError && !clockDependent.has(error) && (PERMANENT_REFUSALS.has(error.code) || wasRefusedAfterApproval(error));
+}
+var PERMANENT_REFUSALS, refusedResults, wasRefusedAfterApproval, clockDependent, maybeGranted;
+var init_refusal = __esm({
+  "src/auth/refusal.ts"() {
+    "use strict";
+    init_errors();
+    PERMANENT_REFUSALS = /* @__PURE__ */ new Set([
+      "OPENKEY_OWNER_MISMATCH",
+      "OPENKEY_SCOPE_MISMATCH",
+      "OPENKEY_GRANT_BROADENED",
+      "OPENKEY_APPROVAL_NARROWER",
+      "OPENKEY_PROOF_INVALID",
+      "OPENKEY_EXPIRY_EXCEEDED",
+      "OPENKEY_EXPIRY_TOO_SHORT",
+      "OPENKEY_EXPIRY_UNREPRESENTABLE",
+      "OPENKEY_SESSION_MISMATCH",
+      "RAW_RECAP_RESOURCE_UNSUPPORTED",
+      "DEVICE_AUTH_BINDING_MISMATCH"
+    ]);
+    refusedResults = /* @__PURE__ */ new WeakMap();
+    wasRefusedAfterApproval = (error) => typeof error === "object" && error !== null && refusedResults.has(error);
+    clockDependent = /* @__PURE__ */ new WeakSet();
+    maybeGranted = /* @__PURE__ */ new WeakSet();
+  }
+});
+
+// src/lib/named-keys.ts
+import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import {
+  EncryptionResourceError,
+  KEY_CREATE_ABILITY,
+  formatPrefixResource,
+  nodeSupportsNamedKeys
+} from "@tinycloud/sdk-services/encryption/resource";
+import { DECRYPT_ACTION } from "@tinycloud/sdk-services";
+function namedKeysNetworkId(ownerDid) {
+  return `urn:tinycloud:encryption:${ownerDid}:${NAMED_KEYS_NETWORK}`;
+}
+function parseKeysPrefix(input, ownerDid) {
+  const prefix = input.endsWith("/") ? input.slice(0, -1) : input;
+  const invalid2 = (reason) => new CLIError("INVALID_KEY_PREFIX", `Invalid \`--keys\` folder "${input}": ${reason}`, ExitCode.USAGE_ERROR);
+  if (prefix.length === 0) throw invalid2("the folder can't be empty.");
+  if (prefix === "apps" || prefix.startsWith("apps/")) {
+    throw invalid2("folders under `apps/` belong to apps and can't be used from the CLI.");
+  }
+  try {
+    return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
+  } catch (error) {
+    if (error instanceof EncryptionResourceError) throw invalid2(error.message);
+    throw error;
+  }
+}
+function keyAbilitiesFor(keys) {
+  return { [keys.resource]: [KEY_CREATE_ABILITY, DECRYPT_ACTION] };
+}
+function partialKeysGrantError() {
+  return new CLIError(
+    "KEYS_PARTIAL_GRANT",
+    "Named keys need both permissions (create and use), but only one was approved, so this sign-in wasn't saved. Sign in again and approve both.",
+    ExitCode.PERMISSION_DENIED
+  );
+}
+var NAMED_KEYS_NETWORK;
+var init_named_keys = __esm({
+  "src/lib/named-keys.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    NAMED_KEYS_NETWORK = "default";
+  }
+});
+
+// src/auth/scoped-login.ts
+import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
+import { isLocalOwnerProfile as isLocalOwnerProfile2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
+import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
+function parseRequestedExpiry(value) {
+  if (typeof value === "number") return { durationMs: value };
+  if (/^\d+(m|h|d|w)$/.test(value)) return { durationMs: parseDuration(value) };
+  throw new CLIError(
+    "INVALID_EXPIRY",
+    Number.isFinite(Date.parse(value)) ? `--expiry "${value}" is a date. OpenKey signs approval time plus a lifetime, so use a duration such as 2h or 7d.` : `Invalid --expiry "${value}". Use a duration such as 1h or 7d, or milliseconds.`,
+    ExitCode.USAGE_ERROR
+  );
+}
+function expiryLimit(expiry) {
+  return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
+}
+function outlivesRequestFromIssuedAt(siwe, signedExpiry, expiry) {
+  const raw = [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
+  const issuedAt = raw === void 0 ? NaN : Date.parse(raw);
+  return Number.isFinite(issuedAt) && signedExpiry > issuedAt + expiry.durationMs + CLOCK_SKEW_MS;
+}
+function withoutTrustFields(session) {
+  return Object.fromEntries(Object.entries(session).filter(([name]) => !TRUST_FIELDS.includes(name)));
+}
+function withVerifiedAuthority(session, signed) {
+  return {
+    ...withoutTrustFields(session),
+    ownerDid: signed.ownerDid,
+    permissions: signed.permissions,
+    permissionsSource: SIGNED_RECAP,
+    expiresAt: signed.expiresAt,
+    expiry: signed.expiresAt,
+    expirationTime: signed.expiresAt
+  };
+}
+function ownerSpaceId(space, ownerDid) {
+  return space.startsWith("tinycloud:") ? space : `tinycloud:${ownerDid.slice("did:".length)}:${space}`;
+}
+function sameLoginSpace(left, right, ownerDid) {
+  const normalizedLeft = normalizePkhIdentifier(ownerDid === void 0 ? left : ownerSpaceId(left, ownerDid));
+  const normalizedRight = normalizePkhIdentifier(ownerDid === void 0 ? right : ownerSpaceId(right, ownerDid));
+  if (normalizedLeft === normalizedRight) return true;
+  if (ownerDid !== void 0) return false;
+  if (left.startsWith("tinycloud:") && !right.startsWith("tinycloud:")) return left.split(":").at(-1) === right;
+  if (right.startsWith("tinycloud:") && !left.startsWith("tinycloud:")) return right.split(":").at(-1) === left;
+  return false;
+}
+function isRawCidRevocationPermission(permission2) {
+  return permission2.service === "tinycloud.delegation" && permission2.space?.startsWith("urn:cid:") === true && permission2.path === "" && permission2.actions.includes("tinycloud.delegation/revoke");
+}
+function actionTuples(permission2, ownerDid) {
+  if (isDeviceDefaultDecrypt({ ...permission2, space: permission2.space ?? "" })) {
+    return [JSON.stringify([permission2.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission2.actions[0]])];
+  }
+  const service = permission2.service.startsWith("tinycloud.") ? permission2.service : `tinycloud.${permission2.service}`;
+  const rawEncryption = isVerifiedRawEncryptionPermission(permission2);
+  const rawCidRevocation = isRawCidRevocationPermission(permission2);
+  const space = rawEncryption ? ENCRYPTION_MANIFEST_SPACE : rawCidRevocation ? permission2.space : normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", ownerDid));
+  const path = rawEncryption ? normalizePkhIdentifier(permission2.path) : permission2.path;
+  return permission2.actions.map((action) => JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
+}
+function isLegacyNestedDecrypt(permission2, requested, ownerDid, spaceId) {
+  return isRawEncryptionPermission(permission2) && !isVerifiedRawEncryptionPermission(permission2) && normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", ownerDid)) === normalizePkhIdentifier(spaceId) && rawEncryptionOwnerMatches(permission2.path, ownerDid) && permission2.actions.every((action) => action === "tinycloud.encryption/decrypt") && requested.some((entry) => isRawEncryptionPermission(entry) && normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission2.path) && permission2.actions.every((action) => entry.actions.includes(action)));
+}
+function canonicalJson(value) {
+  const canonical = (entry) => Array.isArray(entry) ? entry.map(canonical) : entry && typeof entry === "object" ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)).map(([name, inner]) => [name, canonical(inner)])) : entry;
+  return JSON.stringify(canonical(value) ?? null);
+}
+function caveatRestriction(caveats) {
+  const restrictions = (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0).map(canonicalJson).sort();
+  return restrictions.length === 0 ? "" : JSON.stringify(restrictions);
+}
+function scopeCovers(granted, held, ownerDid) {
+  const grants = /* @__PURE__ */ new Map();
+  for (const permission2 of granted) {
+    const restriction = caveatRestriction(permission2.caveats);
+    for (const tuple of actionTuples(permission2, ownerDid)) {
+      const restrictions = grants.get(tuple) ?? /* @__PURE__ */ new Set();
+      restrictions.add(restriction);
+      grants.set(tuple, restrictions);
+    }
+  }
+  return held.every((permission2) => {
+    const restriction = caveatRestriction(permission2.caveats);
+    return actionTuples(permission2, ownerDid).every((tuple) => {
+      const restrictions = grants.get(tuple);
+      return restrictions !== void 0 && (restrictions.has("") || restrictions.has(restriction));
+    });
+  });
+}
+function plainCaveat(value) {
+  if (value === void 0 || value === null) return null;
+  if (typeof value === "boolean" || typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(plainCaveat);
+  if (value instanceof Map) {
+    return Object.fromEntries([...value].map(([name, inner]) => {
+      if (typeof name !== "string") throw new Error("ReCap caveat keys must be strings");
+      return [name, plainCaveat(inner)];
+    }));
+  }
+  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([name, inner]) => [name, plainCaveat(inner)]));
+  }
+  throw new Error("ReCap caveats must contain only JSON values");
+}
+function plainCaveats(caveats) {
+  return (caveats ?? []).map((caveat) => {
+    const plain = plainCaveat(caveat);
+    if (plain === null || typeof plain !== "object" || Array.isArray(plain)) throw new Error("ReCap caveats must be objects");
+    return plain;
+  }).filter((caveat) => Object.keys(caveat).length > 0);
+}
+function verifySignedSession(data, key, sessionDid, expected = {}) {
+  const notStored = expected.purpose === "grant" ? "No grant was stored." : "No session was saved.";
+  let permissions;
+  let expiresAt;
+  try {
+    if (typeof data.siwe !== "string" || typeof data.signature !== "string" || typeof data.address !== "string" || !Number.isSafeInteger(data.chainId) || typeof data.spaceId !== "string" || typeof data.delegationCid !== "string" || !data.delegationHeader || typeof data.delegationHeader !== "object" || typeof data.verificationMethod !== "string" || data.verificationMethod.split("#")[0] !== sessionDid.split("#")[0]) throw new Error();
+    const proof = new NodeWasmBindings().validatePersistedSession({
+      delegationHeader: data.delegationHeader,
+      delegationCid: data.delegationCid,
+      spaceId: data.spaceId,
+      jwk: key,
+      address: data.address,
+      chainId: data.chainId,
+      siwe: data.siwe,
+      signature: data.signature
+    });
+    if (!proof.verifiedRecap?.length || !proof.expiresAt || !Number.isFinite(Date.parse(proof.expiresAt))) throw new Error();
+    permissions = proof.verifiedRecap.map((entry) => {
+      const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+      const actions = entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`);
+      const caveats = plainCaveats(entry.caveats);
+      return { service, space: entry.space, path: entry.path, actions, ...caveats.length > 0 ? { caveats } : {} };
+    });
+    expiresAt = proof.expiresAt;
+  } catch (error) {
+    if (/expir/i.test(error instanceof Error ? error.message : String(error))) {
+      throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
+    }
+    throw Object.assign(
+      new CLIError("OPENKEY_PROOF_INVALID", `OpenKey did not return a complete, verifiable session proof. ${notStored}`, ExitCode.AUTH_REQUIRED),
+      { cause: error }
+    );
+  }
+  const signedExpiry = Date.parse(expiresAt);
+  if (signedExpiry <= Date.now()) {
+    throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
+  }
+  if (expected.expiryChangeable === true) {
+    if (signedExpiry <= Date.now() + MIN_SIGNED_REMAINING_MS) {
+      throw new CLIError("OPENKEY_EXPIRY_TOO_SHORT", `The signed session lasts 60 seconds or less, too short to use. Choose a longer lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+    const technical = technicalExpiryRefusal(signedExpiry, "siwe");
+    if (technical !== null) {
+      throw new CLIError("OPENKEY_EXPIRY_UNREPRESENTABLE", `The signed session's ${technical}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  } else if (expected.expiry !== void 0 && signedExpiry > expiryLimit(expected.expiry)) {
+    const exceeded = new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    if (!outlivesRequestFromIssuedAt(data.siwe, signedExpiry, expected.expiry)) markClockDependent(exceeded);
+    throw exceeded;
+  }
+  const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
+  if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", `The approved signing identity differs from this profile's owner. ${notStored} Use a new profile for another account.`, ExitCode.PERMISSION_DENIED);
+  }
+  return { ownerDid, permissions, expiresAt };
+}
+function withoutRequestedKeyRow(signed, keys, signerDid) {
+  const mismatch = () => new CLIError(
+    "OPENKEY_SCOPE_MISMATCH",
+    `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME14} auth login --keys <folder>\`.`,
+    ExitCode.PERMISSION_DENIED
+  );
+  let expectedResource;
+  try {
+    expectedResource = parseKeysPrefix(keys.prefix, canonicalOwnerDid(signerDid)).resource;
+  } catch {
+    throw mismatch();
+  }
+  if (keys.resource !== expectedResource) throw mismatch();
+  const rest = [];
+  const actions = /* @__PURE__ */ new Set();
+  for (const permission2 of signed) {
+    if (!isVerifiedRawEncryptionPermission(permission2) || permission2.path !== expectedResource) {
+      rest.push(permission2);
+      continue;
+    }
+    if (permission2.caveats?.some((caveat) => Object.keys(caveat).length > 0)) throw mismatch();
+    for (const action of permission2.actions) actions.add(action);
+  }
+  if (actions.size === 0) return rest;
+  const wanted = keyAbilitiesFor(keys)[expectedResource];
+  if ([...actions].some((action) => !wanted.includes(action))) throw mismatch();
+  if (actions.size !== wanted.length) throw partialKeysGrantError();
+  return rest;
+}
+function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
+  const notStored = expected.purpose === "grant" ? "No grant was stored." : "No scoped session was saved.";
+  let signed;
+  try {
+    signed = verifySignedSession(data, key, sessionDid, expected);
+  } catch (error) {
+    const cause = error instanceof Error ? error.cause : void 0;
+    if (requested.some(isRawCidRevocationPermission) && /invalid ReCap resource URI/i.test(cause instanceof Error ? cause.message : String(cause ?? ""))) {
+      throw new CLIError(
+        "RAW_RECAP_RESOURCE_UNSUPPORTED",
+        "This WASM build cannot verify raw urn:cid ReCap resources.",
+        ExitCode.PERMISSION_DENIED
+      );
+    }
+    throw error;
+  }
+  const spaceId = data.spaceId;
+  for (const permission2 of requested) {
+    if (isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2)) continue;
+    if (normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  }
+  const legacyNested = [];
+  const approved = [];
+  const keyRowRest = expected.namedKeyRow === void 0 ? signed.permissions : withoutRequestedKeyRow(signed.permissions, expected.namedKeyRow, signed.ownerDid);
+  for (const permission2 of keyRowRest) {
+    (isLegacyNestedDecrypt(permission2, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission2);
+  }
+  for (const permission2 of keyRowRest) {
+    if (isVerifiedRawEncryptionPermission(permission2) && !rawEncryptionOwnerMatches(permission2.path, signed.ownerDid)) {
+      throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  }
+  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+    throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
+    throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  }
+  const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
+  return { session, legacyNested };
+}
+var CLOCK_SKEW_MS, SIGNED_RECAP, MIN_SIGNED_REMAINING_MS, TRUST_FIELDS;
+var init_scoped_login = __esm({
+  "src/auth/scoped-login.ts"() {
+    "use strict";
+    init_errors();
+    init_constants();
+    init_duration();
+    init_space();
+    init_manifest();
+    init_raw_encryption();
+    init_owner_did();
+    init_caveat_refusal();
+    init_refusal();
+    init_named_keys();
+    CLOCK_SKEW_MS = 3e4;
+    SIGNED_RECAP = "signed-recap";
+    MIN_SIGNED_REMAINING_MS = 6e4;
+    TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
+  }
+});
+
+// src/auth/pending-code.ts
+import { createHash as createHash2 } from "crypto";
+import { constants as fsConstants5 } from "fs";
+import { open as open13, rm as rm8 } from "fs/promises";
+import { join as join15 } from "path";
+import { profilePath as profilePath6 } from "@tinycloud/operations/state";
+var init_pending_code = __esm({
+  "src/auth/pending-code.ts"() {
+    "use strict";
+    init_storage2();
+    init_refusal();
+    init_scoped_login();
+  }
+});
+
+// src/auth/local-key.ts
+import { createProfileRegistryCacheStore as createProfileRegistryCacheStore3, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore3 } from "@tinycloud/operations/state";
+import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
+import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { randomBytes as randomBytes4 } from "crypto";
+var init_local_key = __esm({
+  "src/auth/local-key.ts"() {
+    "use strict";
+    init_replication_config();
+    init_warnings();
+  }
+});
+
+// src/auth/browser-auth.ts
+import { publicJwk } from "@tinycloud/sdk-core";
+import { createInterface } from "readline";
+var init_browser_auth = __esm({
+  "src/auth/browser-auth.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    init_caveat_refusal();
+    init_approval_request();
+    init_profiles();
+    init_pending_code();
+  }
+});
+
+// src/auth/login-commit.ts
+import { lstat as lstat9 } from "fs/promises";
+import { join as join16 } from "path";
+import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
+import { CLI_NAME as CLI_NAME15 } from "@tinycloud/operations/cli-name";
+import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
+import { ProfileLockTimeoutError as ProfileLockTimeoutError3, profilePath as profilePath7 } from "@tinycloud/operations/state";
+var init_login_commit = __esm({
+  "src/auth/login-commit.ts"() {
+    "use strict";
+    init_named_keys();
+    init_constants();
+    init_profiles();
+    init_storage2();
+    init_errors();
+    init_space();
+    init_local_key();
+    init_scoped_login();
+  }
+});
+
+// src/auth/owner-key.ts
+import { CLI_NAME as CLI_NAME16 } from "@tinycloud/operations/cli-name";
+var init_owner_key = __esm({
+  "src/auth/owner-key.ts"() {
+    "use strict";
+    init_theme();
+    init_scoped_login();
+  }
+});
+
+// src/auth/refused-approval.ts
+import { rmdir as rmdir4 } from "fs/promises";
+import { profilePath as profilePath8 } from "@tinycloud/operations/state";
+var init_refused_approval = __esm({
+  "src/auth/refused-approval.ts"() {
+    "use strict";
+    init_profiles();
+    init_pending_code();
+    init_refusal();
+    init_scoped_login();
+  }
+});
+
+// src/auth/device-auth.ts
+import {
+  createDecipheriv,
+  createECDH,
+  createHash as createHash3,
+  createHmac,
+  randomBytes as randomBytes5
+} from "crypto";
+import { publicJwk as publicJwk2 } from "@tinycloud/sdk-core";
+function invalidResponse(message) {
+  return new CLIError("DEVICE_AUTH_INVALID_RESPONSE", message, ExitCode.ERROR);
+}
+function publicRelayJwk(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid relay key");
+  const jwk = value;
+  if (jwk.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.x) || typeof jwk.y !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.y) || "d" in jwk) throw invalidResponse("OpenKey returned an invalid relay key");
+  return { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
+}
+function decodeCanonicalBase64Url(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw invalidResponse(`OpenKey returned an invalid ${label}`);
+  const decoded = Buffer.from(value, "base64url");
+  if (decoded.toString("base64url") !== value) throw invalidResponse(`OpenKey returned an invalid ${label}`);
+  return decoded;
+}
+function deriveRelayKey(sharedSecret, transactionId) {
+  const extracted = createHmac("sha256", Buffer.from(transactionId)).update(sharedSecret).digest();
+  return createHmac("sha256", extracted).update(Buffer.from("openkey-device-relay-v1")).update(Buffer.from([1])).digest();
+}
+function onP256(x, y) {
+  const px = BigInt(`0x${x.toString("hex")}`);
+  const py = BigInt(`0x${y.toString("hex")}`);
+  if (px >= P256_P || py >= P256_P) return false;
+  const mod2 = (value) => (value % P256_P + P256_P) % P256_P;
+  return mod2(py * py) === mod2(px * px * px - 3n * px + P256_B);
+}
+function relayPublicJwkOf(relayKey) {
+  const point = relayKey.getPublicKey();
+  return publicRelayJwk({ kty: "EC", crv: "P-256", x: point.subarray(1, 33).toString("base64url"), y: point.subarray(33).toString("base64url") });
+}
+function decryptRelayResult(envelope, transactionId, relayKey) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
+  const relay = envelope;
+  if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResponse("OpenKey returned an unsupported encrypted relay result");
+  const peerJwk = publicRelayJwk(relay.ephemeralPublicJwk);
+  const x = decodeCanonicalBase64Url(peerJwk.x, "relay key");
+  const y = decodeCanonicalBase64Url(peerJwk.y, "relay key");
+  if (x.length !== 32 || y.length !== 32 || !onP256(x, y)) throw invalidResponse("OpenKey returned an invalid relay key");
+  const nonce = decodeCanonicalBase64Url(relay.nonce, "relay nonce");
+  const ciphertext = decodeCanonicalBase64Url(relay.ciphertext, "relay ciphertext");
+  if (nonce.length !== 12 || ciphertext.length <= 16) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
+  let sharedSecret;
+  try {
+    sharedSecret = relayKey.computeSecret(Buffer.concat([Buffer.from([4]), x, y]));
+  } catch {
+    throw invalidResponse("OpenKey returned an invalid relay key");
+  }
+  const key = deriveRelayKey(sharedSecret, transactionId);
+  const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+  decipher.setAAD(Buffer.from(transactionId));
+  decipher.setAuthTag(ciphertext.subarray(ciphertext.length - 16));
+  let value;
+  try {
+    value = JSON.parse(Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()]).toString("utf8"));
+  } catch {
+    throw invalidResponse("OpenKey returned an unreadable encrypted relay result");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
+  return value;
+}
+var DEVICE_DELEGATION_MAX_SECONDS, DEVICE_APPROVAL_WINDOW_MAX_SECONDS, P256_P, P256_B;
+var init_device_auth = __esm({
+  "src/auth/device-auth.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    init_caveat_refusal();
+    init_raw_encryption();
+    init_local_key();
+    init_browser_auth();
+    init_scoped_login();
+    init_login_commit();
+    init_owner_key();
+    init_refusal();
+    init_refused_approval();
+    DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
+    DEVICE_APPROVAL_WINDOW_MAX_SECONDS = 60 * 60;
+    P256_P = 0xffffffff00000001000000000000000000000000ffffffffffffffffffffffffn;
+    P256_B = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604bn;
+  }
+});
+
+// src/auth/next-line.ts
+import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+function safeToEcho(argv2) {
+  for (let index = 0; index < argv2.length; index += 1) {
+    const arg = argv2[index];
+    if (isKnown(BOOLEAN_FLAGS, arg)) continue;
+    if (isKnown(VALUE_FLAGS, arg)) {
+      const value = argv2[index += 1];
+      if (value === void 0 || !safeValue(value)) return false;
+      continue;
+    }
+    if (arg.startsWith("-")) return false;
+    if (!isKnown(WORDS, arg) && !SOURCE_FILE.test(arg)) return false;
+  }
+  return true;
+}
+function readsStdin(argv2) {
+  if (argv2.includes("--stdin") || argv2.includes("--paste") || argv2.includes("-")) return true;
+  const grant = argv2.findIndex((arg, index) => arg === "auth" && argv2[index + 1] === "grant");
+  if (grant === -1) return false;
+  for (let index = grant + 2; index < argv2.length; index += 1) {
+    if (isKnown(VALUE_FLAGS, argv2[index])) index += 1;
+    else if (!argv2[index].startsWith("-")) return false;
+  }
+  return true;
+}
+function approvalNextLine(created, argv2 = process.argv.slice(2)) {
+  const stdin = readsStdin(argv2);
+  const command = !stdin && argv2.length > 0 && safeToEcho(argv2) ? `\`${[CLI_NAME17, ...argv2.map(shellWord)].join(" ")}\`` : "this same command";
+  const again = stdin ? "again with the same input" : "again";
+  return created ? `Next: send the owner the link above in your reply now. When the owner next writes to you, run ${command} ${again}.` : `Next: if you have not sent the owner the link above yet, send it in your reply now. When the owner next writes to you, run ${command} ${again}.`;
+}
+var shellWord, WORDS, VALUE_FLAGS, BOOLEAN_FLAGS, isKnown, SOURCE_FILE, PLAIN_VALUE, LONG_TOKEN, JWT_LIKE, safeValue;
+var init_next_line = __esm({
+  "src/auth/next-line.ts"() {
+    "use strict";
+    shellWord = (arg) => /^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+    WORDS = { onboard: true, auth: true, grant: true };
+    VALUE_FLAGS = { "--timeout": true, "--profile": true, "-p": true, "--host": true, "-H": true };
+    BOOLEAN_FLAGS = {
+      "--json": true,
+      "--yes": true,
+      "--quiet": true,
+      "-q": true,
+      "--verbose": true,
+      "-v": true,
+      "--no-cache": true,
+      "--no-retry": true,
+      "--replication": true,
+      "--no-replication": true
+    };
+    isKnown = (table, name) => Object.hasOwn(table, name);
+    SOURCE_FILE = /^[A-Za-z0-9._/-]{1,64}\.json$/;
+    PLAIN_VALUE = /^[A-Za-z0-9._:@/+ -]{1,64}$/;
+    LONG_TOKEN = /^[A-Za-z0-9+/_-]{24,}={0,2}$/;
+    JWT_LIKE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*$/;
+    safeValue = (value) => PLAIN_VALUE.test(value) && !LONG_TOKEN.test(value) && !JWT_LIKE.test(value);
+  }
+});
+
+// src/auth/approval-wait.ts
+function approvalLimitMs(wait2, approved) {
+  return wait2.deadlineMs + (approved ? wait2.graceMs ?? APPROVAL_COLLECT_GRACE_MS : 0);
+}
+function approvalRequestTimeoutMs(wait2, approved) {
+  if (!wait2) return REQUEST_TIMEOUT_MS2;
+  const left = approvalLimitMs(wait2, approved) - (wait2.now ?? Date.now)();
+  return Math.min(REQUEST_TIMEOUT_MS2, Math.max(MIN_REQUEST_TIMEOUT_MS2, left));
+}
+function firstCheckTimeoutMs(wait2) {
+  return wait2.requestTimeoutMs ?? REQUEST_TIMEOUT_MS2;
+}
+function approvalPendingError(pending, created = false) {
+  return new CLIError(
+    "APPROVAL_PENDING",
+    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.
+${approvalNextLine(created)}`,
+    ExitCode.PENDING,
+    { pending }
+  );
+}
+var MAX_APPROVAL_TIMEOUT_MS, APPROVAL_POLL_INTERVAL_MS2, APPROVAL_COLLECT_GRACE_MS, REQUEST_TIMEOUT_MS2, MIN_REQUEST_TIMEOUT_MS2;
+var init_approval_wait = __esm({
+  "src/auth/approval-wait.ts"() {
+    "use strict";
+    init_next_line();
+    init_constants();
+    init_errors();
+    MAX_APPROVAL_TIMEOUT_MS = 9 * 6e4;
+    APPROVAL_POLL_INTERVAL_MS2 = 2e3;
+    APPROVAL_COLLECT_GRACE_MS = 3e4;
+    REQUEST_TIMEOUT_MS2 = 1e4;
+    MIN_REQUEST_TIMEOUT_MS2 = 1e3;
+  }
+});
+
+// src/auth/invitation-key-grant.ts
+import { NodeWasmBindings as NodeWasmBindings2 } from "@tinycloud/node-sdk";
+import { SiweMessage } from "@tinycloud/sdk-core";
+function refuse2(message) {
+  throw new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
+}
+function parseApprovalSiwe(siwe) {
+  let message;
+  try {
+    message = new SiweMessage(siwe);
+  } catch {
+    refuse2("The approval message is not a valid sign-in message; no invitation was sent.");
+  }
+  if (message.prepareMessage() !== siwe) refuse2("The approval message is not in its canonical form; no invitation was sent.");
+  return { raw: siwe, requestId: message.requestId, issuedAt: message.issuedAt ?? "" };
+}
+function assertApprovalRequestBinding(siwe, request) {
+  const parsed = typeof siwe === "string" ? parseApprovalSiwe(siwe) : siwe;
+  if (parsed.requestId !== `urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`) {
+    refuse2("The approval was not signed for this invitation request; no invitation was sent.");
+  }
+}
+function invitationKeyFromGrant(permissions, input) {
+  const now = input.now ?? Date.now();
+  const prefix = `urn:tinycloud:encryption:${input.ownerDid}:default/share/`;
+  const ids = /* @__PURE__ */ new Set();
+  const actions = /* @__PURE__ */ new Set();
+  for (const entry of permissions) {
+    const id = entry.path.startsWith(prefix) ? entry.path.slice(prefix.length) : "";
+    if (entry.service !== "tinycloud.encryption" || !/^[a-f0-9]{32}$/.test(id) || (entry.caveats?.length ?? 0) > 0 || !entry.actions.every((action) => KEY_ACTIONS.includes(action))) {
+      refuse2("The approval holds more than one invitation key and nothing else; no invitation was sent.");
+    }
+    ids.add(id);
+    for (const action of entry.actions) actions.add(action);
+  }
+  if (ids.size !== 1 || !KEY_ACTIONS.every((action) => actions.has(action))) {
+    refuse2("The approval does not hold key.create and decrypt on exactly one invitation key; no invitation was sent.");
+  }
+  const issued = Date.parse(input.issuedAt);
+  const expiry = Date.parse(input.expiresAt);
+  if (!Number.isFinite(issued) || !Number.isFinite(expiry)) refuse2("The invitation approval has no signed lifetime; no invitation was sent.");
+  if (issued > now + FUTURE_ISSUE_MS) refuse2("The invitation approval was issued in the future; no invitation was sent.");
+  if (expiry <= now) refuse2("The invitation approval has expired; no invitation was sent.");
+  if (expiry - issued > DAY_MS2 || expiry > Date.parse(input.acceptanceExpiresAt)) {
+    refuse2("The approval lasts longer than the invitation it was requested for; no invitation was sent.");
+  }
+  return [...ids][0];
+}
+function verifyInvitationGrant(data, key, expected) {
+  const text = (value) => typeof value === "string" ? value : refuse2("OpenKey did not return a complete, verifiable invitation approval; no invitation was sent.");
+  const parsed = parseApprovalSiwe(text(data.siwe));
+  const siwe = parsed.raw;
+  const signature = text(data.signature);
+  const address = text(data.address);
+  const delegationCid = text(data.delegationCid);
+  const spaceId = text(data.spaceId);
+  const verificationMethod = text(data.verificationMethod);
+  const header = data.delegationHeader;
+  if (!Number.isSafeInteger(data.chainId) || typeof header?.Authorization !== "string" || verificationMethod.split("#")[0] !== expected.targetDid.split("#")[0]) {
+    refuse2("The invitation approval was not issued to this profile's key; no invitation was sent.");
+  }
+  assertApprovalRequestBinding(parsed, expected.request);
+  const bindings = new NodeWasmBindings2();
+  if (typeof bindings.validateSessionGrant !== "function") refuse2("Invitation approval could not be verified; no invitation was sent.");
+  let proof;
+  try {
+    proof = bindings.validateSessionGrant({
+      delegationHeader: { Authorization: header.Authorization },
+      delegationCid,
+      spaceId,
+      jwk: key,
+      address,
+      chainId: data.chainId,
+      siwe,
+      signature
+    });
+  } catch {
+    refuse2("OpenKey did not return a complete, verifiable invitation approval; no invitation was sent.");
+  }
+  if (!proof.verifiedRecap?.length || typeof proof.expiresAt !== "string") refuse2("The invitation approval has no signed authority; no invitation was sent.");
+  const ownerDid = `did:pkh:eip155:${data.chainId}:${address}`;
+  if (normalizePkhIdentifier(ownerDid) !== normalizePkhIdentifier(expected.ownerDid)) {
+    refuse2("The approval was given by a different account than this profile's owner; no invitation was sent.");
+  }
+  const permissions = proof.verifiedRecap.map((entry) => {
+    const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+    return {
+      service,
+      space: entry.space,
+      path: entry.path,
+      actions: entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`),
+      ...entry.caveats?.length ? { caveats: [...entry.caveats] } : {}
+    };
+  });
+  const issuedAt = parsed.issuedAt;
+  const shareId = invitationKeyFromGrant(permissions, { ownerDid, issuedAt, expiresAt: proof.expiresAt, acceptanceExpiresAt: expected.acceptanceExpiresAt, now: expected.now });
+  return { shareId, ownerDid, issuedAt, expiresAt: proof.expiresAt, permissions };
+}
+var KEY_ACTIONS, FUTURE_ISSUE_MS, DAY_MS2;
+var init_invitation_key_grant = __esm({
+  "src/auth/invitation-key-grant.ts"() {
+    "use strict";
+    init_constants();
+    init_space();
+    init_errors();
+    KEY_ACTIONS = ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"];
+    FUTURE_ISSUE_MS = 5 * 6e4;
+    DAY_MS2 = 864e5;
+  }
+});
+
+// src/auth/approval-request.ts
+import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes6, randomUUID as randomUUID2, sign } from "crypto";
+import { open as open14 } from "fs/promises";
+import { join as join17 } from "path";
+import { setTimeout as wait } from "timers/promises";
+import { additionalDelegationsPath, profilePath as profilePath9 } from "@tinycloud/operations/state";
+import { principalDidEquals } from "@tinycloud/node-sdk";
+import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
+function invalid(message) {
+  return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
+}
+function configuredOrigin(value, label) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw invalid(`${label} must be an origin.`);
+  }
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (url.pathname !== "/" || url.search || url.hash || url.username || url.password || url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw invalid(`${label} must be an HTTPS origin or a loopback HTTP origin.`);
+  }
+  return url.origin;
+}
+function grantLifetimeSeconds(expiry) {
+  const durationMs = typeof expiry === "string" && /^\d+s$/.test(expiry) ? Number(expiry.slice(0, -1)) * 1e3 : parseRequestedExpiry(expiry ?? "7d").durationMs;
+  const seconds = Math.floor(durationMs / 1e3);
+  if (!Number.isSafeInteger(seconds) || seconds < 60) throw invalid("Invalid requested grant lifetime.");
+  return seconds;
+}
+async function updatePending(profile, update) {
+  await ProfileManager.withLock(profile, async () => {
+    const directory = await ProfileManager.ensureProfileDir(profile);
+    const path = join17(directory, STATE_FILE);
+    await writeJsonDurable(path, update(await readJson(path) ?? []));
+  }, { requireProfile: true });
+}
+async function activePending(profile) {
+  const path = join17(profilePath9(profile), STATE_FILE);
+  if (!(await readJson(path))?.length) return [];
+  return ProfileManager.withLock(profile, async () => {
+    const entries = await readJson(path) ?? [];
+    const now = Date.now();
+    const active = entries.filter((entry) => {
+      const expiry = entry.command ? entry.command.result.expiry : entry.resultExpiresAt;
+      return expiry === void 0 || !(Date.parse(expiry) <= now);
+    });
+    if (active.length !== entries.length) await writeJsonDurable(path, active);
+    return active;
+  }, { requireProfile: true });
+}
+async function forgetApproval(profile, entry) {
+  await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+}
+function approvalSessionProof2(entry, action, resultRef = "", ackId = "") {
+  const jwk = entry.signingKey;
+  const jkt = createHash4("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
+  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
+  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: jkt, typ: "openkey-session-proof+jwt" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({
+    client_id: "openkey-approval-result-v1",
+    cred_hash: createHash4("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
+    htm: "POST",
+    htu: entry.apiOrigin + path,
+    iat: Math.floor(Date.now() / 1e3),
+    jti: randomBytes6(24).toString("base64url")
+  })).toString("base64url");
+  const input = `${header}.${payload}`;
+  return `${input}.${sign(null, Buffer.from(input), createPrivateKey({
+    key: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, d: jwk.d },
+    format: "jwk"
+  })).toString("base64url")}`;
+}
+async function post2(entry, action, signingKey, timeoutMs = 1e4) {
+  const ref = action === "discover" ? "" : entry.resultRef ?? "";
+  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
+  const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature } : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...action === "ack" ? { ackId: entry.ackId } : {} };
+  return fetch(entry.apiOrigin + path, {
+    method: "POST",
+    credentials: "omit",
+    redirect: "error",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof2({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+}
+async function throwRemoteError(profile, entry, response, action) {
+  const body = await response.clone().json().catch(() => null);
+  const code5 = typeof body?.code === "string" ? body.code : "";
+  if (code5 === "expired_request") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Start a new request.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code5 === "expired_result") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError("APPROVAL_RESULT_EXPIRED", "The approved result expired before it was saved. Start a new request.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code5 === "acknowledged") {
+    throw new CLIError("APPROVAL_RESULT_ACKNOWLEDGED", "OpenKey has acknowledged this result; its local commit may already be complete.", ExitCode.PENDING);
+  }
+  if (code5 === "not_found") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError(
+      action === "discover" ? "APPROVAL_REQUEST_NOT_FOUND" : "APPROVAL_RESULT_NOT_FOUND",
+      action === "discover" ? "OpenKey cannot find this approval request." : "OpenKey cannot find this approval result.",
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  if (code5 === "ack_conflict") throw invalid("OpenKey rejected a conflicting approval ACK intent.");
+  if (code5 === "request_binding" || code5 === "invalid_proof") {
+    const rejected = invalid("OpenKey rejected the request or requester binding.");
+    throw action === "discover" ? markMaybeGranted(rejected) : rejected;
+  }
+  throw new CLIError(
+    action === "discover" ? "APPROVAL_REQUEST_UNAVAILABLE" : "APPROVAL_RESULT_UNAVAILABLE",
+    `OpenKey could not ${action === "discover" ? "discover this request" : "fetch this result"} (HTTP ${response.status}). Retry the command to resume.`,
+    ExitCode.PENDING
+  );
+}
+function verifyPendingResult(entry, key) {
+  if (!entry.resultRef || !entry.resultEnvelope) throw invalid("No encrypted approval result is available.");
+  let seen;
+  try {
+    const signer = signerFromJwk(key);
+    const relay = createECDH2("prime256v1");
+    relay.setPrivateKey(Buffer.from(entry.relayPrivateKey, "base64url"));
+    const opened = decryptRelayResult(entry.resultEnvelope, entry.requestId, relay);
+    seen = opened.delegation;
+    if (opened.resultVersion !== 1 || opened.requestId !== entry.requestId || opened.requestDigest !== entry.bodyCid || opened.requesterDid !== entry.request.issuer || opened.targetDid !== entry.request.targetDid || signer.did !== entry.request.issuer || typeof opened.ownerDid !== "string" || typeof opened.delegationExpiresAt !== "string" || !Number.isFinite(Date.parse(opened.delegationExpiresAt)) || new Date(opened.delegationExpiresAt).toISOString() !== opened.delegationExpiresAt || !opened.delegation || typeof opened.delegation !== "object") throw invalid("Encrypted result binding does not match this request.");
+    const delegation = opened.delegation;
+    if (entry.request.context) {
+      if (entry.expectedOwner === void 0) throw invalid("An invitation approval needs the profile's own account to check it against.");
+      const grant = verifyInvitationGrant(delegation, key, {
+        targetDid: entry.request.targetDid,
+        ownerDid: entry.expectedOwner,
+        request: { requestId: entry.requestId, bodyCid: entry.bodyCid },
+        acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt
+      });
+      if (grant.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || grant.expiresAt !== opened.delegationExpiresAt) {
+        throw invalid("Result owner or expiry differs from its signed delegation.");
+      }
+      return { delegation, session: { ownerDid: grant.ownerDid, permissions: grant.permissions, expiresAt: grant.expiresAt } };
+    }
+    const verified = verifyScopedLogin(
+      delegation,
+      key,
+      entry.request.targetDid,
+      entry.request.permissions,
+      {
+        expectedOwner: entry.expectedOwner ?? opened.ownerDid,
+        expiry: { durationMs: entry.request.grantLifetimeSeconds * 1e3 },
+        exactApproval: true
+      }
+    );
+    if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid("Result owner or expiry differs from its signed delegation.");
+    return { delegation, session: verified.session };
+  } catch (error) {
+    if (isPermanentRefusal(error) || error instanceof CLIError && error.code === "APPROVAL_RESULT_INVALID") carryRefusedDelegation(error, seen);
+    throw error;
+  }
+}
+function pendingApproval(entry, approvalWait, created = false) {
+  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt }, created);
+}
+function bodyCutOff(error) {
+  return error instanceof TypeError || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError" || error.code === "ECONNRESET");
+}
+function lapsedPastRetention(entry, now) {
+  return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
+}
+async function expiredRequest(profile, entry, drop) {
+  if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+  return new CLIError(
+    "APPROVAL_REQUEST_EXPIRED",
+    "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.",
+    ExitCode.AUTH_REQUIRED
+  );
+}
+async function discoverRefusedAsExpired(entry, response, now) {
+  if (response.status !== 400 || entry.resultRef !== void 0 || now < Date.parse(entry.requestExpiresAt)) return false;
+  const body = await response.clone().json().catch(() => null);
+  return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
+}
+async function pauseBetweenAttempts(profile, entry, approvalWait, reached = false) {
+  if (!approvalWait) {
+    await wait(2e3);
+    return;
+  }
+  const now = approvalWait.now ?? Date.now;
+  const approved = entry.resultRef !== void 0;
+  const remaining = approvalLimitMs(approvalWait, approved) - now();
+  if (remaining <= 0) {
+    if (approved) {
+      throw new CLIError(
+        "APPROVAL_RESULT_UNAVAILABLE",
+        "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.",
+        ExitCode.PENDING
+      );
+    }
+    if (!reached && now() >= Date.parse(entry.requestExpiresAt)) throw await expiredRequest(profile, entry, lapsedPastRetention(entry, now()));
+    throw pendingApproval(entry, approvalWait);
+  }
+  await (approvalWait.sleep ?? ((ms2) => wait(ms2)))(Math.min(APPROVAL_POLL_INTERVAL_MS2, remaining));
+}
+async function acquireApprovalRequest(_did, options) {
+  const profile = options.profileName;
+  if (!profile || !options.jwk || !options.host || !options.permissions?.length && !options.invitationContext || options.invitationContext && !options.expectedOwner) {
+    throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
+  }
+  const signingKey = options.jwk;
+  const approvalWait = options.approvalWait;
+  const signer = signerFromJwk(signingKey);
+  const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
+  const apiOrigin = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ?? (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
+  const linkApiOrigin = configuredOrigin(process.env.TC_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API_ORIGIN, "Links API");
+  const context = options.invitationContext;
+  const targetPublicJwk = {
+    kty: signingKey.kty,
+    crv: signingKey.crv,
+    x: signingKey.x
+  };
+  const spec = context ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context, now: Date.now() }) : {
+    issuer: signer.did,
+    requestVersion: 1,
+    targetDid: signer.did,
+    targetPublicJwk,
+    nodeOrigin: options.host,
+    permissions: options.permissions,
+    ...options.reason ? { reason: options.reason } : {},
+    grantLifetimeSeconds: grantLifetimeSeconds(options.expiry)
+  };
+  if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
+    throw invalid("Invalid approval command intent.");
+  }
+  const matching = (await activePending(profile)).filter((item) => {
+    if (item.commandIntent !== options.commandIntent) return false;
+    const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
+    const { permissions: nextPermissions, ...nextRaw } = spec;
+    const next = context ? { ...nextRaw, grantLifetimeSeconds: prior.grantLifetimeSeconds, suggestedLifetimeSeconds: prior.suggestedLifetimeSeconds } : nextRaw;
+    if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin || item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin || priorPermissions.length !== nextPermissions.length) return false;
+    let owner;
+    try {
+      owner = item.resultEnvelope ? verifyPendingResult(item, signingKey).session.ownerDid : item.expectedOwner;
+    } catch (error) {
+      if (error instanceof CLIError && error.code === "AUTH_EXPIRED") return false;
+      throw error;
+    }
+    if ((item.expectedOwner !== void 0 || options.expectedOwner !== void 0) && (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
+    return priorPermissions.every(({ space, ...permission2 }, index) => {
+      const { space: nextSpace, ...nextPermission } = nextPermissions[index];
+      return canonicalJson(permission2) === canonicalJson(nextPermission) && (owner ? sameLoginSpace(space, nextSpace, owner) : space === nextSpace);
+    });
+  });
+  if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
+  let entry = matching[0];
+  const isNewRequest = entry === void 0;
+  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
+    throw await expiredRequest(profile, entry, true);
+  }
+  if (!entry) {
+    const relay = createECDH2("prime256v1");
+    relay.generateKeys();
+    const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
+    const created = await createApprovalRequest({
+      request,
+      issuerKey: signer,
+      apiOrigin: linkApiOrigin,
+      openkeyOrigin,
+      ...context ? { expiresAt: new Date(context.acceptanceExpiresAt) } : {}
+    });
+    const profileKey = await ProfileManager.getKey(profile);
+    entry = {
+      version: 1,
+      request,
+      requestId: created.id,
+      bodyCid: created.bodyCid,
+      approvalUrl: created.link,
+      requestExpiresAt: created.expiresAt,
+      record: created.record,
+      apiOrigin,
+      linkApiOrigin,
+      openkeyOrigin,
+      ...profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey },
+      relayPrivateKey: relay.getPrivateKey().toString("base64url"),
+      expectedOwner: options.expectedOwner,
+      ackId: randomUUID2(),
+      ...options.invitationMeta === void 0 ? {} : { invitationMeta: options.invitationMeta },
+      ...options.commandIntent === void 0 ? {} : { commandIntent: options.commandIntent }
+    };
+    await updatePending(profile, (items) => [...items, entry]);
+  }
+  if (!entry.resultRef && !entry.resultEnvelope) {
+    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+`);
+    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+      await tryOpenBrowser(entry.approvalUrl);
+    }
+    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
+  }
+  if (!entry.resultEnvelope) {
+    let answered = false;
+    for (; ; ) {
+      const firstWait = !answered && entry.resultRef === void 0 ? approvalWait : void 0;
+      let response;
+      try {
+        response = await post2(entry, "discover", signingKey, firstWait ? firstCheckTimeoutMs(firstWait) : approvalRequestTimeoutMs(approvalWait, entry.resultRef !== void 0));
+      } catch (error) {
+        if (firstWait && error instanceof Error && error.name === "TimeoutError") {
+          throw new CLIError(
+            "NETWORK_ERROR",
+            `OpenKey did not answer the approval status check within ${Math.round(firstCheckTimeoutMs(firstWait) / 1e3)} seconds. The approval request is saved: run the same command again.`,
+            ExitCode.NETWORK_ERROR,
+            { hint: "The saved approval request resumes on the next run; no new link is needed." }
+          );
+        }
+        await pauseBetweenAttempts(profile, entry, approvalWait);
+        continue;
+      }
+      answered = true;
+      if (response.status === 202) {
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
+        continue;
+      }
+      if (!response.ok && await discoverRefusedAsExpired(entry, response, (approvalWait?.now ?? Date.now)())) {
+        throw await expiredRequest(profile, entry, true);
+      }
+      if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
+      let discovered;
+      try {
+        discovered = await response.json();
+      } catch (error) {
+        if (!approvalWait || !bodyCutOff(error)) throw error;
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
+        continue;
+      }
+      if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) || typeof discovered.expiresAt !== "string" || !Number.isFinite(Date.parse(discovered.expiresAt))) {
+        throw invalid("Invalid approval result reference.");
+      }
+      entry.resultRef = discovered.resultRef;
+      entry.resultExpiresAt = discovered.expiresAt;
+      await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
+      let fetched;
+      try {
+        fetched = await post2(entry, "fetch", signingKey, approvalRequestTimeoutMs(approvalWait, true));
+      } catch {
+        if (approvalWait) await pauseBetweenAttempts(profile, entry, approvalWait);
+        continue;
+      }
+      if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
+      let result;
+      try {
+        result = await fetched.json();
+      } catch (error) {
+        if (!approvalWait || !bodyCutOff(error)) throw error;
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
+        continue;
+      }
+      if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid || result.resultRef !== entry.resultRef || result.expiresAt !== entry.resultExpiresAt || !result.relay || typeof result.relay !== "object") throw invalid("Result reference does not match this request.");
+      entry.resultEnvelope = result.relay;
+      break;
+    }
+  }
+  let verified;
+  try {
+    verified = verifyPendingResult(entry, signingKey);
+  } catch (error) {
+    if (isPermanentRefusal(error)) await forgetApproval(profile, entry);
+    throw error;
+  }
+  await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
+  acquisitions.set(verified.delegation, entry);
+  if (approvalWait) approvalWaits.set(entry, approvalWait);
+  return verified.delegation;
+}
+async function pendingInvitationContext(profile, match) {
+  const now = match.now ?? Date.now();
+  return (await activePending(profile)).flatMap((entry) => entry.request.context ? [{ context: entry.request.context, entry }] : []).find(({ context, entry }) => context.recipientEmail === match.recipientEmail && context.subjectKind === match.subjectKind && context.subjectName === match.subjectName && Date.parse(context.acceptanceExpiresAt) > now && entry.invitationMeta?.contentSha256 === match.contentSha256 && (context.accessExpiresAt === match.accessExpiresAt || match.requestedDurationMs !== void 0 && entry.invitationMeta?.requestedDurationMs === match.requestedDurationMs && Date.parse(context.accessExpiresAt) < Date.parse(match.accessExpiresAt) && Date.parse(context.accessExpiresAt) > now + 6e4))?.context;
+}
+async function takeInvitationApproval(profile, delegation) {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || !entry.resultRef) throw invalid("This is not an invitation approval that has a result.");
+  const profileKey = await ProfileManager.getKey(profile);
+  const key = entry.signingKey ?? profileKey;
+  if (!key || signerFromJwk(key).did !== entry.request.targetDid) throw invalid("The approval was not requested by this profile's key.");
+  let present = false;
+  await updatePending(profile, (items) => {
+    present = items.some((item) => item.requestId === entry.requestId);
+    return items.filter((item) => item.requestId !== entry.requestId);
+  });
+  if (!present) throw invalid("This invitation approval was already used; request a new one.");
+  try {
+    await post2(entry, "ack", key);
+  } catch {
+  }
+}
+function invitationGrantOf(delegation, key) {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || entry.expectedOwner === void 0) throw invalid("This is not an invitation approval for this profile.");
+  return verifyInvitationGrant(delegation, key, {
+    targetDid: entry.request.targetDid,
+    ownerDid: entry.expectedOwner,
+    request: { requestId: entry.requestId, bodyCid: entry.bodyCid },
+    acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt
+  });
+}
+var acquisitions, approvalWaits, STATE_FILE, RESULT_RETENTION_MS, EXPIRY_SKEW_MS;
+var init_approval_request = __esm({
+  "src/auth/approval-request.ts"() {
+    "use strict";
+    init_browser();
+    init_space();
+    init_links();
+    init_profiles();
+    init_storage2();
+    init_constants();
+    init_errors();
+    init_permissions();
+    init_permissions();
+    init_apps_agent_preset();
+    init_pending_code();
+    init_refusal();
+    init_device_auth();
+    init_scoped_login();
+    init_approval_wait();
+    init_invitation_key_grant();
+    acquisitions = /* @__PURE__ */ new WeakMap();
+    approvalWaits = /* @__PURE__ */ new WeakMap();
+    STATE_FILE = "approval-pending.json";
+    RESULT_RETENTION_MS = 6e5;
+    EXPIRY_SKEW_MS = 6e4;
   }
 });
 
@@ -15776,7 +17231,7 @@ var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME} courier takes no ${CLI_NAME} option
 // src/index.ts
 init_errors();
 import { readFileSync as readFileSync2 } from "fs";
-import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
 import { Command as Command2 } from "commander";
 
 // src/output/banner.ts
@@ -28288,6 +29743,7 @@ async function publishTargetShare(input) {
     target,
     expiresAt,
     expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
+    ...input.expiresInMs === void 0 ? {} : { expiresInMs: input.expiresInMs },
     origin: input.origin,
     ...input.notify === void 0 ? {} : { notify: input.notify },
     ...input.credentialDescriptor === void 0 ? {} : { credentialDescriptor: input.credentialDescriptor },
@@ -30984,35 +32440,9 @@ function canonicalMailbox2(value) {
 var POLICY_ROOT_MAX_LIFETIME_SECONDS3 = 31 * 24 * 60 * 60;
 
 // src/commands/share.ts
-import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
-
-// src/lib/duration.ts
-function parseDuration(input) {
-  const match = input.match(/^(\d+)(m|h|d|w)$/);
-  if (match) {
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
-    const multipliers = {
-      m: 60 * 1e3,
-      h: 60 * 60 * 1e3,
-      d: 24 * 60 * 60 * 1e3,
-      w: 7 * 24 * 60 * 60 * 1e3
-    };
-    return value * multipliers[unit];
-  }
-  const date = new Date(input);
-  if (!isNaN(date.getTime())) {
-    const ms = date.getTime() - Date.now();
-    if (ms <= 0) {
-      throw new Error(`Expiry date "${input}" is in the past`);
-    }
-    return ms;
-  }
-  throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
-}
-
-// src/commands/share.ts
+init_duration();
 init_errors();
+import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
 
 // src/share/failure-class.ts
 init_constants();
@@ -31433,7 +32863,7 @@ import {
   revokePolicyRootV3,
   signCompactUcanAuthorization
 } from "@tinycloud/sdk-core";
-import { extractSiweExpiration, InvalidRestoredSessionError } from "@tinycloud/node-sdk";
+import { extractSiweExpiration, InvalidRestoredSessionError, ManifestValidationError } from "@tinycloud/node-sdk";
 function requiredKvAction(meta) {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return void 0;
   const action = meta.requiredAction;
@@ -31468,8 +32898,15 @@ async function removeOverLimitShare(input) {
   }
   return remaining;
 }
+var NAMED_KEY_PATH_MESSAGE = "Manifest validation failed: named keys go in manifest.keys";
 function sessionHoldsEncryptionDecrypt(node, networkId) {
-  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+  try {
+    return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+  } catch (error) {
+    if (!(error instanceof ManifestValidationError) || error.message !== NAMED_KEY_PATH_MESSAGE || node.getRuntimePermissionDelegations === void 0) throw error;
+    const now = Date.now();
+    return node.getRuntimePermissionDelegations().some((delegation) => delegation.expiry.getTime() > now && (delegation.resources ?? []).some((resource) => resource.service === "encryption" && resource.path === networkId && resource.actions.includes("tinycloud.encryption/decrypt")));
+  }
 }
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
@@ -31944,45 +33381,45 @@ function createShareAuthorityAdapters(input = {}) {
     if (refusedKind !== void 0) throw new CLIError("UNAVAILABLE", `${refusedKind}-addressed shares are not available in this release; nothing was shared`, 4);
     const node = await authenticatedNode();
     const session = node.restorableSession;
-    const ownerSpaceId = session?.spaceId;
+    const ownerSpaceId2 = session?.spaceId;
     const localKey = !node.isSessionOnly;
-    let sessionExpiresAt;
+    let sessionExpiresAt2;
     try {
-      sessionExpiresAt = node.isSessionOnly && session?.siwe ? extractSiweExpiration(session.siwe) : void 0;
+      sessionExpiresAt2 = node.isSessionOnly && session?.siwe ? extractSiweExpiration(session.siwe) : void 0;
     } catch {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName2 });
     }
-    if (ownerSpaceId === void 0 || node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt === void 0)) {
+    if (ownerSpaceId2 === void 0 || node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt2 === void 0)) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName2 });
     }
-    if (node.isSessionOnly && sessionExpiresAt !== void 0) {
-      const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1e3) * 1e3);
+    if (node.isSessionOnly && sessionExpiresAt2 !== void 0) {
+      const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt2.getTime() / 1e3) * 1e3);
       if (roundedSessionExpiry.getTime() <= Date.now() + 6e4) {
         throw new SharePublishAuthorityError({
           kind: "lifetime-exceeds-session",
-          sessionExpiresAt,
+          sessionExpiresAt: sessionExpiresAt2,
           reason: "session-too-close",
           localKey,
           profileName: activeProfileName2
         });
       }
     }
-    const expiryClamped = node.isSessionOnly && sessionExpiresAt !== void 0 && targetInput.expiresAt > sessionExpiresAt;
+    const expiryClamped = node.isSessionOnly && sessionExpiresAt2 !== void 0 && targetInput.expiresAt > sessionExpiresAt2;
     if (expiryClamped && targetInput.expiryWasExplicit) {
       throw new SharePublishAuthorityError({
         kind: "lifetime-exceeds-session",
-        sessionExpiresAt,
+        sessionExpiresAt: sessionExpiresAt2,
         reason: "beyond-session",
         localKey,
         profileName: activeProfileName2
       });
     }
-    const effectiveExpiry = expiryClamped ? sessionExpiresAt : targetInput.expiresAt;
-    const expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1e3) * 1e3);
+    const effectiveExpiry = expiryClamped ? sessionExpiresAt2 : targetInput.expiresAt;
+    let expiresAt = new Date(Math.floor(effectiveExpiry.getTime() / 1e3) * 1e3);
     if (expiresAt.getTime() <= Date.now() + 6e4) {
       throw new SharePublishAuthorityError({
         kind: "lifetime-exceeds-session",
-        sessionExpiresAt: sessionExpiresAt ?? expiresAt,
+        sessionExpiresAt: sessionExpiresAt2 ?? expiresAt,
         reason: node.isSessionOnly && expiryClamped && !targetInput.expiryWasExplicit ? "session-too-close" : "below-minimum",
         localKey,
         profileName: activeProfileName2
@@ -31991,11 +33428,45 @@ function createShareAuthorityAdapters(input = {}) {
     if (targetInput.target.kind === "email" && (targetInput.credentialDescriptor === void 0 || targetInput.issuerDid === void 0 || targetInput.issuerKid === void 0)) {
       throw new TypeError("email credential descriptor and issuer are required");
     }
-    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? void 0 : targetInput.target.kind === "email" ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    const shareId = crypto.randomUUID().replaceAll("-", "");
-    const pathPlan = addressedEncryptionNetwork === void 0 ? void 0 : planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork });
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? void 0 : targetInput.target.kind === "email" ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId2);
+    let shareId = crypto.randomUUID().replaceAll("-", "");
+    let pathPlan = addressedEncryptionNetwork === void 0 ? void 0 : planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork });
     if (pathPlan !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, pathPlan.keyResource)) {
-      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      if (input.approveEmailInviteKey === void 0 || targetInput.target.kind !== "email" || activeProfileName2 === void 0) {
+        throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      }
+      const requestedSeconds = (expiresAt.getTime() - Date.now()) / 1e3;
+      if (requestedSeconds > POLICY_ROOT_MAX_LIFETIME_SECONDS3) {
+        throw new SharePublishAuthorityError({ kind: "invite-access-too-long", requestedDays: Math.ceil(requestedSeconds / 86400), limitDays: POLICY_ROOT_MAX_LIFETIME_SECONDS3 / 86400 });
+      }
+      if (targetInput.origin !== (await publicConfig()).shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
+      await node.activeNodeIdentity();
+      const approved = await input.approveEmailInviteKey({
+        node,
+        profile: activeProfileName2,
+        recipientEmail: targetInput.target.address,
+        subjectName: targetInput.filename,
+        subjectKind: "file",
+        accessExpiresAt: expiresAt,
+        // A default clamped to the session's expiry is not the user's duration: a later, longer session must not silently reuse this shorter date.
+        ...targetInput.expiresInMs === void 0 || expiryClamped ? {} : { requestedDurationMs: targetInput.expiresInMs },
+        contentSha256: (() => {
+          const hash = createHash("sha256");
+          for (const file2 of targetInput.files !== void 0 && targetInput.files.length > 0 ? targetInput.files : [{ bytes: targetInput.source, filename: targetInput.filename }]) {
+            hash.update(file2.filename).update("\0").update(createHash("sha256").update(file2.bytes).digest());
+          }
+          return hash.digest("hex");
+        })()
+      });
+      if (approved.accessExpiresAt !== expiresAt.toISOString()) {
+        const approvedExpiry = new Date(approved.accessExpiresAt);
+        if (!approved.resumed || !(approvedExpiry.getTime() < expiresAt.getTime()) || approvedExpiry.getTime() <= Date.now() + 6e4) {
+          throw new SharePublishAuthorityError({ kind: "invalid-request", reason: "the approval's access date is not this share's expiry; nothing was published" });
+        }
+        expiresAt = approvedExpiry;
+      }
+      shareId = approved.shareId;
+      pathPlan = planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork });
     }
     const config = await publicConfig();
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
@@ -32022,14 +33493,14 @@ function createShareAuthorityAdapters(input = {}) {
       }
       let artifactVersion2;
       if (artifact2 !== void 0) {
-        artifactVersion2 = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
+        artifactVersion2 = await storeArtifactVersion(node.kvForSpace(ownerSpaceId2), {
           artifactId: artifact2.id,
           files: [{ filename: storageName2, bytes: file2.bytes, contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream" }],
           ...artifact2.note === void 0 ? {} : { note: artifact2.note }
         }, { localKey, profileName: activeProfileName2 });
         resourcePath2 = artifactVersionFilePath(artifact2.id, artifactVersion2.version, storageName2);
       } else {
-        const written = await node.kvForSpace(ownerSpaceId).put(resourcePath2, file2.bytes.slice(), {
+        const written = await node.kvForSpace(ownerSpaceId2).put(resourcePath2, file2.bytes.slice(), {
           contentType: targetInput.mediaType ?? file2.mediaType ?? "application/octet-stream"
         });
         failIfSpaceNotReady(written);
@@ -32067,7 +33538,7 @@ function createShareAuthorityAdapters(input = {}) {
         }
         throw error;
       }
-      if (native.spaceId !== ownerSpaceId) throw new Error("native bearer delegation authority does not match the authenticated owner space");
+      if (native.spaceId !== ownerSpaceId2) throw new Error("native bearer delegation authority does not match the authenticated owner space");
       const result = {
         protocol: "tinycloud-share",
         version: SHARE_PUBLISH_RESULT_VERSION,
@@ -32119,7 +33590,7 @@ function createShareAuthorityAdapters(input = {}) {
       nodeOrigin: activeNode.origin,
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
-      spaceId: ownerSpaceId,
+      spaceId: ownerSpaceId2,
       target: prepared.target,
       resource: { kind: resourceKind },
       storage: artifact === void 0 ? { path: resourcePath } : { artifactId: artifact.id, storageName },
@@ -32148,14 +33619,14 @@ function createShareAuthorityAdapters(input = {}) {
     const storedBytes = encrypted.storedBytes;
     let artifactVersion;
     if (artifact !== void 0) {
-      artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
+      artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId2), {
         artifactId: artifact.id,
         files: [{ filename: storageName, bytes: storedBytes, contentType: "application/vnd.tinycloud.encrypted-envelope+json" }],
         ...artifact.note === void 0 ? {} : { note: artifact.note }
       }, { localKey, profileName: activeProfileName2 });
       resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
     } else {
-      const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+      const stored = await node.kvForSpace(ownerSpaceId2).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
       failIfSpaceNotReady(stored);
       if (!stored.ok) {
         const code5 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
@@ -32176,7 +33647,7 @@ function createShareAuthorityAdapters(input = {}) {
       plan: pathPlanForShare,
       envelope: encrypted.envelope,
       storedBytes,
-      kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
+      kvResource: `${ownerSpaceId2}/kv/${resourcePath}`,
       selector: resourceKind
     });
     const addressedOptions = {
@@ -32185,7 +33656,7 @@ function createShareAuthorityAdapters(input = {}) {
       nodeOrigin: activeNode.origin,
       nodeAudience: activeNode.nodeDid,
       enforcerDid: activeNode.nodeDid,
-      spaceId: ownerSpaceId,
+      spaceId: ownerSpaceId2,
       target: prepared.target,
       resource: { kind: resourceKind, path: resourcePath },
       actions,
@@ -32232,7 +33703,7 @@ function createShareAuthorityAdapters(input = {}) {
           kind: "object",
           path: resourcePath,
           remove: async () => {
-            const removed = await node.kvForSpace(ownerSpaceId).delete(resourcePath);
+            const removed = await node.kvForSpace(ownerSpaceId2).delete(resourcePath);
             const code5 = !removed.ok && typeof removed.error === "object" && removed.error !== null && "code" in removed.error ? removed.error.code : void 0;
             if (!removed.ok && code5 !== "KV_NOT_FOUND") throw new Error("uploaded content could not be deleted");
           }
@@ -32794,9 +34265,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open12 = html.indexOf("<", index);
-    if (open12 === -1) return;
-    index = open12 + 1;
+    const open15 = html.indexOf("<", index);
+    if (open15 === -1) return;
+    index = open15 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -33758,6 +35229,9 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "decrypt-not-held") {
       return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME12} auth login --paste --manifest builtin:share-publishing`, 5);
     }
+    if (failure.kind === "invite-access-too-long") {
+      return new CLIError("INVALID_ARGUMENT", `Couldn't create the invitation: file access can last at most ${failure.limitDays} days, and you asked for ${failure.requestedDays} days. Choose ${failure.limitDays} days or less and try again. Run it again with --expires ${failure.limitDays}d or less.`, 2);
+    }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
     }
@@ -33820,6 +35294,9 @@ async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies 
 }
 function jsonOutput(options, command) {
   return options.json === true || command.optsWithGlobals().json === true;
+}
+function relativeExpiryMs(value) {
+  return /^\d+(m|h|d|w)$/.test(value) ? parseDuration(value) : void 0;
 }
 function expires(value) {
   try {
@@ -33951,6 +35428,8 @@ function registerShareCommand(program2) {
         actions,
         expiresAt: expires(options.expires ?? "7d"),
         expiryWasExplicit: options.expires !== void 0,
+        // The duration the user chose ("7d", or the default), so a rerun of the same choice resumes an open approval with its own absolute date.
+        ...relativeExpiryMs(options.expires ?? "7d") === void 0 ? {} : { expiresInMs: relativeExpiryMs(options.expires ?? "7d") },
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
@@ -34197,6 +35676,113 @@ function registerShareCommand(program2) {
   });
 }
 
+// src/share/invite-approval.ts
+init_approval_request();
+init_invitation_key_grant();
+init_profiles();
+init_constants();
+init_errors();
+import { randomBytes as randomBytes7 } from "crypto";
+import { activateValidatedRuntimeDelegation } from "@tinycloud/node-sdk";
+var DAY_MS3 = 864e5;
+var TRANSIENT_ACTIVATION_CODES = /* @__PURE__ */ new Set(["NODE_NOT_RESPONDING", "registry_unavailable", "ACTIVATION_TRANSPORT_FAILED"]);
+function activationUnavailable(error) {
+  const { reason, code: code5 } = error ?? {};
+  return reason === "activation_unavailable" || typeof code5 === "string" && TRANSIENT_ACTIVATION_CODES.has(code5);
+}
+var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+function newInvitationId(now) {
+  let id = "";
+  let time = now;
+  for (let index = 0; index < 10; index += 1) {
+    id = CROCKFORD[time % 32] + id;
+    time = Math.floor(time / 32);
+  }
+  for (const byte of randomBytes7(16)) id += CROCKFORD[byte % 32];
+  return id.slice(0, 26);
+}
+var approveEmailInviteKey = async (request) => {
+  const { node, profile } = request;
+  const session = node.restorableSession;
+  if (session === void 0 || session.jwk === void 0) throw new Error("the profile session has no signing key");
+  const profileConfig = await ProfileManager.getProfile(profile);
+  const ownerDid = profileConfig.ownerDid;
+  if (typeof ownerDid !== "string" || !/^did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}$/.test(ownerDid)) {
+    throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "This profile has no recorded owner account to check an invitation approval against.", ExitCode.USAGE_ERROR);
+  }
+  const now = Date.now();
+  const accessExpiresAt = new Date(Math.floor(request.accessExpiresAt.getTime() / 1e3) * 1e3).toISOString();
+  const resumedContext = await pendingInvitationContext(profile, {
+    recipientEmail: request.recipientEmail,
+    subjectKind: request.subjectKind,
+    subjectName: request.subjectName,
+    accessExpiresAt,
+    contentSha256: request.contentSha256,
+    ...request.requestedDurationMs === void 0 ? {} : { requestedDurationMs: request.requestedDurationMs }
+  });
+  const context = resumedContext ?? {
+    kind: "share-invitation",
+    version: 1,
+    invitationId: newInvitationId(now),
+    recipientEmail: request.recipientEmail,
+    subjectKind: request.subjectKind,
+    subjectName: request.subjectName,
+    acceptanceExpiresAt: new Date(Math.floor(Math.min(now + DAY_MS3, Date.parse(accessExpiresAt)) / 1e3) * 1e3).toISOString(),
+    accessExpiresAt
+  };
+  const host = (await node.activeNodeIdentity()).origin;
+  const key = session.jwk;
+  const delegation = await acquireApprovalRequest(node.credentialHolderDid, {
+    profileName: profile,
+    jwk: session.jwk,
+    host,
+    invitationContext: context,
+    expectedOwner: ownerDid,
+    openkeyHost: process.env.TC_OPENKEY_HOST ?? profileConfig.openkeyHost,
+    ...request.contentSha256 === void 0 ? {} : { invitationMeta: { contentSha256: request.contentSha256, ...request.requestedDurationMs === void 0 ? {} : { requestedDurationMs: request.requestedDurationMs } } },
+    ...request.onApprovalRequest === void 0 ? {} : { onApprovalRequest: request.onApprovalRequest }
+  });
+  const grant = invitationGrantOf(delegation, key);
+  if (resumedContext === void 0 && context.accessExpiresAt !== accessExpiresAt) {
+    throw new CLIError("APPROVAL_RESULT_INVALID", "The approval was not signed for this share's expiry; nothing was installed or sent.", ExitCode.PERMISSION_DENIED);
+  }
+  const entryKey = grant.permissions[0];
+  const portable = {
+    cid: delegation.delegationCid,
+    delegationHeader: { Authorization: delegation.delegationHeader.Authorization },
+    spaceId: delegation.spaceId,
+    path: entryKey.path,
+    actions: [...entryKey.actions],
+    resources: [{ service: "encryption", space: "encryption", path: entryKey.path, actions: [...entryKey.actions] }],
+    expiry: new Date(grant.expiresAt),
+    delegateDID: delegation.verificationMethod,
+    ownerAddress: delegation.address,
+    chainId: delegation.chainId,
+    host,
+    siweProof: { siwe: delegation.siwe, signature: delegation.signature }
+  };
+  try {
+    await activateValidatedRuntimeDelegation(node, portable, {
+      host,
+      // What the node ends up holding must be exactly the one pair, again from the signed bytes it parsed itself.
+      authorize: (effective) => {
+        try {
+          return invitationKeyFromGrant(effective, { ownerDid: grant.ownerDid, issuedAt: grant.issuedAt, expiresAt: grant.expiresAt, acceptanceExpiresAt: context.acceptanceExpiresAt }) === grant.shareId;
+        } catch {
+          return false;
+        }
+      }
+    });
+  } catch (error) {
+    if (activationUnavailable(error)) {
+      throw new CLIError("UNAVAILABLE", "The TinyCloud host could not be reached to install the invitation approval; nothing was sent. Run the same command again to continue with the same approval.", ExitCode.NETWORK_ERROR);
+    }
+    throw new CLIError("APPROVAL_RESULT_INVALID", `The invitation approval could not be installed for this profile (${error.reason ?? error.code ?? "refused"}); no invitation was sent.`, ExitCode.PERMISSION_DENIED);
+  }
+  await takeInvitationApproval(profile, delegation);
+  return { shareId: grant.shareId, accessExpiresAt: context.accessExpiresAt, resumed: resumedContext !== void 0 };
+};
+
 // src/lib/courier-loader.ts
 async function loadCourierEntry() {
   const load = new Function("specifier", "return import(specifier)");
@@ -34223,7 +35809,8 @@ function fullCommandName(command) {
 }
 var shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
-  fetchFn: globalThis.fetch
+  fetchFn: globalThis.fetch,
+  approveEmailInviteKey
 });
 function selectedShareProfile() {
   const args = process.argv.slice(2);
@@ -34234,7 +35821,7 @@ function selectedShareProfile() {
   }
   return process.env.TC_PROFILE;
 }
-program.name(CLI_NAME13).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr").option("--no-diagnostic-logs", "Don't record a CLI log for this command");
+program.name(CLI_NAME18).description("TinyCloud CLI \u2014 self-sovereign storage from the terminal").version(version).option("-p, --profile <name>", "Profile to use").option("-H, --host <url>", "TinyCloud node URL").option("-v, --verbose", "Enable verbose output").option("--no-cache", "Disable caching").option("-q, --quiet", "Suppress non-essential output").option("--json", "Force JSON output").option("--no-retry", "Do not retry node busy/timeout answers (monitors and probes); same as TINYCLOUD_RETRY=0").option("--replication", "Enable read-through replication for this invocation").option("--no-replication", "Disable read-through replication for this invocation").option("--replication-debug", "Write replication diagnostics to stderr").option("--no-diagnostic-logs", "Don't record a CLI log for this command");
 program.hook("preAction", async (hookedCommand, actionCommand) => {
   const opts = hookedCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
@@ -34261,11 +35848,11 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
       const profileName = opts.profile || config.defaultProfile;
       const hasProfile = await ProfileManager.profileExists(profileName);
       if (!hasProfile) {
-        process.stderr.write(theme.warn("\u26A0 No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME13} init`) + "\n\n");
+        process.stderr.write(theme.warn("\u26A0 No profile configured.") + " " + theme.muted(`Run: ${CLI_NAME18} init`) + "\n\n");
       } else {
         const key = await ProfileManager.getKey(profileName);
         if (!key) {
-          process.stderr.write(theme.warn("\u26A0 No key found.") + " " + theme.muted(`Run: ${CLI_NAME13} init`) + "\n\n");
+          process.stderr.write(theme.warn("\u26A0 No key found.") + " " + theme.muted(`Run: ${CLI_NAME18} init`) + "\n\n");
         }
       }
     } catch {
@@ -34328,14 +35915,14 @@ program.addHelpText("afterAll", () => {
   if (!process.stdout.isTTY) return "";
   return `
 ${theme.heading("Examples:")}
-  ${theme.command(`${CLI_NAME13} init`)}                              ${theme.muted("Set up a profile and generate keys")}
-  ${theme.command(`${CLI_NAME13} auth login`)}                        ${theme.muted("Authenticate via browser")}
-  ${theme.command(`${CLI_NAME13} kv put greeting "Hello"`)}           ${theme.muted("Store a value")}
-  ${theme.command(`${CLI_NAME13} kv list`)}                           ${theme.muted("List all keys")}
-  ${theme.command(`${CLI_NAME13} secrets network init`)}              ${theme.muted("Create the default secrets network")}
-  ${theme.command(`${CLI_NAME13} account apps list`)}                 ${theme.muted("List registered account apps")}
-  ${theme.command(`${CLI_NAME13} delegation create --to did:pkh:...`)}  ${theme.muted("Grant access to another user")}
-  ${theme.command(`${CLI_NAME13} space list`)}                        ${theme.muted("Show your spaces")}
+  ${theme.command(`${CLI_NAME18} init`)}                              ${theme.muted("Set up a profile and generate keys")}
+  ${theme.command(`${CLI_NAME18} auth login`)}                        ${theme.muted("Authenticate via browser")}
+  ${theme.command(`${CLI_NAME18} kv put greeting "Hello"`)}           ${theme.muted("Store a value")}
+  ${theme.command(`${CLI_NAME18} kv list`)}                           ${theme.muted("List all keys")}
+  ${theme.command(`${CLI_NAME18} secrets network init`)}              ${theme.muted("Create the default secrets network")}
+  ${theme.command(`${CLI_NAME18} account apps list`)}                 ${theme.muted("List registered account apps")}
+  ${theme.command(`${CLI_NAME18} delegation create --to did:pkh:...`)}  ${theme.muted("Grant access to another user")}
+  ${theme.command(`${CLI_NAME18} space list`)}                        ${theme.muted("Show your spaces")}
 
 ${theme.muted("Docs:")} ${theme.accent("https://docs.tinycloud.xyz/cli")}
 ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk")}

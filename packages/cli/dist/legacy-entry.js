@@ -20040,6 +20040,117 @@ var init_approval_wait = __esm({
   }
 });
 
+// src/auth/invitation-key-grant.ts
+import { NodeWasmBindings as NodeWasmBindings2 } from "@tinycloud/node-sdk";
+import { SiweMessage } from "@tinycloud/sdk-core";
+function refuse2(message) {
+  throw new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
+}
+function parseApprovalSiwe(siwe) {
+  let message;
+  try {
+    message = new SiweMessage(siwe);
+  } catch {
+    refuse2("The approval message is not a valid sign-in message; no invitation was sent.");
+  }
+  if (message.prepareMessage() !== siwe) refuse2("The approval message is not in its canonical form; no invitation was sent.");
+  return { raw: siwe, requestId: message.requestId, issuedAt: message.issuedAt ?? "" };
+}
+function assertApprovalRequestBinding(siwe, request) {
+  const parsed = typeof siwe === "string" ? parseApprovalSiwe(siwe) : siwe;
+  if (parsed.requestId !== `urn:tinycloud:approval-request:${request.requestId}:${request.bodyCid}`) {
+    refuse2("The approval was not signed for this invitation request; no invitation was sent.");
+  }
+}
+function invitationKeyFromGrant(permissions, input) {
+  const now = input.now ?? Date.now();
+  const prefix = `urn:tinycloud:encryption:${input.ownerDid}:default/share/`;
+  const ids = /* @__PURE__ */ new Set();
+  const actions = /* @__PURE__ */ new Set();
+  for (const entry of permissions) {
+    const id = entry.path.startsWith(prefix) ? entry.path.slice(prefix.length) : "";
+    if (entry.service !== "tinycloud.encryption" || !/^[a-f0-9]{32}$/.test(id) || (entry.caveats?.length ?? 0) > 0 || !entry.actions.every((action) => KEY_ACTIONS.includes(action))) {
+      refuse2("The approval holds more than one invitation key and nothing else; no invitation was sent.");
+    }
+    ids.add(id);
+    for (const action of entry.actions) actions.add(action);
+  }
+  if (ids.size !== 1 || !KEY_ACTIONS.every((action) => actions.has(action))) {
+    refuse2("The approval does not hold key.create and decrypt on exactly one invitation key; no invitation was sent.");
+  }
+  const issued = Date.parse(input.issuedAt);
+  const expiry = Date.parse(input.expiresAt);
+  if (!Number.isFinite(issued) || !Number.isFinite(expiry)) refuse2("The invitation approval has no signed lifetime; no invitation was sent.");
+  if (issued > now + FUTURE_ISSUE_MS) refuse2("The invitation approval was issued in the future; no invitation was sent.");
+  if (expiry <= now) refuse2("The invitation approval has expired; no invitation was sent.");
+  if (expiry - issued > DAY_MS3 || expiry > Date.parse(input.acceptanceExpiresAt)) {
+    refuse2("The approval lasts longer than the invitation it was requested for; no invitation was sent.");
+  }
+  return [...ids][0];
+}
+function verifyInvitationGrant(data, key, expected) {
+  const text2 = (value4) => typeof value4 === "string" ? value4 : refuse2("OpenKey did not return a complete, verifiable invitation approval; no invitation was sent.");
+  const parsed = parseApprovalSiwe(text2(data.siwe));
+  const siwe = parsed.raw;
+  const signature = text2(data.signature);
+  const address = text2(data.address);
+  const delegationCid = text2(data.delegationCid);
+  const spaceId = text2(data.spaceId);
+  const verificationMethod = text2(data.verificationMethod);
+  const header = data.delegationHeader;
+  if (!Number.isSafeInteger(data.chainId) || typeof header?.Authorization !== "string" || verificationMethod.split("#")[0] !== expected.targetDid.split("#")[0]) {
+    refuse2("The invitation approval was not issued to this profile's key; no invitation was sent.");
+  }
+  assertApprovalRequestBinding(parsed, expected.request);
+  const bindings = new NodeWasmBindings2();
+  if (typeof bindings.validateSessionGrant !== "function") refuse2("Invitation approval could not be verified; no invitation was sent.");
+  let proof;
+  try {
+    proof = bindings.validateSessionGrant({
+      delegationHeader: { Authorization: header.Authorization },
+      delegationCid,
+      spaceId,
+      jwk: key,
+      address,
+      chainId: data.chainId,
+      siwe,
+      signature
+    });
+  } catch {
+    refuse2("OpenKey did not return a complete, verifiable invitation approval; no invitation was sent.");
+  }
+  if (!proof.verifiedRecap?.length || typeof proof.expiresAt !== "string") refuse2("The invitation approval has no signed authority; no invitation was sent.");
+  const ownerDid = `did:pkh:eip155:${data.chainId}:${address}`;
+  if (normalizePkhIdentifier(ownerDid) !== normalizePkhIdentifier(expected.ownerDid)) {
+    refuse2("The approval was given by a different account than this profile's owner; no invitation was sent.");
+  }
+  const permissions = proof.verifiedRecap.map((entry) => {
+    const service = entry.service.startsWith("tinycloud.") ? entry.service : `tinycloud.${entry.service}`;
+    return {
+      service,
+      space: entry.space,
+      path: entry.path,
+      actions: entry.actions.map((action) => action.includes("/") ? action : `${service}/${action}`),
+      ...entry.caveats?.length ? { caveats: [...entry.caveats] } : {}
+    };
+  });
+  const issuedAt = parsed.issuedAt;
+  const shareId = invitationKeyFromGrant(permissions, { ownerDid, issuedAt, expiresAt: proof.expiresAt, acceptanceExpiresAt: expected.acceptanceExpiresAt, now: expected.now });
+  return { shareId, ownerDid, issuedAt, expiresAt: proof.expiresAt, permissions };
+}
+var KEY_ACTIONS, FUTURE_ISSUE_MS, DAY_MS3;
+var init_invitation_key_grant = __esm({
+  "src/auth/invitation-key-grant.ts"() {
+    "use strict";
+    init_constants();
+    init_space();
+    init_errors();
+    KEY_ACTIONS = ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"];
+    FUTURE_ISSUE_MS = 5 * 6e4;
+    DAY_MS3 = 864e5;
+  }
+});
+
 // src/auth/approval-request.ts
 var approval_request_exports = {};
 __export(approval_request_exports, {
@@ -20052,8 +20163,11 @@ __export(approval_request_exports, {
   completeApprovalResult: () => completeApprovalResult,
   dropApprovalsHoldingKey: () => dropApprovalsHoldingKey,
   dropRefusedApproval: () => dropRefusedApproval,
+  invitationGrantOf: () => invitationGrantOf,
   pendingApprovalKey: () => pendingApprovalKey,
+  pendingInvitationContext: () => pendingInvitationContext,
   recoverApprovalCommand: () => recoverApprovalCommand,
+  takeInvitationApproval: () => takeInvitationApproval,
   trackApprovalResult: () => trackApprovalResult
 });
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
@@ -20318,6 +20432,19 @@ function verifyPendingResult(entry, key) {
     seen = opened.delegation;
     if (opened.resultVersion !== 1 || opened.requestId !== entry.requestId || opened.requestDigest !== entry.bodyCid || opened.requesterDid !== entry.request.issuer || opened.targetDid !== entry.request.targetDid || signer.did !== entry.request.issuer || typeof opened.ownerDid !== "string" || typeof opened.delegationExpiresAt !== "string" || !Number.isFinite(Date.parse(opened.delegationExpiresAt)) || new Date(opened.delegationExpiresAt).toISOString() !== opened.delegationExpiresAt || !opened.delegation || typeof opened.delegation !== "object") throw invalid2("Encrypted result binding does not match this request.");
     const delegation = opened.delegation;
+    if (entry.request.context) {
+      if (entry.expectedOwner === void 0) throw invalid2("An invitation approval needs the profile's own account to check it against.");
+      const grant = verifyInvitationGrant(delegation, key, {
+        targetDid: entry.request.targetDid,
+        ownerDid: entry.expectedOwner,
+        request: { requestId: entry.requestId, bodyCid: entry.bodyCid },
+        acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt
+      });
+      if (grant.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || grant.expiresAt !== opened.delegationExpiresAt) {
+        throw invalid2("Result owner or expiry differs from its signed delegation.");
+      }
+      return { delegation, session: { ownerDid: grant.ownerDid, permissions: grant.permissions, expiresAt: grant.expiresAt } };
+    }
     const verified = verifyScopedLogin(
       delegation,
       key,
@@ -20381,7 +20508,7 @@ async function pauseBetweenAttempts(profile, entry, approvalWait, reached = fals
 }
 async function acquireApprovalRequest(_did, options) {
   const profile = options.profileName;
-  if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
+  if (!profile || !options.jwk || !options.host || !options.permissions?.length && !options.invitationContext || options.invitationContext && !options.expectedOwner) {
     throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
   }
   const signingKey = options.jwk;
@@ -20390,13 +20517,13 @@ async function acquireApprovalRequest(_did, options) {
   const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
   const apiOrigin2 = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ?? (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
   const linkApiOrigin = configuredOrigin(process.env.TC_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API_ORIGIN, "Links API");
-  const lifetime = grantLifetimeSeconds(options.expiry);
+  const context2 = options.invitationContext;
   const targetPublicJwk = {
     kty: signingKey.kty,
     crv: signingKey.crv,
     x: signingKey.x
   };
-  const spec = {
+  const spec = context2 ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context: context2, now: Date.now() }) : {
     issuer: signer.did,
     requestVersion: 1,
     targetDid: signer.did,
@@ -20404,7 +20531,7 @@ async function acquireApprovalRequest(_did, options) {
     nodeOrigin: options.host,
     permissions: options.permissions,
     ...options.reason ? { reason: options.reason } : {},
-    grantLifetimeSeconds: lifetime
+    grantLifetimeSeconds: grantLifetimeSeconds(options.expiry)
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid2("Invalid approval command intent.");
@@ -20412,7 +20539,8 @@ async function acquireApprovalRequest(_did, options) {
   const matching = (await activePending(profile)).filter((item) => {
     if (item.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
-    const { permissions: nextPermissions, ...next } = spec;
+    const { permissions: nextPermissions, ...nextRaw } = spec;
+    const next = context2 ? { ...nextRaw, grantLifetimeSeconds: prior.grantLifetimeSeconds, suggestedLifetimeSeconds: prior.suggestedLifetimeSeconds } : nextRaw;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin2 || item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin || priorPermissions.length !== nextPermissions.length) return false;
     let owner;
     try {
@@ -20437,7 +20565,13 @@ async function acquireApprovalRequest(_did, options) {
     const relay = createECDH2("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
-    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const created = await createApprovalRequest({
+      request,
+      issuerKey: signer,
+      apiOrigin: linkApiOrigin,
+      openkeyOrigin,
+      ...context2 ? { expiresAt: new Date(context2.acceptanceExpiresAt) } : {}
+    });
     const profileKey = await ProfileManager.getKey(profile);
     entry = {
       version: 1,
@@ -20454,6 +20588,7 @@ async function acquireApprovalRequest(_did, options) {
       relayPrivateKey: relay.getPrivateKey().toString("base64url"),
       expectedOwner: options.expectedOwner,
       ackId: randomUUID2(),
+      ...options.invitationMeta === void 0 ? {} : { invitationMeta: options.invitationMeta },
       ...options.commandIntent === void 0 ? {} : { commandIntent: options.commandIntent }
     };
     await updatePending(profile, (items) => [...items, entry]);
@@ -20631,6 +20766,37 @@ async function completeApprovalResult(profile, delegation) {
     await updatePending(profile, (items) => entry.command ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item) : items.filter((item) => item.requestId !== entry.requestId));
   }
 }
+async function pendingInvitationContext(profile, match) {
+  const now = match.now ?? Date.now();
+  return (await activePending(profile)).flatMap((entry) => entry.request.context ? [{ context: entry.request.context, entry }] : []).find(({ context: context2, entry }) => context2.recipientEmail === match.recipientEmail && context2.subjectKind === match.subjectKind && context2.subjectName === match.subjectName && Date.parse(context2.acceptanceExpiresAt) > now && entry.invitationMeta?.contentSha256 === match.contentSha256 && (context2.accessExpiresAt === match.accessExpiresAt || match.requestedDurationMs !== void 0 && entry.invitationMeta?.requestedDurationMs === match.requestedDurationMs && Date.parse(context2.accessExpiresAt) < Date.parse(match.accessExpiresAt) && Date.parse(context2.accessExpiresAt) > now + 6e4))?.context;
+}
+async function takeInvitationApproval(profile, delegation) {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || !entry.resultRef) throw invalid2("This is not an invitation approval that has a result.");
+  const profileKey = await ProfileManager.getKey(profile);
+  const key = entry.signingKey ?? profileKey;
+  if (!key || signerFromJwk(key).did !== entry.request.targetDid) throw invalid2("The approval was not requested by this profile's key.");
+  let present = false;
+  await updatePending(profile, (items) => {
+    present = items.some((item) => item.requestId === entry.requestId);
+    return items.filter((item) => item.requestId !== entry.requestId);
+  });
+  if (!present) throw invalid2("This invitation approval was already used; request a new one.");
+  try {
+    await post2(entry, "ack", key);
+  } catch {
+  }
+}
+function invitationGrantOf(delegation, key) {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || entry.expectedOwner === void 0) throw invalid2("This is not an invitation approval for this profile.");
+  return verifyInvitationGrant(delegation, key, {
+    targetDid: entry.request.targetDid,
+    ownerDid: entry.expectedOwner,
+    request: { requestId: entry.requestId, bodyCid: entry.bodyCid },
+    acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt
+  });
+}
 var acquisitions, approvalWaits, STATE_FILE, RESULT_RETENTION_MS, EXPIRY_SKEW_MS;
 var init_approval_request = __esm({
   "src/auth/approval-request.ts"() {
@@ -20650,6 +20816,7 @@ var init_approval_request = __esm({
     init_device_auth();
     init_scoped_login();
     init_approval_wait();
+    init_invitation_key_grant();
     acquisitions = /* @__PURE__ */ new WeakMap();
     approvalWaits = /* @__PURE__ */ new WeakMap();
     STATE_FILE = "approval-pending.json";
@@ -35118,6 +35285,7 @@ async function publishTargetShare(input) {
     target,
     expiresAt,
     expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
+    ...input.expiresInMs === void 0 ? {} : { expiresInMs: input.expiresInMs },
     origin: input.origin,
     ...input.notify === void 0 ? {} : { notify: input.notify },
     ...input.credentialDescriptor === void 0 ? {} : { credentialDescriptor: input.credentialDescriptor },
@@ -35900,7 +36068,7 @@ import {
   revokePolicyRootV3,
   signCompactUcanAuthorization
 } from "@tinycloud/sdk-core";
-import { extractSiweExpiration, InvalidRestoredSessionError } from "@tinycloud/node-sdk";
+import { extractSiweExpiration, InvalidRestoredSessionError, ManifestValidationError as ManifestValidationError2 } from "@tinycloud/node-sdk";
 var SHARE_HISTORY_FILE = "share-history-v2.json";
 var SHARE_HISTORY_LEGACY_FILE = "share-history-v1.bin";
 var PRIVATE_HISTORY_MODE = 384;
@@ -37929,7 +38097,7 @@ function registerAuthCommand(program, options) {
         authenticated: false,
         replicasRemoved,
         replicasKept: options2.keepReplicas === true,
-        warning: online ? "The node confirmed revocation of the listed CIDs before local logout." : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME20} delegation revoke <cid>\` to end access now.`,
+        warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME20} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME20} delegation revoke <cid>\` to end access now.`,
         ...online === void 0 ? {} : {
           revokedCids: online.plan.cids,
           revocationExcluded: online.plan.excluded
@@ -41060,11 +41228,11 @@ import { link as link3, lstat as lstat9, open as open15, readFile as readFile12,
 import { basename as basename2, dirname as dirname8, join as join18, resolve as resolve5 } from "path";
 var RawExportRefusal = class extends Error {
 };
-function refuse2(message) {
+function refuse3(message) {
   throw new RawExportRefusal(message);
 }
 function checkAbort(signal) {
-  if (signal?.aborted) refuse2("Raw snapshot export was cancelled.");
+  if (signal?.aborted) refuse3("Raw snapshot export was cancelled.");
 }
 function strongETag(etag) {
   return typeof etag === "string" && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag);
@@ -41089,11 +41257,11 @@ function pageProof(page, inputCursor) {
 }
 function validateScope(page, options, nodeDid) {
   if (!page.source.nodeDid || page.source.space !== options.sourceSpace || page.source.prefix !== options.prefix || nodeDid !== void 0 && page.source.nodeDid !== nodeDid) {
-    refuse2("The raw source scope changed or did not match the requested space and prefix.");
+    refuse3("The raw source scope changed or did not match the requested space and prefix.");
   }
 }
 function claimSourceKey(keys, key) {
-  if (!key || keys.has(key)) refuse2("Raw capture contains duplicate or conflicting source identities.");
+  if (!key || keys.has(key)) refuse3("Raw capture contains duplicate or conflicting source identities.");
   keys.add(key);
 }
 async function assertUnusedOutput(path) {
@@ -41103,7 +41271,7 @@ async function assertUnusedOutput(path) {
     if (error.code === "ENOENT") return;
     throw error;
   }
-  refuse2("Raw export output already exists; choose an unused output path.");
+  refuse3("Raw export output already exists; choose an unused output path.");
 }
 async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid, linkDepth = 0) {
   let path = directory;
@@ -41111,12 +41279,12 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
   for (; ; ) {
     const entry = await lstat9(path);
     if (!Number.isSafeInteger(entry.uid) || !Number.isSafeInteger(entry.mode) || entry.uid !== uid && entry.uid !== 0) {
-      refuse2("Raw export requires directories owned by the effective user or root.");
+      refuse3("Raw export requires directories owned by the effective user or root.");
     }
     if (entry.isSymbolicLink()) {
-      if (linkDepth >= 40) refuse2("Raw export cannot verify cyclic or excessively nested directory aliases.");
+      if (linkDepth >= 40) refuse3("Raw export cannot verify cyclic or excessively nested directory aliases.");
       const targetBytes = await readlink(path, { encoding: "buffer" });
-      if (!isUtf8(targetBytes)) refuse2("Raw export cannot verify a directory alias with an invalid UTF-8 target.");
+      if (!isUtf8(targetBytes)) refuse3("Raw export cannot verify a directory alias with an invalid UTF-8 target.");
       const target = targetBytes.toString("utf8");
       await assertTrustedDirectoryChain(
         target.startsWith("/") ? target : `${dirname8(path)}/${target}`,
@@ -41127,10 +41295,10 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
       );
     } else {
       if (!entry.isDirectory() || leaf && entry.uid !== uid) {
-        refuse2("Raw export requires an output directory owned by the effective user.");
+        refuse3("Raw export requires an output directory owned by the effective user.");
       }
       if ((entry.mode & 18) !== 0 && (leaf || (entry.mode & 512) === 0 || childUid !== uid && childUid !== 0)) {
-        refuse2("Raw export refuses an output path writable or replaceable by other users.");
+        refuse3("Raw export refuses an output path writable or replaceable by other users.");
       }
     }
     const parent = dirname8(path);
@@ -41141,9 +41309,9 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
   }
 }
 async function assertTrustedOutputDirectory(directory) {
-  if (typeof process.geteuid !== "function") refuse2("Raw export requires verifiable POSIX ownership.");
+  if (typeof process.geteuid !== "function") refuse3("Raw export requires verifiable POSIX ownership.");
   const uid = process.geteuid();
-  if (!Number.isSafeInteger(uid) || uid < 0) refuse2("Raw export cannot verify the effective filesystem owner.");
+  if (!Number.isSafeInteger(uid) || uid < 0) refuse3("Raw export cannot verify the effective filesystem owner.");
   await assertTrustedDirectoryChain(directory, uid);
   const physical = await realpath2(directory);
   if (physical !== directory) await assertTrustedDirectoryChain(physical, uid);
@@ -41151,12 +41319,12 @@ async function assertTrustedOutputDirectory(directory) {
 async function sidecarRows(options, keys) {
   if (options.sidecarsFile === void 0) return [];
   const config = JSON.parse(await readFile12(options.sidecarsFile, { encoding: "utf8", signal: options.signal }));
-  if (!Array.isArray(config)) refuse2("Raw export sidecar configuration must be an array of explicit source records.");
+  if (!Array.isArray(config)) refuse3("Raw export sidecar configuration must be an array of explicit source records.");
   const rows = [];
   for (const value4 of config) {
     checkAbort(options.signal);
     if (value4 === null || typeof value4 !== "object" || typeof value4.sourceKey !== "string" || typeof value4.path !== "string" || !value4.path || !["watch-state", "thread-watch-state", "expiry-state"].includes(value4.sourceArea)) {
-      refuse2("Raw export sidecar configuration contains an invalid explicit source record.");
+      refuse3("Raw export sidecar configuration contains an invalid explicit source record.");
     }
     const sidecar = value4;
     claimSourceKey(keys, sidecar.sourceKey);
@@ -41177,7 +41345,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
     const assertStableParent = async () => {
       const current = await lstat9(parentPath);
       if (!current.isDirectory() || current.dev !== identity2.dev || current.ino !== identity2.ino) {
-        refuse2("The raw export output directory changed during publication.");
+        refuse3("The raw export output directory changed during publication.");
       }
     };
     await assertStableParent();
@@ -41205,7 +41373,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
 async function exportFeedRawSnapshot(options) {
   try {
     if (!/^tinycloud:[^\s:]+(?::[^\s:]+)+$/.test(options.sourceSpace) || !options.prefix || options.prefix.startsWith("/") || !options.prefix.endsWith("/") || !options.outFile || options.outFile === "-") {
-      refuse2("Raw export requires an explicit full source-space URI, relative slash prefix and output file.");
+      refuse3("Raw export requires an explicit full source-space URI, relative slash prefix and output file.");
     }
     checkAbort(options.signal);
     const outFile = resolve5(options.outFile);
@@ -41222,20 +41390,20 @@ async function exportFeedRawSnapshot(options) {
       checkAbort(options.signal);
       const result = await options.kv.changes({ prefix: options.prefix, cursor, limit: 500, signal: options.signal });
       checkAbort(options.signal);
-      if (!result.ok) refuse2("Could not read the raw change feed; explicit source read and sync authority are required.");
+      if (!result.ok) refuse3("Could not read the raw change feed; explicit source read and sync authority are required.");
       const page = result.data;
       validateScope(page, options, nodeDid);
       nodeDid = page.source.nodeDid;
       pages.push(pageProof(page, cursor));
       for (const change of page.changes) {
         checkAbort(options.signal);
-        if (!change.key.startsWith(options.prefix)) refuse2("A raw change key falls outside the requested namespace.");
+        if (!change.key.startsWith(options.prefix)) refuse3("A raw change key falls outside the requested namespace.");
         claimSourceKey(keys, change.key);
         if (change.deleted) {
           deletions.push({ sourceKey: change.key, sourceArea: "kv", deleted: true });
           continue;
         }
-        if (!strongETag(change.etag)) refuse2("Raw capture requires strong source ETags.");
+        if (!strongETag(change.etag)) refuse3("Raw capture requires strong source ETags.");
         const value4 = await options.kv.get(change.key, {
           prefix: "",
           binary: true,
@@ -41243,14 +41411,14 @@ async function exportFeedRawSnapshot(options) {
           signal: options.signal
         });
         checkAbort(options.signal);
-        if (!value4.ok) refuse2("Could not read a raw source value at its change-feed revision.");
+        if (!value4.ok) refuse3("Could not read a raw source value at its change-feed revision.");
         if (!(value4.data.data instanceof Uint8Array) || !strongETag(value4.data.headers.etag) || value4.data.headers.etag !== change.etag) {
-          refuse2("A raw source value changed during capture or did not provide matching strong ETags.");
+          refuse3("A raw source value changed during capture or did not provide matching strong ETags.");
         }
         rows.push({ ...rawRow(change.key, "kv", value4.data.data), etag: change.etag, metadata: { ...change.metadata } });
       }
       if (page.more && (page.cursor === cursor || cursors.has(page.cursor))) {
-        refuse2("Raw change-feed pagination did not advance its opaque cursor.");
+        refuse3("Raw change-feed pagination did not advance its opaque cursor.");
       }
       cursor = page.cursor;
       if (!page.more) break;
@@ -41260,11 +41428,11 @@ async function exportFeedRawSnapshot(options) {
     checkAbort(options.signal);
     const tailResult = await options.kv.changes({ prefix: options.prefix, cursor, limit: 500, signal: options.signal });
     checkAbort(options.signal);
-    if (!tailResult.ok) refuse2("Could not verify the final raw source cursor.");
+    if (!tailResult.ok) refuse3("Could not verify the final raw source cursor.");
     const tail = tailResult.data;
     validateScope(tail, options, nodeDid);
     if (tail.more || tail.changes.length !== 0 || tail.cursor !== cursor) {
-      refuse2("The raw source changed during capture; no complete snapshot was published.");
+      refuse3("The raw source changed during capture; no complete snapshot was published.");
     }
     const snapshot = {
       format: "tinycloud.feed.raw-snapshot",
@@ -41372,7 +41540,7 @@ var bundleSchema = external_exports2.object({
   deletions: external_exports2.array(external_exports2.object({ sourceKey: text, classification, previousSha256: digest2.optional(), deletedAt: external_exports2.string().optional() }).strict()),
   quarantine: external_exports2.array(external_exports2.object({ sourceKey: text, reason: external_exports2.enum(["unknown", "invalid", "ambiguous-reference", "orphan-reference", "unmapped-publisher", "unresolved-issuance", "unsupported-receipt"]), detail: external_exports2.string() }).strict())
 }).strict();
-function refuse3() {
+function refuse4() {
   throw new CLIError(ErrorCodes.INVALID_INPUT, "Prepared feed bundle is structurally inconsistent");
 }
 function sameIdentity(a, b) {
@@ -41388,7 +41556,7 @@ function unique(values, key) {
   const map = /* @__PURE__ */ new Map();
   for (const value4 of values) {
     const id = key(value4);
-    if (map.has(id)) refuse3();
+    if (map.has(id)) refuse4();
     map.set(id, value4);
   }
   return map;
@@ -41396,19 +41564,19 @@ function unique(values, key) {
 function validateBundle(input) {
   try {
     const bundle = bundleSchema.parse(input);
-    if (bundle.source.previousSnapshotId === bundle.source.snapshotId) refuse3();
+    if (bundle.source.previousSnapshotId === bundle.source.snapshotId) refuse4();
     unique(bundle.origins, (origin2) => origin2.path);
-    for (const origin2 of bundle.origins) if (origin2.path.startsWith("/") || origin2.path.split("/").includes("..")) refuse3();
+    for (const origin2 of bundle.origins) if (origin2.path.startsWith("/") || origin2.path.split("/").includes("..")) refuse4();
     const rows = unique(bundle.sourceRows, (row) => row.sourceKey);
     const decoded = /* @__PURE__ */ new Map();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     for (const row of rows.values()) {
-      if (row.sourceArea === "kv" && !row.sourceKey.startsWith(bundle.source.namespace)) refuse3();
+      if (row.sourceArea === "kv" && !row.sourceKey.startsWith(bundle.source.namespace)) refuse4();
       const bytes = Buffer.from(row.rawBase64, "base64");
-      if (bytes.toString("base64") !== row.rawBase64 || createHash7("sha256").update(bytes).digest("hex") !== row.sha256) refuse3();
+      if (bytes.toString("base64") !== row.rawBase64 || createHash7("sha256").update(bytes).digest("hex") !== row.sha256) refuse4();
       if (row.classification !== "quarantine") {
         const value4 = JSON.parse(decoder.decode(bytes));
-        if (!jsonValue(value4)) refuse3();
+        if (!jsonValue(value4)) refuse4();
         decoded.set(row.sourceKey, value4);
       }
     }
@@ -41419,41 +41587,41 @@ function validateBundle(input) {
     unique(bundle.cards, (card) => cardKey(card.publisherId, card.identity));
     const keys = (values) => {
       unique(values, (value4) => value4);
-      for (const key of values) if (!recipients.has(key)) refuse3();
+      for (const key of values) if (!recipients.has(key)) refuse4();
     };
     for (const card of cards.values()) {
       const raw = decoded.get(card.sourceKey);
-      if (!rows.has(card.sourceKey) || !publishers.has(card.publisherId) || !object2(raw) || typeof card.record.kind !== "string" || typeof card.record.id !== "string" || raw.kind !== card.record.kind || raw.id !== card.record.id || card.sourceKey !== `${bundle.source.namespace}board/${card.record.kind}/${card.record.id}.json` || !sameIdentity(card.identity, card.canonicalCard) || card.canonicalCard.kind !== card.record.kind) refuse3();
+      if (!rows.has(card.sourceKey) || !publishers.has(card.publisherId) || !object2(raw) || typeof card.record.kind !== "string" || typeof card.record.id !== "string" || raw.kind !== card.record.kind || raw.id !== card.record.id || card.sourceKey !== `${bundle.source.namespace}board/${card.record.kind}/${card.record.id}.json` || !sameIdentity(card.identity, card.canonicalCard) || card.canonicalCard.kind !== card.record.kind) refuse4();
       const payload = typedPayload.parse(card.canonicalCard.payload);
-      if (payload.source.ref !== card.sourceKey || !sameJSON(payload.sitrep.record, card.record) || card.currentAnswerSourceKey !== void 0 && !rows.has(card.currentAnswerSourceKey)) refuse3();
+      if (payload.source.ref !== card.sourceKey || !sameJSON(payload.sitrep.record, card.record) || card.currentAnswerSourceKey !== void 0 && !rows.has(card.currentAnswerSourceKey)) refuse4();
     }
     unique(bundle.routes, (route) => route.sourceKey);
     for (const route of bundle.routes) {
       const card = cards.get(route.sourceKey);
-      if (!card || card.record.kind !== route.card.kind || card.record.id !== route.card.id) refuse3();
+      if (!card || card.record.kind !== route.card.kind || card.record.id !== route.card.id) refuse4();
       keys(route.recipientKeys);
       keys(route.fallbackRecipientKeys);
     }
     const responses = unique(bundle.ownerResponses, (event) => event.response.responseId);
     unique(bundle.ownerResponses, (event) => event.eventKey);
     for (const event of responses.values()) {
-      if (!rows.has(event.sourceKey) || !publishers.has(event.publisherId)) refuse3();
+      if (!rows.has(event.sourceKey) || !publishers.has(event.publisherId)) refuse4();
       keys(event.recipientKeys);
-      if (event.restoreTarget === "agent-response" && !event.recipientKeys.some((key) => recipients.get(key)?.runtimeTarget)) refuse3();
+      if (event.restoreTarget === "agent-response" && !event.recipientKeys.some((key) => recipients.get(key)?.runtimeTarget)) refuse4();
     }
     for (const delivery of bundle.deliveries) {
       const event = responses.get(delivery.responseId);
       const recipient = recipients.get(delivery.recipientKey);
-      if (!rows.has(delivery.sourceKey) || !rows.has(delivery.eventSourceKey) || !event || !recipient || delivery.publisherId !== event.publisherId || delivery.eventSourceKey !== event.sourceKey || delivery.eventKey !== event.eventKey || !sameIdentity(delivery.identity, event.response) || !event.recipientKeys.includes(delivery.recipientKey)) refuse3();
-      if (delivery.dispatch === "resolved-pending" && (!recipient.runtimeTarget || delivery.state !== "pending" || event.restoreTarget !== "agent-response")) refuse3();
-      if (["delivered", "unconfirmed", "refused"].includes(delivery.state) && delivery.dispatch !== "never") refuse3();
+      if (!rows.has(delivery.sourceKey) || !rows.has(delivery.eventSourceKey) || !event || !recipient || delivery.publisherId !== event.publisherId || delivery.eventSourceKey !== event.sourceKey || delivery.eventKey !== event.eventKey || !sameIdentity(delivery.identity, event.response) || !event.recipientKeys.includes(delivery.recipientKey)) refuse4();
+      if (delivery.dispatch === "resolved-pending" && (!recipient.runtimeTarget || delivery.state !== "pending" || event.restoreTarget !== "agent-response")) refuse4();
+      if (["delivered", "unconfirmed", "refused"].includes(delivery.state) && delivery.dispatch !== "never") refuse4();
     }
-    for (const value4 of [...bundle.ownerState, ...bundle.checkpoints, ...bundle.quarantine]) if (!rows.has(value4.sourceKey)) refuse3();
-    for (const thread of bundle.threads) if (!rows.has(thread.sourceKey) || !publishers.has(thread.publisherId)) refuse3();
+    for (const value4 of [...bundle.ownerState, ...bundle.checkpoints, ...bundle.quarantine]) if (!rows.has(value4.sourceKey)) refuse4();
+    for (const thread of bundle.threads) if (!rows.has(thread.sourceKey) || !publishers.has(thread.publisherId)) refuse4();
     unique(bundle.deletions, (deletion) => deletion.sourceKey);
     return bundle;
   } catch {
-    refuse3();
+    refuse4();
   }
 }
 function safeError(error) {
@@ -41483,53 +41651,53 @@ async function verifyRegistry(owner, publishers) {
   const basenames = /* @__PURE__ */ new Set(["home_feed", "threads"]);
   for (const raw of result.rows) {
     const row = registryRow.parse(raw);
-    if (registered.has(row[0])) refuse3();
+    if (registered.has(row[0])) refuse4();
     const expected = value2(feedResourceNames(FEED_PREFIX, row[0]));
-    if (row[3] !== expected.outputResource || row[4] !== expected.responseResource) refuse3();
+    if (row[3] !== expected.outputResource || row[4] !== expected.responseResource) refuse4();
     for (const resource of [row[3], row[4]]) {
       const basename7 = resource.split("/").at(-1);
-      if (basenames.has(basename7)) refuse3();
+      if (basenames.has(basename7)) refuse4();
       basenames.add(basename7);
     }
     registered.set(row[0], row);
   }
   for (const publisher of publishers) {
     const row = registered.get(publisher.agentId);
-    if (!row || row[1] !== publisher.agentDid || row[3] !== publisher.outputResource || row[4] !== publisher.responseResource) refuse3();
+    if (!row || row[1] !== publisher.agentDid || row[3] !== publisher.outputResource || row[4] !== publisher.responseResource) refuse4();
   }
 }
 async function archiveRow(owner, bundle, snapshotId) {
   const rows = value2(await owner.query("SELECT bundle_json FROM feed_owner_imports WHERE source_space_id = ? AND namespace = ? AND snapshot_id = ?", [bundle.source.spaceId, bundle.source.namespace, snapshotId])).rows;
-  if (rows.length > 1 || rows.length && typeof rows[0][0] !== "string") refuse3();
+  if (rows.length > 1 || rows.length && typeof rows[0][0] !== "string") refuse4();
   return rows.length ? String(rows[0][0]) : void 0;
 }
 async function priorCards(owner, bundle, bytes) {
   const known = /* @__PURE__ */ new Map();
   const exists = value2(await owner.query("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?", ["feed_owner_imports"])).rows.length > 0;
   if (!exists) {
-    if (bundle.source.previousSnapshotId) refuse3();
+    if (bundle.source.previousSnapshotId) refuse4();
     return known;
   }
   const current = await archiveRow(owner, bundle, bundle.source.snapshotId);
-  if (current !== void 0 && current !== bytes) refuse3();
+  if (current !== void 0 && current !== bytes) refuse4();
   const publishers = new Map(bundle.publishers.map((publisher) => [publisher.publisherId, publisher]));
   const visited = /* @__PURE__ */ new Set([bundle.source.snapshotId]);
   let predecessor = bundle.source.previousSnapshotId;
   while (predecessor) {
-    if (visited.has(predecessor)) refuse3();
+    if (visited.has(predecessor)) refuse4();
     visited.add(predecessor);
     const prior = await archiveRow(owner, bundle, predecessor);
-    if (prior === void 0) refuse3();
+    if (prior === void 0) refuse4();
     const parsed = JSON.parse(prior);
     const history = validateBundle(parsed);
-    if (history.source.spaceId !== bundle.source.spaceId || history.source.namespace !== bundle.source.namespace || history.source.snapshotId !== predecessor) refuse3();
+    if (history.source.spaceId !== bundle.source.spaceId || history.source.namespace !== bundle.source.namespace || history.source.snapshotId !== predecessor) refuse4();
     for (const card of history.cards) {
       const publisher = history.publishers.find((item) => item.publisherId === card.publisherId);
       const currentPublisher = publishers.get(card.publisherId);
       if (!publisher || !currentPublisher || !sameJSON(publisher, currentPublisher)) continue;
       const key = cardKey(card.publisherId, card.identity);
       const previous = known.get(key);
-      if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse3();
+      if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse4();
       known.set(key, card);
     }
     predecessor = history.source.previousSnapshotId;
@@ -41543,7 +41711,7 @@ function prepareRecords(bundle, known) {
   for (const card of bundle.cards) {
     const key = cardKey(card.publisherId, card.identity);
     const previous = known.get(key);
-    if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse3();
+    if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse4();
     known.set(key, card);
     included.add(key);
     records.get(card.publisherId).cards.push(card.canonicalCard);
@@ -41559,7 +41727,7 @@ function prepareRecords(bundle, known) {
     const key = cardKey(event.publisherId, event.response);
     const parent = known.get(key);
     if (event.restoreTarget === "owner-only") continue;
-    if (!parent || parent.record.kind !== event.card.kind || parent.record.id !== event.card.id) refuse3();
+    if (!parent || parent.record.kind !== event.card.kind || parent.record.id !== event.card.id) refuse4();
     const group = records.get(event.publisherId);
     if (!included.has(key)) {
       group.cards.push(parent.canonicalCard);
@@ -41579,20 +41747,20 @@ function prepareRecords(bundle, known) {
 async function saveArchive(owner, bundle, bytes) {
   value2(await owner.execute(ARCHIVE_SCHEMA));
   const existing = await archiveRow(owner, bundle, bundle.source.snapshotId);
-  if (existing !== void 0 && existing !== bytes) refuse3();
+  if (existing !== void 0 && existing !== bytes) refuse4();
   if (existing === void 0) {
-    if (bundle.source.previousSnapshotId && await archiveRow(owner, bundle, bundle.source.previousSnapshotId) === void 0) refuse3();
+    if (bundle.source.previousSnapshotId && await archiveRow(owner, bundle, bundle.source.previousSnapshotId) === void 0) refuse4();
     try {
       value2(await owner.execute("INSERT INTO feed_owner_imports (source_space_id, namespace, snapshot_id, bundle_json, created_at) VALUES (?, ?, ?, ?, ?)", [bundle.source.spaceId, bundle.source.namespace, bundle.source.snapshotId, bytes, (/* @__PURE__ */ new Date()).toISOString()]));
     } catch (error) {
       if (await archiveRow(owner, bundle, bundle.source.snapshotId) !== bytes) throw error;
     }
   }
-  if (await archiveRow(owner, bundle, bundle.source.snapshotId) !== bytes) refuse3();
+  if (await archiveRow(owner, bundle, bundle.source.snapshotId) !== bytes) refuse4();
 }
 async function importFeedPreparedBundle(options) {
   try {
-    if (typeof options.targetSpace !== "string" || !options.targetSpace.startsWith("tinycloud:") || !parseSpaceUri2(options.targetSpace)?.owner) refuse3();
+    if (typeof options.targetSpace !== "string" || !options.targetSpace.startsWith("tinycloud:") || !parseSpaceUri2(options.targetSpace)?.owner) refuse4();
     const bundle = validateBundle(options.bundle);
     const bytes = JSON.stringify(options.bundle);
     const owner = privateDatabase(options.sql.db(OWNER_RESOURCE));
@@ -47504,6 +47672,9 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "decrypt-not-held") {
       return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME35} auth login --paste --manifest builtin:share-publishing`, 5);
     }
+    if (failure.kind === "invite-access-too-long") {
+      return new CLIError("INVALID_ARGUMENT", `Couldn't create the invitation: file access can last at most ${failure.limitDays} days, and you asked for ${failure.requestedDays} days. Choose ${failure.limitDays} days or less and try again. Run it again with --expires ${failure.limitDays}d or less.`, 2);
+    }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
     }
@@ -47566,6 +47737,9 @@ async function inspectShareInputOnce(value4, stdin2, expectedOrigin, dependencie
 }
 function jsonOutput(options, command) {
   return options.json === true || command.optsWithGlobals().json === true;
+}
+function relativeExpiryMs(value4) {
+  return /^\d+(m|h|d|w)$/.test(value4) ? parseDuration(value4) : void 0;
 }
 function expires(value4) {
   try {
@@ -47697,6 +47871,8 @@ function registerShareCommand(program) {
         actions,
         expiresAt: expires(options.expires ?? "7d"),
         expiryWasExplicit: options.expires !== void 0,
+        // The duration the user chose ("7d", or the default), so a rerun of the same choice resumes an open approval with its own absolute date.
+        ...relativeExpiryMs(options.expires ?? "7d") === void 0 ? {} : { expiresInMs: relativeExpiryMs(options.expires ?? "7d") },
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
@@ -48408,7 +48584,7 @@ init_theme();
 init_permissions();
 import { CLI_NAME as CLI_NAME38 } from "@tinycloud/operations/cli-name";
 import {
-  NodeWasmBindings as NodeWasmBindings2
+  NodeWasmBindings as NodeWasmBindings3
 } from "@tinycloud/node-sdk";
 import { ownerSessionLacksProof as ownerSessionLacksProof6 } from "@tinycloud/operations/profile";
 var wasmBindings = null;
@@ -48658,7 +48834,7 @@ function parseDate2(value4) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 function getWasmBindings() {
-  wasmBindings ??= new NodeWasmBindings2();
+  wasmBindings ??= new NodeWasmBindings3();
   return wasmBindings;
 }
 function normalizeService2(service) {

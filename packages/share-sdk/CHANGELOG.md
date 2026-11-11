@@ -1,5 +1,13 @@
 # @tinycloud/share-sdk
 
+## 1.5.0-beta.2
+
+### Minor Changes
+
+- 7266493: `publishTargetShare` and the target publish input accept an optional `expiresInMs`, the relative expiry the caller asked for as a duration in milliseconds, and pass it to the target adapter unchanged. It lets a caller recognise a rerun of the same relative choice; it does not change how the expiry is computed.
+
+  Details: TC-2234
+
 ## 1.5.0-beta.1
 
 ### Patch Changes
