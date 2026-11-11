@@ -203,7 +203,9 @@ test("active identity describes the resolved origin and public identity, not the
 });
 
 test("the offline replication hint preflight sends no credential, body or secret bytes", async () => {
-  const { attempts } = await fixture("cold", { replication: true });
+  const { node, attempts } = await fixture("cold", { replication: true });
+  expect(attempts).toEqual([]);
+  await node.replication!.status();
   const hint = attempts.filter((attempt) => new URL(attempt.url).origin === STALE);
   expect(hint.map((attempt) => [attempt.method, attempt.url])).toEqual([["GET", `${STALE}/info`]]);
   expect(hint.map(({ headers, hasBody, body, authorization }) => ({ headers, hasBody, body, authorization })))

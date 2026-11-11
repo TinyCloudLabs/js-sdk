@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-sdk",
-  "version": "3.12.0-beta.14",
+  "version": "3.12.0-beta.17",
   "description": "TinyCloud SDK for Node.js with configurable authorization strategies",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -109,11 +109,11 @@
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {
-    "@tinycloud/share-sdk": "1.5.0-beta.0",
-    "@tinycloud/share-envelope": "1.5.0",
-    "@tinycloud/replica": "0.4.5-beta.4",
-    "@tinycloud/sdk-services": "3.12.0-beta.10",
-    "@tinycloud/sdk-core": "3.12.0-beta.14",
+    "@tinycloud/share-sdk": "1.5.0-beta.1",
+    "@tinycloud/share-envelope": "1.6.0-beta.0",
+    "@tinycloud/replica": "0.4.5-beta.5",
+    "@tinycloud/sdk-services": "3.12.0-beta.16",
+    "@tinycloud/sdk-core": "3.12.0-beta.17",
     "@tinycloud/node-sdk-wasm": "1.7.8",
     "siwe": "^3.0.0"
   },
