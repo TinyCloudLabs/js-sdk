@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -26,6 +26,31 @@ describe("program name", () => {
         expect(JSON.parse(result.stderr)).toEqual({
           error: { code: "AUTH_REQUIRED", message: "Not authenticated. Run `tinycloud auth login` or `tinycloud init` first." },
         });
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("help and version commands finish a cached update notice", () => {
+    const home = mkdtempSync(join(tmpdir(), "tc-update-finalizer-"));
+    const state = join(home, "state");
+    const config = join(state, ".tinycloud");
+    mkdirSync(config, { recursive: true, mode: 0o700 });
+    writeFileSync(join(config, "update-check.json.beta"), JSON.stringify({
+      checkedAt: Date.now(),
+      version: "1.7.0-beta.31",
+    }), { mode: 0o600 });
+    const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;
+    try {
+      for (const args of [["--version"], ["--help"]]) {
+        const result = spawnSync("node", [resolve(PACKAGE_DIR, bin.tinycloud), ...args], {
+          encoding: "utf-8",
+          env: { ...ambient, CI: "", TC_NO_AUTO_UPDATE: "", HOME: home, TC_HOME: state },
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain("1.7.0-beta.30");
+        expect(result.stderr).toContain("1.7.0-beta.31");
       }
     } finally {
       rmSync(home, { recursive: true, force: true });

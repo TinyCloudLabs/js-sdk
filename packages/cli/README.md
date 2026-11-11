@@ -18,6 +18,10 @@ link emits one deprecation notice on stderr, never stdout. On Linux,
 `/usr/sbin/tc` is iproute2's traffic-control tool. Verify the pinned install
 with `tinycloud --version`.
 
+## Update checks
+
+The CLI checks for a newer release once per day and prints the matching update command on stderr after the command finishes. Stable installs follow npm's `latest` tag; prerelease installs follow their matching channel. Set `TC_NO_AUTO_UPDATE=1` or `CI=true` to disable the check.
+
 ## Agent skills
 
 The package ships the general `tinycloud-cli` skill and its references in

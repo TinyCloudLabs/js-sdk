@@ -1,7 +1,18 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  checkForUpdate,
+  detectInstallKind,
+  finishUpdateNotice,
+  isAutoUpdateEnabled,
+  registerUpdateNoticeFinalizer,
+  updateNotice,
+} from "./lib/auto-update.js";
 import { TC_OPTIONS_BEFORE_COURIER } from "./commands/courier.js";
 import { readFileSync } from "node:fs";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
 import { closeReplication } from "./lib/replication-registry.js";
@@ -9,6 +20,21 @@ import { closeReplication } from "./lib/replication-registry.js";
 const { version } = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 );
+
+const updateCheck = isAutoUpdateEnabled(process.env)
+  ? checkForUpdate({ currentVersion: version, cachePath: join(CONFIG_DIR, "update-check.json") }).catch(() => null)
+  : Promise.resolve(null);
+
+registerUpdateNoticeFinalizer(async () => {
+  const available = await updateCheck;
+  if (!available) return;
+  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+  const packagePath = fileURLToPath(new URL("../", import.meta.url));
+  const installKind = detectInstallKind(packagePath, process.cwd(), homedir());
+  process.stderr.write(`${updateNotice(installKind, version, available, packagePath)}\n`);
+  await new Promise<void>((resolve) => process.stderr.write("", () => resolve()));
+});
 import { theme } from "./output/theme.js";
 import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./output/formatter.js";
 import { ProfileManager } from "./config/profiles.js";
@@ -21,6 +47,7 @@ import { appendDiagnosticLog, setDiagnosticCommandContext } from "./lib/diagnost
 
 
 const program = new Command();
+program.exitOverride();
 let commandStartedAt = Date.now();
 
 function fullCommandName(command: Command): string {
@@ -193,10 +220,12 @@ if (argv[0] === "courier") {
   // Courier owns its argv (including --host and --json) and its own profile,
   // so Commander, the banner and the tc profile guard never see it.
   const code = await (await loadCourierEntry()).runCourier(argv.slice(1));
-  if (code !== 0) process.exit(code);
+  process.exitCode = code;
+  await finishUpdateNotice();
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}\n`);
-  process.exit(2);
+  process.exitCode = 2;
+  await finishUpdateNotice();
 } else {
   if (commandToken === "share") {
     // Keep the agent-critical surface independent from the legacy command
@@ -223,9 +252,16 @@ if (argv[0] === "courier") {
       const stderrFlushed = Promise.withResolvers<void>();
       process.stderr.write("", () => stderrFlushed.resolve());
       await stderrFlushed.promise;
+      await finishUpdateNotice();
       process.exit();
     }
+    await finishUpdateNotice();
   } catch (error) {
-    await handleError(error);
+    if (error instanceof CommanderError) {
+      process.exitCode = error.exitCode;
+      await finishUpdateNotice();
+    } else {
+      await handleError(error);
+    }
   }
 }
