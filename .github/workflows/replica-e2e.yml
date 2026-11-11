@@ -469,6 +469,12 @@ jobs:
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bunx playwright install chromium
 
+      - name: Verify request priority across the page and replica worker
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        env:
+          TC_TEST_BROWSER_PRIORITY: "1"
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/replica/test/request-priority.test.ts
+
       - name: Extract the pinned node binary
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: |

@@ -1,0 +1,151 @@
+import { nodeRetryError } from "./errors";
+import { abortableSleep } from "./sleep";
+import { ErrorCodes, type FetchFunction, type FetchRequestInit, type FetchResponse } from "./types";
+
+const FOREGROUND_QUIET_MS = 400;
+const scheduled = Symbol.for("@tinycloud/sdk-services/scheduled-request");
+const lanesKey = Symbol.for("@tinycloud/sdk-services/request-lanes");
+
+export type RequestPriority = "foreground" | "background";
+type Request = FetchRequestInit & { [scheduled]?: true };
+
+export function isScheduled(init: FetchRequestInit | undefined): boolean {
+  return (init as Request | undefined)?.[scheduled] === true;
+}
+
+export function scheduledRequest(init: FetchRequestInit, priority: RequestPriority): Request {
+  return { ...init, priority: priority === "foreground" ? "high" : "low", [scheduled]: true };
+}
+
+type BrowserLocks = {
+  request(
+    name: string,
+    options: { mode?: "shared"; signal?: AbortSignal; ifAvailable?: boolean },
+    callback: (lock: object | null) => void | Promise<void>,
+  ): Promise<void>;
+};
+
+const browser = globalThis as typeof globalThis & {
+  navigator?: { locks?: BrowserLocks };
+  location?: { href: string };
+};
+
+type Lane = {
+  foreground: number;
+  background: boolean;
+  resumeAt: number;
+};
+
+// Multiple SDK entrypoints may bundle ServiceContext separately.
+const shared = globalThis as typeof globalThis & { [lanesKey]?: Map<string, Lane> };
+const lanes = shared[lanesKey] ??= new Map<string, Lane>();
+
+function laneFor(host: string): Lane {
+  const existing = lanes.get(host);
+  if (existing) return existing;
+  const lane: Lane = { foreground: 0, background: false, resumeAt: 0 };
+  lanes.set(host, lane);
+  return lane;
+}
+
+async function busyPause(response: FetchResponse): Promise<number> {
+  if (response.status !== 503 || !response.clone) return 0;
+  const text = await response.clone().text().catch(() => "");
+  const error = nodeRetryError("", "", response, text);
+  const retryAfterMs = error?.meta?.retryAfterMs;
+  return error?.code === ErrorCodes.NODE_BUSY
+    ? Math.min(60_000, Math.max(FOREGROUND_QUIET_MS, typeof retryAfterMs === "number" ? retryAfterMs : 0))
+    : 0;
+}
+
+/** Hold foreground activity through retries. Browser Web Locks also reach replica workers. */
+export async function foregroundRequest(
+  url: string,
+  signal: AbortSignal,
+  send: () => Promise<FetchResponse>,
+): Promise<FetchResponse> {
+  const host = new URL(url, browser.location?.href).origin;
+  const locks = browser.navigator?.locks;
+  if (locks) {
+    return new Promise<FetchResponse>((resolve, reject) => {
+      void locks.request(`tinycloud:foreground:${host}`, { mode: "shared", signal }, async () => {
+        let pause = FOREGROUND_QUIET_MS;
+        try {
+          const response = await send();
+          pause = Math.max(pause, await busyPause(response));
+          resolve(response);
+        } catch (error) {
+          reject(error);
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, pause));
+      }).catch(reject);
+    });
+  }
+
+  const lane = laneFor(host);
+  lane.foreground++;
+  try {
+    const response = await send();
+    lane.resumeAt = Math.max(lane.resumeAt, performance.now() + await busyPause(response));
+    return response;
+  } finally {
+    lane.foreground--;
+    lane.resumeAt = Math.max(lane.resumeAt, performance.now() + FOREGROUND_QUIET_MS);
+  }
+}
+
+export async function backgroundRequest(
+  url: string,
+  signal: AbortSignal,
+  send: () => Promise<FetchResponse>,
+): Promise<FetchResponse> {
+  const host = new URL(url, browser.location?.href).origin;
+  const locks = browser.navigator?.locks;
+  if (locks) {
+    return new Promise<FetchResponse>((resolve, reject) => {
+      void locks.request(`tinycloud:background:${host}`, { signal }, async () => {
+        let request: Promise<FetchResponse> | undefined;
+        while (!request) {
+          signal.throwIfAborted();
+          await locks.request(`tinycloud:foreground:${host}`, { ifAvailable: true }, (lock) => {
+            if (lock !== null) {
+              signal.throwIfAborted();
+              request = send();
+              void request.catch(() => undefined);
+            }
+          });
+          if (!request) await abortableSleep(25, signal);
+        }
+        const response = await request;
+        const pause = await busyPause(response);
+        resolve(response);
+        if (pause) await new Promise<void>((resolve) => setTimeout(resolve, pause));
+      }).catch(reject);
+    });
+  }
+
+  const lane = laneFor(host);
+  while (true) {
+    signal.throwIfAborted();
+    const delay = lane.resumeAt - performance.now();
+    if (!lane.foreground && !lane.background && delay <= 0) break;
+    await abortableSleep(lane.foreground || lane.background ? 25 : delay, signal);
+  }
+  lane.background = true;
+  try {
+    const response = await send();
+    lane.resumeAt = Math.max(lane.resumeAt, performance.now() + await busyPause(response));
+    return response;
+  } finally {
+    lane.background = false;
+  }
+}
+
+
+/** Apply the background lane to a node request made outside a ServiceContext. */
+export function backgroundFetch(fetch: FetchFunction): FetchFunction {
+  return (url, init) => {
+    const signal = init?.signal ?? new AbortController().signal;
+    return backgroundRequest(url, signal, () => fetch(url, scheduledRequest({ ...init, signal }, "background")));
+  };
+}

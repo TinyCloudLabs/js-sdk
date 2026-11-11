@@ -14,6 +14,7 @@ import {
   FetchRequestInit,
   FetchResponse,
   defaultRetryPolicy,
+  ErrorCodes,
   EventHandler,
   TelemetryEventHandler,
   TelemetryConfig,
@@ -22,6 +23,9 @@ import { tinyCloudDebugLogger } from "./debug";
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
+import { backgroundRequest, foregroundRequest, isScheduled, scheduledRequest, type RequestPriority } from "./requestPriority";
+
+export type { RequestPriority } from "./requestPriority";
 
 /**
  * Configuration options for ServiceContext.
@@ -33,6 +37,8 @@ export interface ServiceContextConfig {
   invokeAny?: InvokeAnyFunction;
   /** Function to make HTTP requests (defaults to globalThis.fetch) */
   fetch?: FetchFunction;
+  /** Traffic lane for this context. Defaults to foreground. */
+  priority?: RequestPriority;
   /** List of TinyCloud host URLs */
   hosts: string[];
   /** Initial session (optional) */
@@ -76,6 +82,7 @@ export class ServiceContext implements IServiceContext {
   private readonly _fetch: FetchFunction;
   private readonly _hosts: string[];
   private readonly _retryPolicy: RetryPolicy;
+  private readonly _priority: RequestPriority;
   private readonly _telemetryEnabled: boolean;
   private readonly _telemetryHandler?: TelemetryEventHandler;
 
@@ -84,6 +91,7 @@ export class ServiceContext implements IServiceContext {
     this._invokeAny = config.invokeAny
       ? this.wrapInvokeAny(config.invokeAny)
       : undefined;
+    this._priority = config.priority ?? "foreground";
     this._fetch = this.wrapFetch(config.fetch ?? globalThis.fetch.bind(globalThis));
     this._hosts = config.hosts;
     this._session = config.session ?? null;
@@ -417,6 +425,15 @@ export class ServiceContext implements IServiceContext {
     build: () => FetchRequestInit | Promise<FetchRequestInit>,
   ): Promise<FetchResponse> {
     this.assertActive();
+    if (this._priority === "background") return this.retryInvocation(url, build);
+    return foregroundRequest(url, this.abortSignal, () =>
+      this.retryInvocation(url, async () => scheduledRequest(await build(), "foreground")));
+  }
+
+  private async retryInvocation(
+    url: string,
+    build: () => FetchRequestInit | Promise<FetchRequestInit>,
+  ): Promise<FetchResponse> {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
@@ -435,7 +452,11 @@ export class ServiceContext implements IServiceContext {
       if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
         return done();
       }
-      const remaining = (policy.maxTotalMs ?? Infinity) - (Date.now() - startedAt);
+      const busyBudget = error.code === ErrorCodes.NODE_BUSY && this._priority === "foreground"
+        ? policy.foregroundBusyMaxTotalMs
+        : undefined;
+      const budget = Math.min(policy.maxTotalMs ?? Infinity, busyBudget ?? Infinity);
+      const remaining = budget - (Date.now() - startedAt);
       if (remaining <= 0) return done();
       const retryAfterMs = error.meta.retryAfterMs;
       const step = Math.min(
@@ -446,10 +467,15 @@ export class ServiceContext implements IServiceContext {
             ? policy.baseDelayMs * attempt
             : 0,
       );
+      // A retry scheduled outside the budget would also ignore the node's Retry-After.
+      if (busyBudget !== undefined && typeof retryAfterMs === "number" && retryAfterMs >= remaining) {
+        return done();
+      }
       const delay = Math.min(
         typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
         remaining,
       );
+      if (busyBudget !== undefined && delay >= remaining) return done();
       (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.()?.catch?.(() => {});
       await abortableSleep(delay, signal);
       if (signal.aborted) throw signal.reason;
@@ -460,31 +486,35 @@ export class ServiceContext implements IServiceContext {
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
-      const request = {
-        ...init,
-        signal: this.combineSignals(init?.signal),
-      };
-      if (!tinyCloudDebugLogger.isEnabled()) {
-        return fetchFn(url, request);
-      }
-
-      const meta = { url, method: request.method ?? "GET" };
-      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
-
-      try {
-        const response = await fetchFn(url, request);
-        timer.stop({
-          ...meta,
-          ok: response.ok,
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return response;
-      } catch (error) {
-        timer.stop({ ...meta, ok: false, error });
-        throw error;
-      }
+      const signal = this.combineSignals(init?.signal);
+      const request = { ...init, signal };
+      if (isScheduled(init)) return this.send(fetchFn, url, request);
+      const run = this._priority === "foreground" ? foregroundRequest : backgroundRequest;
+      return run(url, signal, () => this.send(fetchFn, url, scheduledRequest(request, this._priority)));
     };
+  }
+
+  private async send(fetchFn: FetchFunction, url: string, request: FetchRequestInit): Promise<FetchResponse> {
+    if (!tinyCloudDebugLogger.isEnabled()) {
+      return fetchFn(url, request);
+    }
+
+    const meta = { url, method: request.method ?? "GET" };
+    const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
+
+    try {
+      const response = await fetchFn(url, request);
+      timer.stop({
+        ...meta,
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+      });
+      return response;
+    } catch (error) {
+      timer.stop({ ...meta, ok: false, error });
+      throw error;
+    }
   }
 
   private combineSignals(signal?: AbortSignal): AbortSignal {

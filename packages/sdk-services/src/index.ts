@@ -139,7 +139,8 @@ export type {
 
 // Context
 export { ServiceContext } from "./context";
-export type { ServiceContextConfig } from "./context";
+export type { RequestPriority, ServiceContextConfig } from "./context";
+export { backgroundFetch } from "./requestPriority";
 export {
   createResourceRoutingFetch,
   createResourceTransportInvocationFetch,

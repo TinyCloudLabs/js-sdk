@@ -1,10 +1,11 @@
+import type { FetchFunction } from "@tinycloud/sdk-services";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { isInstant } from "./scope.js";
 import type { AuthorityWindow, Change, FetchedContent, ReplicaTransport, SyncPage } from "./types.js";
 
 const featureCache = new Map<string, Promise<readonly string[] | undefined>>();
 
-function featuresForHost(host: string, fetchFn: typeof globalThis.fetch): Promise<readonly string[] | undefined> {
+function featuresForHost(host: string, fetchFn: FetchFunction): Promise<readonly string[] | undefined> {
   const cached = featureCache.get(host);
   if (cached !== undefined) return cached;
   const discovered = fetchFn(`${host.replace(/\/+$/, "")}/info`)
@@ -203,7 +204,7 @@ function fetched(key: string, result: Result<KVValue>, request: string): Fetched
 /** A `ReplicaTransport` over a KV service bound to the replica's space and grant. */
 export function kvSyncTransport(
   kv: KVSyncClient,
-  options: { host?: string; fetch?: typeof globalThis.fetch } = {},
+  options: { host?: string; fetch?: FetchFunction } = {},
 ): ReplicaTransport {
   const host = options.host ?? (kv as KVSyncClient & { host?: unknown }).host;
   const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);

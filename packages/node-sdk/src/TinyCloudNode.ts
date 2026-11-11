@@ -3,6 +3,8 @@ import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
 import {
+  backgroundFetch,
+  type RequestPriority,
   createResourceRoutingFetch,
   routeResourceRequest,
   routingResourceOf,
@@ -1732,9 +1734,9 @@ export class TinyCloudNode {
    * answer for the primary space is also what {@link spaceHosting} reports; a
    * `unknown` answer leaves the previous one in place.
    */
-  async checkSpaceHosting(space?: string): Promise<SpaceHosting> {
+  async checkSpaceHosting(space?: string, priority?: RequestPriority): Promise<SpaceHosting> {
     try {
-      return await this.probeSpaceHosting(space);
+      return await this.probeSpaceHosting(space, priority);
     } catch {
       return "unknown";
     }
@@ -1762,7 +1764,7 @@ export class TinyCloudNode {
     return this.auth ? this.auth.spaceHosting : this._restoredSpaceHosting;
   }
 
-  private async probeSpaceHosting(space: string | undefined): Promise<SpaceHosting> {
+  private async probeSpaceHosting(space: string | undefined, priority?: RequestPriority): Promise<SpaceHosting> {
     const context = this._serviceContext;
     const session = context?.session;
     const host = context?.hosts[0];
@@ -1789,6 +1791,7 @@ export class TinyCloudNode {
     // The recap counts even when sign-in dropped it from the runtime grants because the node had not hosted the
     // space yet: that is the read that says when it has.
     const primary = this.currentTinyCloudSession();
+    const fetch = unrecordedFetchOf(context);
     const answer = await askSpaceHosting({
       spaceId,
       operations: [
@@ -1798,7 +1801,7 @@ export class TinyCloudNode {
       covers: (granted, requested) => this.operationCovers(granted, requested),
       scope: context,
       host,
-      fetch: unrecordedFetchOf(context),
+      fetch: priority === "background" ? backgroundFetch(fetch) : fetch,
       sign: (entries) => {
         assertCurrent();
         return graph.invokeAny({ ...session, spaceId }, entries);
@@ -1808,9 +1811,9 @@ export class TinyCloudNode {
         assertCurrent();
         const activationSignal = AbortSignal.any([signal, graph.signal]);
         if (primary && primary.delegationCid === session.delegationCid) {
-          return this.activateSignedSession(primary, primary.siwe, activationSignal);
+          return this.activateSignedSession(primary, primary.siwe, activationSignal, priority);
         }
-        return this.activateResourceSession(session.delegationHeader, [spaceId], activationSignal);
+        return this.activateResourceSession(session.delegationHeader, [spaceId], activationSignal, priority);
       },
     });
     // A session replaced while the read was in flight owns neither answer.
@@ -7338,6 +7341,7 @@ export class TinyCloudNode {
     delegationHeader: TinyCloudSession["delegationHeader"],
     resources: Iterable<string>,
     signal: AbortSignal = this._serviceGraph.signal,
+    priority?: RequestPriority,
   ): Promise<SpaceHostResult> {
     const targets = new Map<string, { destination: ResourceDestination; spaces: string[] }>();
     const routedSpaces: string[] = [];
@@ -7367,6 +7371,7 @@ export class TinyCloudNode {
     }
     if (targets.size === 0) throw unserved ?? new ResourceNotRoutedError(requestedResource ?? "session grant");
 
+    const fetch = priority === "background" ? backgroundFetch(globalThis.fetch.bind(globalThis)) : undefined;
     const succeeded: string[] = [];
     const accepted: SpaceHostResult[] = [];
     const failed: Array<PartialNodeWriteError["failed"][number]> = [];
@@ -7374,11 +7379,11 @@ export class TinyCloudNode {
     for (const { destination: target, spaces } of targets.values()) {
       signal?.throwIfAborted();
       try {
-        await verifyResourceDestination(target, globalThis.fetch.bind(globalThis));
+        await verifyResourceDestination(target, fetch ?? globalThis.fetch.bind(globalThis));
         signal.throwIfAborted();
         const timeout = AbortSignal.timeout(5_000);
         const result = await activateSessionWithHost(target.url, delegationHeader,
-          AbortSignal.any([signal, timeout]));
+          AbortSignal.any([signal, timeout]), fetch);
         signal.throwIfAborted();
         this.throwRegistryRefusal(result.status, result.error ?? "");
         if (result.success) {
@@ -7412,33 +7417,34 @@ export class TinyCloudNode {
     };
   }
 
-  private activateRoutedDelegation(delegation: PortableDelegation, signal?: AbortSignal): Promise<SpaceHostResult> {
+  private activateRoutedDelegation(delegation: PortableDelegation, signal?: AbortSignal, priority?: RequestPriority): Promise<SpaceHostResult> {
     const resources = this.operationsFromDelegation(delegation).map((operation) =>
       operation.resource?.startsWith("urn:tinycloud:encryption:")
         ? operation.resource.split("/")[0]!
         : operation.spaceId ?? delegation.spaceId,
     );
-    return this.activateResourceSession(delegation.delegationHeader, resources, signal);
+    return this.activateResourceSession(delegation.delegationHeader, resources, signal, priority);
   }
 
   private activateSignedSession(
     session: Pick<TinyCloudSession, "delegationHeader" | "spaceId">,
     siwe: string,
     signal?: AbortSignal,
+    priority?: RequestPriority,
   ): Promise<SpaceHostResult> {
     const resources = this.parseRecapWithCaveats(siwe).map((entry) =>
       this.isEncryptionNetworkOperation(this.invocationServiceName(entry.service), entry.path, entry.space) ? entry.path.split("/")[0]!
         : entry.space.startsWith("tinycloud:") ? entry.space : session.spaceId,
     );
     return this.activateResourceSession(session.delegationHeader,
-      resources.length > 0 ? resources : [session.spaceId], signal);
+      resources.length > 0 ? resources : [session.spaceId], signal, priority);
   }
 
   /**
    * Install a portable runtime permission delegation into this SDK instance so
    * matching service calls and downstream `delegateTo()` calls can use it.
    */
-  async useRuntimeDelegation(delegation: PortableDelegation): Promise<void> {
+  async useRuntimeDelegation(delegation: PortableDelegation, priority?: RequestPriority): Promise<void> {
     const graph = this._serviceGraph;
     const session = this.currentTinyCloudSession();
     if (!session) {
@@ -7457,7 +7463,7 @@ export class TinyCloudNode {
 
     let activateResult: SpaceHostResult;
     try {
-      activateResult = await this.activateRoutedDelegation(delegation, graph.signal);
+      activateResult = await this.activateRoutedDelegation(delegation, graph.signal, priority);
     } catch (cause) {
       graph.assertActive();
       if (routingFailure(cause)) throw cause;

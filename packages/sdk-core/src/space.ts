@@ -5,6 +5,8 @@
  * web-sdk and node-sdk for space hosting and session activation.
  */
 
+import type { FetchFunction } from "@tinycloud/sdk-services";
+
 /**
  * Result of a space hosting or session activation attempt.
  */
@@ -66,7 +68,8 @@ export async function fetchPeerId(
 export async function submitHostDelegation(
   host: string,
   headers: Record<string, string>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  fetch: FetchFunction = globalThis.fetch.bind(globalThis),
 ): Promise<SpaceHostResult> {
   const res = await fetch(`${host}/delegate`, {
     method: "POST",
@@ -162,9 +165,10 @@ function activationFlightKey(
 export async function activateSessionWithHost(
   host: string,
   delegationHeader: { Authorization: string },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  fetch?: FetchFunction,
 ): Promise<SpaceHostResult> {
-  if (signal) return postSessionActivation(host, delegationHeader, signal);
+  if (signal || fetch) return postSessionActivation(host, delegationHeader, signal, fetch);
   const key = activationFlightKey(host, delegationHeader as Record<string, string>);
 
   const existing = inFlightActivations.get(key);
@@ -226,7 +230,8 @@ function startActivationFlight(
 async function postSessionActivation(
   host: string,
   delegationHeader: { Authorization: string },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  fetch: FetchFunction = globalThis.fetch.bind(globalThis),
 ): Promise<SpaceHostResult> {
   const res = await fetch(`${host}/delegate`, {
     method: "POST",
