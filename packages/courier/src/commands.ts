@@ -652,7 +652,7 @@ export async function cmdInbox(args: ParsedArgs) {
   };
   const status = output.notifications.length ? `\nRecent notifications (delivery receipts may already be current):\n${output.notifications.map(n => `${n.title}: ${n.body}`).join('\n')}\n` : '';
   await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items, collection.errors) + status);
-  for (const error of collection.errors) console.error(`warning: inbox ${error.peer}: ${error.message}`);
+  for (const error of collection.errors) console.error(`Warning: ${error.message}`);
   if (!args.has('peek')) await commitReceipts(node.kv, collection.pending);
 }
 
@@ -676,7 +676,7 @@ export async function cmdRead(args: ParsedArgs) {
   } else {
     await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors));
   }
-  for (const error of result.errors) console.error(error.message);
+  for (const error of result.errors) console.error(`Warning: ${error.message}`);
 }
 
 export function renderThreadText(threadId: string, entries: readonly ThreadEntry[]): string {
