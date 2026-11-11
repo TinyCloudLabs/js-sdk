@@ -95,6 +95,52 @@ export function siweTimes(siwe: string): { issuedAt?: Date; expiresAt?: Date } {
   };
 }
 
+const SHARE_KEY_ACTIONS: readonly string[] = ['tinycloud.encryption/key.create', 'tinycloud.encryption/decrypt'];
+const SHARE_ID = /^[a-f0-9]{32}$/;
+
+/** The owner's default encryption network: the only network an invitation key may live on. */
+export function ownerEncryptionNetwork(ownerDid: string): string {
+  return `urn:tinycloud:encryption:${ownerDid}:default`;
+}
+
+/**
+ * Exactly `<network>/share/<32 lowercase hex>`, byte for byte, with only key.create and decrypt and no caveats. The
+ * `share/` prefix is a grant-scope decision that has not been made, so it is not accepted; nor is any other spelling.
+ */
+function isInvitationKeyEntry(entry: PermissionEntry, network: string): boolean {
+  if (entry.service !== 'tinycloud.encryption' || (entry.space ?? '') !== '' || (entry.caveats?.length ?? 0) > 0) return false;
+  const root = `${network}/share/`;
+  if (!entry.path.startsWith(root) || !SHARE_ID.test(entry.path.slice(root.length))) return false;
+  return entry.actions.every((action) => SHARE_KEY_ACTIONS.includes(action));
+}
+
+/**
+ * Split a verified grant into the fixed Courier authority and the optional email-invitation key authority. Entries
+ * that are not exactly invitation-key shaped stay in `base`, so they still fail the exact Courier check. Invitation
+ * authority is one exact key holding BOTH key.create and decrypt: several keys approximate the undecided prefix, and
+ * half a pair is not an invitation authority, so either stays in `base`. Nothing here binds the key to a request:
+ * the grant request is unchanged, so the id is whatever the owner signed.
+ */
+export function splitInvitationAuthority(caps: readonly PermissionEntry[], ownerDid?: string): { base: PermissionEntry[]; invitation: PermissionEntry[] } {
+  if (ownerDid === undefined) return { base: [...caps], invitation: [] };
+  const network = ownerEncryptionNetwork(ownerDid);
+  const base: PermissionEntry[] = [];
+  const candidates: PermissionEntry[] = [];
+  for (const entry of caps) (isInvitationKeyEntry(entry, network) ? candidates : base).push(entry);
+  const paths = new Set(candidates.map((entry) => entry.path));
+  const actions = new Set(candidates.flatMap((entry) => entry.actions));
+  const oneCompleteKey = paths.size === 1 && SHARE_KEY_ACTIONS.every((action) => actions.has(action));
+  return oneCompleteKey ? { base, invitation: candidates } : { base: [...base, ...candidates], invitation: [] };
+}
+
+/** True when the grant holds both key.create and decrypt on exactly `share/<shareId>` of the owner's default network. */
+export function holdsInvitationKeyAuthority(caps: readonly PermissionEntry[], ownerDid: string, shareId: string): boolean {
+  const key = `${ownerEncryptionNetwork(ownerDid)}/share/${shareId}`;
+  const { invitation } = splitInvitationAuthority(caps, ownerDid);
+  return SHARE_KEY_ACTIONS.every((action) => invitation.some((entry) => entry.path === key && entry.actions.includes(action)));
+}
+
+/** The fixed Courier authority, exactly: any additional entry, including a share-key entry, is grant-too-broad. */
 export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now()): void {
   assertExactAuthority(caps, AGENT_GRANT, 'OpenKey grant');
   if (!times.issuedAt) throw new CourierError('bad-grant', 'OpenKey grant SIWE is missing Issued At.');

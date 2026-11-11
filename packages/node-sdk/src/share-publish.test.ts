@@ -5,9 +5,9 @@ import { base58btc } from "multiformats/bases/base58";
 import { canonicalDigest, createEmailCredentialRequirement, credentialRequirementDigest, signCompactUcanRootAuthorization } from "@tinycloud/sdk-core";
 import { canonicalize, toBase64Url, verifyEnvelopeV3, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { resolveLink } from "@tinycloud/share-envelope/links";
-import { publishEmailShareV3, type EmailPublishV3Input } from "./email-publish-v3.js";
+import { publishEmailShareV3, type EmailPublishV3Input } from "./share-publish.js";
 
-const vectors = new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url);
+const vectors = new URL("../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url);
 const descriptor = ((await Bun.file(vectors).json()) as { vectors: { name: string; descriptor: unknown }[] }).vectors.find((vector) => vector.name === "email")!.descriptor;
 const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerSeed)]))}`;

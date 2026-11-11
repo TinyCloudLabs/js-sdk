@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-sdk",
-  "version": "3.12.0-beta.14",
+  "version": "3.12.0-beta.15",
   "description": "TinyCloud SDK for Node.js with configurable authorization strategies",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -58,6 +58,11 @@
       "types": "./dist/share-receive.d.ts",
       "import": "./dist/share-receive.js",
       "require": "./dist/share-receive.cjs"
+    },
+    "./share-publish": {
+      "types": "./dist/share-publish.d.ts",
+      "import": "./dist/share-publish.js",
+      "require": "./dist/share-publish.cjs"
     },
     "./replication/runtime": {
       "import": {

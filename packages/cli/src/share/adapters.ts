@@ -1,7 +1,7 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { createShareLinks, type ShareLinks } from "./short-links.js";
-import { publishEmailShareV3 } from "./email-publish-v3.js";
+import { publishEmailShareV3 } from "@tinycloud/node-sdk/share-publish";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";

@@ -16,6 +16,7 @@ export {
   EmailProofError,
   isTicketEmailProofResult,
   emailProofRequirement,
+  emailProofDescriptor,
   verifyStoredEmailProof,
   requestEmailProofCode,
 } from "./email-proof";
