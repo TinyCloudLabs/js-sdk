@@ -1376,6 +1376,7 @@ export class TinyCloudNode {
   private replicationDelegateSession?: Pick<TinyCloudSession, "delegationHeader" | "delegationCid" | "spaceId" | "verificationMethod" | "jwk">;
   private replicationScopeError?: string;
   private replicaRestoreGate?: ReplicaGateReason;
+  private startRestoredReplica?: () => Promise<void>;
   private replicaSessionPrincipal?: string;
   private replicaSessionStamp?: ReplicaSessionStamp;
   private readonly replicaPurgeFailedHandlers = new Set<(event: ReplicaPurgeFailedEvent) => void>();
@@ -1995,6 +1996,7 @@ export class TinyCloudNode {
       this.replicationRuntime = runtime;
       this.replicationControl = {
         status: async () => {
+          await this.prepareRestoredReplica();
           const gate = this.replicaRestoreGate;
           if (gate) return this.config.replication!.prefixes.map((prefix) => ({
             prefix,
@@ -2022,6 +2024,7 @@ export class TinyCloudNode {
           }));
         },
         sync: async (input) => {
+          await this.prepareRestoredReplica();
           if (this.replicaRestoreGate) {
             throw Object.assign(new Error("Replica restore is gated."), {
               code: "REPLICA_GATED" as const,
@@ -2031,15 +2034,23 @@ export class TinyCloudNode {
           return (await runtime).control.sync(input);
         },
         purge: (input) => {
+          const start = this.startRestoredReplica;
+          if (start) return this.prepareRestoredReplica().then(() => runtime).then((ready) => ready.control.purge(input));
           const instance = this.replicationRuntimeInstance;
           return instance
             ? instance.control.purge(input)
             : runtime.then((ready) => ready.control.purge(input));
         },
-        clearPending: async () => (await runtime).control.clearPending(),
+        clearPending: async () => {
+          await this.prepareRestoredReplica();
+          return (await runtime).control.clearPending();
+        },
         purgeLocalCopy: async () =>
           (await this.eraseReplicaLocalCopy("purge_local_copy"))?.purge ?? { ok: false as const, retryNow: false },
-        close: async () => (await runtime).control.close(),
+        close: async () => {
+          this.startRestoredReplica = undefined;
+          return (await runtime).control.close();
+        },
       };
     }
 
@@ -2907,6 +2918,7 @@ export class TinyCloudNode {
     this._requestLog?.clear();
     this._bootstrapSkipped = false;
     this._bootstrapStatus = { skipped: false };
+    this.startRestoredReplica = undefined;
     this.replicationDelegateSession = undefined;
     this.replicationScopeError = undefined;
     this.replicaSessionPrincipal = undefined;
@@ -3121,6 +3133,7 @@ export class TinyCloudNode {
     // this sign-in and permanently retire anything captured from the previous
     // session. The authorization flow above remains transactional: a rejected
     // sign-in leaves the existing graph untouched.
+    this.startRestoredReplica = undefined;
     this.replicationDelegateSession = undefined;
     this.replicaSessionPrincipal = pkhDid(address, chainId);
     this.replicationScopeError = undefined;
@@ -4604,7 +4617,7 @@ export class TinyCloudNode {
     // Read synchronously: a sign-out called after this restore started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
-    const attempt = ++this.latestSessionAttempt;
+    ++this.latestSessionAttempt;
     await this.signOutInFlight;
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
@@ -4730,22 +4743,7 @@ export class TinyCloudNode {
       stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
     }
     const restoreHints = this.explicitHost ? [this.explicitHost] : sessionData.tinycloudHosts ?? [];
-    // Hydration stages locally verified authority and host hints. Replication
-    // checks capabilities below; network operations still use the fresh routed graph.
     const stagedHost = exactHttpOrigin(restoreHints[0] ?? this.config.host!, "restored host hint");
-    let restoredNodeFeatures: string[] | undefined;
-    let replicaProtocolMismatch = false;
-    if (this.config.replication?.enabled) {
-      try {
-        // Audited exception: this hint-only capability probe sends no credentials
-        // or body. Local hydration must not wait for a live registry lookup.
-        restoredNodeFeatures = (await checkNodeInfo(stagedHost, this.wasmBindings.protocolVersion())).features;
-      } catch (error) {
-        // Offline restores may serve complete local data; an incompatible node cannot.
-        // Neither replica-only preflight outcome invalidates the verified network session.
-        replicaProtocolMismatch = error instanceof ProtocolMismatchError;
-      }
-    }
     // Never blend a metadata-light restore with the prior wallet identity.
     const stagedAddress = restoredAddress;
     const stagedChainId = sessionData.chainId ?? 1;
@@ -4787,9 +4785,7 @@ export class TinyCloudNode {
     let restoredReplicaStamp: ReplicaSessionStamp | undefined;
     const replication = this.config.replication;
     if (replication?.enabled) {
-      if (replicaProtocolMismatch) {
-        replicaRestoreGate = "gate_unavailable";
-      } else if (replicationPrincipal === undefined) {
+      if (replicationPrincipal === undefined) {
         replicaRestoreGate = replicationScopeUnavailable ? "gate_unavailable" : "principal_mismatch";
       } else {
         try {
@@ -4901,9 +4897,9 @@ export class TinyCloudNode {
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
     this.cancelOwnedSpaceHosts();
-    this._restoredNodeFeatures = restoredNodeFeatures;
+    this._restoredNodeFeatures = undefined;
     if (this.auth) {
-      this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost], restoredNodeFeatures);
+      this.auth.installRestoredSession(stagedManager, stagedTcSession, [stagedHost]);
       this._restoredTcSession = undefined;
     } else {
       this._restoredTcSession = stagedTcSession;
@@ -4913,14 +4909,9 @@ export class TinyCloudNode {
     this.replicaRestoreGate = replicaRestoreGate;
     this.replicaSessionPrincipal = replicationPrincipal;
     this.replicaSessionStamp = restoredReplicaStamp;
-    await this.quiesceReplicaRuntime();
-    if (epoch !== this.sessionEpoch) {
-      oldGraph.retire();
-      (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
-      if (attempt === this.latestSessionAttempt) await this.endSession();
-      this.assertSessionEpoch(epoch, "Session restore");
-    }
+    const retiredReplica = this.quiesceReplicaRuntime();
     oldGraph.retire();
+    (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
     if (replicationScopeError) {
       stagedGraph.serviceContext.emit("replication.state", {
         state: "unavailable",
@@ -4928,15 +4919,32 @@ export class TinyCloudNode {
         detail: replicationScopeError,
       });
     }
-    await this.bindReplicaOrGate(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal);
-    (oldCore as { retireServices?: () => void } | null)?.retireServices?.();
-    if (epoch !== this.sessionEpoch) {
-      if (attempt === this.latestSessionAttempt) await this.endSession();
-      this.assertSessionEpoch(epoch, "Session restore");
-    }
-    if (this.config.replication?.enabled) {
-      if (stagedAddress !== undefined) this.refreshRegistryOwner(pkhDid(stagedAddress, stagedChainId));
-      this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
+    this.assertSessionEpoch(epoch, "Session restore");
+    if (this.replicationRuntime) {
+      const isCurrent = () => this.startRestoredReplica === start && epoch === this.sessionEpoch &&
+        this._serviceGraph === stagedGraph.graph && this._kv === stagedGraph.kv;
+      let binding: Promise<void> | undefined;
+      const start = () => binding ??= (async () => {
+        await retiredReplica;
+        if (!isCurrent()) return;
+        let features: string[] | undefined;
+        try {
+          // Hint-only probe with no credentials. Offline restores can still serve complete local data.
+          features = (await checkNodeInfo(
+            stagedHost,
+            this.wasmBindings.protocolVersion(),
+            backgroundFetch(globalThis.fetch.bind(globalThis)),
+          )).features;
+        } catch (error) {
+          if (isCurrent() && error instanceof ProtocolMismatchError) this.replicaRestoreGate = "gate_unavailable";
+        }
+        if (!isCurrent()) return;
+        if (stagedAddress !== undefined) this.refreshRegistryOwner(pkhDid(stagedAddress, stagedChainId));
+        this.refreshRegistryForCapabilities(this.getVerifiedSessionCapabilities());
+        await this.bindReplicaOrGate(stagedGraph.serviceContext, serviceSession, stagedGraph.kv, replicationPrincipal, features);
+      })();
+      this.startRestoredReplica = start;
+      stagedGraph.kv.setReadThroughReady(start);
     }
   }
 
@@ -5703,8 +5711,15 @@ export class TinyCloudNode {
 
   private attachReplicationKV(spaceId: string, kvService: KVService): void {
     if (!this.replicationRuntime) return;
-    const attached = this.replicationRuntime.then((runtime) => runtime.attach(spaceId, kvService));
-    kvService.setReadThroughReady(attached);
+    const runtime = this.replicationRuntime;
+    const start = this.startRestoredReplica;
+    const graph = this._serviceGraph;
+    const attach = async () => {
+      await start?.();
+      const ready = await runtime;
+      if (this._serviceGraph === graph) await ready.attach(spaceId, kvService);
+    };
+    kvService.setReadThroughReady(start ? attach : attach());
   }
 
   private createSpaceScopedKVService(spaceId: string): KVService {
@@ -8354,12 +8369,21 @@ export class TinyCloudNode {
     });
   }
 
+  private async prepareRestoredReplica(): Promise<void> {
+    const start = this.startRestoredReplica;
+    if (!start) return;
+    const graph = this._serviceGraph;
+    await start();
+    graph.assertActive();
+  }
+
   private async quiesceReplicaRuntime(): Promise<void> {
     if (!this.replicationRuntime) return;
+    const graph = this._serviceGraph;
     try {
       await (await this.replicationRuntime).unbind();
     } catch {
-      this.replicaRestoreGate = "gate_unavailable";
+      if (this._serviceGraph === graph) this.replicaRestoreGate = "gate_unavailable";
     }
   }
 
@@ -8368,14 +8392,14 @@ export class TinyCloudNode {
     session: ServiceSession,
     kv: KVService,
     principal?: string,
+    nodeFeatures = this.replicationNodeFeatures,
   ): Promise<void> {
     if (!this.replicationRuntime) return;
     const gate = this.replicaRestoreGate;
     const epoch = this.sessionEpoch;
-    const attempt = this.latestSessionAttempt;
     try {
       const runtime = await this.replicationRuntime;
-      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+      if (epoch !== this.sessionEpoch ||
           this._kv !== kv || this._serviceContext !== context || gate !== this.replicaRestoreGate) return;
       if (gate) {
         await runtime.bindGatedNetworkOnly({
@@ -8387,7 +8411,7 @@ export class TinyCloudNode {
         (this._address === undefined ? undefined : pkhDid(this._address, this._chainId));
       if (identityPrincipal === undefined) return;
       const authority = await this.replicationAuthority();
-      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+      if (epoch !== this.sessionEpoch ||
           this._kv !== kv || this._serviceContext !== context) return;
       await runtime.bind({
         context,
@@ -8395,11 +8419,11 @@ export class TinyCloudNode {
         principal: identityPrincipal,
         stamp: this.replicaSessionStamp,
         authority,
-        nodeFeatures: this.replicationNodeFeatures,
+        nodeFeatures,
         primaryKV: [{ space: session.spaceId, kv }],
       });
     } catch {
-      if (epoch !== this.sessionEpoch || attempt !== this.latestSessionAttempt ||
+      if (epoch !== this.sessionEpoch ||
           this._kv !== kv || this._serviceContext !== context) return;
       this.replicaRestoreGate = "gate_unavailable";
       await this.quiesceReplicaRuntime();

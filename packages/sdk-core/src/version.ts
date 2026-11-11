@@ -4,6 +4,7 @@
  * @packageDocumentation
  */
 
+import type { FetchFunction, FetchResponse } from "@tinycloud/sdk-services";
 import { httpResponseError } from "./http-error";
 
 export class ProtocolMismatchError extends Error {
@@ -58,9 +59,9 @@ export interface NodeInfo {
 export async function checkNodeInfo(
   host: string,
   sdkProtocol: number,
-  fetchFn: typeof globalThis.fetch = globalThis.fetch.bind(globalThis)
+  fetchFn: FetchFunction = globalThis.fetch.bind(globalThis)
 ): Promise<NodeInfo> {
-  let response: Response;
+  let response: FetchResponse;
   try {
     response = await fetchFn(`${host}/info`, {
       signal: AbortSignal.timeout(5000),

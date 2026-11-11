@@ -1,5 +1,38 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [7266493]
+  - @tinycloud/share-sdk@1.5.0-beta.2
+
+## 3.12.0-beta.17
+
+### Patch Changes
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+  - @tinycloud/share-sdk@1.5.0-beta.1
+
+## 3.12.0-beta.16
+
+### Patch Changes
+
+- f859fb3: Restore persisted sessions from local state and initialize replication on demand. Explicit network KV reads bypass replica setup. Refresh browser hosting and panel grants after restore.
+
+  Serialize panel-grant storage updates and sign-out cleanup so a delayed reactivation cannot overwrite a newly granted permission.
+
+  Details: TC-2773
+
+- Updated dependencies [f859fb3]
+  - @tinycloud/sdk-services@3.12.0-beta.16
+
 ## 3.12.0-beta.14
 
 ### Patch Changes

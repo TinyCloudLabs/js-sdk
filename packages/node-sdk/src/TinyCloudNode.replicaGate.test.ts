@@ -148,6 +148,107 @@ async function withBrowserOrigin<T>(run: (
 }
 
 describe("replica gate: restore", () => {
+  test("restores from stored authority with no requests before a replica consumer", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = replicatedNode(dir);
+    const ordinary = new TinyCloudNode({
+      host: RESTORE_HOST,
+      tinycloudRegistryUrl: locationRegistry.url.origin,
+      signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+    });
+    const realFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(String(input));
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      await ordinary.restoreSession(proof);
+      await node.restoreSession({ ...proof, replicaStamp });
+      expect(node.spaceId).toBe(proof.spaceId);
+      expect(requests).toEqual([]);
+      await node.replication!.status();
+      expect(requests).toContain(`${RESTORE_HOST}/info`);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("lazy restore preflight uses the background lane on first replica use", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = replicatedNode(dir);
+    const realFetch = globalThis.fetch;
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === `${RESTORE_HOST}/info`) {
+        return Response.json({ protocol: new NodeWasmBindings().protocolVersion(), version: "fixture", features: [] });
+      }
+      return realFetch(input, init);
+    };
+    try {
+      await node.restoreSession({ ...proof, replicaStamp });
+      expect(requests).toEqual([]);
+      await node.replication!.status();
+      const info = requests.filter(({ url }) => url === `${RESTORE_HOST}/info`);
+      expect(info).toHaveLength(1);
+      expect(info[0]!.init).toMatchObject({ priority: "low" });
+      expect(new Headers(info[0]!.init?.headers).has("authorization")).toBe(false);
+      expect(info[0]!.init?.body).toBeUndefined();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a rejected replacement cannot cancel lazy binding for the current session", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const binding = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let loads = 0;
+    let binds = 0;
+    class ObservedRuntime extends StubRuntime {
+      override async bind() { binds++; }
+    }
+    registerReplicationLoaders({
+      ...loaders(),
+      runtime: async () => ({ ReplicationRuntime: ObservedRuntime }) as never,
+      authority: async () => {
+        if (++loads === 2) {
+          binding.resolve();
+          await release.promise;
+        }
+        return import("./replication/authority");
+      },
+    });
+    const node = replicatedNode(dir);
+    await node.restoreSession({ ...proof, replicaStamp });
+    const status = node.replication!.status();
+    await binding.promise;
+    try {
+      await expect(node.restoreSession({ ...proof, jwk: {} })).rejects.toThrow();
+    } finally {
+      release.resolve();
+    }
+    await status;
+    expect(binds).toBe(1);
+    expect(node.spaceId).toBe(proof.spaceId);
+    expect(node.replicaStamp).toEqual(replicaStamp);
+  });
+
   test("restores when the persisted stamp matches the profile gate", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();
@@ -201,12 +302,13 @@ describe("replica gate: restore", () => {
     await node.restoreSession({ ...proof, replicaStamp });
     expect(node.address).toBe(proof.address);
     expect(node.spaceId).toBe(proof.spaceId);
-    expect(node.replicaStamp).toBeUndefined();
+    expect(node.replicaStamp).toEqual(replicaStamp);
     expect((await node.replication!.status())[0]).toMatchObject({
       state: "gated",
       gate: "gate_unavailable",
       errorCode: "REPLICA_GATED",
     });
+    expect(node.replicaStamp).toBeUndefined();
   });
 
   test("restores the network session but gates a stamp that predates sign-out", async () => {
@@ -407,6 +509,8 @@ describe("browser replica gate without a profile directory", () => {
       });
 
       await node.restoreSession({ ...proof, replicaStamp: stamp });
+      expect(boundStamp).toBeUndefined();
+      await node.replication!.status();
       expect(boundStamp).toEqual(stamp);
       expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
       await node.signOut();
