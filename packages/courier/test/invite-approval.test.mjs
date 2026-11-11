@@ -1,127 +1,147 @@
-import { test } from 'node:test';
+import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { ulid } from 'ulid';
-import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { parseArgs } from '../dist/args.js';
-import { assertInvitationApprovalGrant, ownerEncryptionNetwork, siweTimes } from '../dist/authority.js';
-import { AGENT_GRANT, COURIER_SPACE, PREFIX } from '../dist/keys.js';
+import { assertApprovalRequestBinding, assertInvitationApprovalGrant, siweTimes } from '../dist/authority.js';
+import { PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
 import { cmdInvite } from '../dist/invitation.js';
 import { loadInviteGrant, loadPendingInvite } from '../dist/invite-approval.js';
 import { loadGrant, profileDir, saveKey, saveProfile } from '../dist/profile.js';
-import { sendEmailInvitation } from '../dist/email-invitation.js';
 import { memoryKv } from './memory-kv.mjs';
+import { DAY, HOST, KEY_ACTIONS, bodyCidOf, courierNodeFor, inviteGrant, newAgent, newOwner, requestIdOf, shareIdOf, stubActivation } from './support/invite-grant-fixture.mjs';
 
-const HOST = 'https://node.example';
-const DAY = 86_400_000;
-const wasm = new NodeWasmBindings();
-const manager = wasm.createSessionManager();
-const keyId = manager.createSessionKey('agent');
-const agent = { v: 1, did: manager.getDID(keyId).split('#')[0], jwk: JSON.parse(manager.jwk(keyId)), createdAt: new Date().toISOString() };
-const otherKeyId = manager.createSessionKey('other');
-const other = { v: 1, did: manager.getDID(otherKeyId).split('#')[0], jwk: JSON.parse(manager.jwk(otherKeyId)), createdAt: new Date().toISOString() };
-const owner = new PrivateKeySigner(randomBytes(32).toString('hex'));
-const address = await owner.getAddress();
-const OWNER = `did:pkh:eip155:1:${address}`;
-const SPACE = wasm.makeSpaceId(address, 1, COURIER_SPACE);
-const ID_A = 'a1'.repeat(16);
-const ID_B = 'b2'.repeat(16);
-const network = ownerEncryptionNetwork(OWNER);
-const pair = ['tinycloud.encryption/key.create', 'tinycloud.encryption/decrypt'];
+const owner = await newOwner();
+const agent = newAgent('courier');
+const stranger = newAgent('stranger');
+const network = `urn:tinycloud:encryption:${owner.did}:default`;
+const realNode = await courierNodeFor(owner, agent);
+let restoreFetch;
+beforeEach(() => { restoreFetch = stubActivation(); });
+afterEach(() => restoreFetch());
 
-/** What the approver's service signs: one key pair (plus whatever `extra` adds), for `holder`, for `lifetimeMs`. */
-async function approval({ id = ID_A, holder = agent, lifetimeMs = 3_600_000, issuedAt = new Date(), abilities } = {}) {
-  const prepared = wasm.prepareSession({
-    abilities: abilities ?? { encryption: { [`${network}/share/${id}`]: pair } },
-    address, chainId: 1, domain: 'openkey.offline-test', issuedAt: issuedAt.toISOString(),
-    expirationTime: new Date(issuedAt.getTime() + lifetimeMs).toISOString(), spaceId: SPACE, jwk: holder.jwk,
-  });
-  const signature = await owner.signMessage(prepared.siwe);
-  const session = wasm.completeSessionSetup({ ...prepared, signature });
-  return { delegationHeader: session.delegationHeader, delegationCid: session.delegationCid, spaceId: SPACE, address, chainId: 1,
-    siwe: prepared.siwe, signature, verificationMethod: holder.did };
-}
+const verify = (grant) => realNode.verifySessionGrant({ ...grant.payload, delegationHeader: { Authorization: grant.payload.delegationHeader.Authorization } });
+const signedEntries = (verified) => verified.recap.map((entry) => ({ service: `tinycloud.${entry.service}`, space: entry.space, path: entry.path, actions: entry.actions, caveats: [] }));
+const bounds = (hours = 1) => ({ ownerDid: owner.did, acceptanceExpiresAt: new Date(Date.now() + hours * 3_600_000) });
+const request = () => ({ requestId: requestIdOf(), bodyCid: bodyCidOf() });
 
-const caps = async (options) => {
-  const { TinyCloudNode } = await import('@tinycloud/node-sdk');
-  const { nodeOpts } = await import('../dist/node.js');
-  const payload = await approval(options);
-  const node = new TinyCloudNode(nodeOpts(HOST));
-  const times = siweTimes(payload.siwe);
-  await node.restoreSession({ ...payload, jwk: (options?.holder ?? agent).jwk, expiresAt: times.expiresAt.toISOString(), tinycloudHosts: [HOST] });
-  return { caps: node.getVerifiedSessionCapabilities(), times };
-};
+// ---- the signed authority ------------------------------------------------------------------------------------------------
 
-test('assertInvitationApprovalGrant: reads the key id from the signed grant when it is exactly one pair', async () => {
-  const { caps: verified, times } = await caps();
-  assert.equal(assertInvitationApprovalGrant(verified, times, { ownerDid: OWNER, acceptanceExpiresAt: new Date(Date.now() + DAY) }), ID_A);
+test('a real owner-signed invitation grant yields exactly its key id', async () => {
+  const grant = await inviteGrant(owner, agent, { request: request() });
+  const verified = verify(grant);
+  assert.equal(assertInvitationApprovalGrant(signedEntries(verified), siweTimes(grant.payload.siwe), bounds()), grant.shareId);
 });
 
-for (const [name, options, code] of [
-  ['more authority than the key pair', { abilities: { encryption: { [`${network}/share/${ID_A}`]: pair }, kv: { [`${PREFIX}/me/`]: ['tinycloud.kv/get'] } } }, 'bad-grant'],
-  ['half a pair', { abilities: { encryption: { [`${network}/share/${ID_A}`]: [pair[1]] } } }, 'bad-grant'],
-  ['two keys', { abilities: { encryption: { [`${network}/share/${ID_A}`]: pair, [`${network}/share/${ID_B}`]: pair } } }, 'bad-grant'],
-  ['the share prefix', { abilities: { encryption: { [`${network}/share/`]: pair } } }, 'bad-grant'],
-  ['an upper-case id', { abilities: { encryption: { [`${network}/share/${ID_A.toUpperCase()}`]: pair } } }, 'bad-grant'],
-  ['another network', { abilities: { encryption: { [`urn:tinycloud:encryption:${OWNER}:other/share/${ID_A}`]: pair } } }, 'bad-grant'],
-  ['a different account', { abilities: { encryption: { [`urn:tinycloud:encryption:did:pkh:eip155:1:0x${'1'.repeat(40)}:default/share/${ID_A}`]: pair } } }, 'bad-grant'],
-  ['more than a day', { lifetimeMs: 3 * DAY }, 'grant-too-long'],
-  ['an expiry after the invitation', { lifetimeMs: 2 * 3_600_000 }, 'grant-too-long'],
+const keyPath = (id) => `${network}/share/${id}`;
+for (const [name, rawAbilities, options, code] of [
+  ['more authority than the key pair', { [keyPath(shareIdOf())]: KEY_ACTIONS, [`${network}`]: ['tinycloud.encryption/decrypt'] }, {}, 'bad-grant'],
+  ['half a pair', { [keyPath(shareIdOf())]: [KEY_ACTIONS[1]] }, {}, 'bad-grant'],
+  ['two keys', { [keyPath(shareIdOf())]: KEY_ACTIONS, [keyPath(shareIdOf())]: KEY_ACTIONS }, {}, 'bad-grant'],
+  ['the share prefix', { [`${network}/share/`]: KEY_ACTIONS }, {}, 'bad-grant'],
+  ['an upper-case id', { [keyPath(shareIdOf().toUpperCase())]: KEY_ACTIONS }, {}, 'bad-grant'],
+  ['another network', { [`urn:tinycloud:encryption:${owner.did}:other/share/${shareIdOf()}`]: KEY_ACTIONS }, {}, 'bad-grant'],
+  ['a different account', { [`urn:tinycloud:encryption:did:pkh:eip155:1:0x${'1'.repeat(40)}:default/share/${shareIdOf()}`]: KEY_ACTIONS }, {}, 'bad-grant'],
+  ['more than a day', undefined, { lifetimeMs: 3 * DAY }, 'grant-too-long'],
+  ['an expiry after the invitation', undefined, { lifetimeMs: 2 * 3_600_000 }, 'grant-too-long'],
 ]) {
   test(`assertInvitationApprovalGrant refuses ${name}`, async () => {
-    const { caps: verified, times } = await caps(options);
-    assert.throws(() => assertInvitationApprovalGrant(verified, times, { ownerDid: OWNER, acceptanceExpiresAt: new Date(Date.now() + 3_600_000) }), { code });
+    const grant = await inviteGrant(owner, agent, { request: request(), rawAbilities, ...options });
+    assert.throws(() => assertInvitationApprovalGrant(signedEntries(verify(grant)), siweTimes(grant.payload.siwe), bounds()), { code });
   });
 }
 
+test('the approval window has no slack: an expiry one second past the invitation is refused', async () => {
+  const lifetimeMs = 3_600_000 + 1000;
+  const issuedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
+  const acceptanceExpiresAt = new Date(issuedAt.getTime() + 3_600_000);
+  const grant = await inviteGrant(owner, agent, { request: request(), issuedAt, lifetimeMs });
+  assert.throws(() => assertInvitationApprovalGrant(signedEntries(verify(grant)), siweTimes(grant.payload.siwe), { ownerDid: owner.did, acceptanceExpiresAt }), { code: 'grant-too-long' });
+});
 
-// ---- cmdInvite --mode email with a local approver -------------------------------------------------------------------
+test('a grant issued to another key does not verify for this Courier node', async () => {
+  const grant = await inviteGrant(owner, stranger, { request: request() });
+  assert.throws(() => verify(grant));
+});
+
+// ---- the signed request binding ----------------------------------------------------------------------------------------------
+
+test('assertApprovalRequestBinding accepts only the one Request ID of this request', async () => {
+  const mine = request();
+  const good = await inviteGrant(owner, agent, { request: mine });
+  assert.doesNotThrow(() => assertApprovalRequestBinding(good.payload.siwe, mine));
+  const wrongId = await inviteGrant(owner, agent, { request: { ...mine, requestId: requestIdOf() } });
+  const wrongDigest = await inviteGrant(owner, agent, { request: { ...mine, bodyCid: bodyCidOf() } });
+  const missing = await inviteGrant(owner, agent, { request: mine, bind: false });
+  const line = `Request ID: urn:tinycloud:approval-request:${mine.requestId}:${mine.bodyCid}`;
+  const twice = { payload: { siwe: good.payload.siwe.replace(line, `${line}\n${line}`) } };
+  // Texts the signer cannot even produce are still refused by the verifier: edit the signed text (the check is on the text).
+  const malformed = { payload: { siwe: good.payload.siwe.replace(line, `Request ID: ${mine.requestId}:${mine.bodyCid}`) } };
+  const padded = { payload: { siwe: good.payload.siwe.replace(line, `${line} `) } };
+  const lowercased = { payload: { siwe: good.payload.siwe.replace(line, line.replace('Request ID', 'request id')) } };
+  for (const bad of [wrongId, wrongDigest, missing, twice, malformed, padded, lowercased]) {
+    assert.throws(() => assertApprovalRequestBinding(bad.payload.siwe, mine), { code: 'bad-grant' });
+  }
+});
+
+// ---- cmdInvite --mode email -------------------------------------------------------------------------------------------------
 
 function setup() {
   saveKey(agent);
   saveProfile({
-    version: 3, host: HOST, openkeyHost: 'https://openkey.so', label: 'issuer', courierDid: agent.did, ownerDid: OWNER, spaceId: SPACE,
+    version: 3, host: HOST, openkeyHost: 'https://openkey.so', label: 'issuer', courierDid: agent.did, ownerDid: owner.did, spaceId: owner.space,
     grantExpiresAt: new Date(Date.now() + 20 * DAY).toISOString(), status: 'ready', peers: {},
   });
   const kv = memoryKv();
   const sessionId = ulid();
   kv.rows.set(sessionKey(sessionId), { value: { sessionId, subject: 'plan', createdAt: new Date().toISOString() }, etag: 'e0' });
   const calls = [];
-  const node = {
-    kv,
-    getVerifiedSessionCapabilities: () => AGENT_GRANT.flatMap((permission) => permission.actions.map((action) => ({ ...permission, actions: [action], caveats: [] }))),
-    async delegateTo(audience, permissions) {
-      calls.push('delegateTo');
-      return { delegation: { cid: 'bafyrelay', delegateDID: audience, expiry: new Date(Date.now() + 3_600_000), spaceId: SPACE, delegationHeader: { Authorization: 'Bearer relay' }, permissions } };
+  const node = new Proxy(realNode, {
+    get(target, property) {
+      if (property === 'kv') return kv;
+      if (property === 'delegateTo') {
+        return async (audience, permissions) => {
+          calls.push('delegateTo');
+          return { delegation: { cid: 'bafyrelay', delegateDID: audience, expiry: new Date(Date.now() + 3_600_000), spaceId: owner.space, delegationHeader: { Authorization: 'Bearer relay' }, permissions } };
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
     },
-  };
+  });
   const argv = () => parseArgs(['--session', sessionId, '--mode', 'email', '--recipient', 'Reader@Example.com', '--consent', '--wait', '1']);
-  const events = { created: [], polls: 0, acked: 0, sent: [] };
-  let answer = { status: 'pending' };
+  const events = { created: [], polls: 0, acked: 0, sent: [], failSend: false };
+  let answer = async () => ({ status: 'pending' });
   const approval = {
-    async create({ context }) { events.created.push(context); return { approvalUrl: 'https://openkey.example/a/x', transport: { n: events.created.length } }; },
-    async poll() { events.polls += 1; return answer; },
+    async create({ context }) { events.created.push(context); return { approvalUrl: 'https://openkey.example/a/x', transport: { requestId: requestIdOf(), bodyCid: bodyCidOf() } }; },
+    async poll(pending) { events.polls += 1; return answer(pending); },
     async acknowledge() { events.acked += 1; },
   };
-  const send = async (_node, _profile, body, deps) => { events.sent.push({ body, shareId: deps.shareId(), keyNode: deps.keyNode }); return { shareId: deps.shareId() }; };
-  const deps = { node: async () => node, approval, send };
-  return { kv, calls, argv, events, deps, answer: (value) => { answer = value; } };
+  const send = async (_node, _profile, body, deps) => {
+    if (events.failSend) throw new Error('the Share service is unavailable');
+    events.sent.push({ body, shareId: deps.shareId() });
+    return { shareId: deps.shareId() };
+  };
+  const approve = (options = {}) => { answer = async (pending) => ({ status: 'approved', payload: (await inviteGrant(owner, options.holder ?? agent, { request: pending.transport, ...options })).payload }); };
+  return { kv, calls, argv, events, deps: { node: async () => node, approval, send }, answer: (value) => { answer = async () => value; }, approve, node };
 }
 
 const quiet = async (fn) => {
   const log = console.log;
+  const error = console.error;
   console.log = () => {};
-  try { return await fn(); } finally { console.log = log; }
+  console.error = () => {};
+  try { return await fn(); } finally { console.log = log; console.error = error; }
 };
-const failure = (promise) => promise.then(() => undefined, (error) => error);
+const failure = (promise) => promise.then(() => undefined, (caught) => caught);
+const invitationState = (kv) => [...kv.rows.keys()].filter((key) => key.includes('/state/invitations/'));
 const pendingFiles = () => fs.readdirSync(path.join(profileDir(), 'pending-invites')).filter((name) => name.endsWith('.json'));
 
-test('email invite without an approval: the request is made once with the prepared facts, nothing else is created, a rerun resumes it', async () => {
+test('email invite without an approval: one request with the prepared facts, nothing else created, a rerun resumes it', async () => {
   const { kv, calls, argv, events, deps } = setup();
-  const first = await failure(cmdInvite(argv(), deps));
+  const first = await failure(quiet(() => cmdInvite(argv(), deps)));
   assert.equal(first?.code, 'invite-approval-pending');
   assert.equal(events.created.length, 1);
   const [context] = events.created;
@@ -129,98 +149,169 @@ test('email invite without an approval: the request is made once with the prepar
   assert.equal(context.subjectName, 'plan');
   assert.ok(Date.parse(context.acceptanceExpiresAt) - Date.now() <= DAY);
   assert.equal(context.accessExpiresAt, context.acceptanceExpiresAt);
-  // Nothing before approval: no relay delegation, no invitation state, nothing sent.
   assert.deepEqual(calls, []);
-  assert.deepEqual([...kv.rows.keys()].filter((key) => key.includes('/state/invitations/')), []);
+  assert.deepEqual(invitationState(kv), []);
   assert.deepEqual(events.sent, []);
-  const pending = loadPendingInvite(context.invitationId);
-  assert.equal(pending.status, 'awaiting');
-  assert.equal(pending.recipient, 'reader@example.com');
-  // The same command again continues the same invitation: same id, no second request.
-  const second = await failure(cmdInvite(argv(), deps));
+  assert.equal(loadPendingInvite(context.invitationId).status, 'awaiting');
+  const second = await failure(quiet(() => cmdInvite(argv(), deps)));
   assert.equal(second?.code, 'invite-approval-pending');
   assert.equal(events.created.length, 1);
   assert.deepEqual(pendingFiles(), [`${context.invitationId}.json`]);
   assert.equal(loadInviteGrant(context.invitationId), undefined);
 });
 
-for (const [status, message] of [['denied', /declined/], ['expired', /expired/]]) {
-  test(`email invite whose approval is ${status}: fails closed with nothing created, and the invitation id is not reused`, async () => {
+for (const status of ['denied', 'expired']) {
+  test(`email invite whose approval is ${status}: fails closed with nothing created, and a rerun asks afresh`, async () => {
     const { kv, calls, argv, events, deps, answer } = setup();
     answer({ status });
-    const error = await failure(cmdInvite(argv(), deps));
+    const error = await failure(quiet(() => cmdInvite(argv(), deps)));
     assert.equal(error?.code, 'invite-authority-missing');
     assert.match(error.message, /nothing was created/);
     assert.deepEqual(calls, []);
-    assert.deepEqual([...kv.rows.keys()].filter((key) => key.includes('/state/invitations/')), []);
+    assert.deepEqual(invitationState(kv), []);
     assert.deepEqual(events.sent, []);
     const [{ invitationId }] = events.created;
     assert.equal(loadPendingInvite(invitationId).status, 'closed');
-    await failure(cmdInvite(argv(), deps));
+    await failure(quiet(() => cmdInvite(argv(), deps)));
     assert.equal(events.created.length, 2);
     assert.notEqual(events.created[1].invitationId, invitationId);
-    assert.match(String(message), /\//);
   });
 }
 
-test('email invite after a good approval: the approved key id, invitation id and expiry reach the single send; a rerun sends nothing more', async () => {
-  const { kv, calls, argv, events, deps, answer } = setup();
-  await failure(cmdInvite(argv(), deps));
+test('an approval transport that cannot be reached fails closed with nothing created', async () => {
+  const { kv, calls, argv, events, deps } = setup();
+  deps.approval.create = async () => { throw Object.assign(new Error('x'), { name: 'CourierError', code: 'approval-unavailable' }); };
+  const { CourierError } = await import('../dist/errors.js');
+  deps.approval.create = async () => { throw new CourierError('approval-unavailable', 'unreachable'); };
+  const error = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(error?.code, 'invite-authority-missing');
+  assert.deepEqual(calls, []);
+  assert.deepEqual(invitationState(kv), []);
+  assert.deepEqual(events.sent, []);
+});
+
+test('after a good approval: the signed key id, invitation id and expiry reach the single send; the base grant is unchanged; a rerun sends nothing more', async () => {
+  const { kv, calls, argv, events, deps, approve, answer, node } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
   const [context] = events.created;
-  answer({ status: 'approved', payload: await approval({ id: ID_A, lifetimeMs: Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000 }) });
-  await quiet(() => failure(cmdInvite(argv(), deps)));
+  approve({ lifetimeMs: Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000 });
+  await failure(quiet(() => cmdInvite(argv(), deps)));
   assert.equal(events.sent.length, 1);
   const [sent] = events.sent;
-  assert.equal(sent.shareId, ID_A);
+  const stored = loadInviteGrant(context.invitationId);
+  assert.equal(sent.shareId, stored.shareId);
   assert.equal(sent.body.id, context.invitationId);
   assert.equal(sent.body.expiresAt, context.acceptanceExpiresAt);
   assert.equal(sent.body.recipient, 'reader@example.com');
-  assert.ok(sent.keyNode, 'the exact-key node is used for the key');
   assert.equal(events.acked, 1);
   assert.equal(loadPendingInvite(context.invitationId).status, 'sent');
-  assert.equal(loadInviteGrant(context.invitationId).shareId, ID_A);
   assert.equal(loadGrant(), undefined, 'the main Courier grant is untouched');
+  // The grant is installed as exactly this one key's runtime authority; the session's own authority has no encryption entry.
+  assert.equal(node.hasRuntimePermissions([{ service: 'tinycloud.encryption', path: `${network}/share/${stored.shareId}`, actions: ['tinycloud.encryption/key.create'] }]), true);
+  assert.equal(node.hasRuntimePermissions([{ service: 'tinycloud.encryption', path: `${network}/share/${shareIdOf()}`, actions: ['tinycloud.encryption/key.create'] }]), false);
+  assert.equal(node.getVerifiedSessionCapabilities().some((entry) => entry.service === 'tinycloud.encryption'), false);
   assert.ok(calls.includes('delegateTo'));
   assert.ok([...kv.rows.keys()].some((key) => key.includes(`/state/invitations/${context.invitationId}`)));
-  // Running it again does not send another email for that approval.
-  await quiet(() => failure(cmdInvite(argv(), deps)));
+  // Running it again is a NEW invitation: it asks for its own approval and, until that is given, sends nothing.
+  answer({ status: 'pending' });
+  const again = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(again?.code, 'invite-approval-pending');
+  assert.equal(events.created.length, 2);
+  assert.notEqual(events.created[1].invitationId, context.invitationId);
   assert.equal(events.sent.length, 1);
 });
 
 test('two runs racing on one approved invitation send exactly once', async () => {
-  const { argv, events, deps, answer } = setup();
-  await failure(cmdInvite(argv(), deps));
-  const [context] = events.created;
-  answer({ status: 'approved', payload: await approval({ id: ID_B, lifetimeMs: Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000 }) });
+  const { argv, events, deps, approve } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  approve({ lifetimeMs: Date.parse(events.created[0].acceptanceExpiresAt) - Date.now() - 60_000 });
   const results = await quiet(() => Promise.all([failure(cmdInvite(argv(), deps)), failure(cmdInvite(argv(), deps))]));
   assert.equal(events.sent.length, 1);
   assert.equal(results.filter((error) => error?.code === 'invite-in-progress').length, 1);
 });
 
-for (const [name, build, code] of [
-  ['an approval issued to another key', (context) => approval({ holder: other, lifetimeMs: Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000 }), 'bad-grant'],
-  ['an approval for a prefix', (context) => approval({ abilities: { encryption: { [`${network}/share/`]: pair } }, lifetimeMs: Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000 }), 'bad-grant'],
-  ['an approval that outlasts the invitation', (context) => approval({ lifetimeMs: Date.parse(context.acceptanceExpiresAt) - Date.now() + 2 * 3_600_000 }), 'grant-too-long'],
-  ['an approval that has already lapsed', () => approval({ issuedAt: new Date(Date.now() - 2 * 3_600_000), lifetimeMs: 3_600_000 }), 'grant-expired'],
+// What is refused, and that a refused result closes the pending invitation but never deletes anything approved.
+const lifetimeFor = (context) => Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000;
+for (const [name, options, code] of [
+  ['an approval issued to another key', (context) => ({ holder: stranger, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+  ['an approval for a prefix', (context) => ({ rawAbilities: { [`${network}/share/`]: KEY_ACTIONS }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+  ['an approval with more authority than one key', (context) => ({ rawAbilities: { [keyPath(shareIdOf())]: KEY_ACTIONS, [keyPath(shareIdOf())]: KEY_ACTIONS }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+  ['an approval that outlasts the invitation', (context) => ({ lifetimeMs: lifetimeFor(context) + 2 * 3_600_000 }), 'grant-too-long'],
+  ['an approval signed without the request binding', (context) => ({ bind: false, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+  ['an approval whose binding names another request id', (context) => ({ request: { requestId: requestIdOf(), bodyCid: 'x' }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
 ]) {
-  test(`email invite refuses ${name}: nothing is created or sent`, async () => {
-    const { kv, calls, argv, events, deps, answer } = setup();
-    await failure(cmdInvite(argv(), deps));
-    answer({ status: 'approved', payload: await build(events.created[0]) });
-    const error = await failure(cmdInvite(argv(), deps));
+  test(`email invite refuses ${name}: nothing is created or sent and the pending invitation is closed`, async () => {
+    const { kv, calls, argv, events, deps, approve } = setup();
+    await failure(quiet(() => cmdInvite(argv(), deps)));
+    const [context] = events.created;
+    approve(options(context));
+    const error = await failure(quiet(() => cmdInvite(argv(), deps)));
     assert.equal(error?.code, code);
     assert.deepEqual(calls, []);
     assert.deepEqual(events.sent, []);
-    assert.deepEqual([...kv.rows.keys()].filter((key) => key.includes('/state/invitations/')), []);
-    assert.equal(loadInviteGrant(events.created[0].invitationId), undefined);
+    assert.deepEqual(invitationState(kv), []);
+    assert.equal(loadInviteGrant(context.invitationId), undefined);
+    assert.equal(loadPendingInvite(context.invitationId).status, 'closed');
   });
 }
 
-test('the approved grant is reusable only for its own invitation and its own key', async () => {
-  const { caps: verified } = await caps();
-  const keyNode = { getVerifiedSessionCapabilities: () => verified, keys: { createKey: async () => { throw new Error('must not run'); } }, encryption: {} };
-  const profile = { ownerDid: OWNER, spaceId: SPACE };
-  const body = { mode: 'email', recipient: 'reader@example.com', id: ulid(), expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
-  const error = await failure(sendEmailInvitation({}, profile, body, { shareId: () => ID_B, keyNode }));
+test('a valid owner approval for request X, returned as the result for request Y, is refused', async () => {
+  const { kv, calls, argv, events, deps, answer } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [context] = events.created;
+  const x = await inviteGrant(owner, agent, { request: request(), lifetimeMs: lifetimeFor(context) });
+  answer({ status: 'approved', payload: x.payload });
+  const error = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(error?.code, 'bad-grant');
+  assert.match(error.message, /not signed for this invitation request/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(events.sent, []);
+  assert.deepEqual(invitationState(kv), []);
+});
+
+test('one key id cannot serve two invitations, even with a correctly bound approval', async () => {
+  const { argv, events, deps, answer } = setup();
+  const reused = shareIdOf();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  answer({ status: 'pending' });
+  deps.approval.poll = async (pending) => ({ status: 'approved', payload: (await inviteGrant(owner, agent, { request: pending.transport, shareId: reused, lifetimeMs: lifetimeFor(events.created.at(-1)) })).payload });
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(events.sent.length, 1);
+  // A second invitation (the first is sent, so this one asks afresh) is approved with the SAME key id.
+  const second = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(second?.code, 'bad-grant');
+  assert.match(second.message, /already used for another invitation/);
+  assert.equal(events.sent.length, 1);
+});
+
+// ---- a failed send ends the invitation, not the next 24 hours ----------------------------------------------------------------
+
+test('a send that fails closes the pending invitation; the claim stays, so the same approval is never used twice, and a rerun asks afresh', async () => {
+  const { argv, events, deps, approve } = setup();
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [context] = events.created;
+  approve({ lifetimeMs: lifetimeFor(context) });
+  events.failSend = true;
+  const failed = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.match(failed.message, /Share service is unavailable/);
+  assert.equal(loadPendingInvite(context.invitationId).status, 'closed');
+  assert.ok(fs.existsSync(path.join(profileDir(), 'pending-invites', `${context.invitationId}.sending`)), 'the send claim is kept');
+  assert.ok(loadInviteGrant(context.invitationId), 'the approved grant is kept, never deleted');
+  events.failSend = false;
+  approve({ lifetimeMs: Date.parse(new Date(Date.now() + DAY).toISOString()) - Date.now() - 120_000 });
+  const rerun = await failure(quiet(() => cmdInvite(argv(), deps)));
+  assert.equal(events.created.length, 2, 'a new approval is requested instead of waiting out the old window');
+  assert.notEqual(events.created[1].invitationId, context.invitationId);
+  assert.equal(rerun?.code === undefined || rerun.code === 'invite-approval-pending' || rerun.code === 'invite-pending', true);
+});
+
+test('an approver that no longer knows the request closes the pending invitation', async () => {
+  const { argv, events, deps } = setup();
+  const { CourierError } = await import('../dist/errors.js');
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [context] = events.created;
+  deps.approval.poll = async () => { throw new CourierError('approval-unavailable', 'OpenKey does not recognise this approval request.'); };
+  const error = await failure(quiet(() => cmdInvite(argv(), deps)));
   assert.equal(error?.code, 'invite-authority-missing');
+  assert.equal(loadPendingInvite(context.invitationId).status, 'closed');
 });

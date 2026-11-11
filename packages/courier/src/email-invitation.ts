@@ -37,27 +37,12 @@ export interface EmailInvitationDeps {
   linksApiOrigin?: string;
   now?: () => number;
   shareId?: () => string;
-  /** The per-invitation approval's node: it alone creates the key and encrypts under it; everything else uses the main node. */
-  keyNode?: Pick<TinyCloudNode, 'keys' | 'encryption' | 'getVerifiedSessionCapabilities'>;
 }
 
 interface ShareConfig { shareOrigin: string; registryOrigin: string; credentialsOrigin: string }
 
 const envelopePath = (invitationId: string, shareId: string) => `${PREFIX}/to/invite-${invitationId}/envelope/${shareId}.json`;
 export const newShareId = () => randomBytes(16).toString('hex');
-
-/**
- * Refuse BEFORE anything is created unless this grant holds key.create and decrypt on exactly `share/<shareId>`.
- * Nothing here requests that authority: the grant only gains it from an owner approval for this key, which Courier has
- * no interface for yet, so today this only passes for a grant that already names the generated id.
- */
-export function requireInvitationKeyAuthority(node: Pick<TinyCloudNode, 'getVerifiedSessionCapabilities'>, profile: Profile, shareId: string): void {
-  if (!profile.ownerDid || !profile.spaceId) throw new CourierError('no-grant', 'No owner grant is installed.');
-  if (!holdsInvitationKeyAuthority(node.getVerifiedSessionCapabilities(), profile.ownerDid, shareId)) {
-    throw new CourierError('invite-authority-missing',
-      "This Courier grant does not hold key.create and decrypt on this invitation's share key, so nothing was created: no pairing relay delegation, invitation state, Share key, link or email.");
-  }
-}
 
 function canonicalOrigin(value: unknown, label: string): string {
   if (typeof value !== 'string') throw new CourierError('share-config', `Share ${label} is unavailable.`);
@@ -106,10 +91,13 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   if (body.mode !== 'email' || email === undefined || email !== canonicalInviteEmail(email)) throw new CourierError('bad-invitation', 'Not an email invitation.');
   if (!profile.ownerDid || !profile.spaceId) throw new CourierError('no-grant', 'No owner grant is installed.');
   const shareId = (deps.shareId ?? newShareId)();
-  const keyNode = deps.keyNode ?? node;
-  if (!holdsInvitationKeyAuthority(keyNode.getVerifiedSessionCapabilities(), profile.ownerDid, shareId)) {
+  // Authority for this one key: held by the session itself (legacy), or installed as the invitation's approved runtime grant
+  // (the SDK checks a runtime Share key by its key.create; the installed grant was verified to be exactly the pair).
+  const runtimeGrantHeld = () => typeof node.hasRuntimePermissions === 'function' && node.hasRuntimePermissions([
+    { service: 'tinycloud.encryption', path: `${node.getDefaultEncryptionNetworkId()}/share/${shareId}`, actions: ['tinycloud.encryption/key.create'] },
+  ]);
+  if (!holdsInvitationKeyAuthority(node.getVerifiedSessionCapabilities(), profile.ownerDid, shareId) && !runtimeGrantHeld()) {
     // A direct caller that already ran `issueInvitation` has stored its state and issued the pairing relay delegation.
-    // `cmdInvite` checks first (`requireInvitationKeyAuthority`), so it never reaches this branch.
     throw new CourierError('invite-authority-missing',
       `This Courier grant does not hold key.create and decrypt on this invitation's share key, so no Share key, link or email was created or sent. Already created before this check: a pairing relay delegation (expires ${body.expiresAt}) and invitation state ${body.id}, a record that stays in your Courier space (nothing deletes it).`);
   }
@@ -120,9 +108,9 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   const keyPath = `share/${shareId}`;
   const network = node.getDefaultEncryptionNetworkId();
   await node.publishActiveNodeLocation(config.registryOrigin, fetchFn);
-  await keyNode.keys.createKey(keyPath);
+  await node.keys.createKey(keyPath);
   const plaintext = new TextEncoder().encode(canonicalJson(body));
-  const encrypted = await keyNode.encryption.encryptToNetwork(network, plaintext, { keyPath, metadata: { contentType: 'application/json' } });
+  const encrypted = await node.encryption.encryptToNetwork(network, plaintext, { keyPath, metadata: { contentType: 'application/json' } });
   if (!encrypted.ok || encrypted.data.networkId !== network || encrypted.data.keyPath !== keyPath) throw new CourierError('encrypt-failed', 'The invitation could not be encrypted.');
   const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
   const path = envelopePath(body.id, shareId);
