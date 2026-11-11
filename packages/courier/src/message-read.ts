@@ -73,7 +73,7 @@ export async function collectMessages(input: {
           try {
             if (typeof body === 'string') body = JSON.parse(body);
             // Check inside this message's failure boundary, before final output combines healthy messages.
-            JSON.stringify(body);
+            JSON.stringify({ entries: [{ body }] });
           } catch {
             outcomes.push({ messageId: id, side, status: 'invalid' });
             return;

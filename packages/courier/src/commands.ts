@@ -678,7 +678,7 @@ export async function cmdRead(args: ParsedArgs) {
     });
   if (!args.has('message') && !result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
   if (args.has('json')) {
-    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');
+    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, args.has('message') ? undefined : 2) + '\n');
   } else {
     await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors) + (result.outcomes ? renderMessageOutcomes(args.get('peer')!, result.outcomes) : ''));
   }
