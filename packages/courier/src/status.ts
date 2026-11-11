@@ -1,6 +1,7 @@
 import type { ParsedArgs } from './args.js';
 import { requireFlag } from './args.js';
 import { CourierError } from './errors.js';
+import { loadOwnerEpisode } from './interim-owner.js';
 import { getPeer, loadProfile, type StoredPeer } from './profile.js';
 import { cmd } from './program.js';
 import { oneLine } from './a2a.js';
@@ -21,23 +22,25 @@ export function grantExpiry(expiresAt: string | undefined, now = Date.now()): Gr
 
 export function peerExpiryStatus(peer: StoredPeer, now = Date.now()) {
   const inbound = grantExpiry(peer.inbound?.expiresAt, now);
-  const outbound = grantExpiry(peer.outbound.at(-1)?.expiresAt, now);
+  const outbound = grantExpiry([...peer.outbound].reverse().find(entry => !entry.revokedAt && !peer.interim?.cleanup[entry.cid])?.expiresAt, now);
   const live = (g: GrantExpiry) => g.state === 'current' || g.state === 'expiring';
-  const renewalCommand = peer.status === 'paired' && live(inbound) && live(outbound)
+  const stopped = !!peer.interim?.latchedAt || !!peer.interim?.inboundRefusedAt;
+  const renewalCommand = !stopped && peer.status === 'paired' && live(inbound) && live(outbound)
     ? cmd(`pair renew ${peer.handle}`) : null;
   const warnings: string[] = [];
   for (const [side, grant] of [['inbound', inbound], ['outbound', outbound]] as const) {
     if (grant.state === 'expiring') warnings.push(`The saved ${side} grant for ${oneLine(peer.handle)} expires within 24 hours (${grant.expiresAt}).`);
     if (grant.state === 'expired') warnings.push(side === 'inbound'
-      ? `Your saved access to ${oneLine(peer.handle)} has expired; the peer must approve a new grant.`
+      ? `Your access to ${oneLine(peer.handle)} has expired. A new pairing is required.`
       : `${oneLine(peer.handle)}'s saved access to you has expired; you must approve a new grant.`);
     if (grant.state === 'missing') warnings.push(`No saved ${side} grant for ${oneLine(peer.handle)}.`);
     if (grant.state === 'unknown') warnings.push(`The saved ${side} grant for ${oneLine(peer.handle)} has no expiry on record.`);
   }
+  if (stopped) warnings.push(`Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
   return {
     peer: peer.handle, pairing: peer.status, inbound, outbound,
     remoteReadability: 'not-checked' as const,
-    renewal: { state: 'unknown' as const, command: renewalCommand },
+    renewal: { state: stopped ? 'revoked' : peer.interim?.unavailableAt ? 'unavailable' : peer.interim ? 'automatic' : 'unknown', command: renewalCommand },
     warnings,
   };
 }
@@ -52,11 +55,16 @@ export function cmdStatus(args: ParsedArgs): void {
   const profile = loadProfile();
   const peers = requested === undefined ? Object.values(profile.peers) : [getPeer(profile, requested)];
   const now = Date.now();
-  const output = { source: 'saved-profile', checkedAt: new Date(now).toISOString(), peers: peers.map(peer => peerExpiryStatus(peer, now)) };
+  const episode = loadOwnerEpisode();
+  const owner = episode ? { state: episode.phase, expiresAt: episode.expiresAt, requestId: episode.requestId } : { state: 'unknown' };
+  const output = { owner, source: 'saved-profile', checkedAt: new Date(now).toISOString(), peers: peers.map(peer => peerExpiryStatus(peer, now)) };
   if (args.has('json')) {
     console.log(JSON.stringify(output, null, 2));
     return;
   }
+  if (owner.state === 'unavailable') console.log(`Courier couldn't create an approval request. Run \`${cmd('init --request')}\` to try again.`);
+  if (owner.state === 'requested') console.log(`Courier needs your approval to keep renewing access. Approve the request in OpenKey, then run \`${cmd('init --wait')}\`.`);
+  console.log('To stop sharing with a peer, revoke the pairing. A renewal Courier already published can stay usable until Courier next runs, and never past its own end date (at most 30 days).');
   console.log("Showing saved expiry times only. This doesn't contact peers or check renewals.");
   console.log("Inbound: your access to the peer. Outbound: the peer's access to you (latest saved grant).");
   if (!output.peers.length) console.log('No saved peers.');

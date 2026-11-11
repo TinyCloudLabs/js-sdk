@@ -5,6 +5,7 @@ import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { canonicalJson } from './canonical.js';
 import { acquireLock, fsyncDir, parseIdentityRecord, processIdentityRecord } from './file-lock.js';
+import type { InterimState } from './interim-renewal.js';
 import type { LockRecord } from './file-lock.js';
 
 /** Courier-local identity and peer store; never an OpenKey owner profile. */
@@ -39,7 +40,8 @@ export interface StoredPeer {
   spaceId: string;
   theirHandleForMe?: string;
   inbound?: { delegation: string; cid: string; expiresAt: string };
-  outbound: { cid: string; issuedAt: string; expiresAt: string; revokedAt?: string }[];
+  outbound: { cid: string; issuedAt: string; expiresAt: string; revokedAt?: string; priorCid?: string; delegation?: string }[];
+  interim?: InterimState;
   status: 'pending-A' | 'awaiting-C' | 'paired';
   /** Guided pairing is restricted to this one thread, never the peer's other chats. */
   sessionId?: string;
@@ -47,7 +49,7 @@ export interface StoredPeer {
 }
 
 export interface Profile {
-  version: 3;
+  version: 3 | 4;
   host: string;
   openkeyHost: string;
   label: string;
@@ -246,7 +248,7 @@ export function readSecure<T>(name: string, required: boolean, home = profileDir
 
 /** The fields `loadProfile` requires of a current (version 3) profile. */
 export function hasProfileFields(profile: Partial<Profile> | null): profile is Profile {
-  return !!profile && typeof profile === 'object' && profile.version === 3 && !!profile.courierDid && !!profile.host && !!profile.openkeyHost;
+  return !!profile && typeof profile === 'object' && (profile.version === 3 || profile.version === 4) && !!profile.courierDid && !!profile.host && !!profile.openkeyHost;
 }
 
 function readProfile(home: string): Profile {
@@ -257,7 +259,7 @@ function readProfile(home: string): Profile {
   if (loaded.version === 2) {
     throw new CourierError('profile-outdated', `This profile stores Courier data in the applications space. Courier now uses your agents space: run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
   }
-  if (loaded.version !== 3) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
+  if (loaded.version !== 3 && loaded.version !== 4) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
   const profile = loaded as Profile;
   if (!hasProfileFields(profile)) throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json', home)}`);
   profile.peers ??= {};

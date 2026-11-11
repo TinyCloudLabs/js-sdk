@@ -1,3 +1,4 @@
+import { createRuntimeNode, recordAuthorityRefusal, watchPeerEligible, watchPreflight } from './interim-runtime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { cmd, programName } from './program.js';
 import { CourierError } from './errors.js';
 import { loadProfile, profileDir, writeSecure } from './profile.js';
-import { courierNode, peerHooks, peerKv } from './node.js';
+import { peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
 import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
@@ -232,15 +233,17 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   }
 
   const log = jsonLineLog();
-  const node = await courierNode(profile);
+  const node = await createRuntimeNode();
   const watcher = new Watcher({
+    beforePoll: () => watchPreflight(node),
+    onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
     selfKv: node.kv,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,
     peerHooks: (peer) => peerHooks(node, loadProfile(), peer),
-    loadPeers: () => Object.values(loadProfile().peers),
+    loadPeers: () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer)),
     kvFor: (peer) => peerKv(node, loadProfile(), peer),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },

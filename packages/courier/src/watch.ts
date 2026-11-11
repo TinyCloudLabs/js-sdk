@@ -1,3 +1,4 @@
+import { isAuthorizationRefusal } from './errors.js';
 import { defer } from './defer.js';
 import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
@@ -175,6 +176,8 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
+  beforePoll?(): Promise<void>;
+  onAuthorityRefusal?(source: string): Promise<void>;
   selfKv: KV;
   /** Own space id, for the `me/approvals/` subscription. */
   spaceId: string;
@@ -480,6 +483,7 @@ export class Watcher {
         try {
           await this.syncPeer(peer, entry.via);
         } catch (error) {
+          if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`); return; }
           this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
         }
       } while (entry.again);
@@ -1254,7 +1258,8 @@ export class Watcher {
 
   // ---------- run loop ----------
 
-  async pollOnce(via: Via): Promise<void> {
+  async pollOnce(via: Via, preflight = true): Promise<void> {
+    if (preflight) await this.deps.beforePoll?.();
     if (this.deps.notifyOnly) {
       const paired = this.deps.loadPeers().filter(peer => peer.status === 'paired' && HANDLE.test(peer.handle)).map(peer => peer.handle);
       if (paired.some(peer => !Object.hasOwn(this.state.peerNotices, peer))
@@ -1287,6 +1292,7 @@ export class Watcher {
     const supervisors = new Map<string, AbortController>();
     let ticker: NodeJS.Timeout | undefined;
     try {
+      await this.deps.beforePoll?.();
       await this.loadState();
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
       await this.pruneClaims();
@@ -1321,25 +1327,29 @@ export class Watcher {
         }
       };
       if (options.once) {
-        await this.pollOnce('startup');
+        await this.pollOnce('startup', false);
         await this.tick(true);
       } else {
         // Open the subscriptions first, then catch up: a write between the two is seen by one or the other.
         reconcile();
         await sleep(RECONNECT_CATCH_UP_MS, signal);
-        if (!signal.aborted) await this.pollOnce('startup');
+        if (!signal.aborted) await this.pollOnce('startup', false);
         ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
         while (!signal.aborted) {
           await sleep(this.opts.pollMs, signal);
           if (signal.aborted) break;
+          await this.deps.beforePoll?.();
           reconcile();
-          await this.pollOnce('poll');
+          await this.pollOnce('poll', false);
           if (this.now() - this.lastClaimPrune > 3600_000) {
             this.lastClaimPrune = this.now();
             await this.pruneClaims();
           }
         }
       }
+    } catch (error) {
+      if (isAuthorizationRefusal(error)) await this.deps.onAuthorityRefusal?.('self');
+      throw error;
     } finally {
       clearInterval(ticker);
       for (const controller of supervisors.values()) controller.abort();
@@ -1350,7 +1360,7 @@ export class Watcher {
     if (this.fatalError) throw this.fatalError;
   }
 
-  /** One hook subscription. A refused ticket (revoked or expired delegation) backs off; the poll covers meanwhile. */
+  /** One hook subscription. Authorization refusals stop this subscription; transient failures back off. */
   private async supervise(
     id: string,
     sub: HookSubscription,
@@ -1376,6 +1386,7 @@ export class Watcher {
         }
         if (!signal.aborted) await sleep(5_000, signal);
       } catch (error) {
+        if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(id); return; }
         failures++;
         this.deps.log('hook-error', { source: id.split(':').slice(0, 2).join(':'), ...errInfo(error) });
         await sleep(Math.min(300_000, 15_000 * 2 ** Math.min(failures - 1, 5)), signal);

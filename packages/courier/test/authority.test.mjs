@@ -97,12 +97,12 @@ test('peer delegation: authority outside the mailbox is rejected', () => {
 
 });
 
-test('peer delegation: lifetime capped at 7 days plus skew', () => {
-  const cap = 7 * DAY + CLOCK_SKEW_MS;
+test('peer delegation: lifetime capped at 30 days plus skew', () => {
+  const cap = 30 * DAY + CLOCK_SKEW_MS;
   assert.doesNotThrow(() => assertPeerDelegation(signed({ expiry: new Date(NOW + cap) }), expected, NOW));
   assert.throws(() => assertPeerDelegation(signed({ expiry: new Date(NOW + cap + 1000) }), expected, NOW), { code: 'grant-too-long' });
-  assert.throws(() => assertPeerDelegation(signed({ expiry: new Date(NOW + 30 * DAY) }), expected, NOW), { code: 'grant-too-long' });
-  assert.equal(PEER_DELEGATION_MAX_MS, 7 * DAY);
+  assert.throws(() => assertPeerDelegation(signed({ expiry: new Date(NOW + 31 * DAY) }), expected, NOW), { code: 'grant-too-long' });
+  assert.equal(PEER_DELEGATION_MAX_MS, 30 * DAY);
 });
 
 test('peer delegation: expired grants cannot be installed', () => {

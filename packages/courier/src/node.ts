@@ -4,7 +4,7 @@ import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { COURIER_SPACE, k } from './keys.js';
 import type { Profile, StoredPeer } from './profile.js';
-import { loadGrant, loadKey, saveProfile } from './profile.js';
+import { loadGrant, loadKey, withProfileTransaction } from './profile.js';
 import { canonicalJson } from './canonical.js';
 import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
@@ -70,15 +70,15 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
   return node;
 }
 
-export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer) {
+export async function currentInbound(node: TinyCloudNode, profile: Profile, peer: StoredPeer): Promise<ValidatedRuntimeDelegation> {
   if (!peer.inbound) {
     throw new CourierError('not-paired', `No delegation from ${peer.handle} yet (status ${peer.status}). Finish pairing first.`);
   }
   if (!peer.theirHandleForMe) {
     throw new CourierError('not-paired', `Peer ${peer.handle} is missing its mailbox handle; finish pairing first.`);
   }
+  if (peer.interim?.latchedAt || peer.interim?.inboundRefusedAt) throw new CourierError('peer-revoked', `Sharing with ${peer.handle} was revoked. A new pairing is required.`);
   assertInboundLive(peer);
-  const original = renewalBinding(profile, peer);
   let cids = activatedCids.get(node);
   if (!cids) {
     cids = new Map<string, ValidatedRuntimeDelegation>();
@@ -101,14 +101,21 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
   }
   const current = cids.get(peer.inbound.cid)!;
   assertInboundLive(peer, current.expiry);
+  return current;
+}
+
+export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer) {
+  const original = renewalBinding(profile, peer);
+  const current = await currentInbound(node, profile, peer);
+  const cids = activatedCids.get(node)!;
   const kv = node.kvForSpace(peer.spaceId);
   // Awaiting-C still needs the explicit pairing acknowledgement, not a renewal.
   if (peer.status !== 'paired') return kv;
-  const update = await getJson<{ delegation?: string }>(kv, k.peerDelegation(peer.theirHandleForMe, peer.sessionId));
+  const update = await getJson<{ delegation?: string }>(kv, k.peerDelegation(peer.theirHandleForMe!, peer.sessionId));
   assertInboundLive(peer, current.expiry);
   if (!update?.value.delegation) return kv;
   const delegation = deserializeDelegation(update.value.delegation);
-  if (delegation.cid === peer.inbound.cid || delegation.expiry.getTime() <= Math.max(current.expiry.getTime(), Date.parse(peer.inbound.expiresAt))) return kv;
+  if (delegation.cid === peer.inbound!.cid || delegation.expiry.getTime() <= Math.max(current.expiry.getTime(), Date.parse(peer.inbound!.expiresAt))) return kv;
   if (delegation.spaceId !== peer.spaceId || delegation.ownerAddress.toLowerCase() !== peer.ownerDid.split(':').at(-1)?.toLowerCase()) {
     throw new CourierError('bad-delegation', 'Peer renewal owner or space does not match the pairing.');
   }
@@ -119,37 +126,38 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
   });
   assertPeerDelegation(renewed, {
     issuer: peer.courierDid, audience: profile.courierDid, spaceId: peer.spaceId,
-    mailbox: peer.theirHandleForMe, sessionId: peer.sessionId,
+    mailbox: peer.theirHandleForMe!, sessionId: peer.sessionId,
   });
   assertInboundLive(peer, current.expiry);
-  const stored = profile.peers[peer.handle];
-  if (!stored || renewalBinding(profile, stored) !== original) {
-    throw new CourierError('peer-changed', 'Peer pairing changed while collecting renewed access.');
-  }
-  stored.inbound = { delegation: serializeDelegation(renewed.delegation), cid: renewed.cid, expiresAt: renewed.expiry.toISOString() };
-  saveProfile(profile, disk => {
-    if (!disk || renewalBinding(disk, disk.peers[peer.handle]) !== original || bareDid(loadKey().did) !== disk.courierDid) {
+  await withProfileTransaction(async (disk, save) => {
+    if (renewalBinding(disk, disk.peers[peer.handle]) !== original || bareDid(loadKey().did) !== disk.courierDid) {
       throw new CourierError('peer-changed', 'Peer pairing changed while collecting renewed access.');
     }
-    assertInboundLive(disk.peers[peer.handle], current.expiry);
+    const stored = disk.peers[peer.handle];
+    assertInboundLive(stored, current.expiry);
     assertInboundLive(stored, renewed.expiry);
+    const inbound = { delegation: serializeDelegation(renewed.delegation), cid: renewed.cid, expiresAt: renewed.expiry.toISOString() };
+    stored.inbound = inbound;
+    save();
+    peer.inbound = inbound;
+    if (profile.peers[peer.handle]) profile.peers[peer.handle].inbound = inbound;
   });
-  peer.inbound = profile.peers[peer.handle].inbound;
   cids.set(renewed.cid, renewed);
   return node.kvForSpace(peer.spaceId);
 }
 
 
 /** Ignore outbound issuance and display labels; compare identity, both mailbox handles and the original grant. */
-function renewalBinding(profile: Profile, peer: StoredPeer | undefined): string {
+export function renewalBinding(profile: Profile, peer: StoredPeer | undefined): string {
   return canonicalJson({
     host: profile.host, courierDid: profile.courierDid, ownerDid: profile.ownerDid,
     spaceId: profile.spaceId, selfHandle: profile.selfHandle, status: profile.status,
-    peer: peer ? { ...peer, outbound: undefined, label: undefined } : undefined,
+    peer: peer ? { ...peer, outbound: undefined, label: undefined, interim: peer.interim?.latchedAt || peer.interim?.inboundRefusedAt || peer.interim?.ownerRevoked
+      ? { latchedAt: peer.interim.latchedAt, inboundRefusedAt: peer.interim.inboundRefusedAt, ownerRevoked: peer.interim.ownerRevoked, ownerRevokedCid: peer.interim.ownerRevokedCid } : undefined } : undefined,
   });
 }
 
-function assertInboundLive(peer: StoredPeer, signedExpiry?: Date): void {
+export function assertInboundLive(peer: StoredPeer, signedExpiry?: Date): void {
   const expiry = Date.parse(peer.inbound?.expiresAt ?? '');
   if (!Number.isFinite(expiry) || expiry <= Date.now() || (signedExpiry && signedExpiry.getTime() <= Date.now())) {
     throw new CourierError('peer-expired', `Access from ${peer.handle} has expired. A new pairing is required.`);
