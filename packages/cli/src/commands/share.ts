@@ -24,6 +24,7 @@ import {
   shareDeliveryWindowExpiresAt,
   ShareNotifyError,
   revokeShare,
+  ShareRevocationIncompleteError,
   redactPublishedShare,
   historyRecordForPublishedShare,
   type ShareTarget,
@@ -162,6 +163,14 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       { hint: `Run \`${CLI_NAME} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` },
     );
   }
+  if (error instanceof ShareRevocationIncompleteError) {
+    return new CLIError(
+      "REVOCATION_INCOMPLETE",
+      `the share was not fully revoked: ${error.failed.map((failure) => `${failure.targetRole} root ${failure.rootCid}`).join(", ")} is still live`,
+      1,
+      { hint: error.revoked.length > 0 ? "Recipient access has already ended. Run the same command again to revoke the rest." : "Run the same command again." },
+    );
+  }
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
     const profileName = "profileName" in failure ? failure.profileName : undefined;
@@ -269,8 +278,8 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     : undefined;
   const known: Record<string, { code: string; exit: number }> = {
     MAX_BYTES_EXCEEDED: { code: "MAX_BYTES_EXCEEDED", exit: 7 },
-    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 8 },
-    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 8 },
+    UNSAFE_FILENAME: { code: "UNSAFE_FILENAME", exit: 2 },
+    OUTPUT_EXISTS: { code: "OUTPUT_EXISTS", exit: 2 },
     INVALID_ARGUMENT: { code: "INVALID_ARGUMENT", exit: 2 },
     "share not found": { code: "NOT_FOUND", exit: 4 },
     AUTH_REQUIRED: { code: "AUTH_REQUIRED", exit: 3 },
@@ -723,7 +732,7 @@ export function registerShareCommand(program: Command): void {
 
   share.command("revoke <id>")
     .description("Revoke a bearer or addressed share this profile created")
-    .option("--ancestor", "Revoke the owner delegation ancestry")
+    .option("--ancestor", "Bearer shares: revoke the owner delegation ancestry (addressed shares always revoke every root)")
     .option("--json", "Print versioned JSON")
     .action(async (id: string, options, command: Command) => {
       try {

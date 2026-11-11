@@ -1,7 +1,9 @@
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner, type TinyCloudNode } from "@tinycloud/node-sdk";
 import { randomBytes } from "node:crypto";
 import { createCliReplicationConfig, type ProfileReplicationSettings } from "../lib/replication-config.js";
+import { recordRegistryFallbackWarning } from "../output/warnings.js";
 
 let wasmInitialized = false;
 
@@ -84,6 +86,7 @@ export async function localKeySignIn(options: {
   privateKey: string;
   host: string;
   profile?: string;
+  tinycloudRegistryUrl?: string;
   replication?: ProfileReplicationSettings;
   /** Extra top-level resource abilities for the sign-in ReCap (named-key prefix grants). */
   keyAbilities?: Record<string, string[]>;
@@ -111,6 +114,10 @@ export async function localKeySignIn(options: {
   );
 
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    tinycloudRegistryUrl: process.env.TC_REGISTRY_URL || options.tinycloudRegistryUrl,
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,

@@ -1,6 +1,8 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createServer, type Server } from "node:http";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -13,6 +15,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { NodeWasmBindings, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
+import { registerMcpFixtureServer, resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import {
   OTHER_OWNER_KEY,
   REQUESTER_KEY,
@@ -27,7 +30,11 @@ const resources: Array<() => Promise<void>> = [];
 const nodeBinary = process.env.TC_MCP_TEST_NODE;
 
 afterEach(async () => {
-  await Promise.all(resources.splice(0).reverse().map((dispose) => dispose()));
+  try {
+    await Promise.all(resources.splice(0).reverse().map((dispose) => dispose()));
+  } finally {
+    resetMcpRegistryFixture();
+  }
 });
 
 test("official Streamable HTTP client authenticates and starts delegated setup", async () => {
@@ -82,7 +89,40 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
-  expect(tools.tools).toHaveLength(22);
+  // Restores the hosted count pin removed in #826 and covers its actual 24-tool matrix.
+  // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
+  expect(tools.tools.map(({ name, annotations }) => [
+    name, annotations?.readOnlyHint, annotations?.destructiveHint,
+    annotations?.idempotentHint, annotations?.openWorldHint,
+  ])).toEqual([
+    ["tinycloud_status", true, false, true, false],
+    ["tinycloud_auth_status", true, false, true, false],
+    ["tinycloud_auth_capabilities", true, false, true, false],
+    ["tinycloud_auth_request", false, false, true, false],
+    // TC-2469 F5: preserve today's read-only hint despite saving a pending request.
+    ["tinycloud_auth_read_scope", true, false, true, false],
+    ["tinycloud_account_spaces_list", true, false, true, true],
+    ["tinycloud_account_applications_list", true, false, true, true],
+    ["tinycloud_kv_list", true, false, true, true],
+    ["tinycloud_kv_get", true, false, true, true],
+    ["tinycloud_read", true, false, true, true],
+    ["tinycloud_kv_head", true, false, true, true],
+    ["tinycloud_kv_put", false, true, true, true],
+    ["tinycloud_kv_delete", false, true, true, true],
+    ["tinycloud_knowledge_list", true, false, true, true],
+    ["tinycloud_knowledge_read", true, false, true, true],
+    ["tinycloud_sql_schema_inspect", true, false, true, true],
+    ["tinycloud_sql_query", true, false, true, true],
+    ["tinycloud_sql_execute", false, true, false, true],
+    ["tinycloud_secrets_get", false, false, true, true],
+    ["tinycloud_apps_context", false, false, true, false],
+    ["tinycloud_apps_read", true, false, true, false],
+    ["tinycloud_apps_write", false, true, false, false],
+    // A query rewrites only its own rebuildable derived copy, and context saves only a timezone: neither deletes a record.
+    ["tinycloud_apps_query", false, false, true, false],
+    ["tinycloud_connect", false, false, true, false],
+  ]);
+  expect(tools.tools).toHaveLength(24);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
   // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
   // reauthorization path for a server-revoked session (TC-896).
@@ -141,17 +181,19 @@ test("public plugin enforces its tools, OAuth audience and separate approval sta
     "tinycloud_apps_context", "tinycloud_apps_query", "tinycloud_apps_read",
     "tinycloud_apps_write", "tinycloud_connect",
   ]);
-  for (const name of ["tinycloud_apps_context", "tinycloud_apps_query", "tinycloud_apps_write"]) {
-    expect(tools.find((tool) => tool.name === name)?.annotations).toMatchObject({
-      readOnlyHint: false, destructiveHint: true, openWorldHint: false,
-    });
+  expect(tools.find((tool) => tool.name === "tinycloud_apps_write")?.annotations)
+    .toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: false });
+  // Context saves only a timezone, and a query rewrites only its derived copy: neither deletes a record.
+  for (const name of ["tinycloud_apps_context", "tinycloud_apps_query"]) {
+    expect(tools.find((tool) => tool.name === name)?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
   }
   expect(tools.find((tool) => tool.name === "tinycloud_apps_read")?.annotations)
     .toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
   for (const name of [
     "tinycloud_secrets_get", "tinycloud_kv_get", "tinycloud_kv_put",
     "tinycloud_sql_query", "tinycloud_sql_execute", "tinycloud_auth_request",
-    "tinycloud_auth_import", "tinycloud_account_spaces_list",
+    "tinycloud_auth_import", "tinycloud_account_spaces_list", "tinycloud_auth_read_scope", "tinycloud_read",
   ]) {
     const refusal = await client.callTool({ name, arguments: {} })
       .then((value) => JSON.stringify(value), (error: unknown) => String(error));
@@ -186,7 +228,7 @@ test("a signed bootstrap and a signed delegation approval let a hosted tool use 
   // The loopback node lives in node-sdk's test sources, outside this package's
   // build graph; stdio.test.ts loads the same fixtures the same way.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -290,6 +332,114 @@ test("a signed bootstrap and a signed delegation approval let a hosted tool use 
     throw new Error(`${stage}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }, 60_000);
+
+test("signed reusable read scope covers future children and digest-bound handoff requires recipient approval", async () => {
+  // A static cross-package source import would pull this test-only node fixture
+  // into MCP's build graph; load it at runtime as the other hosted tests do.
+  const hermeticModule = await import(new URL(
+    "./test-support/hermetic-node.mjs",
+    import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  const { app, client, stateDir, createClient } = await startHostedMcp({
+    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid],
+  });
+  const [tenantId] = await readdir(join(stateDir, "tenants"));
+  const senderRoot = join(stateDir, "tenants", tenantId!);
+  const approve = async (url: string, tenantStateRoot: string, bootstrap = false) => {
+    const body = await openKeyApprovalBody({
+      redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+    });
+    if (bootstrap) await activateOnNode(hermetic.host, body);
+    expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+  };
+  const connect = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  await approve(String(connect.approvalUrl), senderRoot, true);
+  const scope = { space: "applications", kvPrefixes: ["arbitrary/resources/"], databases: ["inventory"] };
+  const required = record((await client.callTool({
+    name: "tinycloud_auth_read_scope", arguments: scope,
+  })).structuredContent);
+  expect(required).toMatchObject({ status: "authority_required" });
+  await approve(String(record(required.approval).url), senderRoot);
+  expect((await client.callTool({
+    name: "tinycloud_auth_read_scope", arguments: scope,
+  })).structuredContent).toMatchObject({ status: "ok", output: { access: "not-tested" } });
+
+  // Created after approval: the selected prefix, not a snapshot of existing keys.
+  const resource = { kind: "kv", space: "applications", key: "arbitrary/resources/revisions/one" };
+  const body = { format: "unregistered.example", content: "λ\n".repeat(40_000) };
+  hermetic.configureKv(hermetic.applicationsSpaceId, { [resource.key]: body });
+  const expectedBytes = Buffer.from(JSON.stringify(body));
+  const oversized = await client.callTool({
+    name: "tinycloud_kv_get", arguments: { space: resource.space, key: resource.key, representation: "text" },
+  });
+  expect(oversized.structuredContent).toMatchObject({
+    status: "error", error: { code: "KV_RESPONSE_TOO_LARGE", details: {
+      recovery: { action: "read_in_chunks", tool: "tinycloud_read", resourceKind: "kv" },
+    } },
+  });
+  const parts: Buffer[] = [];
+  let continuation: Record<string, unknown> = {};
+  let first: Record<string, unknown> | undefined;
+  for (let pageNumber = 0; pageNumber < 30; pageNumber++) {
+    const result = await client.callTool({
+      name: "tinycloud_read", arguments: { resource, ...continuation },
+    });
+    expect(result.structuredContent).toMatchObject({ status: "ok" });
+    const page = record(record(result.structuredContent).output);
+    first ??= page;
+    expect(record(page.binding).sha256).toBe(createHash("sha256").update(expectedBytes).digest("hex"));
+    expect(record(page.range).start).toBe(parts.reduce((sum, part) => sum + part.byteLength, 0));
+    if (!Array.isArray(result.content)) throw new Error("MCP content must be an array");
+    for (const entry of result.content) {
+      const block = record(entry);
+      if (block.type !== "text" || typeof block.text !== "string") throw new Error("Expected MCP text content");
+      expect(block.text.length).toBeLessThan(100_000);
+    }
+    parts.push(Buffer.from(String(page.value), page.encoding === "base64" ? "base64" : "utf8"));
+    if (page.complete) {
+      expect(page.continuation).toBeNull();
+      break;
+    }
+    continuation = record(page.continuation);
+  }
+  expect(Buffer.concat(parts)).toEqual(expectedBytes);
+  expect((await client.callTool({
+    name: "tinycloud_read",
+    arguments: { resource: { ...resource, key: "arbitrary/sibling/private" } },
+  })).structuredContent).toMatchObject({ status: "authority_required" });
+
+  // A portable binding carries no authority. A different tenant must approve
+  // its own session, then the exact source, before accepting the same binding.
+  const beforeRecipient = new Set(await readdir(join(stateDir, "tenants")));
+  const recipient = await createClient("independent-read-recipient");
+  const recipientConnect = record((await recipient.callTool({
+    name: "tinycloud_connect", arguments: {},
+  })).structuredContent);
+  const recipientId = (await readdir(join(stateDir, "tenants"))).find((id) => !beforeRecipient.has(id))!;
+  const recipientRoot = join(stateDir, "tenants", recipientId);
+  await approve(String(recipientConnect.approvalUrl), recipientRoot, true);
+  const handoff = { resource, expected: first!.binding, pageBytes: 8 };
+  const recipientRequired = record((await recipient.callTool({
+    name: "tinycloud_read", arguments: handoff,
+  })).structuredContent);
+  expect(recipientRequired).toMatchObject({ status: "authority_required" });
+  await approve(String(record(recipientRequired.approval).url), recipientRoot);
+  expect((await recipient.callTool({
+    name: "tinycloud_read", arguments: handoff,
+  })).structuredContent).toMatchObject({
+    status: "ok", output: { binding: first!.binding, range: { start: 0, end: 8 }, value: '{"format' },
+  });
+  expect((await recipient.callTool({
+    name: "tinycloud_read", arguments: { resource: { ...resource, key: "arbitrary/resources/another" } },
+  })).structuredContent).toMatchObject({ status: "authority_required" });
+
+  hermetic.configureKv(hermetic.applicationsSpaceId, { [resource.key]: { ...body, revision: 2 } });
+  expect((await client.callTool({
+    name: "tinycloud_read", arguments: { resource, ...record(first!.continuation) },
+  })).structuredContent).toMatchObject({ status: "error", error: { code: "READ_SOURCE_CHANGED" } });
+}, 90_000);
 
 for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as const) {
   test(`a definitive bootstrap ${marker} response renews one tenant once under concurrent connects`, async () => {
@@ -1070,15 +1220,82 @@ function openKeyApprover(app: HostedApp, host: string, root: string) {
 
 type HostedApp = Awaited<ReturnType<typeof startHostedMcp>>["app"];
 
+for (const namedApp of [true, false]) {
+test(`/mcp apps approvals Health Log ${namedApp ? "bundled" : "per-call"} save the first meal`, async () => {
+  const hermeticModule = await import(new URL("./test-support/hermetic-node.mjs", import.meta.url).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  const { app, client, stateDir } = await startHostedMcp({ nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid] });
+  // The encrypted loopback fixture serves KV, not SQL; use the pinned schema in
+  // SQLite for SQL execution while exercising real MCP planning and signed approvals.
+  const db = new Database(":memory:");
+  db.exec(await readFile(new URL("../../cli/src/lib/apps-install.healthlog.schema.sql", import.meta.url), "utf8"));
+  const sql = { db: (database: string) => {
+    expect(database).toBe("xyz.tinycloud.sample.healthlog/healthlog");
+    return {
+      query: async (query: string, params: (string | number)[]) => {
+        const statement = db.query(query);
+        return { ok: true, data: { columns: statement.columnNames, rows: statement.values(...params) } };
+      },
+      execute: async (query: string, params: (string | number)[]) => {
+        const result = db.query(query).run(...params);
+        return { ok: true, data: { changes: result.changes, lastInsertRowId: Number(result.lastInsertRowid) } };
+      },
+    };
+  } } as unknown as ReturnType<TinyCloudNode["sqlForSpace"]>;
+  const sqlForSpace = spyOn(TinyCloudNode.prototype, "sqlForSpace").mockReturnValue(sql);
+  try {
+    const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
+    const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
+    const [tenantId] = await readdir(join(stateDir, "tenants"));
+    const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+    const approve = async (url: string) => {
+      const body = await openKeyApprovalBody({ redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey });
+      await activateOnNode(hermetic.host, body);
+      expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    };
+    await approve(bootstrapUrl);
+    let approvals = 0;
+    const approved = async (name: string, args: Record<string, unknown>) => {
+      let result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      if (result.status === "authority_required") {
+        approvals++;
+        const url = String(record(result.approval).url);
+        const redirect = await openKeyRedirect(app, url);
+        const request = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString("utf8"));
+        if (namedApp) {
+          expect(request.reason).toContain("whole Health Log database");
+          expect(request.reason).toContain("30 days");
+          expect(request.permissions).toHaveLength(2);
+          expect(request.permissions.every((entry: { space: string }) => entry.space.endsWith(":applications"))).toBe(true);
+        }
+        await approve(url);
+        result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      }
+      expect(result.status).toBe("ok");
+      return record(result.output);
+    };
+    await approved("tinycloud_apps_context", { ...(namedApp ? { app: "healthlog" } : {}), timezone: "Europe/Berlin" });
+    const target = { space: "applications", database: "xyz.tinycloud.sample.healthlog/healthlog" };
+    expect((await approved("tinycloud_sql_query", { ...target, sql: "SELECT id FROM meal WHERE day = ? AND slot = ? AND name = ?", params: ["2026-11-03", "lunch", "Dal"] })).rows).toEqual([]);
+    await approved("tinycloud_sql_execute", { ...target, sql: "INSERT INTO meal (op_id, day, slot, name, kcal, source, logged_at) VALUES (?, ?, ?, ?, ?, 'agent', ?)", params: ["meal-1", "2026-11-03", "lunch", "Dal", 650, "2026-11-03T12:30:00Z"], acknowledgeDatabaseWideAuthority: true });
+    expect((await approved("tinycloud_sql_query", { ...target, sql: "SELECT name, kcal FROM meal WHERE op_id = ?", params: ["meal-1"] })).rows).toEqual([["Dal", 650]]);
+    expect(approvals).toBe(namedApp ? 1 : 3);
+  } finally { sqlForSpace.mockRestore(); db.close(); }
+}, 60_000);
+}
+
 for (const resourcePath of ["/mcp", "/chatgpt/mcp"]) {
-test(`${resourcePath} apps approvals persist records and recover an expired session without losing grants`, async () => {
+for (const namedApp of [true, false]) {
+test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persist records and recover an expired session without losing grants`, async () => {
   // This loopback fixture is outside MCP's package build graph.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
+    "./test-support/hermetic-node.mjs", import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
-  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
   const { app, client, stateDir } = await startHostedMcp({
     nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath,
   });
@@ -1094,47 +1311,76 @@ test(`${resourcePath} apps approvals persist records and recover an expired sess
   await activateOnNode(hermetic.host, bootstrap);
   expect(await postCallback(app, bootstrapUrl, bootstrap)).toEqual({ status: 200, body: { success: true } });
 
-  const required = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
+  const required = record((await client.callTool({ name: "tinycloud_apps_context", arguments: namedApp ? { app: "fitness" } : {} })).structuredContent);
   expect(required).toMatchObject({ status: "authority_required" });
   const recordsUrl = String(record(required.approval).url);
   const approval = await openKeyApprovalBody({
     redirect: await openKeyRedirect(app, recordsUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
   });
   expect(await postCallback(app, recordsUrl, approval)).toEqual({ status: 200, body: { success: true } });
-  expect((await client.callTool({
-    name: "tinycloud_apps_context", arguments: { timezone: "Europe/Berlin" },
-  })).structuredContent).toMatchObject({ status: "ok", output: { timezone: "Europe/Berlin", catalog: { keys: [] } } });
+  let approvalCount = 1;
+  // A call that still needs approval is approved in rounds; every approval is counted.
+  const approved = async (name: string, args: Record<string, unknown>) => {
+    for (let round = 0; round < 4; round++) {
+      const result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      if (result.status !== "authority_required") return result;
+      approvalCount++;
+      const url = String(record(result.approval).url);
+      const body = await openKeyApprovalBody({
+        redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+      });
+      expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    }
+    throw new Error(`${name} kept asking for approval.`);
+  };
+  expect(await approved("tinycloud_apps_context", { timezone: "Europe/Berlin" })).toMatchObject({
+    status: "ok", output: { timezone: "Europe/Berlin", apps: [] },
+  });
 
-  const root = "xyz.tinycloud.agent-data/";
-  const key = `${root}fitness/weight/2026-10/2026-10-14`;
-  const written = record((await client.callTool({
-    name: "tinycloud_apps_write",
-    arguments: { ops: [
-      { op: "put", key: `${root}catalog/fitness`, value: {
-        app: "fitness", title: "Fitness", about: "Body measurements", created: "2026-10-14",
-      } },
-      { op: "put", key: `${root}catalog/fitness/weight`, value: {
-        app: "fitness", kind: "weight", about: "Daily weight", shape: "log", per: "day", v: 1,
-        fields: { kg: "number: weight in kilograms" }, created: "2026-10-14",
-      } },
-      { op: "put", key, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
-    ] },
-  })).structuredContent);
+  const root = "xyz.tinycloud.tinyapps.fitness/";
+  const key = `${root}weight/2026-10/2026-10-14`;
+  const ops = [
+    { op: "put", key: `${root}catalog`, value: {
+      app: "fitness", title: "Fitness", about: "Body measurements", created: "2026-10-14",
+    } },
+    { op: "put", key: `${root}catalog/weight`, value: {
+      app: "fitness", kind: "weight", about: "Daily weight", shape: "log", per: "day", v: 1,
+      fields: { kg: "number: weight in kilograms" }, created: "2026-10-14",
+    } },
+    { op: "put", key: "xyz.tinycloud.tinyapps.catalog/fitness/entry", value: {
+      v: 1, app: "fitness", id: "xyz.tinycloud.tinyapps.fitness", title: "Fitness",
+    } },
+    { op: "put", key, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
+  ];
+  const written = await approved("tinycloud_apps_write", { ops });
+  expect(approvalCount).toBe(namedApp ? 1 : 2);
   expect(written).toMatchObject({
     status: "ok", output: { ops: [
-      { outcome: "ok" }, { outcome: "ok" },
+      { outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" },
       { outcome: "ok", key, value: { v: 1, by: "tinycloud-mcp", at: "2026-10-14T09:00+02:00", data: { kg: 80.5 } } },
     ] },
   });
+  expect(await approved("tinycloud_apps_context", {})).toMatchObject({
+    status: "ok", output: { apps: [{ app: "fitness", title: "Fitness" }] },
+  });
   // Two keys exercise the SDK batch response rather than its one-key get fallback.
   const read = await client.callTool({
-    name: "tinycloud_apps_read", arguments: { keys: [key, `${root}catalog/fitness/weight`] },
+    name: "tinycloud_apps_read", arguments: { keys: [key, `${root}catalog/weight`] },
   });
   expect(read.structuredContent).toMatchObject({ status: "ok", output: { records: [
     { key, value: { data: { kg: 80.5 }, by: "tinycloud-mcp" }, etag: expect.any(String) },
-    { key: `${root}catalog/fitness/weight`, value: { kind: "weight" } },
+    { key: `${root}catalog/weight`, value: { kind: "weight" } },
   ] } });
   expect(JSON.stringify(read.content)).toContain("80.5");
+  expect(approvalCount).toBe(namedApp ? 1 : 2);
+  const beforeLaterApp = approvalCount;
+  expect(await approved("tinycloud_apps_context", { app: "books" })).toMatchObject({ status: "ok" });
+  const later = await approved("tinycloud_apps_write", { ops: ops.map((op) => ({
+    ...op, key: op.key.replaceAll("fitness", "books"),
+    value: { ...op.value, ...("app" in op.value ? { app: "books" } : {}), ...("id" in op.value ? { id: "xyz.tinycloud.tinyapps.books" } : {}) },
+  })) });
+  expect(later).toMatchObject({ status: "ok", output: { ops: [{ outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" }] } });
+  expect(approvalCount - beforeLaterApp).toBe(1);
 
   const outsideRecords = await client.callTool({
     name: "tinycloud_apps_read", arguments: { keys: ["xyz.tinycloud.secrets/private-key"] },
@@ -1164,11 +1410,12 @@ test(`${resourcePath} apps approvals persist records and recover an expired sess
     .toMatchObject({ status: "ok", output: { records: [{ key, value: { data: { kg: 80.5 } } }] } });
 }, 60_000);
 }
+}
 
 test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
   // The loopback node is outside this package's build graph, as above.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -1260,7 +1507,9 @@ test("a refused delegation approval names its stage, code and reason, and never 
     "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_REJECTED detail=none\n",
   ]);
   for (const secret of secrets) expect(diagnostics.join("")).not.toContain(secret);
-  expect(await exists(join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json"))).toBe(false);
+  const additionalPath = join(tenantStateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  const storedDelegations = await exists(additionalPath) ? JSON.parse(await readFile(additionalPath, "utf8")) : [];
+  expect(storedDelegations).toEqual([]);
 
   // The same approval, unrefused, still succeeds.
   expect(await postCallback(app, delegationUrl, approval)).toEqual({ status: 200, body: { success: true } });
@@ -1308,7 +1557,7 @@ async function approveWithStoredHost(storedHost: string): Promise<{
 }> {
   // The loopback node is outside this package's build graph, as above.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
@@ -1373,6 +1622,7 @@ interface HermeticNode {
   readonly applicationsSpaceId: string;
   assertDelegatedKvResources(resources: readonly string[]): void;
   provisionKvSpace(spaceId: string): void;
+  configureKv(spaceId: string, entries: Readonly<Record<string, unknown>>): void;
   stop(): void;
 }
 
@@ -1505,7 +1755,9 @@ async function serveJwks(jwk: object): Promise<string> {
   resources.push(() => closeServer(server));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("JWKS server did not start.");
-  return `http://127.0.0.1:${address.port}/jwks`;
+  const url = `http://127.0.0.1:${address.port}/jwks`;
+  registerMcpFixtureServer(server);
+  return url;
 }
 
 function closeServer(server: Server): Promise<void> {
@@ -1586,6 +1838,7 @@ async function serveNodeProxy(upstream: string): Promise<NodeProxy> {
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("Node proxy did not start.");
   proxy.host = `http://127.0.0.1:${address.port}`;
+  registerMcpFixtureServer(server);
   return proxy;
 }
 
@@ -1606,7 +1859,7 @@ async function setupProxiedSession(): Promise<{
 }> {
   // Fixture source is outside MCP's package build graph; load only in the test.
   const hermeticModule = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
+    "./test-support/hermetic-node.mjs", import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());

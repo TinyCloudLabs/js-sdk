@@ -297,6 +297,7 @@ export class ProfileManager {
    *
    * Profile resolution: options.profile > TC_PROFILE env > config.defaultProfile > "default"
    * Host resolution:    options.host    > TC_HOST env    > discovered local node > profile.host > DEFAULT_HOST
+   * Registry URL:       TC_REGISTRY_URL env > profile.tinycloudRegistryUrl > SDK default
    *
    * Local-node discovery (TC-106) only runs when no explicit host was given
    * (`--host` / `TC_HOST`); it probes configured or registered local nodes and,
@@ -334,6 +335,14 @@ export class ProfileManager {
       if (error instanceof ProfileSymlinkError) throw error;
       // Profile may not exist yet (e.g., during `tc init`)
     }
+    const envRegistryUrl = process.env.TC_REGISTRY_URL;
+    const profileRegistryUrl = profileConfig?.tinycloudRegistryUrl;
+    const tinycloudRegistryUrl =
+      typeof envRegistryUrl === "string" && envRegistryUrl.length > 0
+        ? envRegistryUrl
+        : typeof profileRegistryUrl === "string" && profileRegistryUrl.length > 0
+        ? profileRegistryUrl
+        : undefined;
 
     const envReplication = process.env.TC_REPLICATION?.toLowerCase();
     const envEnabled = envReplication === "1" || envReplication === "true" || envReplication === "on";
@@ -363,6 +372,7 @@ export class ProfileManager {
     return {
       profile,
       host,
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       verbose: options.verbose ?? false,
       noCache: options.noCache ?? false,
       quiet: options.quiet ?? false,

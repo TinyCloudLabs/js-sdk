@@ -181,12 +181,9 @@ export function assertApprovalRequestBinding(siwe: string, request: { requestId:
   }
 }
 
-/**
- * The fixed Courier authority, plus (only when `ownerDid` is given) optional invitation-key authority. A grant without
- * that addition is checked exactly as before, so installs made before email invitations keep working.
- */
-export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now(), ownerDid?: string): void {
-  assertExactAuthority(splitInvitationAuthority(caps, ownerDid).base, AGENT_GRANT, 'OpenKey grant');
+/** The fixed Courier authority, exactly: any additional entry, including a share-key entry, is grant-too-broad. */
+export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now()): void {
+  assertExactAuthority(caps, AGENT_GRANT, 'OpenKey grant');
   if (!times.issuedAt) throw new CourierError('bad-grant', 'OpenKey grant SIWE is missing Issued At.');
   assertLifetime('OpenKey grant', times.expiresAt, AGENT_GRANT_MAX_MS, now, times.issuedAt);
 }

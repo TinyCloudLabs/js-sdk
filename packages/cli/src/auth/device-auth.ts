@@ -7,12 +7,14 @@ import {
   type ECDH,
 } from "node:crypto";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { deviceRefusal, deviceRefusalMessage } from "../lib/raw-encryption.js";
 import { generateKey, keyToDID } from "./local-key.js";
-import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
+import { validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
   declinedPermissions,
   expiryLimit,
@@ -27,6 +29,8 @@ import {
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
+import { carryRefusedDelegation, isPermanentRefusal } from "./refusal.js";
+import { refusing } from "./refused-approval.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -223,13 +227,15 @@ function deviceAuthRateLimit(response: Response): CLIError {
 }
 
 
-function publicSessionJwk(value: object): object {
-  const publicJwk = publicJwkForDelegation(value);
-  const record = publicJwk as Record<string, unknown>;
-  if (record.kty !== "OKP" || record.crv !== "Ed25519" || typeof record.x !== "string") {
+function publicSessionJwk(value: object): Record<string, string> {
+  let jwk: Record<string, string> = {};
+  try {
+    jwk = publicJwk(value);
+  } catch { /* refused below */ }
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") {
     throw new Error("CLI session key is not a public Ed25519 JWK");
   }
-  return publicJwk;
+  return jwk;
 }
 
 function publicRelayJwk(value: unknown): DeviceRelayEnvelope["ephemeralPublicJwk"] {
@@ -427,13 +433,12 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) =>
-    permission.service === "tinycloud.encryption" ||
-    permission.space === "secrets" ||
-    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+  // OpenKey's device flow admits one encryption entry, decrypt on the owner's own default network.
+  const refused = deviceRefusal(input.permissions);
+  if (refused !== undefined) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
       ExitCode.USAGE_ERROR,
     );
   }
@@ -549,19 +554,25 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       throw invalidResponse("OpenKey returned an invalid device authorization result");
     }
     const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
-    return verifyApproval({
-      binding: result.binding,
-      delegation,
-      transactionId: started.transactionId,
-      sessionDid: input.sessionDid,
-      nodeOrigin,
-      shareOrigin,
-      publicJwk,
-      key: input.jwk,
-      requested: input.permissions,
-      expiry,
-      expectedOwner: input.expectedOwner,
-    });
+    try {
+      return await verifyApproval({
+        binding: result.binding,
+        delegation,
+        transactionId: started.transactionId,
+        sessionDid: input.sessionDid,
+        nodeOrigin,
+        shareOrigin,
+        publicJwk,
+        key: input.jwk,
+        requested: input.permissions,
+        expiry,
+        expectedOwner: input.expectedOwner,
+      });
+    } catch (error) {
+      // The owner approved: the refused result is named in the notice the caller prints.
+      if (isPermanentRefusal(error)) carryRefusedDelegation(error, delegation);
+      throw error;
+    }
   }
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
 }
@@ -592,14 +603,16 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   }
   const key = snapshot.key ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
-  const result = await acquireDeviceDelegation({
+  // OpenKey made the delegation before the CLI verified it: a permanent refusal is announced once (the key is deleted only
+  // when this login made it, i.e. it was held in memory; a stored key is kept).
+  const result = await refusing({ profileName: input.profileName, key, storedKey: snapshot.key }, () => acquireDeviceDelegation({
     ...input,
     permissions,
     sessionDid,
     jwk: key,
     openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
     expectedOwner,
-  });
+  }));
   const profile: ProfileConfig = withOwnerKeyPrimary({
     ...existing,
     name: input.profileName,

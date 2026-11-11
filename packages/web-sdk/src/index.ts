@@ -15,6 +15,10 @@ export {
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
 export {
+  OpenKeySigningKeyError,
+  type OpenKeySigningKeyErrorCode,
+} from "./openkey-signing-key";
+export {
   establishManageKeySession,
   type EstablishManageKeySessionOptions,
   type EstablishManageKeySessionResult,
@@ -445,7 +449,7 @@ export {
   serializeDelegation,
   deserializeDelegation,
 } from "@tinycloud/node-sdk/core";
-export type { PortableDelegation } from "@tinycloud/node-sdk/core";
+export type { PortableDelegation, SpaceHosting } from "@tinycloud/node-sdk/core";
 
 // TinyCloudNode re-export (for advanced usage)
 export {

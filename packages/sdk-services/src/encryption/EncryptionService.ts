@@ -15,6 +15,7 @@
 
 import { BaseService } from "../base/BaseService";
 import { type Result } from "../types";
+import { routingFailure } from "../resourceRouting";
 import {
   base64Decode,
   base64Encode,
@@ -51,6 +52,7 @@ import {
   type DecryptResponseBody,
   type EncryptionCrypto,
   type EncryptionError,
+  type EncryptionErrorInput,
   type InlineEncryptedEnvelope,
   type NetworkDescriptor,
   toError,
@@ -69,6 +71,17 @@ function encOk<T>(data: T): Result<T, EncryptionError> {
 }
 function encErr<T = never>(error: EncryptionError): Result<T, EncryptionError> {
   return { ok: false, error };
+}
+
+/** Preserve the failing dependency without reclassifying HTTP refusals or cancellation. */
+function decryptionError(input: EncryptionErrorInput): EncryptionError {
+  const unavailable = input.code === "NODE_NOT_RESPONDING" ||
+    (input.code === "TRANSPORT_ERROR" && input.cause.name !== "AbortError");
+  return encryptionError(unavailable ? {
+    ...input,
+    code: "DECRYPTION_DEPENDENCY_UNAVAILABLE",
+    message: "The decryption service isn't responding right now. Please try again.",
+  } : input);
 }
 
 /**
@@ -91,11 +104,17 @@ export interface DecryptTransport {
 export { DecryptTransportResponseError } from "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
 export interface EncryptionServiceConfig {
+  /** Write TCW2 key wraps. Disabled by default. */
+  keyWrapV2?: boolean;
+  /** Require TCW2 incoming network-key wraps, not signed receiver responses. Disabled by default. */
+  requireKeyWrapV2?: boolean;
   crypto: EncryptionCrypto;
   signer: DecryptInvocationSigner;
   transport: DecryptTransport;
   node?: NodeDescriptorFetcher;
   wellKnown?: WellKnownDescriptorFetcher;
+  /** Verified registry destination; overrides descriptor order and caller hints. */
+  resolveTargetNode?: (networkId: string) => Promise<string>;
   /** Bound by an owning service graph to prevent cross-session authority use. */
   assertActive?: () => void;
   [key: string]: unknown;
@@ -165,12 +184,15 @@ export class EncryptionService
         networkPublicKey,
         plaintext,
         ...(options?.aad !== undefined ? { aad: options.aad } : {}),
-        alg: options?.alg ?? descriptor.alg,
+        keyWrapV2: options?.keyWrapV2 ?? this._config.keyWrapV2 ?? false,
+        ...(options?.alg !== undefined ? { alg: options.alg } : {}),
         keyVersion: options?.keyVersion ?? descriptor.keyVersion,
         ...(options?.metadata !== undefined ? { metadata: options.metadata } : {}),
       });
       return encOk(result.envelope);
     } catch (error) {
+      const routing = routingFailure(error);
+      if (routing) return encErr(encryptionError(routing));
       return encErr(
         encryptionError({
           code: "TRANSPORT_ERROR",
@@ -187,7 +209,7 @@ export class EncryptionService
   ): Promise<Result<Uint8Array, EncryptionError>> {
     try {
       this.assertActive();
-      const validated = validateEnvelope(this.crypto, envelope);
+      const validated = validateEnvelope(this.crypto, envelope, this._config.requireKeyWrapV2 ?? false);
       if (!validated.ok) return validated;
       if (
         options?.aad !== undefined &&
@@ -206,13 +228,16 @@ export class EncryptionService
         descriptor = options.descriptor;
       } else {
         const discovered = await this.discoverNetwork(envelope.networkId);
-        if (!discovered.ok) return discovered;
+        if (!discovered.ok) return encErr(decryptionError(discovered.error));
         descriptor = discovered.data;
       }
       const usable = ensureNetworkUsableForDecrypt(descriptor);
       if (!usable.ok) return usable;
 
       const targetNode =
+        this._config.resolveTargetNode
+          ? await this._config.resolveTargetNode(envelope.networkId)
+          :
         options?.targetNode ?? descriptor.members[0]?.nodeId;
       if (targetNode === undefined) {
         return encErr(
@@ -223,6 +248,11 @@ export class EncryptionService
         );
       }
 
+      if (this._config.resolveTargetNode &&
+        ((options?.targetNode !== undefined && options.targetNode !== targetNode) ||
+          !descriptor.members.some((member) => member.nodeId === targetNode))) {
+        return encErr(encryptionError({ code: "INVALID_INPUT", message: "Encryption destination does not match the registry" }));
+      }
       // Generate per-request receiver key. We use the random mode by
       // default; callers wanting deterministic derivation must wrap
       // this service directly.
@@ -289,6 +319,8 @@ export class EncryptionService
         });
         this.assertActive();
       } catch (error) {
+        const routing = routingFailure(error);
+        if (routing) return encErr(decryptionError(routing));
         if (error instanceof DecryptTransportResponseError) {
           return encErr(
             encryptionError(
@@ -311,7 +343,7 @@ export class EncryptionService
           );
         }
         return encErr(
-          encryptionError({
+          decryptionError({
             code: "TRANSPORT_ERROR",
             cause: toError(error),
           }),
@@ -332,6 +364,7 @@ export class EncryptionService
         this.crypto,
         receiverKey.privateKey,
         verified.data,
+        { purpose: "receiver-key", networkId: body.networkId, keyPath: body.keyPath ?? "", keyVersion: body.keyVersion, metadata: {} },
       );
       const plaintext = decryptEnvelopeWithKey(
         this.crypto,
@@ -340,6 +373,8 @@ export class EncryptionService
       );
       return encOk(plaintext);
     } catch (error) {
+      const routing = routingFailure(error);
+      if (routing) return encErr(decryptionError(routing));
       return encErr(
         encryptionError({
           code: "INVALID_RESPONSE",

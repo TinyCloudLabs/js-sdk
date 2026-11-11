@@ -11,6 +11,11 @@ import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { mintCompactDelegation } from "./test-support/compact-delegation";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
+import {
+  startUnregisteredLocationRegistry,
+  unregisteredLocationRegistryResponse,
+  type UnregisteredLocationRegistry,
+} from "./test-support/unregistered-location-registry";
 import type { ReplicationModuleLoaders } from "./replication/module-registry";
 import { assertValidReplicationConfig } from "./replication/config";
 import { createSqliteReplicaStorage } from "./replication/sqlite";
@@ -21,7 +26,8 @@ import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../repli
 import { KV_DATABASE } from "../../replica/src/kv-storage/schema";
 import { requestAsPromise } from "../../replica/src/browser/idb";
 
-const RESTORE_HOST = "http://127.0.0.1:1";
+let locationRegistry: UnregisteredLocationRegistry;
+let RESTORE_HOST: string;
 const OTHER_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 const GATE_FILE = "replica-gate.json";
 
@@ -58,6 +64,8 @@ function loaders(): ReplicationModuleLoaders {
 const dirs: string[] = [];
 
 beforeEach(() => {
+  locationRegistry = startUnregisteredLocationRegistry();
+  RESTORE_HOST = locationRegistry.url.origin;
   registerReplicationLoaders({
     ...loaders(),
     runtime: async () => ({ ReplicationRuntime: StubRuntime }) as never,
@@ -65,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  locationRegistry.stop(true);
   registerReplicationLoaders(loaders());
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -92,6 +101,7 @@ function replicatedNode(dir?: string, onEvent?: (event: ReplicationEvent) => voi
   const replicaStorage = dir === undefined ? storage
     : createSqliteReplicaStorage({ dir: join(dir, "replicas"), guard });
   return new TinyCloudNode({
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     host: RESTORE_HOST,
     signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
     wasmBindings: new NodeWasmBindings(),
@@ -118,7 +128,11 @@ async function withBrowserOrigin<T>(run: (
   });
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { locks: { request: (_name: string, section: () => Promise<unknown>) => section() } },
+    value: { locks: { request: (
+      _name: string,
+      optionsOrSection: LockOptions | (() => Promise<unknown>),
+      section?: () => Promise<unknown>,
+    ) => (typeof optionsOrSection === "function" ? optionsOrSection : section!)() } },
   });
   try {
     await requestAsPromise(indexedDB.deleteDatabase(KV_DATABASE));
@@ -279,6 +293,7 @@ describe("replica gate: restore", () => {
       siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
     });
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -327,6 +342,7 @@ describe("replica gate: restore", () => {
       host: RESTORE_HOST,
     });
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       wasmBindings: new NodeWasmBindings(),
       replication: { enabled: true, prefixes: ["notes/"], storage, profileDir: profileDir() },
@@ -346,6 +362,7 @@ describe("replica gate: restore", () => {
   test("restores without a stamp when replication is disabled", async () => {
     const proof = await signedRestorableSession();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -382,6 +399,7 @@ describe("browser replica gate without a profile directory", () => {
       };
       const events: ReplicationEvent[] = [];
       const node = new TinyCloudNode({
+        tinycloudRegistryUrl: locationRegistry.url.origin,
         host: RESTORE_HOST,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
         wasmBindings: new NodeWasmBindings(),
@@ -415,6 +433,7 @@ describe("browser replica gate without a profile directory", () => {
       const reads: Array<{ type: string; source?: string; reason?: string; outcome?: string; code?: string }> = [];
       let opens = 0;
       const node = new TinyCloudNode({
+        tinycloudRegistryUrl: locationRegistry.url.origin,
         host: RESTORE_HOST,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
         wasmBindings: new NodeWasmBindings(),
@@ -454,6 +473,7 @@ describe("browser replica gate without a profile directory", () => {
         gate: async () => { throw new Error("Browser sign-out must not load the file gate."); },
       });
       const node = new TinyCloudNode({
+        tinycloudRegistryUrl: locationRegistry.url.origin,
         host: RESTORE_HOST,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
         wasmBindings: new NodeWasmBindings(),
@@ -476,6 +496,7 @@ describe("browser replica gate without a profile directory", () => {
   test("fresh browser consent requires a verified finite owner SIWE with exact-space get and sync", async () => {
     await withBrowserOrigin(async (lifecycle) => {
       const node = new TinyCloudNode({
+        tinycloudRegistryUrl: locationRegistry.url.origin,
         host: RESTORE_HOST,
         signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
         wasmBindings: new NodeWasmBindings(),
@@ -529,6 +550,7 @@ describe("browser replica gate without a profile directory", () => {
         },
       };
       const node = new TinyCloudNode({
+        tinycloudRegistryUrl: locationRegistry.url.origin,
         host: RESTORE_HOST,
         signer: identityOnlySigner,
         wasmBindings: new NodeWasmBindings(),
@@ -555,6 +577,8 @@ describe("browser replica gate without a profile directory", () => {
       });
       const priorFetch = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
+        const registryResponse = unregisteredLocationRegistryResponse(input, locationRegistry.url.origin, init);
+        if (registryResponse) return registryResponse;
         const url = String(input);
         if (url.endsWith("/info")) {
           return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
@@ -646,6 +670,7 @@ describe("browser replica gate without a profile directory", () => {
         await node.waitForAccountRegistrySync();
         expect(ownerSignCalls).toBe(0);
         const local = new TinyCloudNode({
+          tinycloudRegistryUrl: locationRegistry.url.origin,
           host: RESTORE_HOST,
           signer,
           wasmBindings: new NodeWasmBindings(),
@@ -744,6 +769,7 @@ describe("replica gate: sign-out", () => {
     const identity = { host: RESTORE_HOST, space: proof.spaceId, principal };
     await replicaStorage.pendingWrites(identity, { stamp: replicaStamp }).update((state) => { state.seq = 1; });
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -778,6 +804,7 @@ describe("replica gate: sign-out", () => {
     const identity = { host: RESTORE_HOST, space: proof.spaceId, principal };
     await replicaStorage.pendingWrites(identity, { stamp: replicaStamp }).update((state) => { state.seq = 1; });
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -800,6 +827,7 @@ describe("replica gate: sign-out", () => {
       siweIssuedAt: Date.now(),
     });
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
@@ -828,6 +856,7 @@ describe("replica gate: sign-out", () => {
   test("leaves no gate behind when replication is disabled", async () => {
     const proof = await signedRestorableSession();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: locationRegistry.url.origin,
       host: RESTORE_HOST,
       signer: new PrivateKeySigner(PROOF_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),

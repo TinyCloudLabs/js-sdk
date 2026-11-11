@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, ShareReceiveError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
+import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, ShareReceiveError, ShareRevocationIncompleteError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { buildShortLink } from "@tinycloud/share-envelope/links";
 import { configureShareCommandServices as configureServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError, type ShareCommandServices } from "./share.js";
@@ -67,6 +67,14 @@ describe("tc share command contract", () => {
     expect([mismatch.code, mismatch.exitCode]).toEqual(["ORIGIN_MISMATCH", 5]);
     const malformed = shareCliError(new ShareReceiveError("invalid-link", "share link format is invalid"));
     expect([malformed.code, malformed.exitCode]).toEqual(["INVALID_LINK", 2]);
+  });
+  test("an incomplete addressed revocation exits 1 REVOCATION_INCOMPLETE, naming the root left and whether access ended (TC-2337)", () => {
+    const accessEnded = shareCliError(new ShareRevocationIncompleteError(["bafy-enforcement"], [{ rootCid: "bafy-owner", targetRole: "policy-authority", error: new Error("HTTP 503") }]));
+    expect([accessEnded.code, accessEnded.exitCode]).toEqual(["REVOCATION_INCOMPLETE", 1]);
+    expect(accessEnded.message).toContain("policy-authority root bafy-owner");
+    expect(accessEnded.metadata?.hint).toContain("Recipient access has already ended");
+    const nothingRevoked = shareCliError(new ShareRevocationIncompleteError([], [{ rootCid: "bafy-enforcement", targetRole: "policy-enforcement", error: new Error("HTTP 503") }]));
+    expect(nothingRevoked.metadata?.hint).toBe("Run the same command again.");
   });
   test("share list prints a status column: active, revoked, expired (TC-1754)", async () => {
     const records = new MemorySenderShareRecordStorage();
@@ -927,7 +935,7 @@ describe("safe Share output", () => {
     for (const name of ["a\u0001.md", "a\u200b.md", "a\u202e.md", "a\u2028.md"]) {
       let caught: unknown;
       try { safeFilename(name); } catch (error) { caught = error; }
-      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 8, message: "filename contains control or invisible characters" });
+      expect(caught).toMatchObject({ code: "UNSAFE_FILENAME", exitCode: 2, message: "filename contains control or invisible characters" });
     }
   });
 });

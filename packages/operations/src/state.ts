@@ -1,3 +1,4 @@
+import type { RegistryCacheEntry, RegistryCacheRecord, RegistryCacheStore, RegistryCacheTombstone, RegistryRegistrationEvidence, RegistryRegistrationKind, RegistrySequenceStore } from "@tinycloud/sdk-core";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from "node:fs";
@@ -49,6 +50,8 @@ interface HeldProfileLock {
   readonly turnSlot: number;
   /** A deletion of the profile ran while this acquisition waited for the lock. */
   readonly deletedWhileWaiting: boolean;
+  /** The pin opened by this acquisition, not a borrowed lexical scope. Details: TC-2481. */
+  readonly ownedPin: PinnedProfileDirectory | undefined;
   active: boolean;
   deletedProfile?: boolean;
 }
@@ -374,7 +377,9 @@ async function sweepLiveness(acquisition: AcquisitionLiveness): Promise<void> {
 export type ProfileStoreName =
   | "session"
   | "additional-delegations"
-  | "auth-requests";
+  | "auth-requests"
+  | "registry-cache"
+  | "registry-sequences";
 
 export interface StoreMetadata {
   formatVersion: number;
@@ -524,7 +529,7 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
 }
 
 /** A profile's direct JSON files must not resolve through a child alias. */
-async function readProfileJson<T>(profile: string, filePath: string): Promise<T | null> {
+async function readProfileJson<T>(profile: string, filePath: string, rejectNull = false): Promise<T | null> {
   // On platforms without descriptor-relative profile paths, check the named file on
   // both sides of the read so a replacement cannot silently redirect it.
   const before = process.platform !== "linux"
@@ -557,7 +562,9 @@ async function readProfileJson<T>(profile: string, filePath: string): Promise<T 
           throw new ProfileSymlinkError(profile, "changed while reading its file");
         }
       }
-      return JSON.parse(contents) as T;
+      const value = JSON.parse(contents) as T;
+      if (rejectNull && value === null) throw new Error("Invalid registry store");
+      return value;
     } finally {
       await handle.close();
     }
@@ -647,7 +654,7 @@ export async function readStoreMetadata(
   store: ProfileStoreName,
 ): Promise<StoreMetadata> {
   return withPinnedProfileDirectory(profile, async (directory) => {
-    const metadata = directory ? await readProfileJson<StoreMetadata>(profile, profileStoreMetadataPath(profile, store)) : null;
+    const metadata = directory ? await readProfileJson<StoreMetadata>(profile, profileStoreMetadataPath(profile, store), store === "registry-cache" || store === "registry-sequences") : null;
     if (metadata === null) return { formatVersion: 1 };
     if (
       typeof metadata !== "object" ||
@@ -667,8 +674,11 @@ export async function readProfileStore<T>(
     if (!directory) return { formatVersion: 1, records: [] };
     const [metadata, raw] = await Promise.all([
       readStoreMetadata(profile, store),
-      readProfileJson<unknown>(profile, profileStorePath(profile, store)),
+      readProfileJson<unknown>(profile, profileStorePath(profile, store), store === "registry-cache" || store === "registry-sequences"),
     ]);
+    if ((store === "registry-cache" || store === "registry-sequences") && raw !== null && !Array.isArray(raw)) {
+      throw new Error("Invalid registry cache store");
+    }
     return {
       formatVersion: metadata.formatVersion,
       records: Array.isArray(raw) ? raw as T[] : [],
@@ -823,6 +833,9 @@ export async function assertRealProfileDirectory(profile: string): Promise<void>
  * still takes the other root's lock) and lasts exactly as long as the
  * acquisition: it is revoked before release, so work deferred past the
  * critical section waits for the lock like any other caller.
+ *
+ * Independent acquisitions reopen pin scopes owned by completed acquisitions.
+ * Live lexical pin scopes remain intact. Details: TC-2481.
  */
 export async function withProfileLock<T>(
   profile: string,
@@ -831,14 +844,16 @@ export async function withProfileLock<T>(
 ): Promise<T> {
   const normalizedProfile = validateProfileName(profile);
   const lockPath = profileLockPath(normalizedProfile);
-  const held = (heldProfileLocks.getStore() ?? []).filter((ownership) => ownership.active);
+  const inheritedOwnership = heldProfileLocks.getStore() ?? [];
+  const held = inheritedOwnership.filter((ownership) => ownership.active);
   if (held.some((ownership) => ownership.lockPath === lockPath)) {
     await assertRealProfileDirectory(normalizedProfile);
     return action();
   }
   const named = namedProfilePath(normalizedProfile);
   const inherited = pinnedProfiles.getStore()?.get(named);
-  if (inherited && !isPinnedLive(inherited)) {
+  if (inherited && (!isPinnedLive(inherited) || inheritedOwnership.some((ownership) =>
+    !ownership.active && ownership.lockPath === lockPath && ownership.ownedPin === inherited))) {
     // Deferred work may explicitly acquire a new lock, but never reuse its old fd.
     const profiles = new Map(pinnedProfiles.getStore());
     profiles.delete(named);
@@ -854,6 +869,7 @@ export async function withProfileLock<T>(
       lockPath,
       turnSlot: acquired.turnSlot,
       deletedWhileWaiting: acquired.deletedWhileWaiting,
+      ownedPin: inherited ? undefined : pinnedProfiles.getStore()?.get(named),
       active: true,
     };
     try {
@@ -974,6 +990,183 @@ async function updateProfileStoreWhileLocked<T, Result>(
   return next.result;
 }
 
+type RegistryProfileStore = "registry-cache" | "registry-sequences";
+/** Shared across bundled entry points, but never across profile-lock acquisitions. */
+const registryStoreUpdates: WeakMap<HeldProfileLock, Map<RegistryProfileStore, Promise<unknown>>> =
+  (globalThis as unknown as Record<symbol, WeakMap<HeldProfileLock, Map<RegistryProfileStore, Promise<unknown>>> | undefined>)[
+    Symbol.for("tinycloud.operations.registryStoreUpdates.v1")
+  ] ??= new WeakMap();
+
+async function withRegistryStoreUpdate<Result>(
+  profile: string,
+  store: RegistryProfileStore,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  // Acquire the profile first: an outside waiter must not reserve a queue
+  // needed by an already-held caller. Reentrant siblings share this acquisition.
+  return withProfileLock(profile, async () => {
+    // This acquisition already binds the canonical pinned profile; queue
+    // identity must not survive into another root or a later acquisition.
+    const lockPath = profileLockPath(profile);
+    const ownership = heldProfileLocks.getStore()!.find((held) => held.active && held.lockPath === lockPath)!;
+    let updates = registryStoreUpdates.get(ownership);
+    if (!updates) registryStoreUpdates.set(ownership, updates = new Map());
+    const next = (updates.get(store) ?? Promise.resolve()).then(action);
+    const settled = next.catch(() => undefined);
+    updates.set(store, settled);
+    try {
+      return await next;
+    } finally {
+      if (updates.get(store) === settled) updates.delete(store);
+      if (updates.size === 0) registryStoreUpdates.delete(ownership);
+    }
+  });
+}
+
+function validateProfileRegistryCacheRecord(entry: RegistryCacheRecord): void {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+      typeof entry.ownerKey !== "string" || entry.ownerKey.length === 0 ||
+      !Number.isSafeInteger(entry.revision === undefined ? 0 : entry.revision) ||
+      (entry.revision !== undefined && entry.revision < 0)) {
+    throw new Error("Invalid registry cache store");
+  }
+  if ("invalidated" in entry) {
+    if (entry.invalidated !== true || entry.revision === undefined || entry.revision === 0 || Object.keys(entry).length !== 3) {
+      throw new Error("Invalid registry cache tombstone");
+    }
+  } else if (typeof entry.responseBody !== "string" ||
+      !Number.isSafeInteger(entry.fetchedAt) || entry.fetchedAt < 0 ||
+      !Number.isSafeInteger(entry.sequence) || entry.sequence < 0) {
+    throw new Error("Invalid registry cache store");
+  }
+}
+
+/** Plain, owner-only profile file with the same atomic writer and process lock as grants. */
+export function createProfileRegistryCacheStore(profile: string): RegistryCacheStore {
+  const find = (records: readonly RegistryCacheRecord[], key: string): RegistryCacheRecord | undefined => {
+    if (typeof key !== "string" || key.length === 0) throw new Error("Invalid registry cache owner");
+    const keys = new Set<string>();
+    let found: RegistryCacheRecord | undefined;
+    for (const entry of records) {
+      validateProfileRegistryCacheRecord(entry);
+      if (keys.has(entry.ownerKey)) throw new Error("Invalid registry cache store");
+      keys.add(entry.ownerKey);
+      if (entry.ownerKey === key) found = entry;
+    }
+    return found;
+  };
+  return {
+    async get(key) {
+      const entry = find((await readProfileStore<RegistryCacheRecord>(profile, "registry-cache")).records, key);
+      return entry === undefined || "invalidated" in entry ? undefined : entry;
+    },
+    async getRevision(key) {
+      return find((await readProfileStore<RegistryCacheRecord>(profile, "registry-cache")).records, key)?.revision ?? 0;
+    },
+    update(key, update) {
+      return withRegistryStoreUpdate(profile, "registry-cache", () =>
+        updateProfileStoreWhileLocked<RegistryCacheRecord, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
+          const current = find(records, key);
+          const revision = current?.revision ?? 0;
+          const entry = await update(current === undefined || "invalidated" in current ? undefined : current, revision);
+          if (entry.ownerKey !== key) throw new Error("Registry cache owner mismatch");
+          const next = { ...entry, revision };
+          if ("invalidated" in next) throw new Error("Registry cache update requires a signed entry");
+          validateProfileRegistryCacheRecord(next);
+          return { records: [...records.filter((record) => record.ownerKey !== key), next], result: next };
+        }));
+    },
+    delete(key, expectedRevision?: number, maximumSequence?: number) {
+      return withRegistryStoreUpdate(profile, "registry-cache", () =>
+        updateProfileStoreWhileLocked<RegistryCacheRecord, void>(profile, "registry-cache", (records) => {
+          const current = find(records, key);
+          const revision = current?.revision ?? 0;
+          if ((expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) ||
+              (maximumSequence !== undefined && (!Number.isSafeInteger(maximumSequence) || maximumSequence < 0))) {
+            throw new Error("Invalid registry cache deletion guard");
+          }
+          if ((expectedRevision !== undefined && expectedRevision !== revision) ||
+              (maximumSequence !== undefined && current !== undefined && !("invalidated" in current) && current.sequence > maximumSequence)) {
+            throw new Error("Registry cache changed");
+          }
+          if (revision === Number.MAX_SAFE_INTEGER) throw new Error("Registry cache revision overflow");
+          const tombstone: RegistryCacheTombstone = { ownerKey: key, revision: revision + 1, invalidated: true };
+          return { records: [...records.filter((entry) => entry.ownerKey !== key), tombstone], result: undefined };
+        }));
+    },
+  };
+}
+
+/** Independent high-water state survives an absent cache file without inventing absence. */
+export function createProfileRegistrySequenceStore(profile: string): RegistrySequenceStore {
+  type Sequence = { ownerKey: string; sequence: number; kind?: RegistryRegistrationKind };
+  const memory = new Map<string, RegistryRegistrationEvidence>();
+  // Only durable signed provenance may be reused after its original profile scope ends.
+  const durablySigned = new Set<string>();
+  const rank = (kind: RegistryRegistrationKind): number => kind === "signed-v2" ? 2 : kind === "unknown" ? 1 : 0;
+  const remember = (key: string, next: RegistryRegistrationEvidence): void => {
+    const previous = memory.get(key);
+    if (!previous || next.sequence > previous.sequence ||
+        (next.sequence === previous.sequence && rank(next.kind) > rank(previous.kind))) {
+      memory.set(key, next);
+    }
+  };
+  const find = (records: readonly Sequence[], key: string): RegistryRegistrationEvidence | undefined => {
+    const keys = new Set<string>();
+    for (const entry of records) {
+      if (!entry || typeof entry.ownerKey !== "string" || keys.has(entry.ownerKey) ||
+          !Number.isSafeInteger(entry.sequence) || entry.sequence < 0 ||
+          (entry.kind !== undefined && entry.kind !== "legacy-v1" && entry.kind !== "signed-v2" && entry.kind !== "unknown") ||
+          (entry.kind === "legacy-v1" && entry.sequence !== 0)) {
+        throw new Error("Invalid registry sequence store");
+      }
+      keys.add(entry.ownerKey);
+    }
+    const stored = records.find((entry) => entry.ownerKey === key);
+    return stored === undefined ? undefined : { sequence: stored.sequence, kind: stored.kind ?? "unknown" };
+  };
+  const getRegistration = async (key: string): Promise<RegistryRegistrationEvidence | undefined> => {
+    const cached = memory.get(key);
+    if (cached?.kind === "signed-v2" && durablySigned.has(key)) return cached;
+    const stored = find((await readProfileStore<Sequence>(profile, "registry-sequences")).records, key);
+    if (stored) {
+      remember(key, stored);
+      if (stored.kind === "signed-v2") durablySigned.add(key);
+    }
+    const current = memory.get(key);
+    if (current?.kind === "signed-v2" && !durablySigned.has(key)) {
+      return { sequence: current.sequence, kind: "unknown" };
+    }
+    return current;
+  };
+  return {
+    async get(key) {
+      return (await getRegistration(key))?.sequence;
+    },
+    getRegistration,
+    async set(key, sequence, kind = "signed-v2") {
+      if (!Number.isSafeInteger(sequence) || sequence < 0 ||
+          (kind !== "legacy-v1" && kind !== "signed-v2" && kind !== "unknown") ||
+          (kind === "legacy-v1" && sequence !== 0)) {
+        throw new Error("Invalid registry registration evidence");
+      }
+      // A failed write retains knowledge, but cannot fake a durable promotion.
+      remember(key, { sequence, kind });
+      const stored = await withRegistryStoreUpdate(profile, "registry-sequences", () =>
+        updateProfileStoreWhileLocked<Sequence, RegistryRegistrationEvidence>(profile, "registry-sequences", (records) => {
+          const current = find(records, key);
+          if (current) remember(key, current);
+          const highest = memory.get(key)!;
+          return {
+            records: current?.sequence === highest.sequence && current.kind === highest.kind ? records
+              : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, ...highest }],
+            result: highest,
+          };
+        }));
+      if (stored.kind === "signed-v2") durablySigned.add(key);
+    },
+  };
+}
 export async function writeSession<T extends object>(
   profile: string,
   session: T,

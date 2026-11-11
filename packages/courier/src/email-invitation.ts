@@ -92,10 +92,14 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   if (!profile.ownerDid || !profile.spaceId) throw new CourierError('no-grant', 'No owner grant is installed.');
   const shareId = (deps.shareId ?? newShareId)();
   // Authority for this one key: held by the session itself (legacy), or installed as the invitation's approved runtime grant
-  // (the SDK checks a runtime Share key by its key.create; the installed grant was verified to be exactly the pair).
-  const runtimeGrantHeld = () => typeof node.hasRuntimePermissions === 'function' && node.hasRuntimePermissions([
-    { service: 'tinycloud.encryption', path: `${node.getDefaultEncryptionNetworkId()}/share/${shareId}`, actions: ['tinycloud.encryption/key.create'] },
-  ]);
+  // (activation already verified it is exactly the key.create + decrypt pair on this key).
+  const runtimeGrantHeld = () => {
+    const installed = typeof node.getRuntimePermissionDelegations === 'function' ? node.getRuntimePermissionDelegations() : [];
+    if (installed.length === 0) return false;
+    const key = `${node.getDefaultEncryptionNetworkId()}/share/${shareId}`;
+    return installed.some((delegation) => (delegation.resources ?? []).some((resource) => resource.path === key
+      && ['tinycloud.encryption/key.create', 'tinycloud.encryption/decrypt'].every((action) => resource.actions.includes(action))));
+  };
   if (!holdsInvitationKeyAuthority(node.getVerifiedSessionCapabilities(), profile.ownerDid, shareId) && !runtimeGrantHeld()) {
     // A direct caller that already ran `issueInvitation` has stored its state and issued the pairing relay delegation.
     throw new CourierError('invite-authority-missing',

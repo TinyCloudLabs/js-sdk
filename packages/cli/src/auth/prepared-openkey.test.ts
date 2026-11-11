@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeWasmBindings } from "@tinycloud/node-sdk";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff } from "./prepared-openkey.js";
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
@@ -162,6 +163,26 @@ test("v2 embeds only public prepared authority in a bounded fragment without ano
     expect(envelope.request.jwk).not.toHaveProperty("d");
     expect(new Set([envelope.delivery.handoffId, envelope.delivery.state, envelope.delivery.cancelSecret]).size).toBe(3);
     expect(envelope.delivery.callback).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback\/[A-Za-z0-9_-]{22}$/);
+  } finally {
+    await flow.complete(false);
+  }
+});
+
+test("the handoff fragment carries exactly the public members of a real session key", async () => {
+  const manager = new NodeWasmBindings().createSessionManager();
+  const sessionJwk = JSON.parse(manager.jwk("default")!) as Record<string, unknown>;
+  expect(sessionJwk.d).toBeString();
+  const flow = await startPreparedOpenKeyHandoff({
+    prepared: { protocolVersion: 1, siwe: "original SDK SIWE", jwk: sessionJwk,
+      host: "https://node.example", verificationMethod: manager.getDID("default") },
+    openKeyHost: "https://openkey.so", apiHost: "http://127.0.0.1:1", noPopup: true,
+  });
+  try {
+    const envelope = JSON.parse(Buffer.from(new URL(flow.url).hash.slice("#tv2=".length), "base64url").toString("utf8")) as {
+      request: { jwk: Record<string, unknown> };
+    };
+    expect(envelope.request.jwk).toEqual({ kty: "OKP", crv: "Ed25519", x: sessionJwk.x, kid: sessionJwk.kid });
+    for (const member of ["d", "p", "q", "dp", "dq", "qi", "k", "oth"]) expect(envelope.request.jwk).not.toHaveProperty(member);
   } finally {
     await flow.complete(false);
   }

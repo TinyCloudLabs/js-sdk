@@ -40,7 +40,7 @@ export async function fetchPeerId(
 ): Promise<string> {
   const res = await fetch(
     `${host}/peer/generate/${encodeURIComponent(spaceId)}`,
-    { signal }
+    { signal, redirect: "error" }
   );
 
   if (!res.ok) {
@@ -72,6 +72,7 @@ export async function submitHostDelegation(
     method: "POST",
     headers,
     signal,
+    redirect: "error",
   });
 
   if (!res.ok) {
@@ -230,6 +231,7 @@ async function postSessionActivation(
   const res = await fetch(`${host}/delegate`, {
     method: "POST",
     headers: delegationHeader,
+    redirect: "error",
     signal,
   });
 

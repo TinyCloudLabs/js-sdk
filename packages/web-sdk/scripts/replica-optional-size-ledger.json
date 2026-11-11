@@ -1,7 +1,7 @@
 {
   "allowance": {
-    "replica.mjs": 52757,
-    "replica.cjs": 67957,
+    "replica.mjs": 53131,
+    "replica.cjs": 68401,
     "activation.mjs": 23412,
     "activation.cjs": 24981
   },
@@ -65,6 +65,25 @@
       "status": "final: GitHub CI canonical, zero headroom"
     }
   ],
+  "tc2481WebRouting": {
+    "label": "TC-2481 final root and initial replica admission after the canonical helper trim (PR #872)",
+    "ruling": "Naomi ruling 32e1c314: safe trim first, then exact final pinned-CI root and initial optional caps under the worker rule, zero additional headroom. Source c7a9b68120b51b529db7e4f2637b01e0525b1319; SQLite and PostgreSQL in run 42426460499 agree. Bun 1.3.14; rustc 1.99.0 (b940084d7). Final code freeze precedes Naomi's Sol review routing and Amos's merge decision; no other bucket increase.",
+    "base": "d6c7d58ef3d18629257fee647bf93092e581bf86",
+    "sourceCommits": ["c7a9b68120b51b529db7e4f2637b01e0525b1319"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42426460499",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42426460499/job/128565671827",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42426460499/job/128565672045"
+      ],
+      "before": { "replica.mjs": 52757, "replica.cjs": 67953, "activation.mjs": 23405, "activation.cjs": 24977 },
+      "after": { "replica.mjs": 53131, "replica.cjs": 68370, "activation.mjs": 19143, "activation.cjs": 20114 },
+      "delta": { "replica.mjs": 374, "replica.cjs": 417, "activation.mjs": -4262, "activation.cjs": -4863 }
+    },
+    "firstImport": { "delta": { "replica.mjs": 374, "replica.cjs": 413 }, "ceiling": { "replica.mjs": 53131, "replica.cjs": 68370 } },
+    "baselineAlignment": { "format": "replica.cjs", "before": 67957, "controlledBase": 67953, "alignment": -4 },
+    "reason": "After the canonical Services-helper trim, both pinned CI lanes agree on the remaining root and first-import bytes. Admit those four measured asset sizes only, with zero additional headroom; activation stays at its existing ceiling and both worker/gated caps remain unchanged. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . These bounded investigations do not attribute all growth to generic libraries or prove irreducibility. Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security . Historical replica-owned accounting entries are unchanged."
+  },
   "entries": [
     {
       "pr": "#548",
@@ -289,6 +308,33 @@
       "replica.cjs": 111,
       "activation.mjs": 26,
       "activation.cjs": 22,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#872",
+      "ticket": "TC-2481",
+      "replica.mjs": 374,
+      "replica.cjs": 417,
+      "activation.mjs": -4262,
+      "activation.cjs": -4863,
+      "note": "Actual same-toolchain c7a9b68120b51b529db7e4f2637b01e0525b1319 merge-base deltas are 374/417/-4262/-4863. CJS cap growth is 413, not this measured 417: the validated TC-2481 record retires four pre-existing baseline bytes while preserving RAW 68374 and the mandatory DIRECT 68370 ceiling. Root investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555 . Optional investigation: https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790 . Non-blocking payback: https://linear.app/tinycloud-labs/issue/TC-2523/recover-tc-2481-web-routing-bundle-growth-without-relaxing-security ."
+    },
+    {
+      "pr": "#873",
+      "ticket": "TC-2481",
+      "replica.mjs": -2,
+      "replica.cjs": 31,
+      "activation.mjs": 0,
+      "activation.cjs": 1,
+      "note": "Naomi, TC-2523, 2026-11-08: #873 registry_unavailable refusal plus offline mapping, +99/+104 root (base e21 → 3e0d9322). Actual optional deltas are -2/+31/0/+1; only initial CJS cap changes to 68401. The historical four-byte CJS baseline retirement is unchanged: RAW 68405, EFFECTIVE 68401, mandatory DIRECT cap 68401."
+    },
+    {
+      "pr": "#893",
+      "ticket": "TC-2606",
+      "replica.mjs": -5,
+      "replica.cjs": -6,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
+import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const wasm = new NodeWasmBindings();
@@ -35,6 +36,11 @@ const stub = http.createServer((req, res) => {
     res.end(JSON.stringify({ activated: ['agents'], skipped: [] }));
     return;
   }
+  if (req.method === 'POST' && req.url === '/invoke') {
+    res.writeHead(200, { 'content-type': 'application/json', etag: '"stub-etag"' });
+    res.end('{}');
+    return;
+  }
   res.writeHead(404).end('no such route');
 });
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
@@ -47,7 +53,7 @@ fs.mkdirSync(path.join(root, 'pairing'), { recursive: true });
 
 async function run(home, args) {
   const { stdout } = await execFileAsync(process.execPath, [CLI, ...args], {
-    env: { ...process.env, COURIER_HOME: home, HOME: home },
+    env: courierRegistryFixtureEnv(home, HOST),
     encoding: 'utf8',
   });
   return JSON.parse(stdout);
@@ -56,7 +62,7 @@ async function run(home, args) {
 async function runFail(home, args) {
   try {
     await execFileAsync(process.execPath, [CLI, ...args], {
-      env: { ...process.env, COURIER_HOME: home, HOME: home },
+      env: courierRegistryFixtureEnv(home, HOST),
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -160,6 +166,56 @@ const pairAll = async (a, aPeerHandle, b, callMe) => {
   const done = await run(b.home, ['pair', 'accept', JSON.stringify(artC)]);
   return { artA, artB, artC, done };
 };
+
+test('paired renewal exports a C artifact without reading stale inbound and installs it only for its original peer scope', async () => {
+  const issuer = await makeHome('renew-issuer', 'renew-issuer', owners.sam);
+  const recipient = await makeHome('renew-recipient', 'renew-recipient', owners.mira);
+  await pairAll(issuer, 'issuer-one', recipient, 'recipient-one');
+  await pairAll(issuer, 'issuer-two', recipient, 'recipient-two');
+
+  const issuerProfile = profileAt(issuer.home);
+  for (const handle of ['issuer-one', 'issuer-two']) {
+    issuerProfile.peers[handle].outbound.at(-1).issuedAt = new Date(Date.now() - 21 * 3600 * 1000).toISOString();
+  }
+  issuerProfile.peers['issuer-one'].inbound.delegation = 'not-a-valid-delegation';
+  fs.writeFileSync(path.join(issuer.home, 'profile.json'), `${JSON.stringify(issuerProfile, null, 2)}\n`);
+
+  const unknown = await runFail(issuer.home, ['pair', 'renew', 'missing-peer', '--renew-artifact']);
+  assert.match(unknown.stderr, /\[unknown-peer\]/);
+
+  const renewedOne = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--renew-artifact']);
+  assert.equal(renewedOne.step, 'C');
+  assert.equal(renewedOne.peer, 'issuer-one');
+  assert.equal(renewedOne.callMe, 'recipient-one');
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const renewedOneLater = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--renew-artifact', '--force']);
+
+  const before = profileAt(recipient.home);
+  const renewedTwo = await run(issuer.home, ['pair', 'renew', 'issuer-two', '--renew-artifact', '--force']);
+  const changedScope = await runFail(recipient.home, ['pair', 'accept', JSON.stringify({ ...renewedTwo, callMe: 'recipient-one' })]);
+  assert.match(changedScope.stderr, /\[bad-artifact\]/);
+  assert.deepEqual(profileAt(recipient.home).peers['recipient-one'], before.peers['recipient-one']);
+
+  const foreignIssuer = await makeHome('renew-foreign-issuer', 'renew-foreign-issuer', owners.sam);
+  const foreignRecipient = await makeHome('renew-foreign-recipient', 'renew-foreign-recipient', owners.mira);
+  const foreign = (await pairAll(foreignIssuer, 'foreign-issuer', foreignRecipient, 'foreign-recipient')).artC;
+  const foreignRefusal = await runFail(recipient.home, ['pair', 'accept', JSON.stringify({ ...foreign, callMe: 'recipient-one' })]);
+  assert.match(foreignRefusal.stderr, /\[bad-artifact\]/);
+  assert.deepEqual(profileAt(recipient.home).peers['recipient-one'], before.peers['recipient-one']);
+
+  const unrelated = profileAt(recipient.home).peers['recipient-two'];
+  const recipientProfile = profileAt(recipient.home);
+  recipientProfile.peers['recipient-one'].inbound.delegation = 'not-a-valid-delegation';
+  fs.writeFileSync(path.join(recipient.home, 'profile.json'), `${JSON.stringify(recipientProfile, null, 2)}\n`);
+  const installed = await run(recipient.home, ['pair', 'accept', JSON.stringify(renewedOneLater)]);
+  const after = profileAt(recipient.home);
+  assert.equal(installed.ok, true);
+  assert.ok(Date.parse(after.peers['recipient-one'].inbound.expiresAt) > Date.parse(before.peers['recipient-one'].inbound.expiresAt));
+  const replay = await runFail(recipient.home, ['pair', 'accept', JSON.stringify(renewedOne)]);
+  assert.match(replay.stderr, /\[stale-artifact\]/);
+  assert.deepEqual(profileAt(recipient.home).peers['recipient-one'], after.peers['recipient-one']);
+  assert.deepEqual(after.peers['recipient-two'], unrelated, 'the other peer is untouched');
+});
 
 test('two distinct agent keys of the same owner pair with the real protocol', async () => {
   const aHome = profileAt(samA.home);

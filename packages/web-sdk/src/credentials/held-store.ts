@@ -33,6 +33,7 @@ const KV_NOT_FOUND = "KV_NOT_FOUND";
 // The node answers 401 both for a missing capability and for a stale session, and the SDK cannot tell them apart, so the text names both.
 const READ_DENIED = "This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.";
 const DELETE_DENIED = "This app can't delete held credentials: the session may lack kv del on v1/held/ (skipPrefix), or may need to sign in again.";
+const LIST_FAILED = "Held credentials could not be listed";
 
 /**
  * Fixed, non-secret marker (`details.state`) on a `VERIFIED_NOT_SAVED` error whose write or read-back was refused by a typed kv 401 or 403: the
@@ -431,7 +432,7 @@ export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsIn
   const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
   const keys = await listHeldKeys(input.kv, heldPrefix(owner));
-  if (keys === undefined) throw new CredentialError("OFFLINE", "Held credentials could not be listed");
+  if (keys === undefined) throw new CredentialError("OFFLINE", LIST_FAILED);
   const matches: HeldMatch[] = [];
   for (const key of keys) {
     const got = await input.kv.get(key);
@@ -457,15 +458,20 @@ export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsIn
   });
 }
 
-/**
- * Deletes the named record key only. The recordId is validated first, so a caller-supplied value cannot
- * address another key. Copies outside this store remain valid until their own expiry.
- */
-export async function deleteHeldCredential(input: {
+export interface DeleteHeldCredentialInput {
   readonly kv: IKVService;
   readonly ownerDid: unknown;
+  /** The record's id (a 43-character base64url digest), as listed by `listHeldEmailCredentials`. */
   readonly recordId: string;
-}): Promise<boolean> {
+}
+
+/**
+ * Deletes the named record key only. The recordId is validated first, so a caller-supplied value cannot
+ * address another key. Copies outside this store remain valid until their own expiry. Needs `kv del` on `v1/held/`.
+ * Returns true when the record is gone from the store, false for a failed delete that is not a permission failure; a delete the app session
+ * may not make (a typed 401 or 403 from kv) throws `PERMISSION_DENIED`.
+ */
+export async function deleteHeldCredential(input: DeleteHeldCredentialInput): Promise<boolean> {
   const owner = heldAccountOwner(input.ownerDid);
   if (!RECORD_ID_PATTERN.test(input.recordId)) {
     throw new CredentialError("DESCRIPTOR_INVALID", "recordId must be a 43-character base64url digest");
@@ -473,6 +479,33 @@ export async function deleteHeldCredential(input: {
   const result = await input.kv.delete(heldRecordKey(owner, input.recordId));
   if (!result.ok && isPermissionDenied(result)) throw new CredentialError("PERMISSION_DENIED", DELETE_DENIED);
   return result.ok;
+}
+
+export interface ProbeHeldStoreAccessInput {
+  readonly kv: IKVService;
+  readonly ownerDid: unknown;
+}
+
+/**
+ * Asks whether this session may LIST the owner's held credentials, with ONE `kv.list` of `v1/held/<registryKey>/` and nothing else: no cursor is
+ * followed, no record is read (`kv.get`), nothing is verified, written or deleted. Resolves when the list is ok (an empty store, entries, or a
+ * truncated page all resolve). A typed 401 or 403 from kv is `PERMISSION_DENIED` (the same text as the read functions); any other failure, or a
+ * kv that throws, is `OFFLINE`. A non-mainnet or non-did:pkh owner is refused (`ACTIVE_SESSION_REQUIRED`) before any kv call.
+ *
+ * It checks LIST access only. A session that can list but not `get` passes the probe and fails later, when a record is read. The permission text
+ * names both because the usual missing grant lacks both `get` and `list` on `v1/held/`.
+ */
+export async function probeHeldStoreAccess(input: ProbeHeldStoreAccessInput): Promise<void> {
+  const owner = heldAccountOwner(input.ownerDid);
+  let listing: Awaited<ReturnType<IKVService["list"]>>;
+  try {
+    listing = await input.kv.list({ prefix: heldPrefix(owner) });
+  } catch {
+    throw new CredentialError("OFFLINE", LIST_FAILED);
+  }
+  if (listing.ok) return;
+  if (isPermissionDenied(listing)) throw new CredentialError("PERMISSION_DENIED", READ_DENIED);
+  throw new CredentialError("OFFLINE", LIST_FAILED);
 }
 
 export interface PruneHeldCredentialsInput extends HeldIssuerPolicy {

@@ -39,17 +39,21 @@ export type {
 // that package instead of bundling a copy, so the `IssuerSet` brand and the error classes are sdk-core's own.
 export { createAccountHolderSigner } from "./credentials/account-holder";
 export {
+  deleteHeldCredential,
   findHeldCredential,
   listHeldEmailCredentials,
+  probeHeldStoreAccess,
   storeHeldCredential,
 } from "./credentials/held-store";
 export type {
+  DeleteHeldCredentialInput,
   FindHeldCredentialInput,
   HeldCredentialRecord,
   HeldIssuerPolicy,
   HeldMatch,
   HeldStorageReceipt,
   ListHeldEmailCredentialsInput,
+  ProbeHeldStoreAccessInput,
   StoreHeldCredentialInput,
 } from "./credentials/held-store";
 export { acquireHeldCredential } from "./credentials/held-source";

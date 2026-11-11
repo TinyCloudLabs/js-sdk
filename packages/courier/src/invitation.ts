@@ -27,6 +27,7 @@ import { canonicalInviteEmail, isShareLink, receiveEmailInvitation, sendEmailInv
 import { claimInviteSend, closeInvite, findPendingInvite, markInviteSent, newPendingInvite, obtainInviteKey, savePendingInvite } from './invite-approval.js';
 import type { InviteApprovalTransport, PendingInvite } from './invite-approval.js';
 import { openKeyInviteTransport } from './invite-openkey.js';
+import { inviteNextLine, invitePendingNextLine, inviteServeNextLine, nextOnInvitePending } from './next-line.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
 const DEFAULT_VIEWER = 'https://courier.tinycloud.xyz';
@@ -280,7 +281,13 @@ export interface InviteDeps {
   approval?: InviteApprovalTransport;
 }
 
-export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promise<void> {
+/** The command. Its collaborators (node, approver, sender) are fixed: nothing the embedder passes can stand in for the owner's approval. */
+export function cmdInvite(args: ParsedArgs): Promise<void> {
+  return runInvite(args, {});
+}
+
+/** Test boundary: the same command with injected collaborators. Not exported from the package entry point. */
+export async function runInvite(args: ParsedArgs, deps: InviteDeps): Promise<void> {
   const profile = loadProfile();
   const node = await (deps.node ?? courierNode)(profile);
   const wait = waitSeconds(args);
@@ -291,7 +298,9 @@ export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promis
     if (!state) refuse('No invitation issued by this profile.');
     const body = parseInvitation(state.value.body);
     if (body.issuer !== profile.courierDid || !sameIdentity(body.artifact.from.owner, profile.ownerDid!) || body.host !== profile.host) refuse('Invitation belongs to another issuer.');
-    return serveInvitation(node, profile, body, wait);
+    expiryCheck(body);
+    if (!await getJson(node.kv, winnerKey(id))) console.error(inviteServeNextLine(state.value.link));
+    return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(invitePendingNextLine(id, wait)));
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');
   if (mode !== 'email' && !INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
@@ -366,7 +375,7 @@ export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promis
     expiresAt: new Date(expiresAt), plaintext: new TextEncoder().encode(canonicalJson(body)) });
   await putOverwrite(node.kv, inviteStateKey(id), { body, link: result.link });
   console.log(JSON.stringify({ status: 'invitation', invitationId: id, sessionId: session.sessionId, mode, link: result.link, expiresAt }));
-  return serveInvitation(node, profile, body, wait);
+  return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(inviteNextLine(id)));
 }
 
 async function validateHandle(node: TinyCloudNode, profile: Profile, peer: StoredPeer) {

@@ -2,6 +2,7 @@
 // grant shaped like OpenKey's (one raw encryption key, a `Request ID:` field in the signed SIWE). The node is a real TinyCloudNode
 // restored from the main grant; only the network edge (activating a delegation at the host) is stubbed.
 import { randomBytes } from 'node:crypto';
+import { REGISTRY_NOT_FOUND_BODY } from '@tinycloud/sdk-core';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
 import { siweTimes, ownerEncryptionNetwork } from '../../dist/authority.js';
 import { AGENT_GRANT, COURIER_SPACE } from '../../dist/keys.js';
@@ -79,6 +80,8 @@ export function stubActivation() {
   globalThis.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.origin === HOST && url.pathname === '/delegate') return Response.json({ activated: true });
+    // The merged SDK asks the location registry where the owner's node is; the answer 'not registered' falls back to the configured host.
+    if (url.origin === 'https://registry.tinycloud.xyz' && /^\/v[12]\/locations\//.test(url.pathname)) return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { 'content-type': 'application/json' } });
     throw new Error(`blocked request to ${url.origin}`);
   };
   return () => { globalThis.fetch = original; };

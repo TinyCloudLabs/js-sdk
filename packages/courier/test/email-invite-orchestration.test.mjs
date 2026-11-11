@@ -7,7 +7,7 @@ import { parseArgs } from '../dist/args.js';
 import { ownerEncryptionNetwork } from '../dist/authority.js';
 import { AGENT_GRANT, PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
-import { cmdInvite } from '../dist/invitation.js';
+import { runInvite as cmdInvite } from '../dist/invitation.js';
 import { saveKey, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 

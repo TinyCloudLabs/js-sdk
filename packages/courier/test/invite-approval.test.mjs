@@ -7,7 +7,7 @@ import { parseArgs } from '../dist/args.js';
 import { assertApprovalRequestBinding, assertInvitationApprovalGrant, siweTimes } from '../dist/authority.js';
 import { PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
-import { cmdInvite } from '../dist/invitation.js';
+import { runInvite as cmdInvite } from '../dist/invitation.js';
 import { loadInviteGrant, loadPendingInvite } from '../dist/invite-approval.js';
 import { loadGrant, profileDir, saveKey, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
@@ -207,8 +207,9 @@ test('after a good approval: the signed key id, invitation id and expiry reach t
   assert.equal(loadPendingInvite(context.invitationId).status, 'sent');
   assert.equal(loadGrant(), undefined, 'the main Courier grant is untouched');
   // The grant is installed as exactly this one key's runtime authority; the session's own authority has no encryption entry.
-  assert.equal(node.hasRuntimePermissions([{ service: 'tinycloud.encryption', path: `${network}/share/${stored.shareId}`, actions: ['tinycloud.encryption/key.create'] }]), true);
-  assert.equal(node.hasRuntimePermissions([{ service: 'tinycloud.encryption', path: `${network}/share/${shareIdOf()}`, actions: ['tinycloud.encryption/key.create'] }]), false);
+  const installedKeys = node.getRuntimePermissionDelegations().flatMap((delegation) => delegation.resources ?? []).filter((resource) => resource.path.includes('/share/'));
+  assert.deepEqual(installedKeys.map((resource) => resource.path), [`${network}/share/${stored.shareId}`]);
+  assert.deepEqual([...installedKeys[0].actions].sort(), [...KEY_ACTIONS].sort());
   assert.equal(node.getVerifiedSessionCapabilities().some((entry) => entry.service === 'tinycloud.encryption'), false);
   assert.ok(calls.includes('delegateTo'));
   assert.ok([...kv.rows.keys()].some((key) => key.includes(`/state/invitations/${context.invitationId}`)));
@@ -314,4 +315,27 @@ test('an approver that no longer knows the request closes the pending invitation
   const error = await failure(quiet(() => cmdInvite(argv(), deps)));
   assert.equal(error?.code, 'invite-authority-missing');
   assert.equal(loadPendingInvite(context.invitationId).status, 'closed');
+});
+
+// ---- the recipient is only ever the one the owner was asked about ------------------------------------------------------------
+
+test('the invitation goes to the recipient of the approved pending invitation: another recipient needs its own approval', async () => {
+  const { argv, events, deps, approve } = setup();
+  const sessionArg = argv().get('session');
+  const other = () => parseArgs(['--session', sessionArg, '--mode', 'email', '--recipient', 'Blair@Example.com', '--consent', '--wait', '1']);
+  await failure(quiet(() => cmdInvite(argv(), deps)));
+  const [first] = events.created;
+  assert.equal(first.recipientEmail, 'reader@example.com');
+  // A run for someone else does not pick up the first recipient's pending invitation or approval.
+  await failure(quiet(() => cmdInvite(other(), deps)));
+  assert.equal(events.created.length, 2);
+  assert.equal(events.created[1].recipientEmail, 'blair@example.com');
+  assert.notEqual(events.created[1].invitationId, first.invitationId);
+  // Approving the second request sends to the second recipient only; the first stays unanswered.
+  approve({ lifetimeMs: lifetimeFor(events.created[1]) });
+  deps.approval.poll = ((poll) => async (pending) => (pending.invitationId === events.created[1].invitationId ? poll(pending) : { status: 'pending' }))(deps.approval.poll);
+  await failure(quiet(() => cmdInvite(other(), deps)));
+  assert.deepEqual(events.sent.map((sent) => sent.body.recipient), ['blair@example.com']);
+  assert.equal(loadPendingInvite(first.invitationId).status, 'awaiting');
+  assert.equal(loadInviteGrant(first.invitationId), undefined);
 });

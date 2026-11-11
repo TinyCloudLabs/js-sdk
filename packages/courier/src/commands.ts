@@ -1,19 +1,24 @@
+import { adviceFor, deriveState, heldApproval, recoverInterrupted, rotateKey } from './state.js';
 import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, publicJwk, serializeDelegation } from '@tinycloud/node-sdk';
 import type { PortableDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
-import { CourierError, errInfo } from './errors.js';
+import { initRequestNextLine } from './next-line.js';
+import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
-  loadProfile, saveProfile, getPeer, profileDir, profileExists, loadKey, saveKey,
+  loadProfile, saveProfile, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, installGrant, openKeyDelegateUrl, receiveGrant, resumeGrant } from './grant.js';
+import { REVOKE_URL } from './grant-refusal.js';
+import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
+import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -30,7 +35,7 @@ import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
-import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { assertExactAuthority, assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
 
 interface Ctx {
   profile: Profile;
@@ -94,6 +99,13 @@ export async function cmdInit(args: ParsedArgs) {
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
+  const timeoutFlag = initValue(args, 'timeout');
+  if (args.has('wait') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('resume'))) {
+    fail('usage', `\`${cmd('init --wait')}\` cannot be combined with --request, --grant-file, --paste or --resume.`);
+  }
+  if (timeoutFlag !== undefined && !args.has('wait')) fail('usage', `--timeout needs --wait.`);
+  const waitMs = timeoutFlag === undefined ? DEFAULT_WAIT_MS : durationMs(timeoutFlag);
+  if (!waitMs || waitMs > MAX_WAIT_MS) fail('usage', `--timeout must be a duration such as 60s or 5m, at most 9m.`);
   const grantFile = args.has('grant-file')
     ? requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`)
     : undefined;
@@ -102,17 +114,52 @@ export async function cmdInit(args: ParsedArgs) {
   const grantRaw = grantFile === undefined || args.has('request')
     ? undefined
     : grantFile === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(grantFile, 'utf8');
+  // Explicit recovery before any mode acts: finish an interrupted rotation, remove stray key-bearing temp files; then derive once.
+  recoverInterrupted();
+  const state = deriveState();
+  for (const note of state.notes) console.error(`warning: ${note}`);
+  // A profile.json that exists and cannot be read is never treated as absent: `loadProfile` refuses with its own message (an unreadable
+  // profile is replaced only by an explicit `--rotate-key`).
+  if (state.action === 'fix-profile' && !args.has('rotate-key')) { loadProfile(); fail('bad-profile', adviceFor(state)); }
+  // A saved approval without its profile or key is left as it is; `--rotate-key` starts over with a new key.
+  if (state.action === 'refuse' && !args.has('rotate-key')) fail('approval-orphaned', adviceFor(state));
+  // A grant.json that is not owner-only is a saved grant that cannot be used yet: it is neither replaced nor counted as missing. A rotation
+  // discards the grant by design, so it goes on.
+  if (state.grantMode && !args.has('rotate-key')) {
+    const file = path.join(profileDir(), 'grant.json');
+    fail('profile-permissions', `${file} must be owner-only (mode 0600); found mode ${state.grantMode}. It holds a saved grant, so nothing was changed. Run \`chmod 600 ${file}\`, then run the command again.`);
+  }
+  const HELD_APPROVAL_KEPT = `The saved approval request holds an approval from the owner and was kept: run \`${cmd('init --wait')}\` to collect or acknowledge it.`;
   if (args.has('resume')) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
+    // An approval the owner gave, with no grant saved to install first, is collected by `--wait`, never discarded or shadowed by a cleanup.
+    if (state.action === 'wait' && heldApproval(state.inputs.approval) && profile.status !== 'ready') {
+      console.error(`${adviceFor(state)} Continuing as \`${cmd('init --wait')}\`.`);
+      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+      return;
+    }
+    if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
+      dropOpenRequest();
+      if (heldApproval(state.inputs.approval)) console.error(HELD_APPROVAL_KEPT);
+      await finishInit(profile, profile.host);
+      return;
+    }
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);
     await resumeGrant(profile, loadKey());
+    dropOpenRequest();
+    if (heldApproval(state.inputs.approval)) console.error(HELD_APPROVAL_KEPT);
     await finishInit(profile, profile.host);
     return;
   }
 
   const rotate = args.has('rotate-key');
+  // A writer must learn that the saved approval is unreadable BEFORE the key, grant or profile is changed.
+  // Also for a plain `--rotate-key`: an approval that cannot be read may be bound to the old key, and a rotation would leave it there.
+  if (args.has('request') || args.has('wait') || rotate) assertPendingReadable();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
+  // A renewal is asked for with `--request`; `--wait` only collects. The derived state says when `--wait` goes on.
+  if (args.has('wait') && !rotate && !state.wait) fail('usage', adviceFor(state));
   const key = prior ? loadKey() : newAgentKey();
   const host = hostFlag ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
   const openkeyHost = openkeyHostFlag ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
@@ -130,23 +177,34 @@ export async function cmdInit(args: ParsedArgs) {
   profile.openkeyHost = openkeyHost;
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
+  profile.courierDid = bareDid(key.did);
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;
     profile.spaceId = undefined;
     profile.grantExpiresAt = undefined;
     profile.status = 'awaiting-grant';
-    try { fs.unlinkSync(path.join(profileDir(), 'grant.json')); } catch { /* no prior grant */ }
+    // One journaled step: key, profile, grant and a discarded approval change together, and an interruption is finished by the next init.
+    await rotateKey(key, profile);
+  } else {
+    saveKey(key);
+    saveProfile(profile);
   }
-  profile.courierDid = bareDid(key.did);
-  saveKey(key);
-  saveProfile(profile);
   const request = courierGrantRequest(profile, key, expiry, { openkeyApiHost: apiHostFlag });
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
 
   if (args.has('request')) {
-    const openkeyUrl = openKeyDelegateUrl(request);
-    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry, openkeyUrl });
+    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
+    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    console.error(initRequestNextLine());
+    // A resumed request keeps the lifetime it was made with.
+    const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
+    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: publicJwk(key.jwk), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
+    return;
+  }
+
+  if (args.has('wait')) {
+    await collectApproval(profile, key, { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
     return;
   }
 
@@ -156,8 +214,61 @@ export async function cmdInit(args: ParsedArgs) {
   } else {
     payload = await receiveGrant(request, { paste: args.has('paste') });
   }
-  await installGrant(profile, key, payload);
+  try {
+    await installRefusing(profile, key, payload, { viaCode: grantRaw !== undefined && isShortCode(grantRaw) });
+  } catch (error) {
+    // `no-space` means the grant IS saved (awaiting the space); any other error installed nothing and leaves an open short-link request alone.
+    if (error instanceof CourierError && error.code === 'no-space') clearPendingQuietly();
+    throw error;
+  }
+  // An open short-link request would otherwise be collected later, on top of this grant.
+  clearPendingQuietly();
   await finishInit(profile, host);
+}
+
+/**
+ * A grant was installed from another source (legacy import): the saved short-link request would be collected later, on top of it,
+ * so it is removed. Says so when it held an approval the owner gave (that approval is lost). Never fails the command.
+ */
+function clearPendingQuietly(): void {
+  try {
+    const phase = approvalPhase(readApprovalEntry());
+    if (phase.phase === 'held' && phase.stage === 'committed') {
+      console.error('This grant replaces a saved short-link approval that was already installed: its acknowledgement to OpenKey is never sent (harmless; OpenKey discards the result).');
+    } else if (phase.phase === 'held') {
+      console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
+    } else if (phase.phase === 'unreadable' || phase.phase === 'corrupt') {
+      console.error('This grant replaces the saved short-link request: discarded an unreadable saved approval request (it may have held an approval that was not installed).');
+    }
+    clearPending();
+  } catch (error) {
+    console.error(`warning: could not remove the saved approval request (${(error as Error).message}).`);
+  }
+}
+
+/**
+ * `init --resume` installed a grant: an open short-link request that holds nothing would be collected later, on top of it. One with a
+ * result reference, the encrypted result or a commit stays, so the next `init --wait` can install it or send its acknowledgement.
+ */
+function dropOpenRequest(): void {
+  // Only a request that holds nothing: one with a result reference, the encrypted result or a committed grant is kept for `--wait`.
+  const saved = loadPending();
+  if (saved && !holdsApproval(saved)) clearPendingQuietly();
+}
+
+/** `init --wait`: create or resume the approval request, wait for the owner, install the result and acknowledge it. `--resume` hands off here while an approval is saved. */
+async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
+  const deadline = Date.now() + options.waitMs;
+  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost });
+  if (stageOf(pending) !== 'committed') {
+    console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
+  }
+  if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
+    throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt }, !resumed);
+  }
+  const active = loadProfile();
+  if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
+  await finishInit(active, active.host);
 }
 
 async function finishInit(profile: Profile, host: string): Promise<void> {
@@ -180,7 +291,7 @@ export async function cmdPair(args: ParsedArgs) {
   if (sub === 'start') return pairStart(args);
   if (sub === 'accept') return pairAccept(args);
   if (sub === 'renew') return pairRenew(args);
-  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force]')}`);
+  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--renew-artifact]')}`);
 }
 
 async function pairStart(args: ParsedArgs) {
@@ -220,7 +331,13 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
     fail('bad-artifact', 'Peer delegation space or owner does not match the pairing artifact.');
   }
   if (!peer.theirHandleForMe) fail('bad-artifact', 'Pairing artifact is missing the peer mailbox handle.');
-  const active = await activateValidatedRuntimeDelegation(node, delegation, { host: profile.host });
+  const active = await activateValidatedRuntimeDelegation(node, delegation, {
+    host: profile.host,
+    authorize: (permissions) => {
+      assertExactAuthority(permissions, peerReadPermissions(peer.theirHandleForMe!, peer.spaceId, peer.sessionId), 'Pair renewal');
+      return true;
+    },
+  });
   assertPeerDelegation(active, {
     issuer: peer.courierDid,
     audience: profile.courierDid,
@@ -242,6 +359,7 @@ async function pairAccept(args: ParsedArgs) {
 
   if (art.step === 'A') {
     const handle = art.callMe;
+    assertNotPaired(profile, handle); // before delegateTo: a refusal after it would leave a live delegation nothing records
     const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     const peer: StoredPeer = {
       handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
@@ -249,7 +367,7 @@ async function pairAccept(args: ParsedArgs) {
     };
     recordOutbound(peer, outbound.delegation);
     profile.peers[handle] = peer;
-    saveProfile(profile);
+    saveAfterDelegation(profile, outbound.delegation);
     await writePeerRecord(node, peer);
     printJson(artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer));
     return;
@@ -272,25 +390,51 @@ async function pairAccept(args: ParsedArgs) {
     const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     recordOutbound(peer, outgoing.delegation);
     peer.status = 'paired';
-    saveProfile(profile);
+    saveAfterDelegation(profile, outgoing.delegation);
     await writePeerRecord(node, peer);
     printJson(artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer));
     return;
   }
 
   const peer = profile.peers[art.callMe] ?? findPeerByCourier(profile, art.from.courier);
-  if (!peer) fail('unknown-peer', `No pending pairing for "${art.callMe}". Did you run \`pair accept\` on artifact A?`);
-  if (art.from.courier !== peer.courierDid || art.spaceId !== peer.spaceId || art.from.owner !== peer.ownerDid) {
-    fail('bad-artifact', `Artifact C does not match the pending pairing with ${peer.handle}.`);
+  if (!peer) fail('unknown-peer', `No paired peer for "${art.callMe}".`);
+  if (peer.handle !== art.callMe) {
+    fail('bad-artifact', `Artifact C names ${art.callMe}, but the matched peer handle is ${peer.handle}.`);
   }
-  const candidate = { ...peer, theirHandleForMe: art.peer };
-  const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
-  peer.theirHandleForMe = candidate.theirHandleForMe;
+  if (peer.status !== 'awaiting-C' && peer.status !== 'paired') {
+    fail('not-paired', `Cannot install artifact C for ${peer.handle}: pairing is not awaiting C or already paired.`);
+  }
+  if (art.from.courier !== peer.courierDid || art.spaceId !== peer.spaceId || art.from.owner !== peer.ownerDid) {
+    fail('bad-artifact', `Artifact C does not match the pairing with ${peer.handle}.`);
+  }
+  if (!peer.theirHandleForMe || art.peer !== peer.theirHandleForMe) {
+    fail('bad-artifact', `Artifact C changes the established mailbox scope for ${peer.handle}.`);
+  }
+  const incoming = await validatePeerDelegation(node, profile, peer, art.delegation!);
+  if (peer.status === 'paired') {
+    const currentExpiry = Date.parse(peer.inbound?.expiresAt ?? '');
+    if (!Number.isFinite(currentExpiry) || Date.parse(incoming.expiresAt) <= currentExpiry) {
+      fail('stale-artifact', `Artifact C does not extend the current inbound delegation for ${peer.handle}.`);
+    }
+  }
   peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
   peer.status = 'paired';
   saveProfile(profile);
   await writePeerRecord(node, peer);
   printJson({ ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: peer.inbound.expiresAt });
+}
+
+/**
+ * Saves after `delegateTo` made a delegation that is live from that moment. A save that refuses (the pairing completed, or the peer was
+ * revoked, meanwhile) leaves a delegation no profile records: say so, with its CID and where the owner can revoke it, and never publish it.
+ */
+function saveAfterDelegation(profile: Profile, delegation: PortableDelegation): void {
+  try {
+    saveProfile(profile);
+  } catch (error) {
+    console.error(`warning: the delegation ${delegationCid(delegation)} created for this pairing is live and was not saved. Nothing was published. The owner can revoke it at ${REVOKE_URL}.`);
+    throw error;
+  }
 }
 
 function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void {
@@ -301,7 +445,19 @@ function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void 
 async function pairRenew(args: ParsedArgs) {
   const active = await ctx();
   const requested = args.positional[1];
+  if (args.has('renew-artifact') && !requested) {
+    fail('usage', `Usage: ${cmd('pair renew <peer> --renew-artifact [--force]')}`);
+  }
   const peers = requested ? [getPeer(active.profile, requested)] : Object.values(active.profile.peers).filter((peer) => peer.status === 'paired');
+  if (args.has('renew-artifact')) {
+    const peer = peers[0]!;
+    if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
+    if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
+    const delegation = await renewOutbound(active, peer, args.has('force'));
+    if (!delegation) fail('renew-throttled', `Outbound delegation for ${peer.handle} was renewed within the last 20 hours; use --force to renew it now.`);
+    printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
+    return;
+  }
   for (const peer of peers) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
     await renewOutbound(active, peer, args.has('force'));
@@ -310,9 +466,9 @@ async function pairRenew(args: ParsedArgs) {
   printJson({ ok: true, renewed: peers.map((peer) => peer.handle) });
 }
 
-async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<void> {
+async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<PortableDelegation | undefined> {
   const last = peer.outbound.at(-1);
-  if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return;
+  if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return undefined;
   const { profile, node } = active;
   const result = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!, peer.sessionId), { expiry: PEER_DELEGATION_EXPIRY });
   const issuedAt = new Date().toISOString();
@@ -327,6 +483,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Pro
     expiresAt: result.delegation.expiry instanceof Date ? result.delegation.expiry.toISOString() : new Date(result.delegation.expiry).toISOString(),
   });
   saveProfile(profile);
+  return result.delegation;
 }
 
 async function installInbound(active: Ctx, peer: StoredPeer): Promise<void> {

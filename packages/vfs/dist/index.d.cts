@@ -164,6 +164,7 @@ interface TinyCloudNodeLike {
 
 declare class TinyCloudVfsBridge {
     private readonly worker;
+    private readonly timeoutMs;
     constructor(init: TinyCloudVfsWorkerInit);
     close(): void;
     requestSync(request: WorkerRequest): WorkerResponse;

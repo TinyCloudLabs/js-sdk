@@ -36,6 +36,7 @@ async function setup(features: string[]) {
     async fetch(request) {
       const path = new URL(request.url).pathname;
       requests.push(`${request.method} ${path}`);
+      if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
       if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features });
       if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       return new Response(`Unsupported stub node request: ${request.method} ${path}`, { status: 404 });
@@ -47,7 +48,7 @@ async function setup(features: string[]) {
   const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
   mkdirSync(profileDir, { recursive: true });
   writeFileSync(join(profileDir, "profile.json"), JSON.stringify({
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     }));
@@ -130,6 +131,7 @@ async function setupWithNetwork(handler: (request: Request, path: string) => Res
     async fetch(request) {
       const path = new URL(request.url).pathname;
       t.requests.push(`${request.method} ${path}`);
+      if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
       if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", nodeId: "did:key:z6MkStubNode", features: ["encryption-named-keys-v1"] });
       if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
       return handler(request, path) ?? new Response("Unsupported stub node request", { status: 404 });
@@ -138,7 +140,7 @@ async function setupWithNetwork(handler: (request: Request, path: string) => Res
   servers.push(node);
   const profileFile = join(t.home, ".tinycloud", "profiles", PROFILE, "profile.json");
   const profile = JSON.parse(readFileSync(profileFile, "utf8"));
-  writeFileSync(profileFile, JSON.stringify({ ...profile, host: node.url.origin }));
+  writeFileSync(profileFile, JSON.stringify({ ...profile, host: node.url.origin, tinycloudRegistryUrl: node.url.origin }));
   return t;
 }
 

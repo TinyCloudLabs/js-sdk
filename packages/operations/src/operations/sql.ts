@@ -25,7 +25,7 @@ const SCHEMA_MAX_BYTES = 1024 * 1024;
 const MAX_PARAMETERS = 100;
 const MAX_SQL_LENGTH = 64 * 1024;
 const SQL_WRITE_AUTHORITY_NOTICE =
-  "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE.";
+  "Approving tinycloud.sql/write lets the agent read, insert, update and delete any row in this exact database. Nodes that enforce the schema split (the default) also stop it changing the tables; nodes that don't, let it. The MCP tool itself accepts only one parameterized INSERT, UPDATE or DELETE.";
 const SQL_REQUEST_TOO_LARGE_MESSAGE = "SQL request too large.";
 
 const SCHEMA_QUERY = `SELECT type, name, tbl_name, sql
@@ -170,7 +170,7 @@ const SqlTargetInputSchema: z.ZodType<SqlTargetInput> = z.object({
   space: SpaceSchema,
   database: DatabaseSchema,
 }).strict();
-const SqlQueryInputSchema: z.ZodType<SqlQueryInput> = z.object({
+export const SqlQueryInputSchema = z.object({
   space: SpaceSchema,
   database: DatabaseSchema,
   sql: z.string().min(1).max(MAX_SQL_LENGTH).superRefine((sql, context) => {
@@ -317,7 +317,7 @@ export const sqlOperationDefinitions: readonly SqlDefinition[] = [
   },
 ];
 
-async function planSqlRead(
+export async function planSqlRead(
   context: RuntimeOperationContext,
   input: SqlTargetInput,
 ): Promise<readonly CapabilityRequirement[]> {
@@ -374,7 +374,7 @@ async function executeSqlSchemaInspect(
   }
 }
 
-async function executeSqlQuery(
+export async function executeSqlQuery(
   context: OperationContext,
   input: SqlQueryInput,
 ): Promise<OperationExecutionOutcome<SqlQueryOutput>> {
@@ -685,6 +685,29 @@ function sqlServiceFailure(
       error: operationError(
         "SQL_RESULT_LIMIT_EXCEEDED",
         "The SQLite query result exceeded the requested result limits.",
+      ),
+    };
+  }
+  // An unhosted space also answers 404, and is not a missing database: keep the two apart.
+  if (isRecord(error) && typeof error.message === "string" && /space not found/i.test(error.message)) {
+    return {
+      status: "error",
+      error: operationError(
+        "NODE_ERROR",
+        "Your TinyCloud storage space is not set up. Try again in a minute; if it still fails, ask for help setting up the space.",
+        { retryable: false, details: { reason: "space_not_hosted" } },
+      ),
+    };
+  }
+  // A database or table that does not exist yet (for example an app that is not installed) is not a node fault: say so,
+  // so a caller can tell it apart from a permission, quota or network failure without parsing text.
+  if (isRecord(error) && (error.code === "SQL_DATABASE_NOT_FOUND" || (typeof error.message === "string" && /no such (?:table|view)/i.test(error.message)))) {
+    return {
+      status: "error",
+      error: operationError(
+        "NODE_ERROR",
+        "The database or table does not exist in this space.",
+        { retryable: false, details: { reason: "sql_database_missing" } },
       ),
     };
   }

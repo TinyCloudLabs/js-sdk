@@ -238,7 +238,7 @@ describe("tinycloud.secrets.get", () => {
     ["corrupt_envelope", "SECRET_READ_FAILED"],
     ["decrypt_failed", "SECRET_DECRYPT_FAILED"],
     ["invalid_payload", "SECRET_DECRYPT_FAILED"],
-    ["node_unreachable", "NODE_UNREACHABLE"],
+    ["node_unreachable", "NODE_NOT_RESPONDING"],
   ] as const)("classifies %s as %s", async (status, code) => {
     const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
     const result = await secretsGetOperationDefinition.execute(
@@ -248,5 +248,23 @@ describe("tinycloud.secrets.get", () => {
 
     expect(result).toMatchObject({ status: "error", error: { code } });
     expect(result).not.toMatchObject({ status: "setup_required" });
+  });
+
+  test("preserves NODE_NOT_RESPONDING from a thrown secret read without exposing its cause", async () => {
+    const input = secretsGetOperationDefinition.input.parse({ name: "API_KEY" });
+    const result = await secretsGetOperationDefinition.execute(
+      context(async () => {
+        throw Object.assign(new Error("private transport canary"), {
+          code: "NODE_NOT_RESPONDING",
+        });
+      }),
+      input,
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "NODE_NOT_RESPONDING", retryable: true },
+    });
+    expect(JSON.stringify(result)).not.toContain("private transport canary");
   });
 });

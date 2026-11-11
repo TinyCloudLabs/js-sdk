@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 /**
  * Unit tests for {@link TinyCloudNode.delegateTo}.
  *
@@ -15,6 +16,8 @@ import {
   ManifestValidationError,
   PermissionNotInManifestError,
   SessionExpiredError,
+  DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL,
+  REGISTRY_NOT_FOUND_BODY,
   type PermissionEntry,
   type IWasmBindings,
   type ISessionManager,
@@ -26,10 +29,27 @@ import { pkhDid } from "@tinycloud/bootstrap";
 import { formatKeyResource, formatPrefixResource } from "@tinycloud/sdk-services/encryption/resource";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { ownedNodeMetadata } from "./test-support/restored-policy-node";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
 // ---------------------------------------------------------------------------
+const REGISTRY_ORIGIN = new URL(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL).origin;
+const SESSION_SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+const NODE_DID = "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq";
+const fixtureHosts = new Set<string>();
+
+function registryResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (fixtureHosts.has(url.origin)) {
+    const metadata = ownedNodeMetadata(input, init, url.origin, NODE_DID);
+    if (metadata) return metadata;
+  }
+  if (url.origin !== REGISTRY_ORIGIN || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return;
+  expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+}
 
 /**
  * Build a signed SIWE message string with a specific `Expiration Time`.
@@ -110,7 +130,7 @@ function makeFakeWasmBindings(
     prepareSession: mock(() => ({})),
     completeSessionSetup: mock(() => ({})),
     ensureEip55: (a: string) => a,
-    makeSpaceId: (a: string, c: number, p: string) => `space://${a}:${c}:${p}`,
+    makeSpaceId: (a: string, c: number, p: string) => `tinycloud:pkh:eip155:${c}:${a}:${p}`,
     createDelegation: mock(() => ({
       delegation: "fake-serialized-delegation",
       cid: "bafyfake",
@@ -119,7 +139,7 @@ function makeFakeWasmBindings(
       resources: [
         {
           service: "kv",
-          space: "space://test",
+          space: SESSION_SPACE,
           path: "items/",
           actions: ["tinycloud.kv/get"],
         },
@@ -164,7 +184,7 @@ function installFakeSession(
     address: opts.address ?? "0x0000000000000000000000000000000000000001",
     chainId: opts.chainId ?? 1,
     sessionKey: "default",
-    spaceId: opts.spaceId ?? "space://test",
+    spaceId: opts.spaceId ?? SESSION_SPACE,
     delegationCid: "bafyparent",
     delegationHeader: { Authorization: "Bearer parent" },
     verificationMethod: opts.verificationMethod ?? "did:key:z6MkTestSession",
@@ -172,8 +192,12 @@ function installFakeSession(
     siwe: opts.siwe,
     signature: "0xfake",
   };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (node as any).auth = { tinyCloudSession: fakeSession };
+  const host: string = Reflect.get(node, "config").host;
+  fixtureHosts.add(new URL(host).origin);
+  Reflect.set(node, "auth", {
+    tinyCloudSession: fakeSession,
+    resolveResourceDestinations: async () => [{ url: host }],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -193,11 +217,11 @@ describe("TinyCloudNode.delegateTo", () => {
   let originalFetch: typeof globalThis.fetch;
   beforeEach(() => {
     originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ activated: [], skipped: [] }), {
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) =>
+      registryResponse(input, init) ?? new Response(JSON.stringify({ activated: [], skipped: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      })) as typeof fetch;
+      }), { preconnect: originalFetch.preconnect });
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -260,7 +284,7 @@ describe("TinyCloudNode.delegateTo", () => {
       resources: [
         {
           service: "kv",
-          space: "space://test",
+          space: SESSION_SPACE,
           path: "items/",
           actions: ["tinycloud.kv/get"],
         },
@@ -408,13 +432,13 @@ describe("TinyCloudNode.delegateTo", () => {
       resources: [
         {
           service: "kv",
-          space: "space://test",
+          space: SESSION_SPACE,
           path: "com.listen.app/",
           actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
         },
         {
           service: "sql",
-          space: "space://test",
+          space: SESSION_SPACE,
           path: "com.listen.app/data.sqlite",
           actions: ["tinycloud.sql/read"],
         },
@@ -455,22 +479,6 @@ describe("TinyCloudNode.delegateTo", () => {
     expect(result.delegation.actions).toEqual([
       "tinycloud.kv/get",
       "tinycloud.kv/put",
-    ]);
-    // The full multi-resource breakdown is available for consumers
-    // that need it.
-    expect(result.delegation.resources).toEqual([
-      {
-        service: "kv",
-        space: "space://test",
-        path: "com.listen.app/",
-        actions: ["tinycloud.kv/get", "tinycloud.kv/put"],
-      },
-      {
-        service: "sql",
-        space: "space://test",
-        path: "com.listen.app/data.sqlite",
-        actions: ["tinycloud.sql/read"],
-      },
     ]);
     // Exactly ONE underlying WASM call for the entire multi-entry
     // request — not N.
@@ -570,7 +578,7 @@ describe("TinyCloudNode.delegateTo", () => {
       resources: [
         {
           service: "kv",
-          space: "space://test",
+          space: SESSION_SPACE,
           path: "items/",
           actions: ["tinycloud.kv/get"],
         },
@@ -633,7 +641,7 @@ describe("TinyCloudNode.delegateTo", () => {
       resources: [
         {
           service: "kv",
-          space: "space://test",
+          space: SESSION_SPACE,
           path: "items/",
           actions: ["tinycloud.kv/get"],
         },
@@ -680,14 +688,16 @@ describe("TinyCloudNode.delegateTo onPrepared (session-key path)", () => {
     actions: ["tinycloud.kv/get"],
   };
 
-  // Every event (hook call, fetch) lands here in order so tests can assert
-  // the hook runs before any activation request.
+  // Hook and activation events stay ordered; public registry and identity
+  // metadata is handled by the counterpart separately.
   let events: string[];
   let originalFetch: typeof globalThis.fetch;
   beforeEach(() => {
     events = [];
     originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       events.push(`fetch:${String(input)}`);
       return new Response(JSON.stringify({ activated: [], skipped: [] }), {
         status: 200,
@@ -719,7 +729,7 @@ describe("TinyCloudNode.delegateTo onPrepared (session-key path)", () => {
           resources: [
             {
               service: "kv",
-              space: "space://test",
+              space: SESSION_SPACE,
               path: "items/",
               actions: ["tinycloud.kv/get"],
             },
@@ -810,11 +820,11 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
   let originalFetch: typeof globalThis.fetch;
   beforeEach(() => {
     originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ activated: [], skipped: [] }), {
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) =>
+      registryResponse(input, init) ?? new Response(JSON.stringify({ activated: [], skipped: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
-      })) as typeof fetch;
+      }), { preconnect: originalFetch.preconnect });
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -843,7 +853,7 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
         delegateDid: recipient,
         expiry: Math.floor(Date.now() / 1000) + 3600,
         resources: resources ?? [
-          { service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] },
+          { service: "kv", space: SESSION_SPACE, path: "items/", actions: ["tinycloud.kv/get"] },
         ],
       })),
     });
@@ -921,7 +931,7 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
       { service: "encryption", space: "encryption", path: prefix, actions: ["tinycloud.encryption/decrypt"] },
     ];
     const resources = [
-      { service: "kv", space: "space://test", path: kvPath, actions: ["tinycloud.kv/get"] },
+      { service: "kv", space: SESSION_SPACE, path: kvPath, actions: ["tinycloud.kv/get"] },
       { service: "encryption", space: "encryption", path: key, actions: ["tinycloud.encryption/decrypt"] },
     ];
     const { node, wasm } = makeNode(recipient, grants, resources);

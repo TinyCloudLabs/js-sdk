@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { buildShortLink, checkLinkRecord, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
 
@@ -28,6 +30,7 @@ const { verifyScopedLogin } = await import("./scoped-login.js");
 const { clearProfileCredentials } = await import("../lib/logout-pending.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 const { createECDH } = await import("node:crypto");
+const execFileAsync = promisify(execFile);
 restoreEnvironment(original);
 let caseEnvironment = original;
 const wasm = new NodeWasmBindings();
@@ -50,6 +53,7 @@ let terminalAck: { requestId: string; bodyCid: string; ackId: string } | undefin
 let retainedResultExpiresAt: string | undefined;
 
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  if (/^\/v[12]\/locations\//.test(new URL(request.url).pathname)) return Response.json({ error: "location record not found" }, { status: 404 });
   if (new URL(request.url).pathname === "/v1/links") {
     const checked = await checkLinkRecord(await request.json(), Date.now());
     if (checked.header.issuer !== did || checked.header.audience !== "https://api.tinycloud.xyz") return new Response(null, { status: 401 });
@@ -85,8 +89,12 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   return Response.json({ ackId: body.ackId, status: "acknowledged" });
 } });
 
-async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds = 3600) {
-  const prepared = wasm.prepareSession({ abilities: { kv: { "": actions } }, address, chainId: 1,
+async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds = 3600, includeCapabilities = false) {
+  const abilities = {
+    kv: { "": actions },
+    ...(includeCapabilities ? { capabilities: { "": ["tinycloud.capabilities/read"] } } : {}),
+  };
+  const prepared = wasm.prepareSession({ abilities, address, chainId: 1,
     domain: "cli.example", spaceId, jwk: key, issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + lifetimeSeconds * 1000).toISOString() });
   const signature = await wallet.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -94,11 +102,15 @@ async function signedDelegation(actions = ["tinycloud.kv/list"], lifetimeSeconds
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
 }
 
-async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid }) {
+async function stage(
+  delegation: Record<string, unknown>,
+  options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid },
+  requestPermissions: typeof requested = requested,
+) {
   const relay = createECDH("prime256v1"); relay.generateKeys();
   const recipientJwk = relayPublicJwkOf(relay);
   const request = { issuer: did, requestVersion: 1 as const, targetDid: did,
-    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requested,
+    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requestPermissions,
     grantLifetimeSeconds: options.grantLifetimeSeconds ?? 3600, resultEncryptionPublicJwk: recipientJwk };
   const prepared = await prepareLinkRecord({ type: "openkey-approval-request", plaintext: new TextEncoder().encode(JSON.stringify(request)),
     issuerKey: signerFromJwk(key), apiOrigin: "https://api.tinycloud.xyz", expiresAt: new Date(Date.now() + 3600_000) });
@@ -134,7 +146,7 @@ beforeEach(async () => {
   Object.assign(process.env, fixtureEnvironment);
   acknowledgements = new Map(); dropAck = false; savedBeforeAck = false; terminalAckCode = undefined; terminalAck = undefined; retainedResultExpiresAt = undefined;
   await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
-  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
+  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, tinycloudRegistryUrl: server.url.origin, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
   await ProfileManager.clearSession("approval");
 });
@@ -165,6 +177,66 @@ test("a fetched approval is not acknowledged before durable login persistence", 
   const durable = await readJson<Array<{ committed?: boolean; ackId: string }>>(join(profilePath("approval"), "approval-pending.json"));
   expect(durable?.[0]).toMatchObject({ committed: true, ackId: pending.ackId });
   await completeApprovalResult("approval");
+  expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+});
+
+test("key-only auth request retries ACK after its saved session covers the request", async () => {
+  const requestPermissions = [
+    { service: "tinycloud.capabilities", space: "applications", path: "", actions: ["tinycloud.capabilities/read"] },
+    ...requested,
+  ];
+  const delegation = await signedDelegation(["tinycloud.kv/list"], 3600, true);
+  const pending = await stage(delegation, { expectedOwner: ownerDid }, requestPermissions);
+  process.env.TC_OPENKEY_HOST = "https://openkey.example";
+  process.env.TC_OPENKEY_API_HOST = server.url.origin;
+  process.env.TC_LINKS_API_ORIGIN = "https://api.tinycloud.xyz";
+
+  const args = [
+    "node",
+    "tc",
+    "--profile",
+    "approval",
+    "auth",
+    "request",
+    "--grant",
+    "--cap",
+    "tinycloud.kv:applications::list",
+    "--expiry",
+    "1h",
+    "--no-popup",
+  ];
+  const authCommandPath = join(import.meta.dir, "../commands/auth.ts");
+  const projectRoot = resolve(import.meta.dir, "../../../..");
+  const script = `
+    import { Command } from "commander";
+    import { registerAuthCommand } from ${JSON.stringify(authCommandPath)};
+    const program = new Command().option("--profile <name>");
+    registerAuthCommand(program);
+    await program.parseAsync(${JSON.stringify(args)}, { from: "node" });
+  `;
+  const run = async () => {
+    try {
+      const { stdout, stderr } = await execFileAsync("bun", ["-e", script], { cwd: projectRoot, env: { ...process.env } });
+      return { status: 0, stdout, stderr };
+    } catch (error) {
+      const result = error as Error & { code?: number | string; stdout?: string; stderr?: string };
+      return { status: typeof result.code === "number" ? result.code : -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+    }
+  };
+
+  dropAck = true;
+  const firstAttempt = await run();
+  expect(firstAttempt).toMatchObject({ status: 8 });
+  expect(firstAttempt.stderr).toContain("APPROVAL_ACK_PENDING");
+  expect(savedBeforeAck).toBe(true);
+  expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  expect((await ProfileManager.getSession("approval"))?.delegationCid).toBe(delegation.delegationCid);
+  expect((await readJson<Array<{ committed?: boolean }>>(join(profilePath("approval"), "approval-pending.json")))?.[0])
+    .toMatchObject({ committed: true });
+
+  const retry = await run();
+  expect(retry.status).toBe(0);
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
   expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
 });
@@ -331,4 +403,36 @@ test("an approved result remains discoverable after request expiry when its resu
     expect(acknowledgements.has(resultRef)).toBe(false);
     expect(await ProfileManager.getSession("approval")).toBeNull();
   } finally { clock.mockRestore(); localOnly.mockRestore(); await rm(encryptedPath, { force: true }); }
+});
+
+// TC-2276 (PR B): the signed approval request is not a plain link. It never carries the expiryChangeable opt-in, so its
+// body (and body digest) is the same whether or not a caller asks for it, and its ceiling stays the signed lifetime.
+test("a signed approval request never carries expiryChangeable", async () => {
+  const send = globalThis.fetch;
+  const interrupted = new Error("Owned approval prompt interruption");
+  const offers: string[] = [];
+  const localOnly = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://api.tinycloud.xyz" && url.pathname === "/v1/links") return send(server.url.origin + url.pathname, init);
+    if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
+    return send(input, init);
+  }, { preconnect: send.preconnect }));
+  const bodies: string[] = [];
+  try {
+    for (const extra of [{}, { expiryChangeable: true }]) {
+      await ProfileManager.setProfile("approval", await ProfileManager.getProfile("approval"));
+      await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
+      await expect(acquireApprovalRequest(did, { profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid,
+        expiry: "1h", openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, ...extra,
+        onApprovalRequest: ({ approvalUrl }) => { offers.push(approvalUrl); throw interrupted; },
+      })).rejects.toBe(interrupted);
+      const pending = await readJson<Array<{ request: Record<string, unknown>; bodyCid: string }>>(join(profilePath("approval"), "approval-pending.json"));
+      expect(pending).toHaveLength(1);
+      expect(Object.keys(pending![0]!.request)).not.toContain("expiryChangeable");
+      bodies.push(JSON.stringify({ ...pending![0]!.request, issuer: undefined, targetPublicJwk: undefined, resultEncryptionPublicJwk: undefined }));
+    }
+  } finally { localOnly.mockRestore(); }
+  expect(offers.some((url) => url.includes("expiryChangeable"))).toBe(false);
+  // Same request apart from the per-request key material: lifetime, permissions and target are identical.
+  expect(bodies[1]).toBe(bodies[0]);
 });

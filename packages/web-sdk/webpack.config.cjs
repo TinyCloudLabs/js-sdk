@@ -262,6 +262,11 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
     callback(null, `${type} ./encryption-keys.${ext}`);
     return;
   }
+  // The hosting probe is its own file: the root carries only the call that loads it.
+  if (request === "./space-hosting.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./space-hosting.${ext}`);
+    return;
+  }
   if (isIssuedDelegationsRequest({ context, request })) {
     callback(null, `${type} ./delegations-issued.${ext}`);
     return;
@@ -305,6 +310,7 @@ const lazyEntries = {
   "panel-data": "./src/ui/panel-data-entry.ts",
   modals: "./src/notifications/modals-entry.ts",
   "encryption-keys": "./src/encryption-keys-entry.ts",
+  "space-hosting": "./src/space-hosting-entry.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);

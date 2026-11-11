@@ -79,6 +79,37 @@ describe("wrapError", () => {
       .toMatchObject({ code: "NODE_ERROR", exitCode: 1 });
   });
 
+  test.each(["no-saved-settings", "http", "timeout"] as const)(
+    "projects unavailable settings to one safe CLI code without exposing %s detail",
+    (reason) => {
+      const detail = "TEST_PRIVATE_DETAIL_\u001b[2J";
+      const error = cliErrorFromService({
+        code: "registry_unavailable",
+        message: detail,
+        meta: { reason, subject: "did:key:TEST_PRIVATE_OWNER", hint: detail },
+      });
+      expect(error).toMatchObject({ code: "REGISTRY_UNAVAILABLE", exitCode: 1 });
+      expect(error.message).not.toContain(detail);
+      expect(error.message).not.toContain("did:key:");
+      expect(error.metadata).toBeUndefined();
+      expect(wrapError(Object.assign(new Error(detail), {
+        code: "registry_unavailable", meta: { reason },
+      }))).toMatchObject({ code: "REGISTRY_UNAVAILABLE", exitCode: 1 });
+    },
+  );
+
+  test("HTTP auth refusals still outrank a settings-unavailable-looking code", () => {
+    for (const [status, code, exitCode] of [[401, "AUTH_REQUIRED", 3], [403, "PERMISSION_DENIED", 5]] as const) {
+      expect(cliErrorFromService({
+        code: "registry_unavailable",
+        message: "TEST_AUTH_REFUSAL",
+        meta: { status, reason: "no-saved-settings" },
+      })).toMatchObject({ code, exitCode, status });
+    }
+    expect(cliErrorFromService({ code: "KEY_NOT_FOUND", message: "TEST_MISSING" })).toMatchObject({ code: "KEY_NOT_FOUND", exitCode: 1 });
+    expect(cliErrorFromService({ code: "STORAGE_ERROR", message: "TEST_STORAGE_FAILURE" })).toMatchObject({ code: "STORAGE_ERROR", exitCode: 1 });
+  });
+
   test("preserves the shipped not-found, permission, and network exit mappings", () => {
     expect(wrapError(new Error("NOT_FOUND: secret missing"))).toMatchObject({
       code: "NOT_FOUND",
