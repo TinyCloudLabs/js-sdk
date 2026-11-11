@@ -59,6 +59,11 @@
       "import": "./dist/share-receive.js",
       "require": "./dist/share-receive.cjs"
     },
+    "./share-publish": {
+      "types": "./dist/share-publish.d.ts",
+      "import": "./dist/share-publish.js",
+      "require": "./dist/share-publish.cjs"
+    },
     "./replication/runtime": {
       "import": {
         "types": "./dist/replication/runtime.d.ts",
