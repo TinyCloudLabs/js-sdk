@@ -45,6 +45,7 @@ import { validateTc2594ResourceTransportTransition } from "./replica-size-policy
 import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
 import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
 import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
+import { validateTc2773LazyRestoreRootTransition } from "./replica-size-policy";
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
@@ -650,6 +651,13 @@ if (prBaseSha) {
   if (lazyRestore !== undefined && baseLedger.tc2773LazyRestoreReplicaWorker === undefined &&
       (baseLedger.tc2691HostExpiryReplicaWorker === undefined || !hasAncestor(repoRoot, lazyRestore.sourceCommits.at(-1)!))) {
     console.error("The TC-2773 replica worker admission requires the merged TC-2691 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2773LazyRestoreRootTransition(baseLedger.tc2773LazyRestoreRoot, ledger.tc2773LazyRestoreRoot);
+  const lazyRestoreRoot = ledger.tc2773LazyRestoreRoot;
+  if (lazyRestoreRoot !== undefined && baseLedger.tc2773LazyRestoreRoot === undefined &&
+      (baseLedger.tc2691HostExpiry === undefined || !hasAncestor(repoRoot, lazyRestoreRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2773 root admission requires the merged TC-2691 row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
