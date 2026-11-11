@@ -1,5 +1,20 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.16
+
+### Patch Changes
+
+- f859fb3: Restore persisted sessions from local state and initialize replication on demand. Explicit network KV reads bypass replica setup. Refresh browser hosting and panel grants after restore.
+
+  Serialize panel-grant storage updates and sign-out cleanup so a delayed reactivation cannot overwrite a newly granted permission.
+
+  Details: TC-2773
+
+- Updated dependencies [f859fb3]
+  - @tinycloud/node-sdk@3.12.0-beta.16
+  - @tinycloud/sdk-core@3.12.0-beta.16
+  - @tinycloud/replica@0.4.5-beta.5
+
 ## 3.12.0-beta.15
 
 ### Patch Changes
