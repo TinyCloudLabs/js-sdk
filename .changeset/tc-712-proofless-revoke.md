@@ -2,4 +2,4 @@
 "@tinycloud/courier": patch
 ---
 
-TC-712: revoke issued peer delegations immediately using the Courier key, retaining progress and the pairing for retry if revocation fails.
+`courier revoke` now revokes the peer's access on your TinyCloud node, so their next read is refused. If it can't finish, the pairing is kept and you can run it again. Details: TC-712
