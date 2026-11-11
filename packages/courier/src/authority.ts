@@ -140,6 +140,31 @@ export function holdsInvitationKeyAuthority(caps: readonly PermissionEntry[], ow
   return SHARE_KEY_ACTIONS.every((action) => invitation.some((entry) => entry.path === key && entry.actions.includes(action)));
 }
 
+const INVITE_APPROVAL_MAX_MS = DAY_MS;
+
+/**
+ * The signed result of ONE per-invitation approval: only `key.create` + `decrypt` on exactly one canonical
+ * `<owner default network>/share/<32 hex>` key and nothing else, issued for this agent and lasting no longer than the
+ * acceptance window (itself at most 24 hours). Returns the key id the approver chose; it is never taken from anywhere else.
+ */
+export function assertInvitationApprovalGrant(rawCaps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, options: { ownerDid: string; acceptanceExpiresAt: Date; now?: number }): string {
+  const now = options.now ?? Date.now();
+  // The path pins the key and its owner; the space an encryption entry is reported under (`encryption`, none, or the
+  // grant's own space) names no further resource, so it is not part of what is compared.
+  const caps = rawCaps.map((entry) => (entry.service === 'tinycloud.encryption' ? { ...entry, space: '' } : entry));
+  const { base, invitation } = splitInvitationAuthority(caps, options.ownerDid);
+  if (base.length > 0 || invitation.length === 0) throw new CourierError('bad-grant', 'The approval does not hold exactly one invitation key and nothing else.');
+  const prefix = `${ownerEncryptionNetwork(options.ownerDid)}/share/`;
+  const shareId = invitation[0].path.slice(prefix.length);
+  if (!holdsInvitationKeyAuthority(caps, options.ownerDid, shareId)) throw new CourierError('bad-grant', 'The approval does not hold key.create and decrypt on one invitation key.');
+  if (!times.issuedAt) throw new CourierError('bad-grant', 'The approval is missing Issued At.');
+  assertLifetime('Invitation approval', times.expiresAt, INVITE_APPROVAL_MAX_MS, now, times.issuedAt);
+  if (times.expiresAt!.getTime() > options.acceptanceExpiresAt.getTime() + CLOCK_SKEW_MS) {
+    throw new CourierError('grant-too-long', 'The approval lasts longer than the invitation it was requested for.');
+  }
+  return shareId;
+}
+
 /**
  * The fixed Courier authority, plus (only when `ownerDid` is given) optional invitation-key authority. A grant without
  * that addition is checked exactly as before, so installs made before email invitations keep working.

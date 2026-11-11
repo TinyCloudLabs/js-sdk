@@ -78,4 +78,4 @@ export {
 } from "./header.js";
 export { checkLinkRecord, openLinkRecord, type CheckedLinkRecord, type LinkBodyValidator, type OpenedLink } from "./record.js";
 export { signerFromJwk, signerFromSeed, type Ed25519PrivateJwk, type LinkSigner } from "./signer.js";
-export { parseApprovalRequest, type OpenKeyApprovalRequestV1 } from "./approval-request.js";
+export { buildShareInvitationApprovalSpec, parseApprovalRequest, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "./approval-request.js";

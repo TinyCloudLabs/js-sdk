@@ -7,13 +7,14 @@ import { ownerEncryptionNetwork } from '../dist/authority.js';
 import { AGENT_GRANT, PREFIX } from '../dist/keys.js';
 import { sessionKey } from '../dist/guided.js';
 import { cmdInvite } from '../dist/invitation.js';
-import { saveProfile } from '../dist/profile.js';
+import { saveKey, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 
 const OWNER = 'did:pkh:eip155:1:0xA2dF5051172C5Bc1D7FdB33ACC30f7B3C3A7efdF';
 const SPACE = 'tinycloud:pkh:eip155:1:0xA2dF5051172C5Bc1D7FdB33ACC30f7B3C3A7efdF:agents';
 const manager = new NodeWasmBindings().createSessionManager();
-const courierDid = manager.getDID(manager.createSessionKey('issuer')).split('#')[0];
+const issuerKeyId = manager.createSessionKey('issuer');
+const courierDid = manager.getDID(issuerKeyId).split('#')[0];
 const split = AGENT_GRANT.flatMap((permission) => permission.actions.map((action) => ({ ...permission, actions: [action], caveats: [] })));
 const exactKey = (shareId) => ['key.create', 'decrypt'].map((action) => ({
   service: 'tinycloud.encryption', path: `${ownerEncryptionNetwork(OWNER)}/share/${shareId}`, actions: [`tinycloud.encryption/${action}`], caveats: [],
@@ -27,6 +28,7 @@ function setup(capabilities = split) {
     version: 3, host: 'https://node.example', openkeyHost: 'https://openkey.so', label: 'issuer', courierDid, ownerDid: OWNER, spaceId: SPACE,
     grantExpiresAt: new Date(Date.now() + 20 * 86_400_000).toISOString(), status: 'ready', peers: {},
   });
+  saveKey({ v: 1, did: courierDid, jwk: JSON.parse(manager.jwk(issuerKeyId)), createdAt: new Date().toISOString() });
   const kv = memoryKv();
   const sessionId = ulid();
   kv.rows.set(sessionKey(sessionId), { value: { sessionId, subject: 'plan', createdAt: new Date().toISOString() }, etag: 'e0' });
