@@ -1,10 +1,11 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * Protocol version checking for SDK-to-node compatibility.
  *
  * @packageDocumentation
  */
 
-import type { FetchFunction, FetchResponse } from "@tinycloud/sdk-services";
+import type { FetchFunction } from "@tinycloud/sdk-services";
 import { httpResponseError } from "./http-error";
 
 export class ProtocolMismatchError extends Error {
@@ -61,39 +62,40 @@ export async function checkNodeInfo(
   sdkProtocol: number,
   fetchFn: FetchFunction = globalThis.fetch.bind(globalThis)
 ): Promise<NodeInfo> {
-  let response: FetchResponse;
-  try {
-    response = await fetchFn(`${host}/info`, {
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (err) {
-    throw new VersionCheckError(host, err as Error);
-  }
+  return usingResponse(async () => {
+    try {
+      return await fetchFn(`${host}/info`, {
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch (err) {
+      throw new VersionCheckError(host, err as Error);
+    }
+  }, async (response) => {
+    if (!response.ok) {
+      throw new VersionCheckError(host, await httpResponseError(response, "node info fetch failed"));
+    }
 
-  if (!response.ok) {
-    throw new VersionCheckError(host, await httpResponseError(response, "node info fetch failed"));
-  }
+    const data = (await response.json()) as {
+      protocol: number;
+      version: string;
+      features: string[];
+      nodeId?: string;
+      quota_url?: string;
+    };
 
-  const data = (await response.json()) as {
-    protocol: number;
-    version: string;
-    features: string[];
-    nodeId?: string;
-    quota_url?: string;
-  };
+    if (sdkProtocol !== data.protocol) {
+      throw new ProtocolMismatchError(
+        sdkProtocol,
+        data.protocol,
+        data.version,
+        host
+      );
+    }
 
-  if (sdkProtocol !== data.protocol) {
-    throw new ProtocolMismatchError(
-      sdkProtocol,
-      data.protocol,
-      data.version,
-      host
-    );
-  }
-
-  return {
-    features: data.features ?? [],
-    nodeId: data.nodeId,
-    quotaUrl: data.quota_url,
-  };
+    return {
+      features: data.features ?? [],
+      nodeId: data.nodeId,
+      quotaUrl: data.quota_url,
+    };
+  });
 }

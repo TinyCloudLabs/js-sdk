@@ -1,5 +1,6 @@
 import { defineConfig } from "tsup";
 
+const canonicalResponseBody = "@tinycloud/sdk-services/internal/response-body";
 const canonicalDecryptTransportError =
   "@tinycloud/sdk-services/internal/decrypt-transport-response-error";
 
@@ -21,6 +22,7 @@ export default defineConfig({
     "encryption/index": "src/encryption/index.ts",
     "encryption/resource": "src/encryption/resource.ts",
     "encryption/named-keys": "src/encryption/namedKeys.ts",
+    "internal/response-body": "src/responseBody.ts",
     "internal/decrypt-transport-response-error":
       "src/encryption/DecryptTransportResponseError.ts",
   },
@@ -32,5 +34,5 @@ export default defineConfig({
   // The public entrypoints share this one CJS module. Node's CJS cache is
   // common to require() and import(), so the error retains normal identity
   // across root and `/encryption` in both module systems.
-  external: ["zod", canonicalDecryptTransportError, "@tinycloud/sdk-services/request-priority"],
+  external: ["zod", canonicalDecryptTransportError, canonicalResponseBody, "@tinycloud/sdk-services/request-priority"],
 });

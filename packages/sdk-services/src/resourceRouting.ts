@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import type { FetchFunction, FetchResponse, ServiceHeaders, ServiceSession } from "./types";
 import { fetchResolved, routesRequests } from "./resolvedDispatch";
 
@@ -45,19 +46,19 @@ export async function verifyResourceDestination(target: ResourceDestination, fet
     const replies = await Promise.all([
       `${target.url}/info`,
       `${target.url}/.well-known/tinycloud/node-keys`,
-    ].map(async (url) => {
-      const response = await fetchFn(url, { signal, redirect: "error" });
-      // A background lane holds its slot through the body. Consume each reply
-      // immediately so the other identity request can acquire that slot.
-      const content = Promise.resolve().then(() => {
-        if (response.ok) return response.json();
-        return (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.();
-      }).catch(() => undefined);
-      return { response, content };
-    }));
-    if (replies.some(({ response }) => response.status >= 500)) throw new NodeNotRespondingError([target.url]);
-    if (replies.some(({ response }) => !response.ok)) throw new NodeIdentityMismatchError(target.url, target.nodeDid);
-    [info, keys] = await Promise.all(replies.map(({ content }) => content));
+    ].map((url) => usingResponse(
+      () => fetchFn(url, { signal, redirect: "error" }),
+      async (response) => {
+        // Consume each first body before another background request needs its slot.
+        const status = response.status;
+        const accepted = response.ok;
+        const content = await Promise.resolve().then(() => accepted ? response.json() : undefined).catch(() => undefined);
+        return { status, accepted, content };
+      },
+    )));
+    if (replies.some(({ status }) => status >= 500)) throw new NodeNotRespondingError([target.url]);
+    if (replies.some(({ accepted }) => !accepted)) throw new NodeIdentityMismatchError(target.url, target.nodeDid);
+    [info, keys] = replies.map(({ content }) => content);
   } catch (error) {
     if (error instanceof NodeIdentityMismatchError || error instanceof NodeNotRespondingError) throw error;
     throw new NodeNotRespondingError([target.url], error);
@@ -156,10 +157,6 @@ export function routingResourceOf(uri: string): string {
   throw new ResourceNotRoutedError(uri);
 }
 
-async function discardResponse(response: FetchResponse | undefined): Promise<void> {
-  await (response?.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.().catch(() => undefined);
-}
-
 /** A FetchFunction owns its unreturned replies; generic resource transports do not. */
 async function withOwnedReplies(run: (replies: FetchResponse[]) => Promise<FetchResponse>): Promise<FetchResponse> {
   const replies: FetchResponse[] = [];
@@ -168,7 +165,7 @@ async function withOwnedReplies(run: (replies: FetchResponse[]) => Promise<Fetch
     response = await run(replies);
     return response;
   } finally {
-    await Promise.all(replies.filter((reply) => reply !== response).map(discardResponse));
+    await Promise.all(replies.filter((reply) => reply !== response).map((reply) => usingResponse(() => Promise.resolve(reply), () => undefined)));
   }
 }
 
@@ -273,7 +270,10 @@ export function createResourceTransportInvocationFetch(transport: ResourceTransp
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
         .filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
-      const response = await fetchResolved(target.fetch, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
+      const response = await usingResponse(
+        () => fetchResolved(target.fetch, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers }),
+        (reply) => reply,
+      );
       replies.push(response);
       return response;
     }, { invocationSession: session }));
@@ -291,7 +291,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
     return withOwnedReplies(async (replies) => {
       const write = resources.some(({ access }) => access === "write" || access === "host");
       const send = async (target: ResourceDestination): Promise<FetchResponse> => {
-        if (!write && replies.at(-1)?.status === 404) await discardResponse(replies.at(-1));
+        if (!write && replies.at(-1)?.status === 404) await usingResponse(() => Promise.resolve(replies.at(-1)!), () => undefined);
         init?.signal?.throwIfAborted();
         if (routing.verifyDestination) await routing.verifyDestination(target);
         else await verifyResourceDestination(target, fetchFn);
@@ -302,7 +302,10 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
         const timeout = AbortSignal.timeout(5_000);
         const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
         try {
-          const response = await fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
+          const response = await usingResponse(
+            () => fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" }),
+            (reply) => reply,
+          );
           replies.push(response);
           return response;
         } catch (error) {

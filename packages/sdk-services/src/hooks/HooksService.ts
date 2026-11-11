@@ -1,4 +1,4 @@
-import { discardResponse } from "../responseBody";
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { BaseService } from "../base/BaseService";
 import type { RequestSignal } from "../base/types";
 import { abortableSleep } from "../sleep";
@@ -235,45 +235,48 @@ export class HooksService extends BaseService implements IHooksService {
     const session = this.session;
     const request = this.createRequestSignal();
     try {
-      const response = await this.invokeWithRetry(
-        `${this.host}/hooks/webhooks`,
-        () =>
-          this.createHookHeaders(
-            session,
-            "tinycloud.hooks/register",
-            buildScopePath(webhook.service, webhook.pathPrefix),
-          ),
-        {
-          signal: request.signal,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            space: webhook.space,
-            service: webhook.service,
-            pathPrefix: normalizePathPrefix(webhook.pathPrefix),
-            abilities: webhook.abilities ?? [],
-            callbackUrl: webhook.callbackUrl,
-            secret: webhook.secret,
-          }),
+      return await usingResponse(
+        () => this.invokeWithRetry(
+          `${this.host}/hooks/webhooks`,
+          () =>
+            this.createHookHeaders(
+              session,
+              "tinycloud.hooks/register",
+              buildScopePath(webhook.service, webhook.pathPrefix),
+            ),
+          {
+            signal: request.signal,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              space: webhook.space,
+              service: webhook.service,
+              pathPrefix: normalizePathPrefix(webhook.pathPrefix),
+              abilities: webhook.abilities ?? [],
+              callbackUrl: webhook.callbackUrl,
+              secret: webhook.secret,
+            }),
+          },
+        ),
+        async (response) => {
+          if (!response.ok) {
+            return err(
+              await responseError("hooks", "failed to register webhook", response),
+            );
+          }
+
+          const data = normalizeWebhookRecord(await response.json());
+          if (!data) {
+            return err(
+              wrapError(
+                "hooks",
+                new Error("Webhook registration response did not include a record"),
+              ),
+            );
+          }
+
+          return ok(data);
         },
       );
-
-      if (!response.ok) {
-        return err(
-          await responseError("hooks", "failed to register webhook", response),
-        );
-      }
-
-      const data = normalizeWebhookRecord(await response.json());
-      if (!data) {
-        return err(
-          wrapError(
-            "hooks",
-            new Error("Webhook registration response did not include a record"),
-          ),
-        );
-      }
-
-      return ok(data);
     } catch (error) {
       return err(wrapError("hooks", error));
     } finally {
@@ -305,37 +308,40 @@ export class HooksService extends BaseService implements IHooksService {
         }
       }
 
-      const response = await this.invokeWithRetry(
-        `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
-        () =>
-          this.createHookHeaders(
-            session,
-            "tinycloud.hooks/list",
-            options.service
-              ? buildScopePath(options.service, options.pathPrefix)
-              : "webhooks",
-          ),
-        { method: "GET", signal: request.signal },
+      return await usingResponse(
+        () => this.invokeWithRetry(
+          `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
+          () =>
+            this.createHookHeaders(
+              session,
+              "tinycloud.hooks/list",
+              options.service
+                ? buildScopePath(options.service, options.pathPrefix)
+                : "webhooks",
+            ),
+          { method: "GET", signal: request.signal },
+        ),
+        async (response) => {
+          if (!response.ok) {
+            return err(
+              await responseError("hooks", "failed to list webhooks", response),
+            );
+          }
+
+          const payload = await response.json();
+          const records = normalizeWebhookRecordList(payload);
+          if (!records) {
+            return err(
+              wrapError(
+                "hooks",
+                new Error("Webhook list response did not include records"),
+              ),
+            );
+          }
+
+          return ok(records);
+        },
       );
-
-      if (!response.ok) {
-        return err(
-          await responseError("hooks", "failed to list webhooks", response),
-        );
-      }
-
-      const payload = await response.json();
-      const records = normalizeWebhookRecordList(payload);
-      if (!records) {
-        return err(
-          wrapError(
-            "hooks",
-            new Error("Webhook list response did not include records"),
-          ),
-        );
-      }
-
-      return ok(records);
     } catch (error) {
       return err(wrapError("hooks", error));
     } finally {
@@ -354,34 +360,36 @@ export class HooksService extends BaseService implements IHooksService {
     const session = this.session;
     const request = this.createRequestSignal();
     try {
-      const response = await this.invokeWithRetry(
-        `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
-        () =>
-          this.createHookHeaders(
-            session,
-            "tinycloud.hooks/unregister",
-            options.target
-              ? buildScopePath(
-                  options.target.service,
-                  options.target.pathPrefix,
-                )
-              : `webhooks/${id}`,
-          ),
-        { method: "DELETE", signal: request.signal },
+      return await usingResponse(
+        () => this.invokeWithRetry(
+          `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
+          () =>
+            this.createHookHeaders(
+              session,
+              "tinycloud.hooks/unregister",
+              options.target
+                ? buildScopePath(
+                    options.target.service,
+                    options.target.pathPrefix,
+                  )
+                : `webhooks/${id}`,
+            ),
+          { method: "DELETE", signal: request.signal },
+        ),
+        async (response) => {
+          if (!response.ok) {
+            return err(
+              await responseError(
+                "hooks",
+                "failed to unregister webhook",
+                response,
+              ),
+            );
+          }
+
+          return ok(undefined);
+        },
       );
-
-      if (!response.ok) {
-        return err(
-          await responseError(
-            "hooks",
-            "failed to unregister webhook",
-            response,
-          ),
-        );
-      }
-
-      await discardResponse(response);
-      return ok(undefined);
     } catch (error) {
       return err(wrapError("hooks", error));
     } finally {
@@ -512,8 +520,8 @@ export class HooksService extends BaseService implements IHooksService {
       request = this.createRequestSignal(signal, 0);
       const session = this.session;
       const host = this.host;
-      const minted = await awaitOwned(request!.signal, () =>
-        context.fetch(`${host}/hooks/tickets`, {
+      const mint = await awaitOwned(request.signal, () => usingResponse(
+        () => context.fetch(`${host}/hooks/tickets`, {
           method: "POST",
           headers: {
             ...serviceHeadersToRecord(this.createInvokeHeaders(session, plan.subscriptions)),
@@ -525,67 +533,73 @@ export class HooksService extends BaseService implements IHooksService {
           }),
           signal: request!.signal,
         }),
-      );
-      if (!owns()) return { kind: "stopped" };
-      if (!minted.ok) {
-        const status = minted.status;
-        const error = await awaitOwned(request!.signal, () =>
-          responseError("hooks", "failed to mint hook ticket", minted),
-        );
-        if (!owns()) return { kind: "stopped" };
-        return { kind: "refused", terminal: isTerminalMintRefusal(status), error };
-      }
-      const body: unknown = await awaitOwned(request!.signal, () => minted.json());
-      if (!owns()) return { kind: "stopped" };
-      const ticket =
-        body !== null && typeof body === "object" && "ticket" in body
-          ? body.ticket
-          : undefined;
-      if (typeof ticket !== "string" || ticket.length === 0) {
-        throw new Error("Hook ticket response did not include a ticket");
-      }
+        async (minted) => {
+          if (!owns()) return { kind: "stopped" } as const;
+          if (!minted.ok) {
+            const status = minted.status;
+            const error = await awaitOwned(request!.signal, () =>
+              responseError("hooks", "failed to mint hook ticket", minted),
+            );
+            if (!owns()) return { kind: "stopped" } as const;
+            return { kind: "refused", terminal: isTerminalMintRefusal(status), error } as const;
+          }
+          const body: unknown = await awaitOwned(request!.signal, () => minted.json());
+          if (!owns()) return { kind: "stopped" } as const;
+          const ticket =
+            body !== null && typeof body === "object" && "ticket" in body
+              ? body.ticket
+              : undefined;
+          if (typeof ticket !== "string" || ticket.length === 0) {
+            throw new Error("Hook ticket response did not include a ticket");
+          }
 
+          return { kind: "ticket", ticket } as const;
+        },
+      ));
+      if (mint.kind !== "ticket") return mint;
       phase = "open";
       if (!owns()) return { kind: "stopped" };
-      const stream = await awaitOwned(request!.signal, () =>
-        context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(ticket)}`, {
+      return await awaitOwned(request.signal, () => usingResponse(
+        () => context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(mint.ticket)}`, {
           method: "GET",
           headers: { accept: "text/event-stream" },
           signal: request!.signal,
         }),
-      );
-      if (!owns()) return { kind: "stopped" };
-      if (!stream.ok) {
-        return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) };
-      }
-
-      health.openedAt = performance.now();
-      const iterator = parseSseStream(stream.body, request.signal)[Symbol.asyncIterator]();
-      try {
-        for (;;) {
-          const next = await awaitOwned(request!.signal, () => iterator.next());
-          if (!owns()) return { kind: "stopped" };
-          if (next.done) break;
-          const message = next.value;
-          if (!message.data) continue;
-          if (message.event === "ready") {
-            const marker: unknown = JSON.parse(message.data);
-            if (marker !== null && typeof marker === "object" && "type" in marker && marker.type === "ready") {
-              this._readyStream = { key: plan.key, generation };
-              for (const subscriber of this._subscribers) this.notifyReady(subscriber, this._readyStream);
-            }
-            continue;
+        async (stream) => {
+          if (!owns()) return { kind: "stopped" } as const;
+          if (!stream.ok) {
+            return { kind: "refused", terminal: false, error: hookStreamRefusal(stream.status) } as const;
           }
-          const event = parseHookEvent(message);
-          if (!owns()) return { kind: "stopped" };
-          this.dispatch(event);
-          health.delivered = true;
-        }
-      } finally {
-        const closing = iterator.return?.();
-        if (closing) void Promise.resolve(closing).then(() => undefined, () => undefined);
-      }
-      return owns() ? { kind: "ended" } : { kind: "stopped" };
+
+          health.openedAt = performance.now();
+          const iterator = parseSseStream(stream.body, request!.signal)[Symbol.asyncIterator]();
+          try {
+            for (;;) {
+              const next = await awaitOwned(request!.signal, () => iterator.next());
+              if (!owns()) return { kind: "stopped" } as const;
+              if (next.done) break;
+              const message = next.value;
+              if (!message.data) continue;
+              if (message.event === "ready") {
+                const marker: unknown = JSON.parse(message.data);
+                if (marker !== null && typeof marker === "object" && "type" in marker && marker.type === "ready") {
+                  this._readyStream = { key: plan.key, generation };
+                  for (const subscriber of this._subscribers) this.notifyReady(subscriber, this._readyStream);
+                }
+                continue;
+              }
+              const event = parseHookEvent(message);
+              if (!owns()) return { kind: "stopped" } as const;
+              this.dispatch(event);
+              health.delivered = true;
+            }
+          } finally {
+            const closing = iterator.return?.();
+            if (closing) void Promise.resolve(closing).then(() => undefined, () => undefined);
+          }
+          return owns() ? { kind: "ended" } as const : { kind: "stopped" } as const;
+        },
+      ));
     } catch (thrown) {
       return request?.signal.aborted || thrown === SUPERSEDED
         ? { kind: "stopped" }

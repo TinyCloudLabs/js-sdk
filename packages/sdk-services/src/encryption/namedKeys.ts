@@ -27,7 +27,7 @@ import {
   canonicalize,
   type Json,
 } from "./canonical";
-import { discardResponse } from "../responseBody";
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { parseNetworkId } from "./networkId";
 import { generateRandomReceiverKey } from "./receiverKey";
 import { openWrappedKey, verifyDecryptResponse } from "./response";
@@ -463,17 +463,6 @@ export class NamedKeyClient {
     return value;
   }
 
-  private async activeResponse(pending: Promise<Response>): Promise<Response> {
-    const response = await pending;
-    try {
-      this.config.assertActive?.();
-    } catch (error) {
-      await discardResponse(response);
-      throw error;
-    }
-    return response;
-  }
-
   private networkFor(options?: KeyCallOptions): string {
     return options?.networkId ?? this.config.defaultNetworkId();
   }
@@ -515,21 +504,25 @@ export class NamedKeyClient {
   }
 
   private async readNodeInfo(): Promise<string> {
-    const response = await this.config.fetch(`${this.config.host}/info`);
-    if (!response.ok) {
-      throw mapNodeKeyError(response.status, await safeText(response), "failed to read node info");
-    }
-    const info = (await response.json()) as { nodeId?: unknown; features?: unknown };
-    if (!nodeSupportsNamedKeys(info)) {
-      throw new NamedKeyError(
-        "NAMED_KEYS_UNSUPPORTED",
-        "this node does not support named encryption keys",
-      );
-    }
-    if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
-      throw invalidResponse("/info response (nodeId missing)");
-    }
-    return info.nodeId;
+    return await usingResponse(
+      () => this.config.fetch(`${this.config.host}/info`),
+      async (response) => {
+        if (!response.ok) {
+          throw mapNodeKeyError(response.status, await safeText(response), "failed to read node info");
+        }
+        const info = (await response.json()) as { nodeId?: unknown; features?: unknown };
+        if (!nodeSupportsNamedKeys(info)) {
+          throw new NamedKeyError(
+            "NAMED_KEYS_UNSUPPORTED",
+            "this node does not support named encryption keys",
+          );
+        }
+        if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
+          throw invalidResponse("/info response (nodeId missing)");
+        }
+        return info.nodeId;
+      }
+    );
   }
 
   private keysUrl(networkId: string, path: string): string {
@@ -547,11 +540,16 @@ export class NamedKeyClient {
     const networkId = this.networkFor(options);
     this.keyUrn(networkId, path);
     await this.active(this.requireNode());
-    const response = await this.activeResponse(this.config.fetch(this.keysUrl(networkId, path), { method: "GET" }));
-    if (!response.ok) {
-      throw mapNodeKeyError(response.status, await this.active(safeText(response)), "failed to read key");
-    }
-    return parsePublicDescriptor(await this.active(response.json()), networkId, path);
+    return await usingResponse(
+      () => this.config.fetch(this.keysUrl(networkId, path), { method: "GET" }),
+      async (response) => {
+        this.config.assertActive?.();
+        if (!response.ok) {
+          throw mapNodeKeyError(response.status, await this.active(safeText(response)), "failed to read key");
+        }
+        return parsePublicDescriptor(await this.active(response.json()), networkId, path);
+      }
+    );
   }
 
   /**
@@ -597,19 +595,24 @@ export class NamedKeyClient {
       action: ability,
       facts: buildKeyDescribeFacts({ targetNode, keyResource }),
     }));
-    const response = await this.activeResponse(this.config.fetch(this.keysUrl(networkId, path), {
-      method: "GET",
-      headers: { Authorization: signed.authorization },
-    }));
-    if (response.status === 404) {
-      const error = mapNodeKeyError(404, await this.active(safeText(response)), "failed to describe key");
-      if (error.code === "KEY_NOT_FOUND") return null;
-      throw error;
-    }
-    if (!response.ok) {
-      throw mapNodeKeyError(response.status, await this.active(safeText(response)), "failed to describe key");
-    }
-    return this.active(response.json());
+    return await usingResponse(
+      () => this.config.fetch(this.keysUrl(networkId, path), {
+        method: "GET",
+        headers: { Authorization: signed.authorization },
+      }),
+      async (response) => {
+        this.config.assertActive?.();
+        if (response.status === 404) {
+          const error = mapNodeKeyError(404, await this.active(safeText(response)), "failed to describe key");
+          if (error.code === "KEY_NOT_FOUND") return null;
+          throw error;
+        }
+        if (!response.ok) {
+          throw mapNodeKeyError(response.status, await this.active(safeText(response)), "failed to describe key");
+        }
+        return this.active(response.json());
+      }
+    );
   }
 
   private async admin(
@@ -635,21 +638,26 @@ export class NamedKeyClient {
         body,
       }),
     }));
-    const response = await this.activeResponse(this.config.fetch(
-      `${this.config.host}/encryption/networks/${networkId}/${route}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: signed.authorization,
-          "Content-Type": "application/json",
+    return await usingResponse(
+      () => this.config.fetch(
+        `${this.config.host}/encryption/networks/${networkId}/${route}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: signed.authorization,
+            "Content-Type": "application/json",
+          },
+          body: canonicalize(body),
         },
-        body: canonicalize(body),
-      },
-    ));
-    if (!response.ok) {
-      throw mapNodeKeyError(response.status, await this.active(safeText(response)), `failed to ${action}`);
-    }
-    return parseFullDescriptor(unwrapDescriptor(await this.active(response.json())), networkId, path);
+      ),
+      async (response) => {
+        this.config.assertActive?.();
+        if (!response.ok) {
+          throw mapNodeKeyError(response.status, await this.active(safeText(response)), `failed to ${action}`);
+        }
+        return parseFullDescriptor(unwrapDescriptor(await this.active(response.json())), networkId, path);
+      }
+    );
   }
 
   /** `key.create`: `deletable` is `true` exactly under `apps/`, else a deterministic key. */
@@ -878,41 +886,46 @@ export class NamedKeyClient {
       action: DECRYPT_ACTION,
       facts: facts as unknown as Record<string, unknown>,
     }));
-    const response = await this.activeResponse(this.config.fetch(`${this.config.host}/invoke`, {
-      method: "POST",
-      headers: {
-        Authorization: signed.authorization,
-        "Content-Type": "application/json",
-      },
-      body: canonicalBody,
-    }));
-    if (!response.ok) {
-      throw mapNodeKeyError(response.status, await this.active(safeText(response)), "failed to decrypt");
-    }
-    const verified = verifyDecryptResponse({
-      crypto,
-      request: body,
-      facts,
-      invocationCid: signed.invocationCid,
-      requestBodyHash: facts.bodyHash,
-      response: (await this.active(response.json())) as DecryptResponseBody,
-    });
-    if (!verified.ok) {
-      throw new NamedKeyError("INVALID_RESPONSE", safeEcho(verified.error.message), { cause: verified.error });
-    }
-    const symmetricKey = openWrappedKey(crypto, receiverKey.privateKey, verified.data, {
-      purpose: "receiver-key", networkId: body.networkId, keyPath: body.keyPath,
-      keyVersion: body.keyVersion, metadata: {},
-    });
-    try {
-      return crypto.authDecrypt(
-        symmetricKey,
-        base64Decode(envelope.ciphertext),
-        envelope.aad !== undefined ? base64Decode(envelope.aad) : undefined,
-      );
-    } catch (error) {
-      throw new NamedKeyError("DECRYPT_FAILED", "local decryption failed", { cause: error });
-    }
+    return await usingResponse(
+      () => this.config.fetch(`${this.config.host}/invoke`, {
+        method: "POST",
+        headers: {
+          Authorization: signed.authorization,
+          "Content-Type": "application/json",
+        },
+        body: canonicalBody,
+      }),
+      async (response) => {
+        this.config.assertActive?.();
+        if (!response.ok) {
+          throw mapNodeKeyError(response.status, await this.active(safeText(response)), "failed to decrypt");
+        }
+        const verified = verifyDecryptResponse({
+          crypto,
+          request: body,
+          facts,
+          invocationCid: signed.invocationCid,
+          requestBodyHash: facts.bodyHash,
+          response: (await this.active(response.json())) as DecryptResponseBody,
+        });
+        if (!verified.ok) {
+          throw new NamedKeyError("INVALID_RESPONSE", safeEcho(verified.error.message), { cause: verified.error });
+        }
+        const symmetricKey = openWrappedKey(crypto, receiverKey.privateKey, verified.data, {
+          purpose: "receiver-key", networkId: body.networkId, keyPath: body.keyPath,
+          keyVersion: body.keyVersion, metadata: {},
+        });
+        try {
+          return crypto.authDecrypt(
+            symmetricKey,
+            base64Decode(envelope.ciphertext),
+            envelope.aad !== undefined ? base64Decode(envelope.aad) : undefined,
+          );
+        } catch (error) {
+          throw new NamedKeyError("DECRYPT_FAILED", "local decryption failed", { cause: error });
+        }
+      }
+    );
   }
 }
 

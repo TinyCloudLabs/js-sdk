@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import type { FetchFunction } from "@tinycloud/sdk-services";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { isInstant } from "./scope.js";
@@ -8,17 +9,15 @@ const featureCache = new Map<string, Promise<readonly string[] | undefined>>();
 function featuresForHost(host: string, fetchFn: FetchFunction): Promise<readonly string[] | undefined> {
   const cached = featureCache.get(host);
   if (cached !== undefined) return cached;
-  const discovered = fetchFn(`${host.replace(/\/+$/, "")}/info`)
-    .then(async (response) => {
-      if (!response.ok) return undefined;
-      const info: unknown = await response.json();
-      if (typeof info !== "object" || info === null || !("features" in info)) return undefined;
-      const features = info.features;
-      return Array.isArray(features) && features.every((feature) => typeof feature === "string")
-        ? features
-        : undefined;
-    })
-    .catch(() => undefined);
+  const discovered = usingResponse(() => fetchFn(`${host.replace(/\/+$/, "")}/info`), async (response) => {
+    if (!response.ok) return undefined;
+    const info: unknown = await response.json();
+    if (typeof info !== "object" || info === null || !("features" in info)) return undefined;
+    const features = info.features;
+    return Array.isArray(features) && features.every((feature) => typeof feature === "string")
+      ? features
+      : undefined;
+  }).catch(() => undefined);
   featureCache.set(host, discovered);
   void discovered.then((features) => {
     if (features === undefined) featureCache.delete(host);

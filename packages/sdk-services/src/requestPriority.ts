@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { retryInvocation, type RetryInvocationOptions } from "./retryInvocation";
@@ -56,7 +57,7 @@ function laneFor(host: string): Lane {
 
 async function busyPause(response: FetchResponse): Promise<number> {
   if (response.status !== 503 || !response.clone) return 0;
-  const text = await response.clone().text().catch(() => "");
+  const text = await usingResponse(() => Promise.resolve(response.clone!()), (clone) => clone.text()).catch(() => "");
   const error = nodeRetryError("", "", response, text);
   const retryAfterMs = error?.meta?.retryAfterMs;
   return error?.code === ErrorCodes.NODE_BUSY
@@ -107,12 +108,15 @@ async function sendResponse(
   pending: Promise<FetchResponse>,
   resolve: (response: FetchResponse) => void,
 ): Promise<number> {
-  const response = await pending;
-  const pause = busyPause(response);
-  const tracked = trackResponse(response);
+  const tracked = await usingResponse(() => pending, (response, transfer) => {
+    const pause = busyPause(response);
+    const tracked = trackResponse(response);
+    // This returned stream adopts the original reader, rather than its object.
+    return transfer({ ...tracked, response: transfer(tracked.response), pause });
+  });
   resolve(tracked.response);
   await tracked.finished;
-  return pause;
+  return tracked.pause;
 }
 
 function nodeRequest(lane: Lane, foreground: boolean, send: () => Promise<FetchResponse>): Promise<FetchResponse> {

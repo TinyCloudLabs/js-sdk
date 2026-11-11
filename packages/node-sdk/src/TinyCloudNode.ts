@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
@@ -1676,44 +1677,45 @@ export class TinyCloudNode {
 
     try {
       const headers = this._serviceContext.invoke({ ...session, spaceId }, "space", "", action);
-      const response = await this._serviceContext.fetch(`${this._serviceContext.hosts[0]}/invoke`, {
+      return await usingResponse(() => this._serviceContext!.fetch(`${this._serviceContext!.hosts[0]}/invoke`, {
         method: "POST",
         headers,
         body: "{}",
+      }), async (response) => {
+        const text = await response.text();
+        if (!response.ok) {
+          const unauthorized = response.status === 401 || response.status === 403;
+          return err(serviceError(
+            unauthorized ? ErrorCodes.AUTH_UNAUTHORIZED : ErrorCodes.NETWORK_ERROR,
+            `Failed to read storage status: ${response.status} - ${text.slice(0, 300)}`,
+            "storage",
+            { meta: { status: response.status, ...(unauthorized ? { requiredAction: action, resource: spaceId } : {}) } },
+          ));
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = undefined;
+        }
+        const status = parseStorageStatus(body);
+        if (!status) {
+          return err(serviceError(
+            ErrorCodes.STORAGE_STATUS_UNAVAILABLE,
+            "This TinyCloud node does not report storage usage yet.",
+            "storage",
+            { meta: { status: response.status } },
+          ));
+        }
+        // Room again on this space's owner: best-effort writes resume there. The
+        // storage.full episode is not ended here; only a successful write ends it.
+        if (status.state !== "full") {
+          this.storageFull.clearFor(spaceId);
+          // A rejection whose space was unknown counted against the signed-in account.
+          if (spaceOwnerKey(spaceId) === this.currentStorageOwner()) this.storageFull.clearFor(undefined);
+        }
+        return ok(status);
       });
-      const text = await response.text();
-      if (!response.ok) {
-        const unauthorized = response.status === 401 || response.status === 403;
-        return err(serviceError(
-          unauthorized ? ErrorCodes.AUTH_UNAUTHORIZED : ErrorCodes.NETWORK_ERROR,
-          `Failed to read storage status: ${response.status} - ${text.slice(0, 300)}`,
-          "storage",
-          { meta: { status: response.status, ...(unauthorized ? { requiredAction: action, resource: spaceId } : {}) } },
-        ));
-      }
-      let body: unknown;
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = undefined;
-      }
-      const status = parseStorageStatus(body);
-      if (!status) {
-        return err(serviceError(
-          ErrorCodes.STORAGE_STATUS_UNAVAILABLE,
-          "This TinyCloud node does not report storage usage yet.",
-          "storage",
-          { meta: { status: response.status } },
-        ));
-      }
-      // Room again on this space's owner: best-effort writes resume there. The
-      // storage.full episode is not ended here; only a successful write ends it.
-      if (status.state !== "full") {
-        this.storageFull.clearFor(spaceId);
-        // A rejection whose space was unknown counted against the signed-in account.
-        if (spaceOwnerKey(spaceId) === this.currentStorageOwner()) this.storageFull.clearFor(undefined);
-      }
-      return ok(status);
     } catch (error) {
       return err(serviceError(
         ErrorCodes.NETWORK_ERROR,
@@ -2235,11 +2237,12 @@ export class TinyCloudNode {
     const routedFetch = createResourceRoutingFetch(
       async (url, init) => {
         try {
-          const response = await globalThis.fetch(url, init);
-          if (response.status === 403 || response.status === 503) {
-            this.throwRegistryRefusal(response.status, await response.clone().text());
-          }
-          return response;
+          return await usingResponse(() => globalThis.fetch(url, init), async (response) => {
+            if (response.status === 403 || response.status === 503) {
+              this.throwRegistryRefusal(response.status, await usingResponse(() => Promise.resolve(response.clone()), (clone) => clone.text()));
+            }
+            return response;
+          });
         } catch (error) {
           if (routingFailure(error)) throw error;
           if (new URL(url).pathname.startsWith("/encryption/") && !init?.signal?.aborted) {

@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * Shared space utilities for TinyCloud.
  *
@@ -233,37 +234,37 @@ async function postSessionActivation(
   signal?: AbortSignal,
   fetch: FetchFunction = globalThis.fetch.bind(globalThis),
 ): Promise<SpaceHostResult> {
-  const res = await fetch(`${host}/delegate`, {
+  return await usingResponse(() => fetch(`${host}/delegate`, {
     method: "POST",
     headers: delegationHeader,
     redirect: "error",
     signal,
-  });
-
-  if (res.ok) {
-    try {
-      const body = await res.json() as { cid?: string; activated?: string[]; skipped?: string[] };
-      return {
-        success: true,
-        status: res.status,
-        activated: body.activated ?? [],
-        skipped: body.skipped ?? [],
-        commitEventCid: body.cid,
-      };
-    } catch {
-      // Fallback for older servers that return plain text CID
-      return {
-        success: true,
-        status: res.status,
-        activated: [],
-        skipped: [],
-      };
+  }), async (res) => {
+    if (res.ok) {
+      try {
+        const body = await res.json() as { cid?: string; activated?: string[]; skipped?: string[] };
+        return {
+          success: true,
+          status: res.status,
+          activated: body.activated ?? [],
+          skipped: body.skipped ?? [],
+          commitEventCid: body.cid,
+        };
+      } catch {
+        // Fallback for older servers that return plain text CID
+        return {
+          success: true,
+          status: res.status,
+          activated: [],
+          skipped: [],
+        };
+      }
     }
-  }
 
-  return {
-    success: false,
-    status: res.status,
-    error: await res.text().catch(() => res.statusText),
-  };
+    return {
+      success: false,
+      status: res.status,
+      error: await res.text().catch(() => res.statusText),
+    };
+  });
 }

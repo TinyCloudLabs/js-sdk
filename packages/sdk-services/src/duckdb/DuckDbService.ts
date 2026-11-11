@@ -5,7 +5,7 @@
  * Uses dependency injection via IServiceContext for platform dependencies.
  */
 
-import { discardResponse } from "../responseBody";
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -133,19 +133,22 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
       const request = this.createRequestSignal(options?.signal);
       try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.READ,
-          { action: "query", sql, params: params ?? [] },
-          request.signal
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.READ,
+            { action: "query", sql, params: params ?? [] },
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "query");
+            }
+
+            const data = (await response.json()) as QueryResponse<T>;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "query");
-        }
-
-        const data = (await response.json()) as QueryResponse<T>;
-        return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -167,20 +170,23 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
       const request = this.createRequestSignal(options?.signal);
       try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.READ,
-          { action: "query", sql, params: params ?? [] },
-          request.signal,
-          { Accept: "application/vnd.apache.arrow.stream" }
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.READ,
+            { action: "query", sql, params: params ?? [] },
+            request.signal,
+            { Accept: "application/vnd.apache.arrow.stream" }
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "queryArrow");
+            }
+
+            const buffer = await response.arrayBuffer();
+            return ok(buffer);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "queryArrow");
-        }
-
-        const buffer = await response.arrayBuffer();
-        return ok(buffer);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -211,19 +217,22 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           body.schema = options.schema;
         }
 
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.WRITE,
-          body,
-          request.signal
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.WRITE,
+            body,
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "execute");
+            }
+
+            const data = (await response.json()) as ExecuteResponse;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute");
-        }
-
-        const data = (await response.json()) as ExecuteResponse;
-        return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -252,19 +261,22 @@ export class DuckDbService extends BaseService implements IDuckDbService {
           body.transactional = options.transactional;
         }
 
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.WRITE,
-          body,
-          request.signal
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.WRITE,
+            body,
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "batch");
+            }
+
+            const data = (await response.json()) as BatchResponse;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch");
-        }
-
-        const data = (await response.json()) as BatchResponse;
-        return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -294,21 +306,24 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         // path, `write` is the ability that works for both read-only and
         // mutating named statements and is contained in a normal read+write
         // delegation.
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.WRITE,
-          { action: "executeStatement", name, params: params ?? [] },
-          request.signal
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.WRITE,
+            { action: "executeStatement", name, params: params ?? [] },
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "executeStatement");
+            }
+
+            const data = (await response.json()) as
+              | QueryResponse
+              | ExecuteResponse;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement");
-        }
-
-        const data = (await response.json()) as
-          | QueryResponse
-          | ExecuteResponse;
-        return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -333,19 +348,22 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         // `describe` request by body kind and authorizes it as a READ
         // (`DuckDbRequest::Describe` is non-write:
         // tinycloud-node-server/src/routes/mod.rs:1705, see comment :1680).
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.READ,
-          { action: "describe" },
-          request.signal
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.READ,
+            { action: "describe" },
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "describe");
+            }
+
+            const data = (await response.json()) as SchemaInfo;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "describe");
-        }
-
-        const data = (await response.json()) as SchemaInfo;
-        return ok(data);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -365,19 +383,22 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
       const request = this.createRequestSignal(options?.signal);
       try {
-        const response = await this.invokeDuckDb(
-          dbName,
-          DuckDbAction.EXPORT,
-          { action: "export" },
-          request.signal
+        return await usingResponse(
+          () => this.invokeDuckDb(
+            dbName,
+            DuckDbAction.EXPORT,
+            { action: "export" },
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "export");
+            }
+
+            const blob = await response.blob();
+            return ok(blob);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "export");
-        }
-
-        const blob = await response.blob();
-        return ok(blob);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {
@@ -399,28 +420,30 @@ export class DuckDbService extends BaseService implements IDuckDbService {
       const session = this.session;
       const request = this.createRequestSignal(options?.signal);
       try {
-        const response = await this.invokeWithRetry(
-          `${this.host}/invoke`,
-          () =>
-            this.context.invoke(
-              session,
-              "duckdb",
-              dbName,
-              DuckDbAction.IMPORT
-            ),
-          {
-            headers: { "Content-Type": "application/x-duckdb" },
-            body: new Blob([data]),
-            signal: request.signal,
+        return await usingResponse(
+          () => this.invokeWithRetry(
+            `${this.host}/invoke`,
+            () =>
+              this.context.invoke(
+                session,
+                "duckdb",
+                dbName,
+                DuckDbAction.IMPORT
+              ),
+            {
+              headers: { "Content-Type": "application/x-duckdb" },
+              body: new Blob([data]),
+              signal: request.signal,
+            }
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "import");
+            }
+
+            return ok(undefined);
           }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "import");
-        }
-
-        await discardResponse(response);
-        return ok(undefined);
       } catch (error) {
         return err(wrapError("duckdb", error));
       } finally {

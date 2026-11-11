@@ -35,7 +35,7 @@ function contextFor(fetch: () => Promise<FetchResponse>, retryPolicy?: Partial<R
 
 /** Advance fake time in 1 ms steps, flushing promise continuations between steps. */
 async function advance(ms: number) {
-  const flush = async () => { for (let j = 0; j < 10; j++) await Promise.resolve(); };
+  const flush = async () => { for (let j = 0; j < 40; j++) await Promise.resolve(); };
   await flush(); // let the pending request reach its first wait at the current time
   for (let i = 0; i < ms; i++) {
     jest.advanceTimersByTime(1);

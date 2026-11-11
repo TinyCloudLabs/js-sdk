@@ -12,4 +12,6 @@ Cancel pending operations when the session changes and coordinate lanes at the r
 
 Load request coordination and retry handling on first use. Preserve the default server retry policy and the browser foreground busy limit.
 
+Release streamed lane slots on hook refusals, stale responses and parsing failures.
+
 Details: TC-2771

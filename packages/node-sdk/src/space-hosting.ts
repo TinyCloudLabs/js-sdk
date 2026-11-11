@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * The hosting probe's read selection and classification, and the sequence that
  * creates a primary space that is not hosted. Both are loaded on first use, so
@@ -99,23 +100,22 @@ function selectRead({ spaceId, operations, covers }: SpaceHostingPorts): SpaceHo
 async function send(ports: SpaceHostingPorts, read: SpaceHostingRead): Promise<SpaceHosting | "refused"> {
   try {
     const { spaceId } = ports;
-    const response = await ports.fetch(`${ports.host}/invoke`, {
+    return await usingResponse(() => ports.fetch(`${ports.host}/invoke`, {
       method: "POST",
       headers: { ...ports.sign([{ spaceId, service: read.service, path: read.path, action: read.action }]), ...read.headers },
       body: read.body,
       signal: AbortSignal.timeout(TIMEOUT_MS),
+    }), async (response) => {
+      if (response.ok) {
+        return "hosted";
+      }
+      if (response.status === 401 || response.status === 403) return "refused";
+      if (response.status === 404) {
+        // Only the node's unhosted-space 404 says "not hosted"; a missing key is a 404 too.
+        return /space not found/i.test(await response.text()) ? "not-hosted" : "hosted";
+      }
+      return "unknown";
     });
-    if (response.ok) {
-      // A 2xx is the answer; a body that comes with it is not wanted.
-      if (response.body instanceof ReadableStream) await response.body.cancel().catch(() => undefined);
-      return "hosted";
-    }
-    if (response.status === 401 || response.status === 403) return "refused";
-    if (response.status === 404) {
-      // Only the node's unhosted-space 404 says "not hosted"; a missing key is a 404 too.
-      return /space not found/i.test(await response.text()) ? "not-hosted" : "hosted";
-    }
-    return "unknown";
   } catch {
     return "unknown";
   }

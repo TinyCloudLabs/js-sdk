@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * SQLService - SQL database service implementation.
  *
@@ -195,21 +196,24 @@ export class SQLService extends BaseService implements ISQLService {
         if (options?.maxBytes !== undefined) body.maxBytes = options.maxBytes;
 
         const action = this.actionForSql(sql, SQLAction.READ);
-        const response = await this.invokeSQL(
-          dbName,
-          action,
-          body,
-          request.signal,
-          session
+        return await usingResponse(
+          () => this.invokeSQL(
+            dbName,
+            action,
+            body,
+            request.signal,
+            session
+          ),
+          async (response) => {
+            if (!response.ok) {
+              const failure = await this.handleErrorResponse(response, "query", dbName, [action], session);
+              return this.redactFailure(failure, options?.redactErrors, response.status);
+            }
+
+            const data = (await response.json()) as QueryResponse<T>;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          const failure = await this.handleErrorResponse(response, "query", dbName, [action], session);
-          return this.redactFailure(failure, options?.redactErrors, response.status);
-        }
-
-        const data = (await response.json()) as QueryResponse<T>;
-        return ok(data);
       } catch (error) {
         return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
@@ -248,21 +252,24 @@ export class SQLService extends BaseService implements ISQLService {
           ),
         ];
         const requestedActions = this.dedupeActions(actions);
-        const response = await this.invokeSQL(
-          dbName,
-          requestedActions,
-          body,
-          request.signal,
-          session
+        return await usingResponse(
+          () => this.invokeSQL(
+            dbName,
+            requestedActions,
+            body,
+            request.signal,
+            session
+          ),
+          async (response) => {
+            if (!response.ok) {
+              const failure = await this.handleErrorResponse(response, "execute", dbName, requestedActions, session);
+              return this.redactFailure(failure, options?.redactErrors, response.status);
+            }
+
+            const data = (await response.json()) as ExecuteResponse;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          const failure = await this.handleErrorResponse(response, "execute", dbName, requestedActions, session);
-          return this.redactFailure(failure, options?.redactErrors, response.status);
-        }
-
-        const data = (await response.json()) as ExecuteResponse;
-        return ok(data);
       } catch (error) {
         return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
@@ -285,21 +292,24 @@ export class SQLService extends BaseService implements ISQLService {
       const request = this.createRequestSignal(options?.signal);
       try {
         const requestedActions = this.actionsForSqlBatch(statements);
-        const response = await this.invokeSQL(
-          dbName,
-          requestedActions,
-          { action: "batch", statements },
-          request.signal,
-          session
+        return await usingResponse(
+          () => this.invokeSQL(
+            dbName,
+            requestedActions,
+            { action: "batch", statements },
+            request.signal,
+            session
+          ),
+          async (response) => {
+            if (!response.ok) {
+              const failure = await this.handleErrorResponse(response, "batch", dbName, requestedActions, session);
+              return this.redactFailure(failure, options?.redactErrors, response.status);
+            }
+
+            const data = (await response.json()) as BatchResponse;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          const failure = await this.handleErrorResponse(response, "batch", dbName, requestedActions, session);
-          return this.redactFailure(failure, options?.redactErrors, response.status);
-        }
-
-        const data = (await response.json()) as BatchResponse;
-        return ok(data);
       } catch (error) {
         return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
@@ -332,22 +342,25 @@ export class SQLService extends BaseService implements ISQLService {
         // under write (write ⊇ read), so `write` is the ability that works for
         // both read-only and mutating statements and is contained in a normal
         // read+write delegation.
-        const response = await this.invokeSQL(
-          dbName,
-          SQLAction.WRITE,
-          { action: "execute_statement", name, params: params ?? [] },
-          request.signal,
-          session
+        return await usingResponse(
+          () => this.invokeSQL(
+            dbName,
+            SQLAction.WRITE,
+            { action: "execute_statement", name, params: params ?? [] },
+            request.signal,
+            session
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE], session);
+            }
+
+            const data = (await response.json()) as
+              | QueryResponse
+              | ExecuteResponse;
+            return ok(data);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE], session);
-        }
-
-        const data = (await response.json()) as
-          | QueryResponse
-          | ExecuteResponse;
-        return ok(data);
       } catch (error) {
         return err(wrapError("sql", error));
       } finally {
@@ -373,28 +386,31 @@ export class SQLService extends BaseService implements ISQLService {
         // `export` request by body kind and authorizes it as a READ
         // (`SqlRequest::Export` is non-write:
         // tinycloud-node-server/src/routes/mod.rs:1172, see comment :1155).
-        const response = await this.invokeSQL(
-          dbName,
-          SQLAction.READ,
-          { action: "export" },
-          request.signal,
-          session
+        return await usingResponse(
+          () => this.invokeSQL(
+            dbName,
+            SQLAction.READ,
+            { action: "export" },
+            request.signal,
+            session
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ], session);
+            }
+
+            // FetchResponse doesn't expose blob(), so access it from the
+            // underlying response which is a standard fetch Response at runtime
+            const resp = response as any;
+            if (typeof resp.blob === "function") {
+              const blob = await resp.blob();
+              return ok(blob as Blob);
+            }
+            // If blob() is not available, return the raw text as a Blob-like
+            const text = await response.text();
+            return ok(text as unknown as Blob);
+          }
         );
-
-        if (!response.ok) {
-          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ], session);
-        }
-
-        // FetchResponse doesn't expose blob(), so access it from the
-        // underlying response which is a standard fetch Response at runtime
-        const resp = response as any;
-        if (typeof resp.blob === "function") {
-          const blob = await resp.blob();
-          return ok(blob as Blob);
-        }
-        // If blob() is not available, return the raw text as a Blob-like
-        const text = await response.text();
-        return ok(text as unknown as Blob);
       } catch (error) {
         return err(wrapError("sql", error));
       } finally {

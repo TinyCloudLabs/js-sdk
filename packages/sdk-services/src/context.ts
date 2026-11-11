@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 /**
  * ServiceContext implementation for TinyCloud SDK Services
  * @module @tinycloud/sdk-services
@@ -468,14 +469,15 @@ export class ServiceContext implements IServiceContext {
     const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
 
     try {
-      const response = await fetchFn(url, request);
-      timer.stop({
-        ...meta,
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText,
+      return await usingResponse(() => fetchFn(url, request), (response) => {
+        timer.stop({
+          ...meta,
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        return response;
       });
-      return response;
     } catch (error) {
       timer.stop({ ...meta, ok: false, error });
       throw error;
