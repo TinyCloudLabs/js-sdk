@@ -4,7 +4,7 @@
 import { randomBytes } from 'node:crypto';
 import { REGISTRY_NOT_FOUND_BODY } from '@tinycloud/sdk-core';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
-import { siweTimes, ownerEncryptionNetwork } from '../../dist/authority.js';
+import { siweTimes, ownerEncryptionNetwork, parseApprovalSiwe } from '../../dist/authority.js';
 import { AGENT_GRANT, COURIER_SPACE } from '../../dist/keys.js';
 import { nodeOpts } from '../../dist/node.js';
 
@@ -46,14 +46,21 @@ export async function inviteGrant(owner, holder, { shareId = shareIdOf(), reques
   let siwe = prepared.siwe;
   const extra = [...(bind && request ? [typeof bind === 'string' ? bind : bindingLine(request)] : []), ...lines];
   if (extra.length > 0) siwe = siwe.replace(/\nResources:/, `\n${extra.join('\n')}\nResources:`);
-  // A test may replace lines of the canonical text before the owner signs it (the signer accepts what the verifier's parser does not).
-  if (rewrite) siwe = rewrite(siwe, { binding: request ? bindingLine(request) : undefined });
+  // The owner signs the CANONICAL message and the session is completed from that signature. A test may then alter only the raw text handed to the
+  // caller (`rewrite`): the original signature, delegation header and CID are kept, which is the shape of the real attack on unchecked bytes.
   const signature = await owner.signer.signMessage(siwe);
   const session = wasm.completeSessionSetup({ ...prepared, siwe, signature });
+  let delivered = siwe;
+  if (rewrite) {
+    // Baseline: what the owner really signed parses strictly; only the delivered text below differs.
+    parseApprovalSiwe(siwe);
+    delivered = rewrite(siwe, { binding: request ? bindingLine(request) : undefined });
+    if (delivered === siwe) throw new Error('rewrite did not change the raw text');
+  }
   return {
     shareId,
     payload: { delegationHeader: session.delegationHeader, delegationCid: session.delegationCid, spaceId: wasm.makeSpaceId(owner.address, 1, 'default'),
-      address: owner.address, chainId: 1, siwe, signature, verificationMethod: holder.did },
+      address: owner.address, chainId: 1, siwe: delivered, signature, verificationMethod: holder.did },
   };
 }
 

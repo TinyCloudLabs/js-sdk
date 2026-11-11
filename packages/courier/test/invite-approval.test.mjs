@@ -313,9 +313,11 @@ test('a host that cannot be reached while installing the approval keeps the pend
 });
 
 // What is refused, and that a refused result closes the pending invitation but never deletes anything approved.
+// The refusal text of parseApprovalSiwe: an invalid message, or one that is not its own canonical serialisation.
+const STRICT_PARSE = /not a valid sign-in message|canonical form/;
 const replaceRow = (index, replacement) => (siwe, { binding }) => siwe.split('\n').map((row, at) => (at === index ? replacement(binding) : row)).join('\n');
 const lifetimeFor = (context) => Date.parse(context.acceptanceExpiresAt) - Date.now() - 60_000;
-for (const [name, options, code] of [
+for (const [name, options, code, message] of [
   ['an approval issued to another key', (context) => ({ holder: stranger, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
   ['an approval for a prefix', (context) => ({ rawAbilities: { [`${network}/share/`]: KEY_ACTIONS }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
   ['an approval with more authority than one key', (context) => ({ rawAbilities: { [keyPath(shareIdOf())]: KEY_ACTIONS, [keyPath(shareIdOf())]: KEY_ACTIONS }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
@@ -323,8 +325,8 @@ for (const [name, options, code] of [
   ['an approval signed without the request binding', (context) => ({ bind: false, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
   // The owner really signs a message whose blank line 2 or 4 is REPLACED (not inserted) by a Request ID or Issued At line: the strict parse refuses it, nothing is installed.
   ...[2, 4].flatMap((index) => [
-    [`an approval whose blank line ${index} is replaced by the Request ID`, (context) => ({ bind: false, rewrite: replaceRow(index, (binding) => binding), lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
-    [`an approval whose blank line ${index} is replaced by an Issued At`, (context) => ({ rewrite: replaceRow(index, () => `Issued At: ${new Date(Date.now() - 10 * DAY).toISOString()}`), lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
+    [`an approval whose blank line ${index} is replaced by the Request ID`, (context) => ({ bind: false, rewrite: replaceRow(index, (binding) => binding), lifetimeMs: lifetimeFor(context) }), 'bad-grant', STRICT_PARSE],
+    [`an approval whose blank line ${index} is replaced by an Issued At`, (context) => ({ rewrite: replaceRow(index, () => `Issued At: ${new Date(Date.now() - 10 * DAY).toISOString()}`), lifetimeMs: lifetimeFor(context) }), 'bad-grant', STRICT_PARSE],
   ]),
   ['an approval whose binding names another request id', (context) => ({ request: { requestId: requestIdOf(), bodyCid: 'x' }, lifetimeMs: lifetimeFor(context) }), 'bad-grant'],
 ]) {
@@ -335,6 +337,8 @@ for (const [name, options, code] of [
     approve(options(context));
     const error = await failure(quiet(() => cmdInvite(argv(), deps)));
     assert.equal(error?.code, code);
+    // A replaced-line refusal is the caller's own strict parse of the altered raw text, not a signature failure that would only mask it.
+    if (message) assert.match(error.message, message);
     assert.deepEqual(calls, []);
     assert.deepEqual(events.sent, []);
     assert.deepEqual(invitationState(kv), []);
