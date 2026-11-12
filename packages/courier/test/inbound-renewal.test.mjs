@@ -1,3 +1,4 @@
+import { issuedFixture } from './support/issued-fixture.mjs';
 // TC-2746: real signed pairings against an owned loopback activation host.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -29,21 +30,8 @@ const owners = {
 };
 
 const hits = { delegate: 0, invoke: 0 };
-const stub = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/delegate') {
-    hits.delegate += 1;
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ activated: ['agents'], skipped: [] }));
-    return;
-  }
-  if (req.method === 'POST' && req.url === '/invoke') {
-    hits.invoke += 1;
-    res.writeHead(200, { 'content-type': 'application/json', etag: '"stub-etag"' });
-    res.end('{}');
-    return;
-  }
-  res.writeHead(404).end('no such route');
-});
+const fixtureApi = issuedFixture(typeof hits === 'undefined' ? {} : hits);
+const stub = http.createServer((req, res) => { void fixtureApi.handle(req, res); });
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const HOST = `http://127.0.0.1:${stub.address().port}`;
 test.after(() => stub.close());
@@ -134,7 +122,15 @@ async function makeHome(name, handle, ownerPrivateKey, grantLifetimeMs = 30 * DA
   for (const [file, body] of [['profile.json', profile], ['key.json', key], ['grant.json', grant]]) {
     fs.writeFileSync(path.join(home, file), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
   }
-  return { home, profile, grant };
+  return { home, profile, grant, ownerPrivateKey };
+}
+
+async function approveLater(fixture, lifetime = 30 * DAY) {
+  const key = JSON.parse(fs.readFileSync(path.join(fixture.home, 'key.json'), 'utf8'));
+  const result = await makeGrant(fixture.ownerPrivateKey, key, lifetime);
+  fs.writeFileSync(path.join(fixture.home, 'grant.json'), JSON.stringify(result.grant), { mode: 0o600 });
+  const profile = profileAt(fixture.home); profile.grantExpiresAt = result.grant.expiresAt; writeProfile(fixture.home, profile);
+  fixture.grant = result.grant;
 }
 
 const profilePath = (home) => path.join(home, 'profile.json');
@@ -158,6 +154,7 @@ test('peer reads collect a newer signed grant without a receiving pair renew; pr
   const recipient = await makeHome('recipient', 'recipient', owners.mira);
   await pairAll(issuer, 'to-recipient', recipient, 'to-issuer');
   await new Promise(resolve => setTimeout(resolve, 1100));
+  await approveLater(issuer);
   const artifact = await run(issuer.home, ['pair', 'renew', 'to-recipient', '--renew-artifact', '--force']);
   process.env.COURIER_HOME = recipient.home;
   const profile = loadProfile();
@@ -215,6 +212,7 @@ test('replacement with changed mailbox is not saved', async () => {
   const recipient = { home: path.join(root, 'inbound-renewal', 'recipient') };
   await pairAll(issuer, 'elsewhere', recipient, 'other-side');
   await new Promise(resolve => setTimeout(resolve, 1100));
+  await approveLater(issuer);
   const artifact = await run(issuer.home, ['pair', 'renew', 'elsewhere', '--renew-artifact', '--force']);
   const home = path.join(root, 'inbound-renewal', 'recipient');
   process.env.COURIER_HOME = home;
@@ -250,6 +248,8 @@ test('another signed issuer with the same owner and exact mailbox cannot replace
   const recipient = { home: path.join(root, 'inbound-renewal', 'recipient') };
   await pairAll(issuer, 'to-recipient', recipient, 'forger-side');
   await new Promise(resolve => setTimeout(resolve, 1100));
+  fixtureApi.seed(profileAt(issuer.home).peers['to-recipient'].outbound.at(-1).delegation);
+  await approveLater(issuer);
   const artifact = await run(issuer.home, ['pair', 'renew', 'to-recipient', '--renew-artifact', '--force']);
   const home = path.join(root, 'inbound-renewal', 'recipient');
   process.env.COURIER_HOME = home;
@@ -264,7 +264,9 @@ test('another signed issuer with the same owner and exact mailbox cannot replace
 
 test('a peer removed or rebound during collection is never restored or overwritten', async () => {
   const issuerHome = path.join(root, 'inbound-renewal', 'issuer');
+  fixtureApi.seed(profileAt(issuerHome).peers['to-recipient'].outbound.at(-1).delegation);
   await new Promise(resolve => setTimeout(resolve, 1100));
+  await approveLater({ home: issuerHome, ownerPrivateKey: owners.sam });
   const artifact = await run(issuerHome, ['pair', 'renew', 'to-recipient', '--renew-artifact', '--force']);
   const home = path.join(root, 'inbound-renewal', 'recipient');
   process.env.COURIER_HOME = home;

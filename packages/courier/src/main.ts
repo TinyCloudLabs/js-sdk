@@ -5,7 +5,7 @@ import { CourierError, CourierPending, EXIT_PENDING, errInfo } from './errors.js
 import {
   requestHelp, cmdInit, cmdManifest, cmdPair, cmdRevoke, cmdSend, cmdInbox, cmdRead, cmdTask, cmdRequest, cmdOrders,
 } from './commands.js';
-import { cmd, programName, setProgramName } from './program.js';
+import { cmd, programName, setProgramName, tcCmd } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
 import { cmdIntake } from './intake/intake.js';
 import { cmdOutbox } from './outbox.js';
@@ -51,13 +51,13 @@ Setup & pairing (humans run these):
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew both directions; humans or watcher only
   pair renew <peer> --renew-artifact [--force]  Emit renewed C artifact for handoff; receiver runs pair accept
-  revoke <peer>                    Stop renewing and remove the peer; their access ends when the current grant expires. Files you already shared stay available until each share expires or you revoke it (\`tinycloud share revoke <id>\`).
+  revoke <peer>                    Revoke the peer's access and remove the pairing. Files you already shared stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
               [--intent request|ask|answer|update|inform] [--ask "…"]… [--constraint "…"]…
               [--reply-to <messageId>] [--task-ref <taskId>]…
-  status [--peer <peer>] [--json]   Saved per-side expiry
+  status [--peer <peer>] [--json]   Saved per-side expiry; no remote access or renewal check
   inbox [--json] [--peek]          New counterparty messages; --peek skips receipt updates
   read <threadId> [--peer p] [--json]
                                    The merged thread: both sides' messages + tasks
