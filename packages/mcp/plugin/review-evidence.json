@@ -145,8 +145,8 @@
   },
   "rollout_preflight": {
     "date": "2026-11-12",
-    "status": "HELD_FOR_RELEASE_SCOPE_DECISION",
-    "reason": "The documented main/master release paths include material changes beyond the approved consent fix. Their production rollout requires an explicit scope decision; preparing review PRs and read-only preflight does not deploy them.",
+    "status": "HELD_BY_OWNER",
+    "reason": "After being informed of the inherited API release batch and MCP old-layout compatibility impact, the owner selected Hold production. Keep all three review PRs draft and unmerged; no package publication or production deployment is authorized while this hold remains.",
     "openkey": {
       "api_pr": "https://github.com/TinyCloudLabs/openkey/pull/493",
       "web_pr": "https://github.com/TinyCloudLabs/openkey/pull/494",
@@ -159,6 +159,7 @@
       "remaining_preflight": "Reconcile current live compose after unrelated operator activity; obtain complete serving-instance/image inventory, database migration state and rollback identity. Do not execute the separately gated destructive TC-488/TC-492 cutover."
     },
     "mcp": {
+      "pr": "https://github.com/TinyCloudLabs/js-sdk/pull/935",
       "observed_live_version": "0.10.0-beta.6",
       "inspected_master_commit": "3a073c10f503e1c7b5fcdd0d943e2c3611b58d9f",
       "inherited_git_commits_to_worktree_base": 446,
