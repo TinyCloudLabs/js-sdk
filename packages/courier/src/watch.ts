@@ -1,8 +1,9 @@
+import { cmd } from './program.js';
 import { defer } from './defer.js';
 import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
 import { errInfo, CourierError } from './errors.js';
-import { k, PREFIX } from './keys.js';
+import { k, PREFIX, watchStateKey } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
@@ -175,6 +176,8 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
+  /** Canonical bare did:key of the authenticated agent; the CLI passes the SDK's verified credentialHolderDid. */
+  courierDid: string;
   selfKv: KV;
   /** Own space id, for the `me/approvals/` subscription. */
   spaceId: string;
@@ -269,15 +272,17 @@ export class Watcher {
   /** Set once `run` is told to stop: nothing new is woken after that. */
   private stopping = false;
   private onFatal: (() => void) | undefined;
-  /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
+  /** Etag of this identity's watcher state as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   private readonly metaMirrored = new Set<string>();
   private readonly syncing = new Map<string, { again: boolean; via: Via }>();
+  private readonly stateKey: string;
   private stateQueue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
 
   constructor(private readonly deps: WatchDeps, private readonly opts: WatchOptions = WATCH_DEFAULTS) {
+    this.stateKey = watchStateKey(deps.courierDid);
     this.now = deps.now ?? Date.now;
     this.profileId = deps.holder?.profileId ?? this.runId;
     this.pid = deps.holder?.pid ?? process.pid;
@@ -287,7 +292,7 @@ export class Watcher {
   // ---------- state ----------
 
   async loadState(): Promise<void> {
-    const got = await getJson<WatchState>(this.deps.selfKv, k.watchState);
+    const got = await getJson<WatchState>(this.deps.selfKv, this.stateKey);
     const value = got?.value;
     this.stateEtag = got?.etag ?? null;
     this.state = isRecord(value) && value.v === 1
@@ -359,15 +364,15 @@ export class Watcher {
     const run = this.stateQueue.then(async () => {
       const result = fn();
       const { selfKv } = this.deps;
-      if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, k.watchState))?.etag ?? null;
+      if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, this.stateKey))?.etag ?? null;
       try {
         const written = this.stateEtag
-          ? await putMatch(selfKv, k.watchState, this.state, this.stateEtag)
-          : await putCreate(selfKv, k.watchState, this.state);
+          ? await putMatch(selfKv, this.stateKey, this.state, this.stateEtag)
+          : await putCreate(selfKv, this.stateKey, this.state);
         this.stateEtag = written ?? undefined;
       } catch (error) {
         if (error instanceof CourierError && error.code === 'conflict') {
-          throw this.stateConflict('me/state/watch.json was changed by another process; a second `watch` is running for this profile. This watcher is stopping.');
+          throw this.stateConflict(`The saved state for this Courier agent changed, so this watcher is stopping. Run your \`${cmd('watch')}\` command again if you need it here.`);
         }
         throw error;
       }

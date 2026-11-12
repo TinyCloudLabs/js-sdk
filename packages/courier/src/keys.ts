@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { CourierError } from './errors.js';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 
 /** Courier KV layout and the single source of agent grant authority. */
@@ -54,6 +56,7 @@ export const k = {
     `${PREFIX}/me/mirror/${peer}/threads/${threadId}/meta.json`,
   mirrorTask: (peer: string, threadId: string, taskId: string) =>
     `${PREFIX}/me/mirror/${peer}/threads/${threadId}/task/${taskId}.json`,
+  /** Legacy global state; new watchers leave it untouched. */
   watchState: `${PREFIX}/me/state/watch.json`,
   /** `me/state/paused/<peer>/<thread>.json`: this side's agent is not woken for the thread (written by the watcher on budget, or by `courier pause`). */
   paused: (peer: string, threadId: string) => `${PREFIX}/me/state/paused/${peer}/${threadId}.json`,
@@ -69,6 +72,14 @@ export const k = {
   ordersPrefix: `${PREFIX}/me/orders/`,
   mePrefix: `${PREFIX}/me/`,
 };
+
+/** One hosted state key per authenticated Courier agent, shared by its homes and machines. */
+export function watchStateKey(courierDid: string): string {
+  if (typeof courierDid !== 'string' || !courierDid) throw new CourierError('bad-identity', 'Courier identity is unavailable. Pass the authenticated courierDid when constructing Watcher.');
+  // The SDK derives this canonical bare did:key from the session key; base58 is case-sensitive.
+  const identity = createHash('sha256').update(courierDid).digest('hex');
+  return `${PREFIX}/me/state/watch/${identity}.json`;
+}
 
 /** Peer-read capability entries for `delegateTo`, spec §3/§5 and TC-708. */
 export function peerReadPermissions(peer: string, space: string, sessionId?: string): PermissionEntry[] {

@@ -4,7 +4,10 @@ import assert from 'node:assert/strict';
 import { ulid } from 'ulid';
 import { Watcher, wakeDueAt } from '../dist/watch.js';
 import { buildMessage, buildTask } from '../dist/a2a.js';
-import { k, PREFIX } from '../dist/keys.js';
+import { k as keyLayout, PREFIX, watchStateKey } from '../dist/keys.js';
+
+const FIXTURE_COURIER_DID = 'did:key:zFixtureCourier';
+const k = { ...keyLayout, watchState: watchStateKey(FIXTURE_COURIER_DID) };
 
 function memoryKv() {
   const rows = new Map();
@@ -52,7 +55,7 @@ function setup({ wake, selfKv = memoryKv() } = {}) {
   const clock = { t: 1_000_000 };
   const wakes = [];
   const events = [];
-  const watcher = new Watcher({
+  const watcher = new Watcher({ courierDid: FIXTURE_COURIER_DID,
     selfKv,
     spaceId: 'tinycloud:pkh:eip155:1:0x01:agents',
     selfHooks: {}, peerHooks: async () => ({}),
@@ -148,7 +151,7 @@ test('a wake that fails stays pending and is retried', async () => {
   const { selfKv, peerSide, clock, events, send } = setup();
   let fail = true;
   const calls = [];
-  const watcher = new Watcher({
+  const watcher = new Watcher({ courierDid: FIXTURE_COURIER_DID,
     selfKv, spaceId: 's', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => [peer], kvFor: async () => peerSide,
     wake: async (request) => { calls.push(request); if (fail) throw new Error('paseo down'); },
     log: (event, fields) => events.push({ event, ...fields }),
@@ -287,7 +290,7 @@ function idleHooks() {
 }
 
 function runnable(selfKv, peers, peerSide, wakes, debounceMs = 0) {
-  return new Watcher({
+  return new Watcher({ courierDid: FIXTURE_COURIER_DID,
     selfKv, spaceId: 's', selfHooks: idleHooks(), peerHooks: async () => idleHooks(),
     loadPeers: () => peers, kvFor: async () => peerSide,
     wake: async (request) => { wakes.push(request); }, log: () => {},
@@ -324,7 +327,7 @@ function claimWorld() {
     alive.add(pid);
     const wakes = [];
     const events = [];
-    const watcher = new Watcher({
+    const watcher = new Watcher({ courierDid: FIXTURE_COURIER_DID,
       selfKv, spaceId: 's', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => [peer], kvFor: async () => peerSide,
       wake: async (request) => { wakes.push(request); await wake?.(request); },
       log: (event, fields) => events.push({ event, ...fields }),
@@ -497,7 +500,7 @@ test('run() starts the subscriptions before the first catch-up listing', async (
   const list = peerSide.list.bind(peerSide);
   peerSide.list = async (options) => { order.push('list'); return list(options); };
   const hooks = { subscribe: (_subs, { signal }) => ({ async *[Symbol.asyncIterator]() { order.push('subscribe'); await new Promise((r) => signal.addEventListener('abort', r, { once: true })); } }) };
-  const watcher = new Watcher({
+  const watcher = new Watcher({ courierDid: FIXTURE_COURIER_DID,
     selfKv, spaceId: 's', selfHooks: hooks, peerHooks: async () => hooks, loadPeers: () => [peer], kvFor: async () => peerSide,
     wake: async () => {}, log: () => {},
   }, { debounceMs: 30_000, pollMs: 60_000, ticketSeconds: 25 });
