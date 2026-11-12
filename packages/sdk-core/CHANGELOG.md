@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.19
+
+### Patch Changes
+
+- 5fe6cff: Issued-delegation queries now use the node's session-key delegation resource.
+
+  Details: TC-712
+
 ## 3.12.0-beta.18
 
 ### Patch Changes
