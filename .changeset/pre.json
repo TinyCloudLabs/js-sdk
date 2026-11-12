@@ -72,6 +72,7 @@
     "tc-2671-share-sender-settings",
     "tc-2687-published-signin",
     "tc-2691-host-expiry",
+    "tc-2746-interim-renewal",
     "tc-2748-courier-read-isolation",
     "tc-712-issued-resource",
     "tc-712-proofless-revoke",
