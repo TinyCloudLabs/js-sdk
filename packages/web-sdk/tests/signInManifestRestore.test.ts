@@ -1937,7 +1937,7 @@ describe("space hosting on restore (TC-2380)", () => {
     return { tcw, node, walletRequest, statusDuringProbe, confirm };
   }
 
-  test("a restored session whose space is not hosted stays restored, reports not-hosted and prompts for nothing", async () => {
+  test("restore returns locally and the background hosting probe updates it without a prompt", async () => {
     const { tcw, node, walletRequest, statusDuringProbe } = await webWith(async (n) => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
@@ -1948,27 +1948,33 @@ describe("space hosting on restore (TC-2380)", () => {
     expect(result.status).toBe("restored");
     expect(result.session?.address).toBe(address);
     expect(tcw.sessionRestoreStatus).toBe("restored");
+    expect(tcw.spaceHosting).toBe("unknown");
+    expect(node.checkSpaceHosting).not.toHaveBeenCalled();
+    await tcw.restoredNetworkWork.hosting;
     expect(tcw.spaceHosting).toBe("not-hosted");
     expect(node.checkSpaceHosting).toHaveBeenCalledTimes(1);
-    // The probe runs while the restore is still in progress, before "restored".
-    expect(statusDuringProbe).toEqual(["restoring"]);
+    expect(statusDuringProbe).toEqual(["restored"]);
     expect(node.signIn).not.toHaveBeenCalled();
     expect(walletRequest).not.toHaveBeenCalled();
   });
 
-  test("a hung probe delays the restore only up to the cap and a throwing probe never fails it", async () => {
+  test("a hung background probe is bounded and a throwing probe leaves the restore usable", async () => {
     const hung = await webWith(() => new Promise<Hosting>(() => undefined));
     hung.tcw.spaceHostingCapMs = 50;
     const started = Date.now();
     const result = await hung.tcw.restoreSession(address);
     expect(result.status).toBe("restored");
     expect(Date.now() - started).toBeLessThan(2_000);
+    expect(hung.node.checkSpaceHosting).not.toHaveBeenCalled();
+    await hung.tcw.restoredNetworkWork.hosting;
+    expect(hung.node.checkSpaceHosting).toHaveBeenCalledTimes(1);
     expect(hung.tcw.spaceHosting).toBe("unknown");
 
     const failing = await webWith(async () => {
       throw new Error("node unreachable");
     });
     expect((await failing.tcw.restoreSession(address)).status).toBe("restored");
+    await failing.tcw.restoredNetworkWork.hosting;
     expect(failing.tcw.spaceHosting).toBe("unknown");
   });
 
@@ -2033,6 +2039,7 @@ describe("space hosting on restore (TC-2380)", () => {
       },
     });
     await tcw.restoreSession(address);
+    await tcw.restoredNetworkWork.hosting;
 
     const first = tcw.ensureSpaceHosted().then(
       (value) => ({ status: "fulfilled" as const, value }),
@@ -2139,6 +2146,7 @@ describe("space hosting on restore (TC-2380)", () => {
     }) as typeof clearTimeout;
     try {
       expect((await tcw.restoreSession(address)).status).toBe("restored");
+      await tcw.restoredNetworkWork.hosting;
     } finally {
       globalThis.setTimeout = realSet;
       globalThis.clearTimeout = realClear;

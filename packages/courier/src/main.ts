@@ -16,6 +16,7 @@ import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
 import { courierVersion } from './version.js';
 import { cmdStart } from './guided.js';
+import { cmdStatus } from './status.js';
 import { cmdInvite, cmdJoin } from './invitation.js';
 
 function usage(): string {
@@ -27,10 +28,6 @@ Usage: ${name} <command> [args]
 Setup & pairing (humans run these):
   start [--new <subject> | --session <id> [--peer p] | --link <invitation> --consent]
                                    Discover accessible chats; choose new/existing only when chats exist.
-  invite --session <id> --mode same-owner|anyone|named [--recipient <did:key|peer>] --consent
-                                   Print one handoff link and serve its signed pairing (default --wait 300).
-  invite serve <invitationId> [--wait 300]
-                                   Resume the same invitation and durable winning claim.
   join <invitation-link> --consent [--wait 300]
                                    Join and activate the link's intended session; never create a substitute.
   init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
@@ -54,12 +51,13 @@ Setup & pairing (humans run these):
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew both directions; humans or watcher only
   pair renew <peer> --renew-artifact [--force]  Emit renewed C artifact for handoff; receiver runs pair accept
-  revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
+  revoke <peer>                    Stop renewing and remove the peer; their access ends when the current grant expires. Files you already shared stay available until each share expires or you revoke it (\`tinycloud share revoke <id>\`).
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
               [--intent request|ask|answer|update|inform] [--ask "…"]… [--constraint "…"]…
               [--reply-to <messageId>] [--task-ref <taskId>]…
+  status [--peer <peer>] [--json]   Saved per-side expiry
   inbox [--json] [--peek]          New counterparty messages; --peek skips receipt updates
   read <threadId> [--peer p] [--json]
                                    The merged thread: both sides' messages + tasks
@@ -182,6 +180,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'pair': return cmdPair(sub);
     case 'revoke': return cmdRevoke(sub);
     case 'send': return cmdSend(sub);
+    case 'status': return cmdStatus(sub);
     case 'inbox': return cmdInbox(sub);
     case 'read': return cmdRead(sub);
     case 'task': return cmdTask(sub);

@@ -50,6 +50,11 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   in `.github/actions/conformance-setup`. Add a new job to the aggregate's `needs:` or it is not
   gated.
 
+- TC-2234: Courier email invitations reuse the Share path. `publishEmailShareV3` now lives in
+  `@tinycloud/node-sdk/share-publish` (the CLI imports it). Courier's grant check stays exact:
+  the base grant is exactly `AGENT_GRANT`; any `share/` entry is `grant-too-broad`. Per-invitation key authority
+  needs a separate approval path (not the standing grant); the OpenKey request and `AGENT_GRANT` are unchanged.
+
 ## 2026-10-29
 
 - TC-2192: documented the exact-owner Share-key runtime consent boundary and

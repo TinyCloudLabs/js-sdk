@@ -18,6 +18,7 @@ export const COMMAND_FLAGS: Record<string, readonly string[]> = {
   pair: ['file', 'stdin', 'call-me', 'as', 'force', 'renew-artifact'],
   revoke: [],
   send: ['new', 'thread', 'intent', 'ask', 'constraint', 'reply-to', 'task-ref', ...TEXT],
+  status: ['peer', 'json'],
   inbox: ['json', 'peek'],
   read: ['peer', 'json'],
   task: ['peer', 'thread', 'state', 'note', 'artifact', 'ask', 'request-message'],

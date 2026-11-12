@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   AGENT_GRANT_MAX_MS, CLOCK_SKEW_MS, PEER_DELEGATION_MAX_MS,
   assertAgentGrant, assertExactAuthority, assertLifetime, assertPeerDelegation, durationMs,
+  holdsInvitationKeyAuthority, ownerEncryptionNetwork,
 } from '../dist/authority.js';
 import { AGENT_GRANT, PREFIX } from '../dist/keys.js';
 
@@ -57,6 +58,75 @@ test('agent grant: missing authority is incomplete', () => {
   const withoutToDelete = split.filter((permission) => !(permission.path === `${PREFIX}/to/` && permission.actions[0] === 'tinycloud.kv/del'));
   assert.throws(() => assertAgentGrant(withoutToDelete, { issuedAt: new Date(NOW), expiresAt: new Date(NOW + DAY) }, NOW), { code: 'grant-incomplete' });
   assert.throws(() => assertExactAuthority([], AGENT_GRANT, 'OpenKey grant'), { code: 'grant-incomplete' });
+});
+
+const OWNER = 'did:pkh:eip155:1:0xA2dF5051172C5Bc1D7FdB33ACC30f7B3C3A7efdF';
+const NETWORK = ownerEncryptionNetwork(OWNER);
+const SHARE = 'a'.repeat(32);
+const keyEntry = (path, action) => ({ service: 'tinycloud.encryption', path, actions: [`tinycloud.encryption/${action}`], caveats: [] });
+const both = (path) => [keyEntry(path, 'key.create'), keyEntry(path, 'decrypt')];
+const lifetime = { issuedAt: new Date(NOW), expiresAt: new Date(NOW + 30 * DAY) };
+
+test('invitation authority: an existing install (no encryption entries) is checked exactly as before', () => {
+  assert.doesNotThrow(() => assertAgentGrant(split, lifetime, NOW));
+  assert.throws(() => assertAgentGrant(split.slice(1), lifetime, NOW), { code: 'grant-incomplete' });
+  assert.throws(() => assertAgentGrant([...split, { service: 'tinycloud.kv', space: 'agents', path: `${PREFIX}/`, actions: ['tinycloud.kv/put'] }], lifetime, NOW), { code: 'grant-too-broad' });
+});
+
+test('invitation authority: the base grant is exactly AGENT_GRANT; one exact canonical share key and the share/ prefix are both too broad', () => {
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW), { code: 'grant-too-broad' });
+  // The prefix is a grant-scope decision that is not made: it stays too broad.
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/`)], lifetime, NOW), { code: 'grant-too-broad' });
+  // The standing base grant never carries a share key, for any caller (this case had no owner argument originally).
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW), { code: 'grant-too-broad' });
+});
+
+test('invitation authority: anything wider or differently spelled than one share key stays too broad', () => {
+  const other = ownerEncryptionNetwork('did:pkh:eip155:1:0x1111111111111111111111111111111111111111');
+  const wider = [
+    keyEntry(NETWORK, 'decrypt'),
+    keyEntry(`${NETWORK}/share/`, 'key.create'),
+    keyEntry(`${NETWORK}/share`, 'decrypt'),
+    keyEntry(`${NETWORK}/apps/`, 'key.create'),
+    keyEntry(`${NETWORK}/share/not-a-share-id`, 'decrypt'),
+    keyEntry(`${NETWORK}/share/${SHARE}/child`, 'decrypt'),
+    keyEntry(`${NETWORK}/share/${SHARE.toUpperCase()}`, 'decrypt'),
+    keyEntry(`${NETWORK.toLowerCase()}/share/${SHARE}`, 'decrypt'),
+    keyEntry(`${NETWORK.toUpperCase()}/share/${SHARE}`, 'decrypt'),
+    keyEntry(`${other}/share/${SHARE}`, 'decrypt'),
+    keyEntry(`${NETWORK}/share/${SHARE}`, 'key.delete'),
+    keyEntry(`${NETWORK}/share/${SHARE}`, 'key.block'),
+    { ...keyEntry(`${NETWORK}/share/${SHARE}`, 'decrypt'), space: 'agents' },
+    { ...keyEntry(`${NETWORK}/share/${SHARE}`, 'decrypt'), caveats: [{ x: 1 }] },
+  ];
+  for (const extra of wider) {
+    assert.throws(() => assertAgentGrant([...split, extra], lifetime, NOW), { code: 'grant-too-broad' }, JSON.stringify(extra));
+  }
+});
+
+test('invitation authority: a share key in the base grant is too broad however it is spelled', () => {
+  const second = 'b'.repeat(32);
+  // A grant that names several exact keys approximates the prefix that has not been decided.
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`), ...both(`${NETWORK}/share/${second}`)], lifetime, NOW), { code: 'grant-too-broad' });
+  // One half of the pair is not an invitation authority.
+  assert.throws(() => assertAgentGrant([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create')], lifetime, NOW), { code: 'grant-too-broad' });
+  assert.throws(() => assertAgentGrant([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'decrypt')], lifetime, NOW), { code: 'grant-too-broad' });
+  // The same key spelled in one or two entries is still not accepted.
+  const joined = { ...keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create'), actions: ['tinycloud.encryption/key.create', 'tinycloud.encryption/decrypt'] };
+  assert.throws(() => assertAgentGrant([...split, joined], lifetime, NOW), { code: 'grant-too-broad' });
+  assert.throws(() => assertAgentGrant([...split, ...both(`${NETWORK}/share/${SHARE}`), ...both(`${NETWORK}/share/${SHARE}`)], lifetime, NOW), { code: 'grant-too-broad' });
+});
+
+test('invitation authority: both key.create and decrypt must name exactly the key, and a prefix never counts', () => {
+  const otherId = 'b'.repeat(32);
+  assert.equal(holdsInvitationKeyAuthority([...split], OWNER, SHARE), false);
+  assert.equal(holdsInvitationKeyAuthority([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create')], OWNER, SHARE), false);
+  assert.equal(holdsInvitationKeyAuthority([...split, ...both(`${NETWORK}/share/`)], OWNER, SHARE), false);
+  assert.equal(holdsInvitationKeyAuthority([...split, ...both(`${NETWORK}/share/${SHARE}`)], OWNER, SHARE), true);
+  assert.equal(holdsInvitationKeyAuthority([...split, ...both(`${NETWORK}/share/${otherId}`)], OWNER, SHARE), false);
+  assert.equal(holdsInvitationKeyAuthority([...split, keyEntry(`${NETWORK}/share/${SHARE}`, 'key.create'), keyEntry(`${NETWORK}/share/${otherId}`, 'decrypt')], OWNER, SHARE), false);
+  assert.equal(holdsInvitationKeyAuthority([...split, ...both(`${NETWORK.toLowerCase()}/share/${SHARE}`)], OWNER, SHARE), false);
+  assert.equal(holdsInvitationKeyAuthority([...split, ...both(`${NETWORK}/share/${SHARE}`)], OWNER, SHARE.toUpperCase()), false);
 });
 
 test('agent grant: lifetime capped at 30 days plus skew', () => {

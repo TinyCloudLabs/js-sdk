@@ -446,6 +446,9 @@ export type Ledger = {
   tc2691HostExpiryWorker?: WorkerRatchet;
   tc2691HostExpiryReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
   tc2691HostExpiry?: LogoutRatchet;
+  tc2773LazyRestoreRoot?: LogoutRatchet;
+  tc2234InvitationPolicyRoot?: LogoutRatchet;
+  tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1060,6 +1063,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   for (const row of ["tc2691HostExpiryWorker", "tc2691HostExpiryReplicaWorker", "tc2691HostExpiry"] as const) {
     if (root[row] !== undefined) pins.push({ row, pin: root[row].sourceCommits.at(-1)! });
   }
+  if (root.tc2773LazyRestoreReplicaWorker !== undefined) pins.push({ row: "tc2773LazyRestoreReplicaWorker", pin: root.tc2773LazyRestoreReplicaWorker.sourceCommits.at(-1)! });
+  if (root.tc2773LazyRestoreRoot !== undefined) pins.push({ row: "tc2773LazyRestoreRoot", pin: root.tc2773LazyRestoreRoot.sourceCommits.at(-1)! });
+  if (root.tc2234InvitationPolicyRoot !== undefined) pins.push({ row: "tc2234InvitationPolicyRoot", pin: root.tc2234InvitationPolicyRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1148,6 +1154,8 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2518KeyWrap", root.tc2518KeyWrap?.root.ceiling],
     ["tc2687PublishedSignIn", root.tc2687PublishedSignIn?.root.ceiling],
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
+    ["tc2773LazyRestoreRoot", root.tc2773LazyRestoreRoot?.root.ceiling],
+    ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2985,6 +2993,81 @@ export const approvedTc2691HostExpiry: LogoutRatchet = {
   reason: "Host SIWE expiry builder in the deferred hosting chunk plus its import seam: the authorization passes its already-loaded hosting tier instead of importing the policy module into the chunk. Canonical CI run 42744327164 job 129592697357 measured CJS 1450238 gzip bytes (+61 above tc2687PublishedSignIn; +14 above the prior TC-2691 ceiling) and ESM 1514881, within its unchanged 1514897 ceiling. No worker, optional, gated or cumulative allowance changes.",
 };
 
+export const approvedTc2773LazyRestoreReplicaWorker: NonNullable<Ledger["tc2773LazyRestoreReplicaWorker"]> = {
+  "label": "local session restore (TC-2773)",
+  "ruling": "Naomi, 2026-11-11: admit the remaining canonical 34-byte replica worker overage after two reductions, exactly 771106 gzip bytes with zero headroom. budget-ruling: Naomi, TC-2773.",
+  "base": "603bc970cceeb0f6bc490442354f78d8d69750f9",
+  "sourceCommits": [
+    "824062c9fbbded197bdf155a26f51d5c27c33571"
+  ],
+  "canonicalCI": {
+    "run": "42939305043",
+    "jobs": [
+      "130257035407",
+      "130257034994"
+    ]
+  },
+  "replicaWorker": {
+    "delta": 34,
+    "ceiling": 771106
+  },
+  "reason": "Lazy replica readiness is needed for zero-network stored restore and immediate explicit network reads. Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures replica.worker.js at 771106 gzip bytes, 34 above 771072 after readiness consolidation. The hashed kv-storage worker measures 777206, within its 777224 ceiling."
+};
+
+export const approvedTc2773LazyRestoreRoot: LogoutRatchet = {
+  "label": "local session restore (TC-2773)",
+  "ruling": "Naomi, 2026-11-11: final exact web-sdk root ceilings 1515460 ESM and 1450535 CJS gzip bytes, zero headroom. C1 adds 152 ESM and 112 CJS above the first TC-2773 admission, measured at c6ea90023 in canonical run 42949525988. budget-ruling: Naomi, TC-2773.",
+  "base": "603bc970cceeb0f6bc490442354f78d8d69750f9",
+  "sourceCommits": [
+    "70161ce380e4f42412b314095905202635dc6541",
+    "c6ea90023765eec29dfeecbfcfc089747d17d073"
+  ],
+  "canonicalCI": {
+    "run": "42949525988",
+    "jobs": [
+      "130290295953"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 563,
+      "index.cjs": 297
+    },
+    "ceiling": {
+      "index.mjs": 1515460,
+      "index.cjs": 1450535
+    }
+  },
+  "reason": "Local restore schedules automatic hosting and panel-grant refresh with an account/space/host-bound display hint. The C1 review adds a bounded panel wait, serialized per-store mutations, latest-state refused-CID cleanup and final queued sign-out cleanup. Canonical source-WASM run 42940528019 at 70161ce38 measured ESM 1515308 and CJS 1450423. Run 42949525988 at c6ea90023 measures ESM 1515460 and CJS 1450535, adding 152/112 for C1. The queue uses one settled tail per weakly keyed live store after consolidation. No dependencies are added."
+};
+
+export const approvedTc2234InvitationPolicyRoot: LogoutRatchet = {
+  "label": "invitation policy root limit (TC-2234)",
+  "ruling": "Naomi, 2026-11-11: exact web-sdk root ceiling 1515509 ESM, 49 gzip bytes above the TC-2773 ceiling, and 1450535 CJS unchanged, zero headroom. budget-ruling: Naomi, TC-2234.",
+  "base": "6053273fd26fa064552e2e556166118b3a959cc9",
+  "sourceCommits": [
+    "4395832d18bb956d7f4f40a2fb0ec0089f723d64"
+  ],
+  "canonicalCI": {
+    "run": "43006941073",
+    "jobs": [
+      "130476655749",
+      "130476655844"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 49,
+      "index.cjs": 0
+    },
+    "ceiling": {
+      "index.mjs": 1515509,
+      "index.cjs": 1450535
+    }
+  },
+  "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3121,6 +3204,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2691HostExpiryWorker: approvedTc2691HostExpiryWorker,
   tc2691HostExpiryReplicaWorker: approvedTc2691HostExpiryReplicaWorker,
   tc2691HostExpiry: approvedTc2691HostExpiry,
+  tc2773LazyRestoreReplicaWorker: approvedTc2773LazyRestoreReplicaWorker,
+  tc2773LazyRestoreRoot: approvedTc2773LazyRestoreRoot,
+  tc2234InvitationPolicyRoot: approvedTc2234InvitationPolicyRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3495,6 +3581,20 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         (!value.tc2687PublishedSignIn || JSON.stringify(value[row]) !== JSON.stringify(approvedLedgerRows[row]))) {
       throw new Error("Only Naomi's exact host SIWE expiry (TC-2691) admission is approved.");
     }
+  }
+  if (value.tc2773LazyRestoreReplicaWorker !== undefined &&
+      (!value.tc2691HostExpiryReplicaWorker || JSON.stringify(value.tc2773LazyRestoreReplicaWorker) !== JSON.stringify(approvedTc2773LazyRestoreReplicaWorker))) {
+    throw new Error("Only Naomi's exact TC-2773 replica worker admission is approved.");
+  }
+  if (value.tc2773LazyRestoreRoot !== undefined &&
+      (!value.tc2691HostExpiry || !value.tc2773LazyRestoreReplicaWorker ||
+        JSON.stringify(value.tc2773LazyRestoreRoot) !== JSON.stringify(approvedTc2773LazyRestoreRoot))) {
+    throw new Error("Only Naomi's exact TC-2773 root admission is approved.");
+  }
+  if (value.tc2234InvitationPolicyRoot !== undefined &&
+      (!value.tc2773LazyRestoreRoot ||
+        JSON.stringify(value.tc2234InvitationPolicyRoot) !== JSON.stringify(approvedTc2234InvitationPolicyRoot))) {
+    throw new Error("Only Naomi's exact TC-2234 root admission is approved.");
   }
 }
 
@@ -4221,4 +4321,30 @@ export function isPolicyOnlySinceApprovedSource(
     if (!isMeasuredTest(path) && !isCliNonInput(path)) return false;
     return graph !== undefined && !graph.bundleInputs.has(path) && !graph.sourceMapInputs.has(path);
   });
+}
+
+/** The TC-2773 replica worker admission is introduced once and immutable afterwards. */
+export function validateTc2773LazyRestoreReplicaWorkerTransition(
+  base?: Ledger["tc2773LazyRestoreReplicaWorker"], current?: Ledger["tc2773LazyRestoreReplicaWorker"],
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2773LazyRestoreReplicaWorker) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2773 replica worker admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2234 root admission is introduced once and immutable afterwards. */
+export function validateTc2234InvitationPolicyRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2234InvitationPolicyRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2234 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2773 root admission is introduced once and immutable afterwards. */
+export function validateTc2773LazyRestoreRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2773LazyRestoreRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2773 root admission may be introduced once and cannot change later.");
+  }
 }

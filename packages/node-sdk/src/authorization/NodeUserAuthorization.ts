@@ -1782,6 +1782,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       createdAt,
       version: "1.0",
       tinycloudHosts: this.tinycloudHosts,
+      ...(this._spaceHosting !== "unknown" ? { spaceHosting: this._spaceHosting } : {}),
       ...(replicaStamp ? { replicaStamp } : {}),
     };
   }
