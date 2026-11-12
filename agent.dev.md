@@ -202,13 +202,23 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   including edits of read-back records and catalogs. Keep this restriction
   expressible in the generated JSON Schema; stored/read-back records retain `by`.
 - Personal-app context can bundle one app's folder and the app list via `app`
-  and `access` (`change` by default, or `read`). A generic change bundle includes app-list
-  put so creating the app needs no further approval; omitting
-  `app` retains per-call approvals. Reads reuse an existing read-only folder grant.
+  and `access` (`change` by default, or `read`). A generic change bundle grants
+  catalog-root get/list, get/put only on `xyz.tinycloud.tinyapps.catalog/<app>/entry`,
+  and CRUD on that app's folder. Never grant catalog-root put. Omitting `app`
+  retains per-call approvals; read access never adds discovery-entry writes.
+  Reads reuse an existing read-only folder grant.
   Catalog slugs are handled before generic app-id validation: Health Log bundles
   app-list read and its exact database read/write; Recipes bundles app-list and
   knowledge reads and learns its database from the notes. Both support read-only
   access; Recipes never requests writes. Catalog grants stay in applications.
+  Previously signed catalog-wide grants remain valid and reusable until revoked
+  or expired; narrower requests do not retroactively narrow them.
+- Hosted MCP passes its configured public origin as ordinary OpenKey
+  `requesterOrigin`; the prepared SIWE domain and consent label use that host.
+  This is caller-reported attribution, not verified app identity or a signed
+  manifest. Deploy matching OpenKey API/web support before the MCP change,
+  only with owner authorization. Approval reasons say TinyCloud connector,
+  describe each scope's actual actions, and do not change vendored CLI skills.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a failed derived-copy upkeep.

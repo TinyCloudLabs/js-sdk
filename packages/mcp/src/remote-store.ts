@@ -661,6 +661,7 @@ export class RemoteTenantStore {
       did: tenant.sessionDid,
       callback: callback.toString(),
       host: this.#config.nodeHost,
+      requesterOrigin: this.#config.publicUrl.origin,
       jwk: Buffer.from(JSON.stringify(publicJwk(tenant.jwk))).toString("base64url"),
       permissions: Buffer.from(JSON.stringify({
         permissions: pending.permissions,
