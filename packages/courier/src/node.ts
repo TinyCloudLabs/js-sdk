@@ -1,10 +1,12 @@
-import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation } from '@tinycloud/node-sdk';
-import type { IHooksService, PortableDelegation, TinyCloudSession } from '@tinycloud/node-sdk';
+import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
-import { COURIER_SPACE } from './keys.js';
+import { COURIER_SPACE, k } from './keys.js';
 import type { Profile, StoredPeer } from './profile.js';
-import { loadGrant, loadKey } from './profile.js';
+import { loadGrant, loadKey, saveProfile } from './profile.js';
+import { canonicalJson } from './canonical.js';
+import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
 
 export function nodeOpts(host: string) {
@@ -18,7 +20,7 @@ export function nodeOpts(host: string) {
   };
 }
 
-const activatedCids = new WeakMap<TinyCloudNode, Set<string>>();
+const activatedCids = new WeakMap<TinyCloudNode, Map<string, ValidatedRuntimeDelegation>>();
 
 export async function courierNode(profile: Profile, home?: string): Promise<TinyCloudNode> {
   const key = loadKey(home);
@@ -75,9 +77,11 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
   if (!peer.theirHandleForMe) {
     throw new CourierError('not-paired', `Peer ${peer.handle} is missing its mailbox handle; finish pairing first.`);
   }
+  assertInboundLive(peer);
+  const original = renewalBinding(profile, peer);
   let cids = activatedCids.get(node);
   if (!cids) {
-    cids = new Set<string>();
+    cids = new Map<string, ValidatedRuntimeDelegation>();
     activatedCids.set(node, cids);
   }
   if (!cids.has(peer.inbound.cid)) {
@@ -93,11 +97,64 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
     if (activated.cid !== peer.inbound.cid) {
       throw new CourierError('bad-delegation', `Peer delegation CID does not match the stored CID for ${peer.handle}.`);
     }
-    cids.add(peer.inbound.cid);
+    cids.set(peer.inbound.cid, activated);
   }
+  const current = cids.get(peer.inbound.cid)!;
+  assertInboundLive(peer, current.expiry);
+  const kv = node.kvForSpace(peer.spaceId);
+  // Awaiting-C still needs the explicit pairing acknowledgement, not a renewal.
+  if (peer.status !== 'paired') return kv;
+  const update = await getJson<{ delegation?: string }>(kv, k.peerDelegation(peer.theirHandleForMe, peer.sessionId));
+  assertInboundLive(peer, current.expiry);
+  if (!update?.value.delegation) return kv;
+  const delegation = deserializeDelegation(update.value.delegation);
+  if (delegation.cid === peer.inbound.cid || delegation.expiry.getTime() <= Math.max(current.expiry.getTime(), Date.parse(peer.inbound.expiresAt))) return kv;
+  if (delegation.spaceId !== peer.spaceId || delegation.ownerAddress.toLowerCase() !== peer.ownerDid.split(':').at(-1)?.toLowerCase()) {
+    throw new CourierError('bad-delegation', 'Peer renewal owner or space does not match the pairing.');
+  }
+  const renewed = await activateValidatedRuntimeDelegation(node, delegation, {
+    host: profile.host,
+    // Preserve signed caveats as well as the mailbox/session abilities.
+    authorize: permissions => canonicalJson(permissions.map(entry => canonicalJson(entry)).sort()) === canonicalJson(current.effectivePermissions.map(entry => canonicalJson(entry)).sort()),
+  });
+  assertPeerDelegation(renewed, {
+    issuer: peer.courierDid, audience: profile.courierDid, spaceId: peer.spaceId,
+    mailbox: peer.theirHandleForMe, sessionId: peer.sessionId,
+  });
+  assertInboundLive(peer, current.expiry);
+  const stored = profile.peers[peer.handle];
+  if (!stored || renewalBinding(profile, stored) !== original) {
+    throw new CourierError('peer-changed', 'Peer pairing changed while collecting renewed access.');
+  }
+  stored.inbound = { delegation: serializeDelegation(renewed.delegation), cid: renewed.cid, expiresAt: renewed.expiry.toISOString() };
+  saveProfile(profile, disk => {
+    if (!disk || renewalBinding(disk, disk.peers[peer.handle]) !== original || bareDid(loadKey().did) !== disk.courierDid) {
+      throw new CourierError('peer-changed', 'Peer pairing changed while collecting renewed access.');
+    }
+    assertInboundLive(disk.peers[peer.handle], current.expiry);
+    assertInboundLive(stored, renewed.expiry);
+  });
+  peer.inbound = profile.peers[peer.handle].inbound;
+  cids.set(renewed.cid, renewed);
   return node.kvForSpace(peer.spaceId);
 }
 
+
+/** Ignore outbound issuance and display labels; compare identity, both mailbox handles and the original grant. */
+function renewalBinding(profile: Profile, peer: StoredPeer | undefined): string {
+  return canonicalJson({
+    host: profile.host, courierDid: profile.courierDid, ownerDid: profile.ownerDid,
+    spaceId: profile.spaceId, selfHandle: profile.selfHandle, status: profile.status,
+    peer: peer ? { ...peer, outbound: undefined, label: undefined } : undefined,
+  });
+}
+
+function assertInboundLive(peer: StoredPeer, signedExpiry?: Date): void {
+  const expiry = Date.parse(peer.inbound?.expiresAt ?? '');
+  if (!Number.isFinite(expiry) || expiry <= Date.now() || (signedExpiry && signedExpiry.getTime() <= Date.now())) {
+    throw new CourierError('peer-expired', `Access from ${peer.handle} has expired. A new pairing is required.`);
+  }
+}
 
 let wasm: NodeWasmBindings | undefined;
 
