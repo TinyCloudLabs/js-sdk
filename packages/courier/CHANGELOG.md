@@ -1,5 +1,17 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.22
+
+### Patch Changes
+
+- 3dfd566: `courier revoke` now revokes the peer's access on your TinyCloud node, so their next read is refused. If it can't finish, the pairing is kept and you can run it again.
+
+  Details: TC-712
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+  - @tinycloud/node-sdk@3.12.0-beta.19
+
 ## 0.6.0-beta.21
 
 ### Patch Changes
