@@ -11,9 +11,10 @@ import { initRequestNextLine } from './next-line.js';
 import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
-  loadProfile, saveProfile, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
+  loadProfile, saveProfile, withProfileTransaction, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
+import { revokePeer } from './revoke.js';
 import { courierNode, peerKv } from './node.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
@@ -468,6 +469,16 @@ async function pairRenew(args: ParsedArgs) {
 }
 
 async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<PortableDelegation | undefined> {
+  return withProfileTransaction(async (profile, save) => {
+    const current = getPeer(profile, peer.handle);
+    if (current.courierDid !== peer.courierDid || profile.courierDid !== active.profile.courierDid) {
+      fail('profile-changed', 'Pairing changed while renewal was starting; run the command again.');
+    }
+    return issueOutbound({ profile, node: await courierNode(profile) }, current, force, save);
+  });
+}
+
+async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void): Promise<PortableDelegation | undefined> {
   const last = peer.outbound.at(-1);
   if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return undefined;
   const { profile, node } = active;
@@ -483,7 +494,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Pro
     issuedAt,
     expiresAt: result.delegation.expiry instanceof Date ? result.delegation.expiry.toISOString() : new Date(result.delegation.expiry).toISOString(),
   });
-  saveProfile(profile);
+  save();
   return result.delegation;
 }
 
@@ -536,18 +547,17 @@ async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
 // ---------- revoke ----------
 
 export async function cmdRevoke(args: ParsedArgs) {
-  const { profile, node } = await ctx();
   const handle = args.positional[0] ?? fail('usage', `Usage: ${cmd('revoke <peer>')}`);
-  const peer = getPeer(profile, handle);
-  delete profile.peers[handle];
-  saveProfile(profile);
-  try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
-  console.log(
-    `Revoked ${handle} (${peer.courierDid}).\n` +
-    `Note: TC-721 prevents immediate revocation; access ends when the current outbound delegation expires (${peer.outbound.at(-1)?.expiresAt ?? 'unknown'}). ` +
-    `Rotating the agent key does not invalidate the old grant; it remains valid until its expiry.` +
-    ` Files you already shared with ${handle} stay available until each share expires or you revoke it (\`tinycloud share revoke <id>\`).`,
-  );
+  const shown = oneLine(handle);
+  await withProfileTransaction(async (profile, save) => {
+    const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${shown}. If you already revoked it, there's nothing left to do.`);
+    const node = await courierNode(profile);
+    await revokePeer(node, profile, handle, save);
+    delete profile.peers[handle];
+    save();
+    try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
+    console.log(`Revoked ${shown} (${peer.courierDid}). Files you already shared with ${shown} stay available until each share expires or you revoke it (\`tinycloud share revoke <id>\`).`);
+  });
 }
 
 // ---------- send ----------
