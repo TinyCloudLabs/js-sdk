@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.21
+
+### Patch Changes
+
+- 82a327f: Hide the beta Courier invite command from help and usage documentation.
+
+  Details: TC-2234
+
 ## 0.6.0-beta.20
 
 ### Patch Changes

@@ -30,6 +30,7 @@
   },
   "changesets": [
     "courier-unknown-flags",
+    "hide-courier-invite",
     "kv-503-not-applied-failed",
     "local-replica-restore",
     "openkey-public-session-key",
