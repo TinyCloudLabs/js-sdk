@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "courier-collect-peer-renewal",
     "courier-unknown-flags",
     "hide-courier-invite",
     "kv-503-not-applied-failed",

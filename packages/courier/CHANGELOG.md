@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.23
+
+### Patch Changes
+
+- 33a2fde: Courier now picks up renewed access from paired peers before reading their messages or subscribing to them, while the current access is still valid.
+
+  Details: TC-2746
+
 ## 0.6.0-beta.22
 
 ### Patch Changes
