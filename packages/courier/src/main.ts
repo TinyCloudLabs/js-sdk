@@ -28,10 +28,6 @@ Usage: ${name} <command> [args]
 Setup & pairing (humans run these):
   start [--new <subject> | --session <id> [--peer p] | --link <invitation> --consent]
                                    Discover accessible chats; choose new/existing only when chats exist.
-  invite --session <id> --mode same-owner|anyone|named [--recipient <did:key|peer>] --consent
-                                   Print one handoff link and serve its signed pairing (default --wait 300).
-  invite serve <invitationId> [--wait 300]
-                                   Resume the same invitation and durable winning claim.
   join <invitation-link> --consent [--wait 300]
                                    Join and activate the link's intended session; never create a substitute.
   init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
