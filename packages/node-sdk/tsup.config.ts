@@ -12,6 +12,7 @@ export default defineConfig({
     credentials: 'src/credentials/index.ts',
     'credentials-core': 'src/credentials/core.ts',
     'share-receive': 'src/share-receive.ts',
+    'share-publish': 'src/share-publish.ts',
     'replication/runtime': 'src/replication/runtime.ts',
     'replication/authority': 'src/replication/authority.ts',
     'replication/gated-network': 'src/replication/gated-network.ts',

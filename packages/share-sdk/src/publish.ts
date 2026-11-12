@@ -17,6 +17,8 @@ export interface SharePublishOptions {
   readonly target?: SharePublishTarget;
   readonly expiresAt?: Date;
   readonly expiryWasExplicit?: boolean;
+  /** The relative expiry the caller asked for, in milliseconds, when it gave a duration (not a date). */
+  readonly expiresInMs?: number;
   readonly origin: string;
   readonly maxBytes?: number;
   readonly now?: () => number;

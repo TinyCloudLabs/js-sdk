@@ -1,5 +1,17 @@
 # @tinycloud/share-envelope
 
+## 1.6.0-beta.0
+
+### Minor Changes
+
+- e3e4bd7: `courier invite --mode email` asks the owner for one approval per invitation. The approval request carries the recipient, session name and dates; OpenKey chooses the Share key and returns a grant for that one key (`key.create` and `decrypt`), valid until the invitation expires (at most 24 hours). Courier writes the pending invitation before asking, sends nothing until the approval is verified, and uses the approved grant only for that invitation's key; the main Courier grant is not changed. Run the same command again to continue a pending invitation. `@tinycloud/share-envelope/links` adds an optional strict `context` to the approval request (with no permissions) and `buildShareInvitationApprovalSpec`.
+
+  Details: TC-2234
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
 ## 1.5.0
 
 ### Minor Changes

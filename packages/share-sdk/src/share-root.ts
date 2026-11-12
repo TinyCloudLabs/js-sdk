@@ -1,4 +1,4 @@
-import { ed25519PublicKeyFromDidKey, signCompactUcanAuthorization, toBase64Url, fromBase64Url, type CompactUcanAuthorization } from "@tinycloud/share-envelope";
+import { ed25519PublicKeyFromDidKey, POLICY_ROOT_MAX_LIFETIME_SECONDS, signCompactUcanAuthorization, toBase64Url, fromBase64Url, type CompactUcanAuthorization } from "@tinycloud/share-envelope";
 import type { AddressedOwnerRootInput, AddressedOwnerRootReceipt } from "./addressed-publish.js";
 import { decodeOwnerRootCacao, ownerRootCacaoCid, type DecodedOwnerRootCacao } from "./owner-root-cacao.js";
 import { createDelegatedShareKey, type CreateOwnerDelegationParams, type DelegatedShareKey, type OwnerDelegationPermission, type OwnerDelegationReceipt } from "./owner-policy.js";
@@ -23,7 +23,7 @@ export const SHARE_ROOT_CLOCK_SKEW_MS = 5 * 60_000;
 /** `ensureShareRoot` asks for the cap minus this margin, so a clamping or slow signer stays inside the cap. */
 export const SHARE_ROOT_REQUEST_MARGIN_MS = 10 * 60_000;
 const MAX_NODE_ANSWER_BYTES = 64 * 1024;
-const MAX_POLICY_ROOT_MS = 31 * DAY_MS;
+const MAX_POLICY_ROOT_MS = POLICY_ROOT_MAX_LIFETIME_SECONDS * 1000;
 
 /** `share`: Share/CLI root in `applications`. `agent`: `default` space. Both are kv/bearer only. */
 export type ShareRootKind = "share" | "agent";
