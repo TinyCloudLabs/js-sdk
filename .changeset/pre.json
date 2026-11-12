@@ -72,6 +72,8 @@
     "tc-2687-published-signin",
     "tc-2691-host-expiry",
     "tc-2748-courier-read-isolation",
+    "tc-712-issued-resource",
+    "tc-712-proofless-revoke",
     "tc2234-cli-invite-approval",
     "tc2234-courier-email-invitation",
     "tc2234-invite-approval",
