@@ -619,6 +619,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await current.evaluate(() => window.__tcw.replicationSync());
       const stale = await bootPage(context);
       await stale.evaluate(() => window.__tcw.signIn());
+      await stale.evaluate(() => window.__tcw.replicationStatus());
       expect(await contentRows(current)).toBeGreaterThan(0);
       expect(await stale.evaluate(() => window.__tcw.stalePendingUpdate("notes/stale-before-deny"))).toEqual({ status: "updated" });
       expect(await pendingRows(stale)).toBeGreaterThan(0);

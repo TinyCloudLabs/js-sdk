@@ -30,7 +30,9 @@
   },
   "changesets": [
     "courier-unknown-flags",
+    "hide-courier-invite",
     "kv-503-not-applied-failed",
+    "local-replica-restore",
     "openkey-public-session-key",
     "share-key-recorded-at-registration",
     "share-permanent-exit-2",
@@ -69,7 +71,14 @@
     "tc-2671-share-sender-settings",
     "tc-2687-published-signin",
     "tc-2691-host-expiry",
+    "tc-2748-courier-read-isolation",
+    "tc2234-cli-invite-approval",
+    "tc2234-courier-email-invitation",
+    "tc2234-invite-approval",
+    "tc2234-policy-root-limit",
+    "tc2234-share-expires-in",
     "tc2380-q2",
+    "tc2747-courier-expiry-status",
     "tidy-names-openkey-grant",
     "vfs-bridge-timeout"
   ]

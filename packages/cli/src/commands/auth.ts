@@ -825,7 +825,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           replicasRemoved,
           replicasKept: options.keepReplicas === true,
           warning: online
-            ? "The node confirmed revocation of the listed CIDs before local logout."
+            ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME} share revoke <id>\`).`
             : options.keepReplicas
               ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused."
               : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME} delegation revoke <cid>\` to end access now.`,

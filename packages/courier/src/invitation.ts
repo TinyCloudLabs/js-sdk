@@ -23,6 +23,10 @@ import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
 import { activateSession, INVITATION_MODES, selectedSession, sessionKey, validSessionId } from './guided.js';
 import type { CourierSession, InvitationMode } from './guided.js';
+import { canonicalInviteEmail, isShareLink, receiveEmailInvitation, sendEmailInvitation } from './email-invitation.js';
+import { claimInviteSend, closeInvite, findPendingInvite, markInviteSent, newPendingInvite, obtainInviteKey, savePendingInvite } from './invite-approval.js';
+import type { InviteApprovalTransport, PendingInvite } from './invite-approval.js';
+import { openKeyInviteTransport } from './invite-openkey.js';
 import { inviteNextLine, invitePendingNextLine, inviteServeNextLine, nextOnInvitePending } from './next-line.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
@@ -40,7 +44,7 @@ export interface CourierInvitation {
   issuer: string;
   host: string;
   session: CourierSession;
-  mode: InvitationMode;
+  mode: InvitationMode | 'email';
   recipient?: string;
   expiresAt: string;
   artifact: PairArtifact;
@@ -73,9 +77,11 @@ export function parseInvitation(value: unknown): CourierInvitation {
   let host: URL;
   try { host = new URL(value.host); } catch { return refuse('Invalid node origin.'); }
   if (host.origin !== value.host || (host.protocol !== 'https:' && !(host.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(host.hostname)))) refuse('Node must be an HTTPS origin (or a loopback test host).');
-  if (!INVITATION_MODES.includes(value.mode as InvitationMode)) refuse('Unknown invitation mode.');
+  if (value.mode !== 'email' && !INVITATION_MODES.includes(value.mode as InvitationMode)) refuse('Unknown invitation mode.');
   if (value.mode === 'named') {
-    if (typeof value.recipient !== 'string' || !linkIssuerPublicKey(value.recipient)) refuse('Named invitations require an exact Courier did:key; email identifiers are not supported.');
+    if (typeof value.recipient !== 'string' || !linkIssuerPublicKey(value.recipient)) refuse('Named invitations require an exact Courier did:key; use --mode email for a mailbox.');
+  } else if (value.mode === 'email') {
+    if (typeof value.recipient !== 'string' || value.recipient !== canonicalInviteEmail(value.recipient)) refuse('Email invitations require one canonical email address.');
   } else if (value.recipient !== undefined) refuse('Unexpected recipient constraint.');
   if (typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt)) || new Date(value.expiresAt).toISOString() !== value.expiresAt) refuse('Invalid invitation expiry.');
   if (!isRecord(value.session)) refuse('Missing intended session.');
@@ -249,9 +255,41 @@ export async function serveInvitation(node: TinyCloudNode, profile: Profile, bod
   }
 }
 
-export async function cmdInvite(args: ParsedArgs): Promise<void> {
+/** Build one invitation with its pairing relay and store it as this issuer's state. Sends nothing. */
+export async function issueInvitation(node: TinyCloudNode, profile: Profile, session: CourierSession, mode: CourierInvitation['mode'], recipient: string | undefined, fixed?: { id: string; expiresAt: string }): Promise<CourierInvitation> {
+  const id = fixed?.id ?? ulid();
+  const manager = new NodeWasmBindings().createSessionManager();
+  const keyId = manager.createSessionKey('courier-relay');
+  const key: AgentKey = { v: 1, did: manager.getDID(keyId), jwk: JSON.parse(manager.jwk(keyId)!), createdAt: new Date().toISOString() };
+  const expiresAt = fixed?.expiresAt ?? new Date(Math.floor(Math.min(Date.now() + 86400000, Date.parse(profile.grantExpiresAt!)) / 1000) * 1000).toISOString();
+  const body: CourierInvitation = {
+    type: 'courier-invitation', v: 1, id, issuer: profile.courierDid, host: profile.host, session, mode,
+    ...(recipient ? { recipient } : {}), expiresAt, artifact: artifactA(profile, `chat-${id}-recipient`, `chat-${id}-issuer`), relay: { key, delegation: '' },
+  };
+  const relay = await node.delegateTo(bareDid(key.did), relayPermissions(body), { expiry: Date.parse(expiresAt) - Date.now(), requireActivation: true });
+  body.relay.delegation = serializeDelegation(relay.delegation);
+  parseInvitation(body);
+  await putCreate(node.kv, inviteStateKey(id), { body });
+  return body;
+}
+
+/** Test seams: how the profile's node is opened, where the share id comes from, and the Share step. */
+export interface InviteDeps {
+  node?: (profile: Profile) => Promise<TinyCloudNode>;
+  send?: typeof sendEmailInvitation;
+  /** The approver for a per-invitation key; OpenKey by default. */
+  approval?: InviteApprovalTransport;
+}
+
+/** The command. Its collaborators (node, approver, sender) are fixed: nothing the embedder passes can stand in for the owner's approval. */
+export function cmdInvite(args: ParsedArgs): Promise<void> {
+  return runInvite(args, {});
+}
+
+/** Test boundary: the same command with injected collaborators. Not exported from the package entry point. */
+export async function runInvite(args: ParsedArgs, deps: InviteDeps): Promise<void> {
   const profile = loadProfile();
-  const node = await courierNode(profile);
+  const node = await (deps.node ?? courierNode)(profile);
   const wait = waitSeconds(args);
   if (args.positional[0] === 'serve') {
     const id = args.positional[1] ?? '';
@@ -265,10 +303,12 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
     return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(invitePendingNextLine(id, wait)));
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');
-  if (!INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
+  if (mode !== 'email' && !INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
   if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Owner consent is required: pass --consent to invite a participant to this session.');
   let recipient: string | undefined;
-  if (mode === 'named') {
+  if (mode === 'email') {
+    recipient = canonicalInviteEmail(requireFlag(args, 'recipient', 'courier invite --session <id> --mode email --recipient <email> --consent'));
+  } else if (mode === 'named') {
     const target = requireFlag(args, 'recipient', 'Named invitations require --recipient <did:key|verified-peer-handle>.');
     const peer = profile.peers[target];
     recipient = target.startsWith('did:key:') ? target : peer?.status === 'paired' && peer.inbound ? peer.courierDid : undefined;
@@ -278,19 +318,58 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
   } else if (args.has('recipient')) throw new CourierError('usage', '--recipient is only valid in named mode.');
   const selected = await selectedSession(node, profile, requireFlag(args, 'session', 'courier invite --session <id>'), args.get('peer'));
   const session = { sessionId: selected.sessionId, subject: selected.subject, createdAt: selected.createdAt };
-  const id = ulid();
-  const manager = new NodeWasmBindings().createSessionManager();
-  const keyId = manager.createSessionKey('courier-relay');
-  const key: AgentKey = { v: 1, did: manager.getDID(keyId), jwk: JSON.parse(manager.jwk(keyId)!), createdAt: new Date().toISOString() };
-  const expiresAt = new Date(Math.floor(Math.min(Date.now() + 86400000, Date.parse(profile.grantExpiresAt!)) / 1000) * 1000).toISOString();
-  const body: CourierInvitation = {
-    type: 'courier-invitation', v: 1, id, issuer: profile.courierDid, host: profile.host, session, mode: mode as InvitationMode,
-    ...(recipient ? { recipient } : {}), expiresAt, artifact: artifactA(profile, `chat-${id}-recipient`, `chat-${id}-issuer`), relay: { key, delegation: '' },
-  };
-  const relay = await node.delegateTo(bareDid(key.did), relayPermissions(body), { expiry: Date.parse(expiresAt) - Date.now(), requireActivation: true });
-  body.relay.delegation = serializeDelegation(relay.delegation);
-  parseInvitation(body);
-  await putCreate(node.kv, inviteStateKey(id), { body });
+  // Email invitations need an owner approval for exactly one Share key, chosen by the approver. Until it is given nothing
+  // is created: no relay delegation, invitation state, Share key, link or email.
+  let shareId: string | undefined;
+  let fixed: { id: string; expiresAt: string } | undefined;
+  let pending: PendingInvite | undefined;
+  if (mode === 'email') {
+    const now = Date.now();
+    pending = findPendingInvite(profile, session.sessionId, recipient!, now) ?? newPendingInvite(profile, { sessionId: session.sessionId, subjectName: session.subject, recipient: recipient! }, now);
+    savePendingInvite(pending);
+    let approved;
+    try {
+      approved = await obtainInviteKey({ node, profile, key: loadKey(), transport: deps.approval ?? openKeyInviteTransport(), pending, waitMs: wait * 1000,
+        onApprovalUrl: (url) => console.error(`Approve this invitation in OpenKey (accept by ${pending!.acceptanceExpiresAt}): ${url}`) });
+    } catch (error) {
+      if (!(error instanceof CourierError) || (error.code !== 'approval-unavailable' && error.code !== 'invite-approval-refused')) throw error;
+      throw new CourierError('invite-authority-missing',
+        "No owner approval for this invitation's share key could be requested, so nothing was created: no pairing relay delegation, invitation state, Share key, link or email.");
+    }
+    if (approved.status === 'awaiting') {
+      throw new CourierError('invite-approval-pending', `Waiting for the owner's approval (accept by ${pending.acceptanceExpiresAt}): ${approved.approvalUrl}. Run the same command again to continue; nothing has been created or sent.`);
+    }
+    if (session.sessionId !== pending.sessionId || session.subject !== pending.subjectName) {
+      closeInvite(pending);
+      throw new CourierError('bad-invitation', 'The session changed since the owner approved this invitation; nothing was sent. Start a new invitation.');
+    }
+    claimInviteSend(pending);
+    shareId = approved.shareId;
+    fixed = { id: pending.invitationId, expiresAt: pending.acceptanceExpiresAt };
+  }
+  let body: CourierInvitation;
+  try {
+    body = await issueInvitation(node, profile, session, mode as CourierInvitation['mode'], recipient, fixed);
+    if (shareId !== undefined) {
+      if (pending && (body.id !== pending.invitationId || body.recipient !== pending.recipient || body.expiresAt !== pending.acceptanceExpiresAt || body.session.sessionId !== pending.sessionId)) {
+        throw new CourierError('bad-invitation', 'The invitation differs from the one that was approved; nothing was sent.');
+      }
+      // The bearer link goes to the mailbox only; it is never printed or stored.
+      await (deps.send ?? sendEmailInvitation)(node, profile, body, { shareId: () => shareId! });
+      if (pending) markInviteSent(pending);
+    }
+  } catch (error) {
+    // A send that failed after the approval was claimed ends this invitation: the claim stays (no second send for the same
+    // approval) and the pending record is closed, so the next run asks the owner again instead of waiting out the window.
+    if (pending) closeInvite(pending);
+    throw error;
+  }
+  const id = body.id;
+  const expiresAt = body.expiresAt;
+  if (shareId !== undefined) {
+    console.log(JSON.stringify({ status: 'invitation', invitationId: id, sessionId: session.sessionId, mode, recipient, expiresAt }));
+    return serveInvitation(node, profile, body, wait);
+  }
   const result = await createLink({ type: 'courier', issuerKey: signerFromJwk(loadKey().jwk as unknown as Ed25519PrivateJwk),
     apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API, linkOrigin: process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER,
     expiresAt: new Date(expiresAt), plaintext: new TextEncoder().encode(canonicalJson(body)) });
@@ -305,13 +384,40 @@ async function validateHandle(node: TinyCloudNode, profile: Profile, peer: Store
   assertPeerDelegation(active, { issuer: peer.courierDid, audience: profile.courierDid, spaceId: peer.spaceId, mailbox: peer.theirHandleForMe, sessionId: peer.sessionId });
 }
 
+/** One local record per invitation id: a join in progress, or finished (`joined`). */
+export function joinStateFile(id: string, home = profileDir()): string {
+  return path.join(home, 'invitation-joins', `${id}.json`);
+}
+
+/** True when this profile already joined the invitation. A join that is only in progress is not "used": it may resume. */
+export function joinedAlready(id: string, home = profileDir()): boolean {
+  try {
+    return (JSON.parse(fs.readFileSync(joinStateFile(id, home), 'utf8')) as JoinState).joined === true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 export async function joinInvitation(link: string, args: ParsedArgs): Promise<void> {
   if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Joining delegates read access to your side of this session. Pass --consent after owner approval.');
   const wait = waitSeconds(args);
-  const opened = await resolveLink(link, { apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API,
-    trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } });
-  const body = parseInvitation(opened.value);
-  if (opened.header.audience !== (process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API) || opened.header.expiresAt !== body.expiresAt) refuse('Invitation audience or expiry changed.');
+  let body: CourierInvitation;
+  if (isShareLink(link)) {
+    const received = await receiveEmailInvitation(link, args.has('code-stdin'));
+    if (received === undefined) return;
+    body = received;
+  } else {
+    const opened = await resolveLink(link, { apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API,
+      trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } });
+    body = parseInvitation(opened.value);
+    if (opened.header.audience !== (process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API) || opened.header.expiresAt !== body.expiresAt) refuse('Invitation audience or expiry changed.');
+  }
+  return joinWithBody(body, wait);
+}
+
+/** Everything after the invitation body is in hand: the relay claim, the issuer's answer and the installed peer. */
+export async function joinWithBody(body: CourierInvitation, wait: number): Promise<void> {
   expiryCheck(body);
   const profile = loadProfile();
   const node = await courierNode(profile);
@@ -320,7 +426,7 @@ export async function joinInvitation(link: string, args: ParsedArgs): Promise<vo
   if (body.mode === 'same-owner' && !sameIdentity(body.artifact.from.owner, profile.ownerDid!)) refuse('Invitation requires another agent of the same owner.');
   if (body.mode === 'named' && body.recipient !== profile.courierDid) refuse('Invitation is addressed to another agent key.');
   const hash = requestHash(body);
-  const localFile = path.join(profileDir(), 'invitation-joins', `${body.id}.json`);
+  const localFile = joinStateFile(body.id);
   fs.mkdirSync(path.dirname(localFile), { recursive: true, mode: 0o700 });
   let state: JoinState | undefined;
   try { state = JSON.parse(fs.readFileSync(localFile, 'utf8')) as JoinState; } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }

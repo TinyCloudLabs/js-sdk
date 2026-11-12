@@ -30,6 +30,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
+import { collectThread, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
@@ -668,70 +669,35 @@ export async function cmdInbox(args: ParsedArgs) {
     notifications: recentNotices(profileDir()),
     items: collection.items.map((item) => ({ authority: 'counterparty', ...item })),
     errors: collection.errors,
+    partial: collection.errors.length > 0,
   };
   const status = output.notifications.length ? `\nRecent notifications (delivery receipts may already be current):\n${output.notifications.map(n => `${n.title}: ${n.body}`).join('\n')}\n` : '';
-  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items) + status);
-  for (const error of collection.errors) console.error(`warning: inbox ${error.peer}: ${error.message}`);
+  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items, collection.errors) + status);
+  for (const error of collection.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
   if (!args.has('peek')) await commitReceipts(node.kv, collection.pending);
 }
 
 // ---------- read ----------
 
-export interface ThreadEntry {
-  kind: 'meta' | 'msg' | 'task';
-  id: string;
-  side: 'me' | 'peer';
-  authority: 'self' | 'counterparty';
-  body: unknown;
-  invalid?: string[];
-}
+export type { ThreadEntry } from './thread.js';
 
 export async function cmdRead(args: ParsedArgs) {
   const { profile, node } = await ctx(true, args.get('peer'));
   const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
-  const entries: ThreadEntry[] = [];
-  const peersToScan = args.get('peer')
-    ? [getPeer(profile, args.get('peer')!)]
-    : Object.values(profile.peers).filter((peer) => peer.status === 'paired' || peer.status === 'awaiting-C');
-
-  for (const peer of peersToScan) {
-    const mine = await listAll(node.kv, `${k.threadRoot(peer.handle, threadId)}/`);
-    for (const key of mine) {
-      const got = await getJson(node.kv, key);
-      if (!got) continue;
-      if (key.endsWith('/meta.json')) entries.push({ kind: 'meta', id: threadId, side: 'me', authority: 'self', body: got.value });
-      else if (/\/msg\/[^/]+\.json$/.test(key)) {
-        const invalid = messageView(got.value).invalid;
-        entries.push({ kind: 'msg', id: msgIdFromKey(key), side: 'me', authority: 'self', body: got.value, ...(invalid.length ? { invalid } : {}) });
-      } else if (/\/task\/[^/]+\.json$/.test(key)) {
-        const invalid = taskView(got.value).invalid;
-        entries.push({ kind: 'task', id: taskIdFromKey(key), side: 'me', authority: 'self', body: got.value, ...(invalid.length ? { invalid } : {}) });
-      }
-    }
-    if (peer.inbound && peer.theirHandleForMe) {
-      const peerSpace = await peerKv(node, profile, peer);
-      const theirs = await listAll(peerSpace, `${PREFIX}/to/${peer.theirHandleForMe}/threads/${threadId}/`);
-      for (const key of theirs) {
-        const got = await getJson(peerSpace, key);
-        if (!got) continue;
-        if (key.endsWith('/meta.json')) entries.push({ kind: 'meta', id: threadId, side: 'peer', authority: 'counterparty', body: got.value });
-        else if (/\/msg\/[^/]+\.json$/.test(key)) {
-          const invalid = messageView(got.value).invalid;
-          entries.push({ kind: 'msg', id: msgIdFromKey(key), side: 'peer', authority: 'counterparty', body: got.value, ...(invalid.length ? { invalid } : {}) });
-        } else if (/\/task\/[^/]+\.json$/.test(key)) {
-          const invalid = taskView(got.value).invalid;
-          entries.push({ kind: 'task', id: taskIdFromKey(key), side: 'peer', authority: 'counterparty', body: got.value, ...(invalid.length ? { invalid } : {}) });
-        }
-      }
-    }
-  }
-  if (!entries.length) fail('not-found', `No thread ${threadId} under any known peer.`);
-  entries.sort((a, b) => (a.id === b.id ? a.kind.localeCompare(b.kind) : a.id < b.id ? -1 : 1));
+  const result = await collectThread({
+    threadId,
+    selfKv: node.kv,
+    peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
+    exactPeer: Boolean(args.get('peer')),
+    kvFor: (peer) => peerKv(node, profile, peer),
+  });
+  if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
   if (args.has('json')) {
-    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, entries }, null, 2) + '\n');
-    return;
+    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');
+  } else {
+    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors));
   }
-  await writeOut(renderThreadText(threadId, entries));
+  for (const error of result.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
 }
 
 export function renderThreadText(threadId: string, entries: readonly ThreadEntry[]): string {
@@ -742,6 +708,7 @@ export function renderThreadText(threadId: string, entries: readonly ThreadEntry
   }
   for (const entry of entries) {
     if (entry.kind === 'meta') continue;
+    if (entry.peer) lines.push(`Peer: ${oneLine(entry.peer)}`);
     if (entry.kind === 'msg') {
       const view = messageView(entry.body);
       const who = entry.side === 'me' ? 'me →' : `${oneLine(view.from?.label ?? 'peer', 80)} →`;
@@ -764,12 +731,6 @@ export function renderThreadText(threadId: string, entries: readonly ThreadEntry
 }
 
 
-function msgIdFromKey(key: string): string {
-  return /\/msg\/([^/]+)\.json$/.exec(key)![1];
-}
-function taskIdFromKey(key: string): string {
-  return /\/task\/([^/]+)\.json$/.exec(key)![1];
-}
 function indent(s: string): string {
   return s.split('\n').map((l) => `    ${l}`).join('\n');
 }

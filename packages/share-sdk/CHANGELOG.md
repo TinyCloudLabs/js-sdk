@@ -1,5 +1,25 @@
 # @tinycloud/share-sdk
 
+## 1.5.0-beta.2
+
+### Minor Changes
+
+- 7266493: `publishTargetShare` and the target publish input accept an optional `expiresInMs`, the relative expiry the caller asked for as a duration in milliseconds, and pass it to the target adapter unchanged. It lets a caller recognise a rerun of the same relative choice; it does not change how the expiry is computed.
+
+  Details: TC-2234
+
+## 1.5.0-beta.1
+
+### Patch Changes
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+
 ## 1.5.0-beta.0
 
 ### Minor Changes
