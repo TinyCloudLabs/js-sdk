@@ -91,7 +91,7 @@ function wanted(profile: Profile, key: AgentKey, expiry: string | undefined, ope
 /** Everything in the request except the relay key (fresh per request) and the lifetime (compared only when asked for). */
 function requestSpec(profile: Profile, want: WantedRequest): Omit<OpenKeyApprovalRequestV1, 'resultEncryptionPublicJwk' | 'grantLifetimeSeconds'> {
   return {
-    issuer: want.signer.did, requestVersion: 1, targetDid: want.signer.did,
+    issuer: want.signer.did, requestVersion: 1, targetDid: want.signer.did, purpose: 'standing',
     // The schema is strict: the public key members only, never `d`.
     targetPublicJwk: { kty: 'OKP', crv: 'Ed25519', x: want.jwk.x },
     nodeOrigin: profile.host, permissions: AGENT_GRANT.map((entry) => ({ ...entry, actions: [...entry.actions] })) as OpenKeyApprovalRequestV1['permissions'],
