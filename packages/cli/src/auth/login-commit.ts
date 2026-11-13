@@ -110,7 +110,7 @@ export function assertSessionReplaceable(
   throw new CLIError(
     "SESSION_IN_USE",
     `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. ` +
-      `Keep the user's existing profiles: use a new profile name (\`${CLI_NAME} init --name publisher --key-only\`, then \`${CLI_NAME} --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
+      `Keep the user's existing profiles: use a new profile name (\`${CLI_NAME} init --name publisher --key-only\`, then \`${CLI_NAME} --profile publisher auth login --manifest ...\`), or pass --replace-session to replace this session.`,
     ExitCode.USAGE_ERROR,
   );
 }

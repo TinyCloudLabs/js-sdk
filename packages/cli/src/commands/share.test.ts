@@ -112,7 +112,7 @@ describe("tc share command contract", () => {
       profileName: "remote",
     }));
     expect(sessionAuth.code).toBe("AUTH_REQUIRED");
-    expect(sessionAuth.message).toContain("tc --profile remote auth login --device --manifest builtin:share-publishing");
+    expect(sessionAuth.message).toContain("tc --profile remote auth login --manifest builtin:share-publishing");
     expect(sessionAuth.message).toContain("tc --profile remote enable share");
     expect(sessionAuth.message).not.toContain("--method local");
 
@@ -138,7 +138,7 @@ describe("tc share command contract", () => {
     expect(openKeyScope.code).toBe("PERMISSION_DENIED");
     expect(openKeyScope.message).toContain("builtin:share-publishing scope");
     expect(openKeyScope.message).toContain("verify the session includes");
-    expect(openKeyScope.message).toContain("tc --profile publisher auth login --device --manifest builtin:share-publishing");
+    expect(openKeyScope.message).toContain("tc --profile publisher auth login --manifest builtin:share-publishing");
     // A caveated session is fixed by a fresh unrestricted approval, not by
     // logging the same profile in again for a scope it already has.
     const caveated = shareCliError(new SharePublishAuthorityError({
@@ -229,7 +229,7 @@ describe("tc share command contract", () => {
     }));
     expect(sessionTooClose.code).toBe("AUTH_REQUIRED");
     expect(sessionTooClose.message).toContain("log in again");
-    expect(sessionTooClose.message).toContain("tc --profile remote auth login --device --manifest builtin:share-publishing");
+    expect(sessionTooClose.message).toContain("tc --profile remote auth login --manifest builtin:share-publishing");
 
     const originMismatch = shareCliError(new SharePublishAuthorityError({ kind: "origin-mismatch" }));
     expect(originMismatch.code).toBe("ORIGIN_MISMATCH");

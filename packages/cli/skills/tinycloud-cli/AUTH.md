@@ -2,22 +2,41 @@
 
 The profile is local session state. The OpenKey signing identity owns the data. Reuse the identity the owner already uses; do not create a different account or reconnect integrations to obtain agent access. Every login below requests an explicit manifest, so the owner sees and approves exactly what this profile may do.
 
-Keep the user's existing profiles: a profile may hold another app's session (for example a TinyChat agent's `applications` session), and logging it in again for a different purpose would drop that authority. Reuse the onboarding profile from `tinycloud onboard`; ask for more with `tinycloud auth request --cap SPEC --grant --paste --expiry 30d` (or `--manifest FILE --grant --paste`), send the owner the link and one line on what it allows, and pass their code to the CLI exactly as sent.
+Keep the user's existing profiles: a profile may hold another app's session (for example a TinyChat agent's `applications` session), and logging it in again for a different purpose would drop that authority. Reuse the onboarding profile from `tinycloud onboard`; ask for more with `tinycloud auth request --cap SPEC --grant --no-popup` (or `--manifest FILE --grant --no-popup`), and send the owner the approval link it prints with one line on what it allows. The command finishes on its own once they approve.
 
-## Device login (servers)
+## Sign in with an approval link (default)
 
-Use device login when the owner cannot open a browser on the machine running `tinycloud`. The owner approves on their phone.
+A manifest login prints one OpenKey approval link and waits. The owner opens it on any device and approves; the command then saves the session and exits. There is no code to paste back.
 
 ```bash
 tinycloud profile list                         # pick a name that is not taken
 tinycloud init --name publisher --key-only
-tinycloud --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
+tinycloud --profile publisher auth login --manifest builtin:share-publishing --no-popup
 tinycloud --profile publisher context --json
+```
+
+The command blocks until the owner approves, so as an agent start it in the background with stderr captured, send the owner the link, then wait:
+
+```bash
+tinycloud --profile publisher auth login --manifest builtin:share-publishing --no-popup > login.json 2> login.err &
+LOGIN_PID=$!
+sleep 3; grep -A1 'Approve this request in OpenKey' login.err   # send this link to the owner
+wait "$LOGIN_PID"; cat login.json
+```
+
+`--no-popup` only skips opening a browser on this machine; leave it out where the owner sits at this machine's browser. Without `--expiry`, a manifest login lasts 1 hour, except `builtin:share-publishing`, which lasts 7 days: every Share link it publishes ends when that session ends, and a link's own default is 7 days. An explicit `--expiry` decides over both; pass one only when the owner wants a different lifetime.
+
+## Device login (only when asked)
+
+Use device login only when the owner asks for a code to type on their phone. Add `--device` to the same command:
+
+```bash
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
 ```
 
 - `--manifest FILE` (required with `--device`) is an app manifest (`app_id`, `space`, `permissions`) given as a file path or `base64:<json>`. `builtin:share-publishing` is the built-in manifest for `tinycloud share publish`; [REFERENCE.md](REFERENCE.md#context-and-login) lists exactly what it requests, and the owner's consent page shows every capability. One space per login.
 - Device login is for KV-scoped manifests. Every scoped login (device, browser, paste) adds `tinycloud.capabilities/read` on the space root (`""`) when the manifest lacks it: OpenKey requires it to sign any delegation and shows it as required. The CLI refuses the `secrets` space and every `tinycloud.encryption` entry except `tinycloud.encryption/decrypt` on the owner's `default` network (space `default`, empty path) before a device request (`DEVICE_AUTH_UNSUPPORTED_SCOPE`); OpenKey also refuses `tinycloud.sql` and other excluded abilities with `SCOPE_REJECTED`. Request those through [browser or paste login with a manifest](#browser-login-with-a-manifest). Device login cannot grant secret reads.
-- `--expiry` sets the session lifetime as a duration counted from approval (`1h`, `7d`, or milliseconds; at least `1m`; device login at most `30d`, default `30d`). OpenKey signs approval time plus the lifetime, so ISO dates are refused up front (`INVALID_EXPIRY`): an absolute deadline cannot survive an approval that takes longer than the 30 s clock-skew allowance. A signed session that would outlive the requested lifetime is refused.
+- `--expiry` sets the session lifetime as a duration counted from approval (`1h`, `7d`, or milliseconds; at least `1m`; a manifest login without `--device` defaults to `1h`, or `7d` for `builtin:share-publishing`; device login at most `30d`, default `30d`). OpenKey signs approval time plus the lifetime, so ISO dates are refused up front (`INVALID_EXPIRY`): an absolute deadline cannot survive an approval that takes longer than the 30 s clock-skew allowance. A signed session that would outlive the requested lifetime is refused.
 - `--owner did:pkh:eip155:CHAIN:ADDRESS` refuses an approval by any other identity. Every login on a profile that already recorded an owner DID is held to that owner automatically, whatever wrote it (`tinycloud init`, an earlier login, or `profile.json` with any posture), and `--owner` must agree with it. Only a local-owner-key profile is not pinned. Owner addresses compare case-insensitively; chain id and space name compare exactly. The owner, permissions and expiry recorded for a session only ever come from a verified signed proof; callback-supplied values are dropped.
 - An OpenKey account can hold several keys. Each key is a separate owner with its own spaces and data, and one of them is the account's **primary key**. OpenKey preselects the primary key unless the request names an owner. OpenKey reports whether the approving key is primary. The profile records that as `ownerKeyPrimary`, and `tinycloud auth status` shows it (`null` when OpenKey did not say). A login approved by another key succeeds, but prints a warning on stderr. To use a key that is not primary on purpose, pass `--owner` with its did:pkh, also on a plain `auth login` without `--manifest`: OpenKey then preselects that key. The flag is unsigned metadata, never authority.
 - Scoped and device logins refuse a profile that holds a local owner key (`LOCAL_OWNER_PROFILE`): a local-owner-key posture, `authMethod: "local"`, or a stored private key, whatever the recorded posture. Use a separate profile.
@@ -46,7 +65,7 @@ sleep 3; grep 'Approve on your phone' login.err   # send this line to the owner
 wait "$LOGIN_PID"; cat login.json
 ```
 
-Send the owner the link and code through the channel they are already using with you, and say what it grants (for example "publish Share links from this agent for 7 days"). Only ask them to approve a request you just started. The code alone grants nothing; the owner must sign in to OpenKey and approve. Never send private keys, session files or `session.json` contents.
+Send the owner the link and code through the channel they are already using with you, and say what it grants (for example "publish Share links from this agent"). Only ask them to approve a request you just started. The code alone grants nothing; the owner must sign in to OpenKey and approve. Never send private keys, session files or `session.json` contents.
 
 ### What the CLI verifies
 
@@ -61,10 +80,10 @@ Errors: `SCOPE_REJECTED` means OpenKey refuses that capability over device login
 On a machine with a browser, request the same manifest through the OpenKey browser flow:
 
 ```bash
-tinycloud --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
+tinycloud --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json
 ```
 
-Normal OpenKey login prints a short approval link on stderr and waits for the owner's approval. Send that link to the owner if the CLI is remote or headless. `--no-popup` skips opening a local browser; it still retrieves the encrypted result automatically, verifies the signed proof, saves the session durably and acknowledges delivery. No pasted code or localhost callback is needed, including when stdout is redirected. Re-run the same command after an interruption to resume. The request defaults to a one-hour expiry (maximum 24 hours); that is separate from the requested grant lifetime and the result's retention window. An omitted `--expiry` keeps the seven-day OpenKey grant default; onboarding explicitly requests 30 days.
+Normal OpenKey login prints a short approval link on stderr and waits for the owner's approval. Send that link to the owner if the CLI is remote or headless. `--no-popup` skips opening a local browser; it still retrieves the encrypted result automatically, verifies the signed proof, saves the session durably and acknowledges delivery. No pasted code or localhost callback is needed, including when stdout is redirected. Re-run the same command after an interruption to resume. The request defaults to a one-hour expiry (maximum 24 hours); that is separate from the requested grant lifetime and the result's retention window. Without `--expiry`, a manifest login requests a one-hour session (seven days for `builtin:share-publishing`) and a login without a manifest keeps the seven-day OpenKey grant default; onboarding explicitly requests 30 days.
 
 `--paste` takes the short code the owner sends back; pass it exactly as sent. It prints its approval URL on stderr and reads the owner's five-minute, single-use return code from stdin. End the code with a newline; a final line without one is also accepted. If stdin ends with no code, the command fails with `PASTE_CODE_MISSING` (exit 3), names the approval URL, and saves nothing. Automatic short-link approvals do not produce this code. The same signed-proof, owner, live-session, local-owner and commit-time checks apply. Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure. `--expiry` reaches OpenKey as a lifetime; dates and lifetimes under a minute are refused before approval. `--device --manifest` remains available for eligible KV scopes, but cannot approve a secrets or encryption manifest.
 
