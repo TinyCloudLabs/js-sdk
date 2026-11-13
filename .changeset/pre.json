@@ -83,6 +83,7 @@
     "tc-2904-renewal-approval-codec",
     "tc-2923-node-defaults",
     "tc-2924-node-alias",
+    "tc-2931-signin-bootstrap-policy",
     "tc-2934-requested-account",
     "tc-712-issued-resource",
     "tc-712-proofless-revoke",
