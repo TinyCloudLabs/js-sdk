@@ -230,9 +230,11 @@ test('courier send: every write looks its owner up afresh; the peer\'s owner is 
   const first = await run(issuer.home, ['send', 'to-recipient', '--new', 'Synthetic subject', '--text', 'Synthetic message one']);
   const { threadId } = JSON.parse(first.stdout);
   const reply = await run(issuer.home, ['send', 'to-recipient', '--thread', threadId, '--text', 'Synthetic message two']);
-  // A new thread: one read, then two writes (meta, message), each with its own lookup: 3 for our owner. A reply: one read,
-  // one write: 2. The peer's reads share one lookup; installing its grant on the reader is not a read: 2 for the peer.
-  for (const [sent, writes, own] of [[first, 2, 3], [reply, 1, 2]]) {
+  // Each command first checks its peers' authority (POST /delegation/query), which is not a data read: its own lookup. A new
+  // thread then writes meta and the message, each with its own lookup: 3 for our owner. A reply reads the meta (one shared
+  // lookup) and writes the message: 3. The peer's reads share one lookup; installing its grant on the reader is not a
+  // read: 2 for the peer.
+  for (const [sent, writes, own] of [[first, 2, 3], [reply, 1, 3]]) {
     assert.equal(sent.invokes, 3);
     assert.deepEqual(sent.writes, { [issuer.owner]: writes }, 'send writes only its own space');
     assert.deepEqual(sent.lookups, lookupPairs({ [issuer.owner]: own, [recipient.owner]: 2 }));
@@ -243,12 +245,13 @@ test('courier watch --once: every write looks its owner up afresh, reads between
   const pass = await run(recipient.home, ['watch', '--once', '--wake', 'none', '--notify', 'none']);
   assert.ok(pass.invokes > 2, `the pass made several node calls (${pass.invokes})`);
   // After the earlier sends, the pass imports, mirrors and records receipts and state: 9 writes to our space, each with its
-  // own lookup, and 4 runs of reads between them sharing one each. Any blow-up past that fails here.
+  // own lookup; 2 authority checks (POST /delegation/query), each with its own lookup; and 4 runs of reads between them
+  // sharing one each: 15. Any blow-up past that fails here.
   assert.equal(pass.writes[recipient.owner], 9);
-  assert.deepEqual(pass.lookups, lookupPairs({ [recipient.owner]: 13, [issuer.owner]: 2 }));
+  assert.deepEqual(pass.lookups, lookupPairs({ [recipient.owner]: 15, [issuer.owner]: 2 }));
 });
 
-test('courier read of a 344-entry thread: bounded batched node calls, reads share one lookup per owner, installing the peer\'s grant looks its owner up afresh, every entry shown', async () => {
+test('courier read of a 344-entry thread: bounded batched node calls, reads share one lookup per owner, the authority check and the peer\'s grant install each look up afresh, every entry shown', async () => {
   const started = await run(recipient.home, ['send', 'to-issuer', '--new', 'Synthetic long thread', '--text', 'Synthetic opener']);
   const { threadId, messageId: opener } = JSON.parse(started.stdout);
   const profile = JSON.parse(fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8'));
@@ -278,5 +281,6 @@ test('courier read of a 344-entry thread: bounded batched node calls, reads shar
   const bound = Math.ceil(172 / 16) * 2 + 6;
   assert.ok(read.invokes <= bound, `read made ${read.invokes} node calls for 344 entries (bound ${bound})`);
   assert.equal(read.writes[recipient.owner] ?? 0, 0, 'read writes nothing');
-  assert.deepEqual(read.lookups, lookupPairs({ [recipient.owner]: 1, [issuer.owner]: 2 }));
+  // Our reads share one lookup; the authority check before them is not a data read and has its own.
+  assert.deepEqual(read.lookups, lookupPairs({ [recipient.owner]: 2, [issuer.owner]: 2 }));
 });
