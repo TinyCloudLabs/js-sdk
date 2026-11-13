@@ -31,6 +31,17 @@ export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string
   }
 }
 
+/**
+ * The lease's expiry exactly as the owner signed it. Node admission compares it with the signed bytes, which may
+ * spell it without the receipt's milliseconds; the receipt's ISO value is checked equal by {@link verifyOwnerRenewal}.
+ */
+export async function signedLeaseExpiry(renewal: ApprovalRenewal): Promise<string> {
+  const { receipt } = parseApprovalRenewal(renewal);
+  const lease = await parseSignedSiweCacao(receipt.leaseAuthorization.replace(/^Bearer\s+/i, ''), receipt.leaseCid);
+  if (!lease.expiresAt) throw new CourierError('bad-grant', 'The renewal lease does not match the signed owner grant.');
+  return lease.expiresAt;
+}
+
 export function assertOwnerRenewalIdentity(renewal: ApprovalRenewal, live: RenewalNodeIdentity): void {
   assertRenewalNodeIdentity(live);
   assertRenewalNodeIdentity(renewal.receipt.nodeIdentity);
