@@ -1186,8 +1186,8 @@ function normalizePkhIdentifier(identifier) {
     (_match, prefix, address) => prefix + address.toLowerCase()
   );
 }
-function parsePkhDid(did) {
-  const match = did.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
+function parsePkhDid(did2) {
+  const match = did2.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
   if (!match) return null;
   return {
     chainId: Number(match[1]),
@@ -2949,10 +2949,10 @@ var init_raw_encryption = __esm({
 
 // src/lib/owner-did.ts
 import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
-function canonicalOwnerDid(did, label = "--owner") {
-  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did);
+function canonicalOwnerDid(did2, label = "--owner") {
+  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did2);
   if (!match) {
-    throw new CLIError("INVALID_ARGUMENT", `${label} "${did}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`, ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_ARGUMENT", `${label} "${did2}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`, ExitCode.USAGE_ERROR);
   }
   return `did:pkh:eip155:${match[1]}:${ensureEip55(match[2])}`;
 }
@@ -3121,9 +3121,9 @@ function createPermissionRequestArtifact(params) {
     }
   });
 }
-function didWithoutFragment(did) {
-  const fragment = did.indexOf("#");
-  return fragment === -1 ? did : did.slice(0, fragment);
+function didWithoutFragment(did2) {
+  const fragment = did2.indexOf("#");
+  return fragment === -1 ? did2 : did2.slice(0, fragment);
 }
 async function loadAdditionalDelegations(profile) {
   return readAdditionalDelegations(profile);
@@ -5834,8 +5834,8 @@ function ucanCid(jwt) {
   bytes.set(digest3, 4);
   return `b${base32Encode(bytes)}`;
 }
-function ed25519KeyOfDid(did) {
-  const bare = did.split("#", 1)[0];
+function ed25519KeyOfDid(did2) {
+  const bare = did2.split("#", 1)[0];
   if (!bare.startsWith("did:key:z")) return void 0;
   let decoded;
   try {
@@ -16896,9 +16896,11 @@ __export(links_exports, {
   LINK_TYPE_SPECS: () => LINK_TYPE_SPECS,
   LINK_WINDOW_SECONDS: () => LINK_WINDOW_SECONDS,
   LinkError: () => LinkError,
+  MAX_APPROVAL_LEASE_SECONDS: () => MAX_APPROVAL_LEASE_SECONDS,
   MAX_LINK_BODY_BYTES: () => MAX_LINK_BODY_BYTES,
   MAX_LINK_REQUEST_BYTES: () => MAX_LINK_REQUEST_BYTES,
   ackApprovalResult: () => ackApprovalResult,
+  approvalRequestPurpose: () => approvalRequestPurpose,
   approvalSessionProof: () => approvalSessionProof,
   assertDidKeySignature: () => assertDidKeySignature,
   buildFullLink: () => buildFullLink,
@@ -16928,6 +16930,7 @@ __export(links_exports, {
   normalizeLinkId: () => normalizeLinkId,
   openLinkRecord: () => openLinkRecord,
   openRelayResult: () => openRelayResult,
+  parseApprovalRenewal: () => parseApprovalRenewal,
   parseApprovalRequest: () => parseApprovalRequest,
   parseLink: () => parseLink,
   parseLinkTimestamp: () => parseLinkTimestamp,
@@ -17112,11 +17115,11 @@ function didKeyFromEd25519PublicKey(publicKey) {
   prefixed.set(publicKey, ED25519_MULTICODEC_PREFIX2.length);
   return `did:key:${base58btc2.encode(prefixed)}`;
 }
-function ed25519PublicKeyFromDidKey(did) {
-  if (!did.startsWith("did:key:")) {
-    throw new TypeError(`not a did:key: ${did}`);
+function ed25519PublicKeyFromDidKey(did2) {
+  if (!did2.startsWith("did:key:")) {
+    throw new TypeError(`not a did:key: ${did2}`);
   }
-  const multibase = did.slice("did:key:".length);
+  const multibase = did2.slice("did:key:".length);
   const prefixed = base58btc2.decode(multibase);
   if (prefixed.length !== ED25519_MULTICODEC_PREFIX2.length + PUBLIC_KEY_LENGTH || prefixed[0] !== ED25519_MULTICODEC_PREFIX2[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX2[1]) {
     throw new TypeError("did:key does not encode an ed25519 public key");
@@ -17176,11 +17179,11 @@ function parseLinkTimestamp(text2) {
   const ms2 = Date.parse(text2);
   return Number.isFinite(ms2) && new Date(ms2).toISOString() === text2 ? ms2 : null;
 }
-function linkIssuerPublicKey(did) {
-  if (!DID_KEY_PATTERN.test(did)) return null;
+function linkIssuerPublicKey(did2) {
+  if (!DID_KEY_PATTERN.test(did2)) return null;
   try {
-    const key = ed25519PublicKeyFromDidKey(did);
-    return didKeyFromEd25519PublicKey(key) === did ? key : null;
+    const key = ed25519PublicKeyFromDidKey(did2);
+    return didKeyFromEd25519PublicKey(key) === did2 ? key : null;
   } catch {
     return null;
   }
@@ -17449,6 +17452,11 @@ async function openLinkRecord(record3, key, options = {}) {
   await runBodyValidator(opened, options.validateBody);
   return opened;
 }
+function parseApprovalRenewal(value4) {
+  const parsed = approvalRenewalSchema.safeParse(value4);
+  if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval renewal");
+  return parsed.data;
+}
 function buildShareInvitationApprovalSpec(input) {
   const { context: context2 } = input;
   const lifetime = Math.floor((Date.parse(context2.acceptanceExpiresAt) - input.now) / 1e3);
@@ -17474,6 +17482,9 @@ function parseApprovalRequest(value4, options = {}) {
     throw new LinkError("issuer_binding_mismatch");
   }
   return request;
+}
+function approvalRequestPurpose(request) {
+  return request.purpose ?? "task";
 }
 function checkApiOrigin(origin2) {
   if (!AUDIENCE_ORIGIN.test(origin2)) throw new LinkError("invalid_argument", "the API origin is not a canonical https origin");
@@ -17919,6 +17930,22 @@ async function openRelayResult(envelope, requestId, relayPrivateKey) {
   return value4;
 }
 function checkApprovalResultBinding(opened, expected) {
+  const allowed = /* @__PURE__ */ new Set(["resultVersion", "requestId", "requestDigest", "requesterDid", "targetDid", "ownerDid", "delegationExpiresAt", "delegation", "renewalChoice", "renewal"]);
+  if (Object.keys(opened).some((key) => !allowed.has(key))) throw invalidResult("The encrypted result contains unknown fields.");
+  let renewal;
+  if (expected.request.renewal) {
+    if (opened.renewalChoice === "leased") {
+      const parsed = approvalRenewalSchema.safeParse(opened.renewal);
+      if (!parsed.success || parsed.data.approvedLeaseLifetimeSeconds > expected.request.renewal.leaseLifetimeSeconds || Date.parse(parsed.data.approvedAt) > (expected.now ?? Date.now()) + 6e4) {
+        throw invalidResult("The approved renewal does not match this request.");
+      }
+      renewal = parsed.data;
+    } else if (opened.renewalChoice !== "finite" || opened.renewal !== void 0) {
+      throw invalidResult("The approved renewal choice is missing or inconsistent.");
+    }
+  } else if (opened.renewalChoice !== void 0 || opened.renewal !== void 0) {
+    throw invalidResult("The result contains renewal that was not requested.");
+  }
   const { ownerDid, delegationExpiresAt, delegation } = opened;
   const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) && new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
   const differing = [
@@ -17932,10 +17959,10 @@ function checkApprovalResultBinding(opened, expected) {
     ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)]
   ].filter(([, matches]) => !matches).map(([field]) => field);
   if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
-  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
-  return { ownerDid, delegationExpiresAt, delegation };
+  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now()) && !(expected.allowExpiredRenewal && renewal)) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid, delegationExpiresAt, delegation, ...expected.request.renewal ? { renewalChoice: opened.renewalChoice, ...renewal ? { renewal } : {} } : {} };
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, isoUtc, invitationContext, requestSchema, DAY_SECONDS, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, MAX_APPROVAL_LEASE_SECONDS, positiveSeconds, timestamp, did, approvalRenewalRequestSchema, approvalRenewalSchema, bytes32, ed25519Jwk, p256Jwk, origin, permission, isoUtc, invitationContext, requestSchema, DAY_SECONDS, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -17949,6 +17976,7 @@ var init_links = __esm({
     init_zod();
     init_base58();
     init_ed25519();
+    init_zod();
     init_zod();
     init_p256();
     init_zod();
@@ -18011,8 +18039,8 @@ var init_links = __esm({
     CID_PATTERN = /^bafkrei[a-z2-7]{52}$/;
     HEADER_KEYS = ["audience", "bodyCid", "expiresAt", "issuedAt", "issuer", "nonce", "size", "type", "version"];
     DELETE_KEYS = ["audience", "id", "issuedAt", "issuer", "nonce", "op", "version"];
-    ed25519DidKey = external_exports2.string().refine((did) => {
-      const key = linkIssuerPublicKey(did);
+    ed25519DidKey = external_exports2.string().refine((did2) => {
+      const key = linkIssuerPublicKey(did2);
       return key !== null && ed25519KeyProblem(key) === null;
     });
     linkTypeSchema = external_exports2.enum(LINK_TYPES);
@@ -18047,6 +18075,36 @@ var init_links = __esm({
     REMOVED_FRAGMENT = /^#v=[23](&|$)/;
     MAX_FULL_RECORD_JSON_BYTES = MAX_LINK_REQUEST_BYTES;
     jsonObject = external_exports2.record(external_exports2.unknown());
+    MAX_APPROVAL_LEASE_SECONDS = 365 * 86400;
+    positiveSeconds = external_exports2.number().int().positive().safe().max(MAX_APPROVAL_LEASE_SECONDS);
+    timestamp = external_exports2.string().datetime({ precision: 3 });
+    did = external_exports2.string().startsWith("did:key:z");
+    approvalRenewalRequestSchema = external_exports2.object({
+      version: external_exports2.literal(1),
+      leaseLifetimeSeconds: positiveSeconds
+    }).strict();
+    approvalRenewalSchema = external_exports2.object({
+      version: external_exports2.literal(1),
+      approvedLeaseLifetimeSeconds: positiveSeconds,
+      approvedAt: timestamp,
+      receipt: external_exports2.object({
+        originalCid: external_exports2.string().min(1),
+        leaseCid: external_exports2.string().min(1),
+        leaseAuthorization: external_exports2.string().min(1),
+        leaseExpiresAt: timestamp,
+        leaseGeneration: external_exports2.number().int().positive().safe(),
+        nodeIdentity: external_exports2.object({
+          nodeDid: did,
+          renewerDid: did,
+          renewerPublicKey: external_exports2.string().min(1),
+          renewerEpoch: external_exports2.number().int().nonnegative().safe()
+        }).strict()
+      }).strict()
+    }).strict().refine((value4) => {
+      const approved = Date.parse(value4.approvedAt);
+      const end = Date.parse(value4.receipt.leaseExpiresAt);
+      return end > approved && end <= approved + value4.approvedLeaseLifetimeSeconds * 1e3;
+    });
     bytes32 = external_exports2.string().refine((value4) => decodeStrictBase64Url(value4)?.length === 32);
     ed25519Jwk = external_exports2.object({ kty: external_exports2.literal("OKP"), crv: external_exports2.literal("Ed25519"), x: bytes32 }).strict();
     p256Jwk = external_exports2.object({ kty: external_exports2.literal("EC"), crv: external_exports2.literal("P-256"), x: bytes32, y: bytes32 }).strict().refine((key) => {
@@ -18098,6 +18156,9 @@ var init_links = __esm({
       grantLifetimeSeconds: external_exports2.number().int().positive(),
       resultEncryptionPublicJwk: p256Jwk,
       context: invitationContext.optional(),
+      /** D11: absence means task; keep absent bytes unchanged for signed request compatibility. */
+      purpose: external_exports2.enum(["task", "standing"]).optional(),
+      renewal: approvalRenewalRequestSchema.optional(),
       /**
        * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
        * maximum; it has no upper bound of its own, and the approver may still choose less.
@@ -19126,8 +19187,8 @@ function generateKey2() {
   const jwkStr = mgr.jwk(keyId);
   if (!jwkStr) throw new Error("Failed to generate key");
   const jwk = JSON.parse(jwkStr);
-  const did = mgr.getDID(keyId);
-  return { jwk, did };
+  const did2 = mgr.getDID(keyId);
+  return { jwk, did: did2 };
 }
 function keyToDID(jwk) {
   ensureWasm();
@@ -19149,8 +19210,8 @@ function addressToDID(address, chainId = 1) {
 async function generateLocalIdentity(chainId = 1) {
   const privateKey = generateEthereumPrivateKey();
   const address = await deriveAddress(privateKey);
-  const did = addressToDID(address, chainId);
-  return { privateKey, address, did };
+  const did2 = addressToDID(address, chainId);
+  return { privateKey, address, did: did2 };
 }
 async function localKeySignIn(options) {
   const { TinyCloudNode: TinyCloudNode4 } = await import("@tinycloud/node-sdk");
@@ -20828,17 +20889,17 @@ var init_approval_request = __esm({
 // src/auth/browser-auth.ts
 import { publicJwk as publicJwk2 } from "@tinycloud/sdk-core";
 import { createInterface as createInterface2 } from "readline";
-async function startAuthFlow(did, options = {}) {
+async function startAuthFlow(did2, options = {}) {
   assertNoCaveatLimits(options.permissions);
   if (options.paste) {
-    return pasteFlow(did, options);
+    return pasteFlow(did2, options);
   }
-  return acquireApprovalRequest(did, options);
+  return acquireApprovalRequest(did2, options);
 }
-function buildAuthUrl(did, options = {}) {
+function buildAuthUrl(did2, options = {}) {
   assertNoCaveatLimits(options.permissions);
   const params = new URLSearchParams();
-  params.set("did", did);
+  params.set("did", did2);
   if (options.callback) {
     params.set("callback", options.callback);
   }
@@ -20916,14 +20977,14 @@ function validateDelegationCallbackPayload(value4) {
   }
   return null;
 }
-function assertBoundToKey(parsed, did, localJwk) {
+function assertBoundToKey(parsed, did2, localJwk) {
   const delegation = parsed;
   const jwk = delegation?.jwk;
-  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || "d" in jwk) {
+  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did2.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || "d" in jwk) {
     throw new Error("Delegation is bound to a different CLI key.");
   }
 }
-async function delegationFromInput(input, did, options) {
+async function delegationFromInput(input, did2, options) {
   const trimmed = input.trim();
   let parsed;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
@@ -20932,7 +20993,7 @@ async function delegationFromInput(input, did, options) {
     const saved = options.profileName === void 0 ? void 0 : await pendingDelegationFor(options.profileName, trimmed);
     if (saved !== void 0) {
       try {
-        assertBoundToKey(saved, did, localJwk);
+        assertBoundToKey(saved, did2, localJwk);
       } catch (error) {
         await dropPendingDelegationFor(options.profileName, trimmed);
         throw error;
@@ -20948,7 +21009,7 @@ async function delegationFromInput(input, did, options) {
     }
     const result = await response.json();
     parsed = result.delegation;
-    assertBoundToKey(parsed, did, localJwk);
+    assertBoundToKey(parsed, did2, localJwk);
     if (options.profileName !== void 0 && validateDelegationCallbackPayload(parsed) === null) {
       const stored = await ProfileManager.getKey(options.profileName);
       if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed);
@@ -20969,8 +21030,8 @@ async function delegationFromInput(input, did, options) {
   if (invalid4) throw new Error(`Invalid delegation code: ${invalid4}`);
   return parsed;
 }
-async function pasteFlow(did, options = {}) {
-  const authUrl = buildAuthUrl(did, options);
+async function pasteFlow(did2, options = {}) {
+  const authUrl = buildAuthUrl(did2, options);
   console.error(`
 Open this URL in a browser to authenticate:
 `);
@@ -20986,7 +21047,7 @@ Open this URL in a browser to authenticate:
       if (answered || input.trim() === "") return;
       answered = true;
       rl.close();
-      void delegationFromInput(input, did, options).then(resolve10, reject);
+      void delegationFromInput(input, did2, options).then(resolve10, reject);
     });
     rl.on("close", () => {
       if (answered) return;
@@ -33669,11 +33730,11 @@ function utf8Bytes4(text2) {
 }
 var ED25519_MULTICODEC_PREFIX4 = Uint8Array.of(237, 1);
 var PUBLIC_KEY_LENGTH2 = 32;
-function ed25519PublicKeyFromDidKey2(did) {
-  if (!did.startsWith("did:key:")) {
-    throw new TypeError(`not a did:key: ${did}`);
+function ed25519PublicKeyFromDidKey2(did2) {
+  if (!did2.startsWith("did:key:")) {
+    throw new TypeError(`not a did:key: ${did2}`);
   }
-  const multibase = did.slice("did:key:".length);
+  const multibase = did2.slice("did:key:".length);
   const prefixed = base58btc4.decode(multibase);
   if (prefixed.length !== ED25519_MULTICODEC_PREFIX4.length + PUBLIC_KEY_LENGTH2 || prefixed[0] !== ED25519_MULTICODEC_PREFIX4[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX4[1]) {
     throw new TypeError("did:key does not encode an ed25519 public key");
@@ -37328,14 +37389,14 @@ init_local_key();
 import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
 async function createKeyOnlyProfile(profileName2, host, defaultSpace) {
   await ProfileManager.ensureConfigDir();
-  const { jwk, did } = await generateKey2();
+  const { jwk, did: did2 } = await generateKey2();
   await ProfileManager.setKey(profileName2, jwk);
   await ProfileManager.setProfile(profileName2, {
     name: profileName2,
     host,
     chainId: DEFAULT_CHAIN_ID,
     spaceName: "default",
-    did,
+    did: did2,
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     ...defaultSpace ? { defaultSpace } : {}
   });
@@ -37343,7 +37404,7 @@ async function createKeyOnlyProfile(profileName2, host, defaultSpace) {
   if (profileName2 === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
     await ProfileManager.setConfig({ ...config, defaultProfile: profileName2 });
   }
-  return { did, previousDefaultProfile: config.defaultProfile };
+  return { did: did2, previousDefaultProfile: config.defaultProfile };
 }
 function registerInitCommand(program) {
   program.command("init").description("Initialize a new TinyCloud profile").option("--name <profile>", "Profile name", "default").option("--key-only", "Only generate key, skip authentication").option("--host <url>", "TinyCloud node URL").option("--paste", "Use manual paste mode for authentication").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)").action(async (options, cmd) => {
@@ -37366,11 +37427,11 @@ function registerInitCommand(program) {
           ExitCode.ERROR
         );
       }
-      const { did, previousDefaultProfile } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName2, host, defaultSpace));
+      const { did: did2, previousDefaultProfile } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName2, host, defaultSpace));
       if (options.keyOnly) {
         outputJson({
           profile: profileName2,
-          did,
+          did: did2,
           host,
           authenticated: false
         });
@@ -37385,7 +37446,7 @@ function registerInitCommand(program) {
       await ensureSpaceSetup({ profile: profileName2, host }, delegationData, delegationData.permissions);
       outputJson({
         profile: profileName2,
-        did,
+        did: did2,
         host,
         spaceId: delegationData.spaceId,
         authenticated: true
@@ -39326,14 +39387,14 @@ async function rotateAuthKey(profileName2, host, options = {}) {
     );
   }
   if (!options.force) await assertShareHistoryAllowsKeyDrop(profileName2, "rotate");
-  const { jwk, did } = await withSpinner("Generating session key...", async () => {
+  const { jwk, did: did2 } = await withSpinner("Generating session key...", async () => {
     return generateKey2();
   });
   const previousNotice = previousSignInNotice(await ProfileManager.getSession(profileName2), profile);
   const result = await refreshOpenKeySession(profileName2, host, {
     paste: options.paste,
     noPopup: options.noPopup,
-    ...profile.namedKeys === void 0 ? { rotation: { jwk, did } } : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }
+    ...profile.namedKeys === void 0 ? { rotation: { jwk, did: did2 } } : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }
   });
   outputRotationResult(result.profile, profileName2, oldDid, "openkey");
   if (previousNotice !== void 0) process.stderr.write(`${previousNotice}
@@ -39399,11 +39460,11 @@ async function handleLocalAuth(profileName2, host, options = {}) {
   const posture = profile ? resolveProfilePosture(profile) : null;
   let privateKey;
   let address;
-  let did;
+  let did2;
   if (profile && (profile.authMethod === "local" || posture === "local-owner-key") && profile.privateKey) {
     privateKey = profile.privateKey;
     address = profile.address ?? await deriveAddress(privateKey);
-    did = profile.did.startsWith("did:pkh:") ? profile.did : addressToDID(address, profile.chainId ?? DEFAULT_CHAIN_ID);
+    did2 = profile.did.startsWith("did:pkh:") ? profile.did : addressToDID(address, profile.chainId ?? DEFAULT_CHAIN_ID);
     if (isInteractive()) {
       process.stderr.write(theme.muted("Using existing local key") + "\n");
       process.stderr.write(formatField("Address", address) + "\n");
@@ -39414,14 +39475,14 @@ async function handleLocalAuth(profileName2, host, options = {}) {
     });
     privateKey = identity2.privateKey;
     address = identity2.address;
-    did = identity2.did;
+    did2 = identity2.did;
     if (isInteractive()) {
       process.stderr.write("\n" + theme.heading("Local Key Generated") + "\n");
       process.stderr.write(formatField("Address", address) + "\n");
-      process.stderr.write(formatField("DID", did) + "\n\n");
+      process.stderr.write(formatField("DID", did2) + "\n\n");
     }
   }
-  const namedKeys = options.keys === void 0 ? void 0 : parseKeysPrefix(options.keys, did);
+  const namedKeys = options.keys === void 0 ? void 0 : parseKeysPrefix(options.keys, did2);
   if (namedKeys !== void 0) await assertNodeSupportsNamedKeys(host);
   const sessionResult = await withSpinner("Signing in...", async () => {
     const replication = options.replication ?? profile?.replication;
@@ -39439,7 +39500,7 @@ async function handleLocalAuth(profileName2, host, options = {}) {
     authMethod: "local",
     address,
     chainId: DEFAULT_CHAIN_ID,
-    ownerDid: did,
+    ownerDid: did2,
     spaceId: sessionResult.spaceId,
     delegationHeader: sessionResult.delegationHeader,
     delegationCid: sessionResult.delegationCid,
@@ -39456,9 +39517,9 @@ async function handleLocalAuth(profileName2, host, options = {}) {
     host,
     chainId: DEFAULT_CHAIN_ID,
     spaceName: "default",
-    did,
+    did: did2,
     sessionDid,
-    ownerDid: did,
+    ownerDid: did2,
     spaceId: sessionResult.spaceId,
     createdAt: profile?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString(),
     posture: profile?.posture ?? "local-owner-key",
@@ -39475,7 +39536,7 @@ async function handleLocalAuth(profileName2, host, options = {}) {
     outputJson({
       authenticated: true,
       profile: profileName2,
-      did,
+      did: did2,
       sessionDid,
       address,
       spaceId: sessionResult.spaceId,
@@ -39777,13 +39838,13 @@ async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
   }
   await node.replication?.close();
 }
-function rotatedProfile(current, host, did) {
+function rotatedProfile(current, host, did2) {
   const { namedKeys: _rotated, ...currentFields } = current;
   return {
     ...currentFields,
     host,
-    did,
-    sessionDid: did,
+    did: did2,
+    sessionDid: did2,
     posture: current.posture ?? "owner-openkey",
     operatorType: current.operatorType ?? "human",
     authMethod: "openkey"
@@ -41122,6 +41183,19 @@ async function openFeedHandoff(path) {
 
 // src/feed/runner.ts
 import { spawn as spawn2 } from "child_process";
+function parseFeedRunner(json) {
+  const argv = JSON.parse(json);
+  if (!Array.isArray(argv) || argv.length === 0 || argv.some((item) => typeof item !== "string") || !argv[0]) {
+    throw new Error("--runner must be a nonempty JSON string argv array");
+  }
+  return [argv[0], ...argv.slice(1)];
+}
+function printFeedResponse(response) {
+  return new Promise((resolve10) => {
+    process.stdout.write(`${JSON.stringify(response)}
+`, (error) => resolve10(error ? "unconfirmed" : "delivered"));
+  });
+}
 function runFeedRunner(argv, response, signal) {
   if (signal?.aborted) return Promise.resolve("unconfirmed");
   return new Promise((resolve10) => {
@@ -41474,7 +41548,7 @@ var ARCHIVE_SCHEMA = `CREATE TABLE IF NOT EXISTS feed_owner_imports (
   bundle_json TEXT NOT NULL, created_at TEXT NOT NULL,
   PRIMARY KEY(source_space_id,namespace,snapshot_id))`;
 var text = external_exports2.string().min(1);
-var timestamp = external_exports2.string().datetime({ offset: true });
+var timestamp2 = external_exports2.string().datetime({ offset: true });
 var digest2 = external_exports2.string().regex(/^[a-f0-9]{64}$/);
 var identitySchema = external_exports2.object({ cardId: text, revision: external_exports2.number().int().positive().safe(), issuanceId: text }).strict();
 var legacyRef = external_exports2.object({ kind: text, id: text }).strict();
@@ -41520,7 +41594,7 @@ var publisherSchema = external_exports2.object({ publisherId: text, agentId: tex
 var bundleSchema = external_exports2.object({
   formatVersion: external_exports2.literal(1),
   modelVersion: external_exports2.literal(1),
-  frozenAt: timestamp,
+  frozenAt: timestamp2,
   source: external_exports2.object({ spaceId: text, namespace: text.endsWith("/"), snapshotId: text, completePrefixSnapshot: external_exports2.boolean(), previousSnapshotId: text.optional(), cursor: opaque.optional(), revision: opaque.optional() }).strict(),
   origins: external_exports2.array(external_exports2.object({ path: text, sha256: digest2 }).strict()),
   sourceRows: external_exports2.array(external_exports2.object({ sourceKey: text, sourceArea: external_exports2.enum(["kv", "watch-state", "thread-watch-state", "expiry-state"]), encoding: external_exports2.literal("base64"), rawBase64: external_exports2.string(), sha256: digest2, classification }).strict()),
@@ -41535,7 +41609,7 @@ var bundleSchema = external_exports2.object({
     external_exports2.object({ sourceKey: text, type: external_exports2.literal("group-preference"), value: opaqueObject }).strict()
   ])),
   threads: external_exports2.array(external_exports2.object({ sourceKey: text, publisherId: text, identity: identitySchema, message: opaqueObject }).strict()),
-  deliveries: external_exports2.array(external_exports2.object({ sourceKey: text, eventSourceKey: text, eventKey: text, publisherId: text, identity: identitySchema, responseId: text, recipientKey: text, recipient: text, state: external_exports2.enum(["pending", "held", "delivered", "unconfirmed", "refused"]), routedTo: external_exports2.enum(["owner", "xo"]), at: external_exports2.string().optional(), reason: external_exports2.string().optional(), evidence: external_exports2.enum(["explicit", "sent-without-confirmation", "historical-cursor"]), dispatch: external_exports2.enum(["never", "resolved-pending", "held"]), dispatchBefore: timestamp.nullable(), originalReceipt: opaque }).strict()),
+  deliveries: external_exports2.array(external_exports2.object({ sourceKey: text, eventSourceKey: text, eventKey: text, publisherId: text, identity: identitySchema, responseId: text, recipientKey: text, recipient: text, state: external_exports2.enum(["pending", "held", "delivered", "unconfirmed", "refused"]), routedTo: external_exports2.enum(["owner", "xo"]), at: external_exports2.string().optional(), reason: external_exports2.string().optional(), evidence: external_exports2.enum(["explicit", "sent-without-confirmation", "historical-cursor"]), dispatch: external_exports2.enum(["never", "resolved-pending", "held"]), dispatchBefore: timestamp2.nullable(), originalReceipt: opaque }).strict()),
   checkpoints: external_exports2.array(external_exports2.object({ sourceKey: text, type: external_exports2.enum(["answer-cursor", "claim-cursor", "task-steps", "task-closed", "thread-cursor", "expiry-grace", "expiry-notice", "chat-receipt", "hold-actions"]), value: opaque }).strict()),
   deletions: external_exports2.array(external_exports2.object({ sourceKey: text, classification, previousSha256: digest2.optional(), deletedAt: external_exports2.string().optional() }).strict()),
   quarantine: external_exports2.array(external_exports2.object({ sourceKey: text, reason: external_exports2.enum(["unknown", "invalid", "ambiguous-reference", "orphan-reference", "unmapped-publisher", "unresolved-issuance", "unsupported-receipt"]), detail: external_exports2.string() }).strict())
@@ -41828,11 +41902,17 @@ publish/respond/message/handling read JSON files carrying full card/revision/iss
 and response IDs. Retain the same response ID when retrying a saved answer or message.
 Messages never answer cards; saving an answer is not acknowledgement or completion.
 
-watch requires Bun or Node.js 22.13+ (built-in SQLite). --runner is a JSON argv array,
-never a shell command. The runner receives allowlisted response-header JSON and must
-exit zero only after durable acceptance. Uncertain delivery remains unconfirmed and
-is never automatically repeated. Renewal reconciles durable rows at most every five
-minutes while connected; hook notifications are wakeups, not replay or execution proof.
+watch requires Bun or Node.js 22.13+ (built-in SQLite). It subscribes to response hooks,
+reconnects on its own, and keeps a durable per-recipient ledger, so a restart delivers only
+responses that recipient has not had. Without --runner it prints each response header as
+one JSON line on stdout. --runner is a JSON argv array, never a shell command; the runner
+receives allowlisted response-header JSON on stdin and must exit zero only after durable
+acceptance. --once exits after the first batch it hands off, to wake a runtime whose tools
+return when a command exits. Uncertain delivery remains unconfirmed and is never
+automatically repeated. Renewal reconciles durable rows at most every five minutes while
+connected; hook notifications are wakeups, not replay or execution proof. stdout lines
+carry the owner's response content, as sensitive as the runner's stdin: never pipe them
+into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
@@ -41876,10 +41956,10 @@ slash prefix and output are explicit; source get/sync grants are separate from f
   agentOptions(feed.command("connect").description("Owner: provision an agent feed and activate its exact bundled grant")).requiredOption("--to <did>", "Authenticated agent DID receiving the grant").requiredOption("--label <label>", "Owner registry display label").option("--expiry <duration>", "Delegation expiry duration", "24h").action(async (options, command) => {
     try {
       const { node, space, sql: sql2, resources, output: output2, responses } = await context(command);
-      const did = options.to.split("#")[0];
+      const did2 = options.to.split("#")[0];
       const source = {
         sourceId: options.agent,
-        agentDid: did,
+        agentDid: did2,
         label: options.label,
         output: { spaceId: space, database: resources.outputResource },
         responses: { spaceId: space, database: resources.responseResource }
@@ -41887,7 +41967,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       const delegation = await connectFeedAgent(sql2.db(REGISTRY), source, async () => {
         value3(await initializeFeedDatabases2({ output: output2, responses }));
         const expiry = parseExpiry3(options.expiry).getTime() - Date.now();
-        const { delegation: delegation2 } = await node.delegateTo(did, [
+        const { delegation: delegation2 } = await node.delegateTo(did2, [
           { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
           { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
           { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] }
@@ -41989,33 +42069,34 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       return handleError(error);
     }
   });
-  agentOptions(feed.command("watch").description("Agent: deliver durable owner responses to an external argv runner")).requiredOption("--recipient <id>", "Stable runtime recipient identity used by the handoff ledger").requiredOption("--runner <json>", `JSON argv array, e.g. '["node","agent-handler.js"]'`).option("--handoff <path>", "Durable local SQLite handoff path (default: profile feed ledger)").action(async (options, command) => {
+  agentOptions(feed.command("watch").description("Agent: deliver durable owner responses as JSON lines or to an external argv runner")).requiredOption("--recipient <id>", "Stable runtime recipient identity used by the handoff ledger").option("--runner <json>", `JSON argv array run once per response, e.g. '["node","agent-handler.js"]' (default: print JSON lines)`).option("--once", "Exit after the first batch of new responses is handed off").option("--handoff <path>", "Durable local SQLite handoff path (default: profile feed ledger)").action(async (options, command) => {
     let local;
     const abort = new AbortController();
     const stop = () => abort.abort();
+    const alive = setInterval(() => {
+    }, 6e4);
     try {
-      const argv = JSON.parse(options.runner);
-      if (!Array.isArray(argv) || argv.length === 0 || argv.some((item) => typeof item !== "string") || !argv[0]) {
-        throw new Error("--runner must be a nonempty JSON string argv array");
-      }
+      const runner = options.runner === void 0 ? void 0 : parseFeedRunner(options.runner);
       const { profile, node, space, responses, resources } = await context(command);
       const directory = await ProfileManager.ensureProfileDir(profile.profile);
       local = await openFeedHandoff(options.handoff ?? join19(directory, `feed-${options.agent}.sqlite`));
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
-      const runner = [argv[0], ...argv.slice(1)];
+      const deliver = runner === void 0 ? printFeedResponse : (response) => runFeedRunner(runner, response, abort.signal);
       await listenFeedResponses({
         responses,
         handoff: local.handle,
         recipient: options.recipient,
         hooks: node.hooks,
+        once: options.once === true,
         subscription: { space, service: "sql", pathPrefix: resources.responseResource },
         signal: abort.signal,
-        deliver: (response) => runFeedRunner(runner, response, abort.signal)
+        deliver
       });
     } catch (error) {
       return handleError(error);
     } finally {
+      clearInterval(alive);
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
       local?.close();
@@ -42925,13 +43006,13 @@ function registerOnboardCommand(program) {
       await completeApprovalResult(ctx.profile);
       let code5 = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : void 0;
       let currentStep = 1;
-      const acquire = async (did, flow = {}) => {
+      const acquire = async (did2, flow = {}) => {
         if (code5 !== void 0) {
           const pasted = code5;
           code5 = void 0;
-          return delegationFromInput(pasted, did, flow);
+          return delegationFromInput(pasted, did2, flow);
         }
-        return startAuthFlow(did, {
+        return startAuthFlow(did2, {
           ...flow,
           profileName: ctx.profile,
           noPopup: true,
@@ -43067,15 +43148,15 @@ function registerProfileCommand(program) {
         throw new CLIError("PROFILE_EXISTS", `Profile "${name}" already exists`, ExitCode.ERROR);
       }
       await ProfileManager.ensureConfigDir();
-      const { jwk, did } = generateKey2();
+      const { jwk, did: did2 } = generateKey2();
       await ProfileManager.setKey(name, jwk);
       await ProfileManager.setProfile(name, {
         name,
         host,
         chainId: 1,
         spaceName: "default",
-        did,
-        sessionDid: did,
+        did: did2,
+        sessionDid: did2,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         posture,
         operatorType,
@@ -43083,7 +43164,7 @@ function registerProfileCommand(program) {
       });
       outputJson({
         profile: name,
-        did,
+        did: did2,
         host,
         ...tinycloudRegistryUrl === void 0 ? {} : { tinycloudRegistryUrl },
         posture,
@@ -44266,13 +44347,13 @@ function registerRegistryPublishCommand(registry) {
 function registerRegistryCommand(program) {
   const registry = program.command("registry").description("See or publish your storage settings.");
   registerRegistryPublishCommand(registry);
-  registry.command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did, _options, command) => {
+  registry.command("show [account-id]").description("Check and show the saved storage settings: account, version, age, spaces, servers and decryption service. Works offline, no sign-in.").action(async (did2, _options, command) => {
     try {
       const options = command.optsWithGlobals();
       const result = await invokeOperation3("tinycloud.registry.show", 1, {
         ...options.profile ? { profile: options.profile } : {},
         allowOwnerProfile: true
-      }, did === void 0 ? {} : { did });
+      }, did2 === void 0 ? {} : { did: did2 });
       if (result.status !== "ok") {
         if (result.status === "error") throw new CLIError(result.error.code, result.error.message);
         throw new CLIError("REGISTRY_UNAVAILABLE", "Couldn't read the storage settings saved on this computer.");
@@ -48133,9 +48214,9 @@ import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
 import { mkdir as mkdir9, writeFile as writeFile5 } from "fs/promises";
 import { dirname as dirname12 } from "path";
-function didWithoutFragment2(did) {
-  const fragment = did.indexOf("#");
-  return fragment === -1 ? did : did.slice(0, fragment);
+function didWithoutFragment2(did2) {
+  const fragment = did2.indexOf("#");
+  return fragment === -1 ? did2 : did2.slice(0, fragment);
 }
 function registerSpaceCommand(program) {
   const space = program.command("space").description("Space management");

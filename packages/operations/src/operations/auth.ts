@@ -1,3 +1,4 @@
+import { sameTinyCloudNode } from "@tinycloud/sdk-core";
 import * as nodeSdk from "@tinycloud/node-sdk";
 import type {
   PermissionEntry,
@@ -393,12 +394,12 @@ async function importRequestBoundDelegation(
     return await withProfileLock(context.summary.profile, async (): Promise<OperationExecutionOutcome<AuthImportOutput>> => {
       const state = await importState(context, requestId);
       if (!state.ok) return state.result;
-      if (state.sessionDid !== sessionDid || normalizeHost(state.host) !== normalizeHost(host)) {
+      if (state.sessionDid !== sessionDid || !sameTinyCloudNode(normalizeHost(state.host), normalizeHost(host))) {
         return audienceMismatch(state.sessionDid, sessionDid);
       }
       if (state.request.profile !== context.summary.profile ||
         !samePrincipal(state.request.sessionDid, sessionDid) ||
-        normalizeHost(state.request.host) !== normalizeHost(host) ||
+        !sameTinyCloudNode(normalizeHost(state.request.host), normalizeHost(host)) ||
         JSON.stringify(canonicalizeOperationCapabilities(state.request.requested, resolveSpace)) !==
           JSON.stringify(canonicalizeOperationCapabilities(request.requested, resolveSpace))) {
         return operationFailure(
@@ -462,7 +463,7 @@ async function importRequestBoundDelegation(
         }
         const current = await importState(context, requestId);
         if (!current.ok) return current.result;
-        if (current.sessionDid !== sessionDid || normalizeHost(current.host) !== normalizeHost(host)) {
+        if (current.sessionDid !== sessionDid || !sameTinyCloudNode(normalizeHost(current.host), normalizeHost(host))) {
           return audienceMismatch(current.sessionDid, sessionDid);
         }
         if (JSON.stringify(canonicalizeOperationCapabilities(current.request.requested, resolveSpace)) !==
@@ -513,7 +514,7 @@ async function importState(
   }
   const current = await readProfile<Record<string, unknown>>(context.summary.profile);
   const host = typeof current?.host === "string" ? current.host : context.summary.host;
-  if (normalizeHost(host) !== normalizeHost(context.summary.host)) {
+  if (!sameTinyCloudNode(normalizeHost(host), normalizeHost(context.summary.host))) {
     return { ok: false, result: hostMismatch(context.summary.host, host) };
   }
   let requests: PermissionRequestArtifact[];
@@ -546,7 +547,7 @@ async function importState(
       ),
     };
   }
-  if (normalizeHost(request.host) !== normalizeHost(host)) {
+  if (!sameTinyCloudNode(normalizeHost(request.host), normalizeHost(host))) {
     return { ok: false, result: hostMismatch(host, request.host) };
   }
   if (!samePrincipal(request.sessionDid, sessionDid)) {

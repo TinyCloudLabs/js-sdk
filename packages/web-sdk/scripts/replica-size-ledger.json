@@ -2938,5 +2938,105 @@
       }
     },
     "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
+  },
+  "tc2872RenewalRoot": {
+    "label": "renewal WASM exports root budget (TC-2872)",
+    "ruling": "Naomi, TC-2872, 2026-11-13: use the exact canonical CI root sizes; no general ceiling change. budget-ruling: Naomi, TC-2872.",
+    "base": "b7ba5e8cc9facc90a1644e3c153b1856ef1bb2cb",
+    "sourceCommits": [
+      "766d27a2b96bff5f0c1090ad2d8c2f13f7eba6b9"
+    ],
+    "measuredWith": "Replica e2e CI run 43392230112 (Postgres 131774657231, SQLite 131774657301); Node 22, Bun 1.3.14, rustc 1.99.0, wasm-pack 0.13.1; gzip -9 -c",
+    "root": {
+      "delta": {
+        "index.mjs": 6200,
+        "index.cjs": 4997
+      },
+      "ceiling": {
+        "index.mjs": 1521709,
+        "index.cjs": 1455532
+      }
+    },
+    "reason": "The remaining eager growth comes from renewal Rust exports in the monolithic web-sdk-wasm; renewal verifier JavaScript is lazy. Canonical run 43392230112 measured 1,521,709 ESM and 1,455,532 CJS. The ledger delta is measured against the previous TC-2234 ceilings (1,515,509 / 1,450,535); current master measured 1,515,509 / 1,450,516 in run 43363966953. No general ceiling changes."
+  },
+  "tc2872RenewalKvWorker": {
+    "label": "renewal WASM exports, kv-storage worker (TC-2872)",
+    "ruling": "Naomi, TC-2872, 2026-11-13: admit the exact measured worker size, with a maximum +4,000 B ticket-scoped increase and no headroom. budget-ruling: Naomi, TC-2872.",
+    "base": "b7ba5e8cc9facc90a1644e3c153b1856ef1bb2cb",
+    "sourceCommits": [
+      "766d27a2b96bff5f0c1090ad2d8c2f13f7eba6b9"
+    ],
+    "canonicalCI": {
+      "run": "43392230112",
+      "jobs": [
+        "131774657231",
+        "131774657301"
+      ]
+    },
+    "worker": {
+      "delta": 3518,
+      "ceiling": 780742
+    },
+    "reason": "Canonical Replica e2e CI measured 780,742 gzip bytes on both SQLite and Postgres. The exact increase over the prior 777,224 ceiling is 3,518 B (within Naomi's 4,000 B maximum); master measured 777,206 B. No unrelated worker allowance changes."
+  },
+  "tc2872RenewalReplicaWorker": {
+    "label": "renewal WASM exports, replica worker (TC-2872)",
+    "ruling": "Naomi, TC-2872, 2026-11-13: admit the exact measured worker size, with a maximum +4,000 B ticket-scoped increase and no headroom. budget-ruling: Naomi, TC-2872.",
+    "base": "b7ba5e8cc9facc90a1644e3c153b1856ef1bb2cb",
+    "sourceCommits": [
+      "766d27a2b96bff5f0c1090ad2d8c2f13f7eba6b9"
+    ],
+    "canonicalCI": {
+      "run": "43392230112",
+      "jobs": [
+        "131774657231",
+        "131774657301"
+      ]
+    },
+    "replicaWorker": {
+      "delta": 3305,
+      "ceiling": 774411
+    },
+    "reason": "Canonical Replica e2e CI measured 774,411 gzip bytes on both SQLite and Postgres. The exact increase over the prior 771,106 ceiling is 3,305 B (within Naomi's 4,000 B maximum); master measured 771,106 B. No unrelated worker allowance changes."
+  },
+  "tc2904OwnerDirectProofRoot": {
+    "label": "strict owner-direct proof parsing root budget (TC-2904)",
+    "ruling": "size-ruling: TC-2904: Naomi approves the exact canonical CI measurement over tc2872RenewalRoot, limited to +1100 ESM/+1000 CJS gzip (-9); workers unchanged. Supersedes local reused-WASM rulings.",
+    "base": "cd34e10f2efe302d422f56bf7de82d70bf6a6785",
+    "sourceCommits": [
+      "80ccc21b2596e938eb0f085ecc4bb8d05c152d12"
+    ],
+    "measuredWith": "Canonical CI Node 22 / Bun 1.3.14 / rustc 1.99.0; production webpack; gzip -9 -c. Prior TC-2904 run 43387903289; rebased-head confirmation pending.",
+    "root": {
+      "delta": {
+        "index.mjs": 1009,
+        "index.cjs": 852
+      },
+      "ceiling": {
+        "index.mjs": 1522718,
+        "index.cjs": 1456384
+      }
+    },
+    "reason": "Only the strict signed proof list parser and typed-code import bindings are eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
+  },
+  "tc2924NodeAliasesRoot": {
+    "label": "production node alias helper root budget (TC-2924)",
+    "ruling": "size-ruling: TC-2924: Naomi approves the exact canonical CI root measurement above tc2904OwnerDirectProofRoot, limited to +200 B per format; no headroom or worker changes.",
+    "base": "255e1c7e74cab178698e3d3fae5bae5b69f0f7c0",
+    "sourceCommits": [
+      "4d7795fa6e90acb62fcbf1626b1ff75b7a732d5a"
+    ],
+    "measuredWith": "Canonical Replica e2e CI run 43408618106, Node 22 / Bun 1.3.14; production webpack; gzip -9 -c. SQLite and Postgres root checks measured 1,522,784 ESM and 1,456,437 CJS.",
+    "root": {
+      "delta": {
+        "index.mjs": 66,
+        "index.cjs": 53
+      },
+      "ceiling": {
+        "index.mjs": 1522784,
+        "index.cjs": 1456437
+      }
+    },
+    "reason": "The shared exact two-name node alias helper adds a root export. Exact measured growth over TC-2904 is +66 ESM/+53 CJS, within the +200 B ruling. KV worker remains 780,742 B and replica worker remains 774,411 B; no general allowance changes."
   }
 }

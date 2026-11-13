@@ -1,5 +1,79 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+  - @tinycloud/operations@0.9.0-beta.28
+
+## 1.7.0-beta.40
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.23
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+  - @tinycloud/operations@0.9.0-beta.27
+
+## 1.7.0-beta.39
+
+### Patch Changes
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/sdk-core@3.12.0-beta.22
+  - @tinycloud/node-sdk@3.12.0-beta.22
+  - @tinycloud/operations@0.9.0-beta.26
+
+## 1.7.0-beta.38
+
+### Patch Changes
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk@3.12.0-beta.21
+  - @tinycloud/node-sdk-wasm@1.7.9-beta.0
+  - @tinycloud/operations@0.9.0-beta.25
+
+## 1.7.0-beta.37
+
+### Minor Changes
+
+- 1c9206b: `tinycloud feed watch` no longer needs `--runner`: without it, each new owner response is printed as one JSON line on stdout. `--once` exits after the first batch of new responses is handed off, so an agent whose tools return only when a command exits can run the watcher in the background and be woken by the owner's next answer or comment. `listenFeedResponses` takes the matching `once` option.
+
+  Fixed: an idle `feed watch` no longer exits with status 0 after about a minute. That happened when the node closed an idle hooks stream and nothing kept Node's event loop alive during the reconnect backoff.
+
+  Details: TC-2205
+
+### Patch Changes
+
+- Updated dependencies [1c9206b]
+  - @tinycloud/sdk-services@3.12.0-beta.20
+  - @tinycloud/node-sdk@3.12.0-beta.20
+  - @tinycloud/operations@0.9.0-beta.24
+  - @tinycloud/sdk-core@3.12.0-beta.20
+
+## 1.7.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+  - @tinycloud/node-sdk@3.12.0-beta.19
+  - @tinycloud/operations@0.9.0-beta.23
+
+## 1.7.0-beta.35
+
+### Patch Changes
+
+- 82a327f: Hide the beta Courier invite command from help and usage documentation.
+
+  Details: TC-2234
+
 ## 1.7.0-beta.34
 
 ### Minor Changes
@@ -420,6 +494,24 @@
 - Updated dependencies [5817c2b]
   - @tinycloud/node-sdk@3.11.1-beta.0
   - @tinycloud/operations@0.8.1-beta.0
+
+## 1.6.6
+
+### Patch Changes
+
+- Without `--runner`, `tinycloud feed watch` now prints each new owner response as one JSON line. Add `--once` to exit after it prints the first responses, so an agent's runtime can wake when the command finishes. A long-running `feed watch` no longer stops on its own after about a minute with no responses.
+  Each line includes what the owner wrote. Treat this output as private and keep it out of shared logs. `--runner` works as before.
+
+  [PR #936](https://github.com/TinyCloudLabs/js-sdk/pull/936)
+
+  Details: TC-2205
+
+  This version was published from the hotfix branch `feat/tc-2205-cli-1.6.6-hotfix` (PR #937) as the exact tarball that was checked, so its npm entry has no `gitHead` field.
+
+- Updated dependencies
+  - @tinycloud/sdk-services@3.11.1
+
+Release record: published by Raw Publish runs 43358544813 (sdk-services) and 43360562991 (cli) from #937 at d914a90e. A stuck pre-queue Raw Publish run 43359468965 (cli, d914a90e) remains; any future enable of Raw Publish may start it, and its version-exists preflight will refuse it.
 
 ## 1.6.2
 

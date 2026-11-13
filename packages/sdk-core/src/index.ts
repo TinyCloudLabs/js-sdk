@@ -213,6 +213,8 @@ export {
   MemorySenderShareRecordStorage,
   MemorySenderShareKeyStorage,
   SenderShareStore,
+  assertRenewalNodeIdentity,
+  verifyRenewalHistory,
 } from "./delegations";
 export {
   delegatePortablePolicySession,
@@ -390,6 +392,10 @@ export type {
   SenderShareRecordStorage,
   SenderShareKeyStorage,
   SenderShareRevocationScope,
+  RenewalNodeIdentity,
+  RenewalStampHistoryEntry,
+  VerifyRenewalHistoryInput,
+  VerifiedRenewalHistory,
 } from "./delegations";
 
 // Encryption network identity helpers
@@ -754,6 +760,7 @@ export {
   DelegationErrorCode,
   // Delegation types
   Delegation,
+  RenewalStampHistory,
   DelegationStatus,
   DelegationRevocationReceipt,
   AccountDelegationResource,
@@ -1219,3 +1226,5 @@ export {
   type UnsignedPolicyObject,
   type UnsignedPolicyStatus,
 } from "./policy";
+
+export { sameTinyCloudNode } from "./tinycloud-node";

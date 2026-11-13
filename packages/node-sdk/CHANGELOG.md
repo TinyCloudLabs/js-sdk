@@ -1,5 +1,68 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.24
+
+### Patch Changes
+
+- 56df81d: Treat both production node names as one node for delegation validation while preserving configured hosts.
+
+  Details: TC-2923, TC-2924
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+
+## 3.12.0-beta.23
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+
+## 3.12.0-beta.22
+
+### Patch Changes
+
+- d4366f9: Expose verified SIWE ReCap proof CIDs and admit an already-signed owner renewal lease for an exact agent delegation through the lazy renewal subpath, without an agent private key. Ambiguous or malformed ReCap proof data is now refused.
+
+  Return distinct renewal expiry/inactive error codes so clients can distinguish refusal from unavailable status.
+
+  Keep renewal signature recovery inside its existing lazy web bundle so downstream bundlers do not scan declaration files as runtime modules.
+
+  Details: TC-2904
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/sdk-core@3.12.0-beta.22
+
+## 3.12.0-beta.21
+
+### Patch Changes
+
+- 766d27a: Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
+
+  Details: TC-2872
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk-wasm@1.7.9-beta.0
+
+## 3.12.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [1c9206b]
+  - @tinycloud/sdk-services@3.12.0-beta.20
+  - @tinycloud/replica@0.4.5-beta.6
+  - @tinycloud/sdk-core@3.12.0-beta.20
+
+## 3.12.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+
 ## 3.12.0-beta.18
 
 ### Patch Changes

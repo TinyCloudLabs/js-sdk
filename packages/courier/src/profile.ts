@@ -5,6 +5,7 @@ import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { canonicalJson } from './canonical.js';
 import { acquireLock, fsyncDir, parseIdentityRecord, processIdentityRecord } from './file-lock.js';
+import type { InterimState } from './interim-renewal.js';
 import type { LockRecord } from './file-lock.js';
 
 /** Courier-local identity and peer store; never an OpenKey owner profile. */
@@ -39,7 +40,8 @@ export interface StoredPeer {
   spaceId: string;
   theirHandleForMe?: string;
   inbound?: { delegation: string; cid: string; expiresAt: string };
-  outbound: { cid: string; issuedAt: string; expiresAt: string }[];
+  outbound: { cid: string; issuedAt: string; expiresAt: string; revokedAt?: string; priorCid?: string; delegation?: string }[];
+  interim?: InterimState;
   status: 'pending-A' | 'awaiting-C' | 'paired';
   /** Guided pairing is restricted to this one thread, never the peer's other chats. */
   sessionId?: string;
@@ -47,7 +49,7 @@ export interface StoredPeer {
 }
 
 export interface Profile {
-  version: 3;
+  version: 3 | 4;
   host: string;
   openkeyHost: string;
   label: string;
@@ -246,7 +248,7 @@ export function readSecure<T>(name: string, required: boolean, home = profileDir
 
 /** The fields `loadProfile` requires of a current (version 3) profile. */
 export function hasProfileFields(profile: Partial<Profile> | null): profile is Profile {
-  return !!profile && typeof profile === 'object' && profile.version === 3 && !!profile.courierDid && !!profile.host && !!profile.openkeyHost;
+  return !!profile && typeof profile === 'object' && (profile.version === 3 || profile.version === 4) && !!profile.courierDid && !!profile.host && !!profile.openkeyHost;
 }
 
 function readProfile(home: string): Profile {
@@ -257,7 +259,7 @@ function readProfile(home: string): Profile {
   if (loaded.version === 2) {
     throw new CourierError('profile-outdated', `This profile stores Courier data in the applications space. Courier now uses your agents space: run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
   }
-  if (loaded.version !== 3) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
+  if (loaded.version !== 3 && loaded.version !== 4) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
   const profile = loaded as Profile;
   if (!hasProfileFields(profile)) throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json', home)}`);
   profile.peers ??= {};
@@ -436,22 +438,48 @@ export function assertNotPaired(profile: Profile, handle: string): void {
  * this command changed is written, so a pairing, revocation or key rotation made by another command meanwhile is kept. `profile` is
  * updated to the saved result. A profile built from scratch overwrites the file (first init, key rotation).
  */
-export function saveProfile(profile: Profile): void {
+export function saveProfile(profile: Profile, beforeSave?: (disk: Profile | undefined) => void): void {
+  withProfileLock(() => saveProfileUnlocked(profile, beforeSave));
+}
+
+function saveProfileUnlocked(profile: Profile, beforeSave?: (disk: Profile | undefined) => void): void {
   const file = profilePath('profile.json');
-  withProfileLock(() => {
-    const base = baselines.get(profile);
-    let result: Profile = profile;
-    if (base && fs.existsSync(file)) {
-      const disk = readProfile(profileDir());
-      dropExpiredPending(disk.peers); // an expired pairing is not another command's: it must not block starting that handle again
-      result = mergeProfile(base, profile, disk);
+  beforeSave?.(fs.existsSync(file) ? readProfile(profileDir()) : undefined);
+  const base = baselines.get(profile);
+  let result: Profile = profile;
+  if (base && fs.existsSync(file)) {
+    const disk = readProfile(profileDir());
+    dropExpiredPending(disk.peers); // an expired pairing is not another command's: it must not block starting that handle again
+    result = mergeProfile(base, profile, disk);
+  }
+  dropExpiredPending(result.peers);
+  writeSecure(file, result);
+  if (result !== profile) adopt(profile as unknown as Record<string, unknown>, result as unknown as Record<string, unknown>);
+  else dropExpiredPending(profile.peers);
+  remember(profile);
+}
+
+/** Serialize peer operations across network awaits; use save(), never saveProfile(), inside. */
+export async function withProfileTransaction<T>(fn: (profile: Profile, save: () => void) => Promise<T>): Promise<T> {
+  ensureSecureDir();
+  const deadline = performance.now() + LOCK_WAIT_MS;
+  let release: () => void;
+  for (;;) {
+    try {
+      release = acquireLock(`${profilePath('profile.json')}.lock`);
+      break;
+    } catch (error) {
+      if (!(error instanceof CourierError) || error.code !== 'locked') throw error;
+      if (performance.now() >= deadline) throw new CourierError('profile-locked', error.message);
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    dropExpiredPending(result.peers);
-    writeSecure(file, result);
-    if (result !== profile) adopt(profile as unknown as Record<string, unknown>, result as unknown as Record<string, unknown>);
-    else dropExpiredPending(profile.peers);
-    remember(profile);
-  });
+  }
+  try {
+    const profile = loadProfile();
+    return await fn(profile, () => saveProfileUnlocked(profile));
+  } finally {
+    release();
+  }
 }
 
 /** The shape `loadKey` accepts: version 1, a JWK and a `did:key:` identifier. */

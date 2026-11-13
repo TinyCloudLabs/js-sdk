@@ -1,5 +1,82 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.29
+
+### Patch Changes
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+
+## 0.6.0-beta.28
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.23
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+
+## 0.6.0-beta.27
+
+### Patch Changes
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/sdk-core@3.12.0-beta.22
+  - @tinycloud/node-sdk@3.12.0-beta.22
+
+## 0.6.0-beta.26
+
+### Patch Changes
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk@3.12.0-beta.21
+
+## 0.6.0-beta.25
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.20
+- @tinycloud/sdk-core@3.12.0-beta.20
+
+## 0.6.0-beta.24
+
+### Patch Changes
+
+- d4cb4df: Courier renews a paired peer's read access, up to 30 days at a time, while your own access is live, and asks for your approval in OpenKey before your access ends. To stop sharing, revoke the pairing. Expired or revoked access requires a new pairing.
+
+  Details: TC-2746
+
+## 0.6.0-beta.23
+
+### Patch Changes
+
+- 33a2fde: Courier now picks up renewed access from paired peers before reading their messages or subscribing to them, while the current access is still valid.
+
+  Details: TC-2746
+
+## 0.6.0-beta.22
+
+### Patch Changes
+
+- 3dfd566: `courier revoke` now revokes the peer's access on your TinyCloud node, so their next read is refused. If it can't finish, the pairing is kept and you can run it again.
+
+  Details: TC-712
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+  - @tinycloud/node-sdk@3.12.0-beta.19
+
+## 0.6.0-beta.21
+
+### Patch Changes
+
+- 82a327f: Hide the beta Courier invite command from help and usage documentation.
+
+  Details: TC-2234
+
 ## 0.6.0-beta.20
 
 ### Patch Changes

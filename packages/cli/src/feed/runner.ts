@@ -1,6 +1,21 @@
 import { spawn } from "node:child_process";
 import type { FeedResponse } from "@tinycloud/sdk-services/feed";
 
+export function parseFeedRunner(json: string): [string, ...string[]] {
+  const argv: unknown = JSON.parse(json);
+  if (!Array.isArray(argv) || argv.length === 0 || argv.some((item) => typeof item !== "string") || !argv[0]) {
+    throw new Error("--runner must be a nonempty JSON string argv array");
+  }
+  return [argv[0], ...argv.slice(1)];
+}
+
+/** One JSON line per response; delivered once stdout has accepted the write. */
+export function printFeedResponse(response: FeedResponse): Promise<"delivered" | "unconfirmed"> {
+  return new Promise((resolve) => {
+    process.stdout.write(`${JSON.stringify(response)}\n`, (error) => resolve(error ? "unconfirmed" : "delivered"));
+  });
+}
+
 /** Exit zero must mean this runner durably accepted the response ID. */
 export function runFeedRunner(
   argv: readonly [string, ...string[]], response: FeedResponse, signal?: AbortSignal,

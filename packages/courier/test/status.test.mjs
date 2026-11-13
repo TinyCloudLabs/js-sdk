@@ -38,7 +38,7 @@ test('either lapsed side requires new approval and never suggests renewing the l
   for (const p of [peer(at(0)), peer(at(1000), at(-1000))]) {
     const result = peerExpiryStatus(p, now);
     assert.equal(result.renewal.command, null);
-    assert.match(result.warnings.join(' '), /approve a new grant/);
+    assert.match(result.warnings.join(' '), result.inbound.state === 'expired' ? /new pairing is required/ : /approve a new grant/);
     assert.doesNotMatch(result.warnings.join(' '), /pair renew/);
   }
 });

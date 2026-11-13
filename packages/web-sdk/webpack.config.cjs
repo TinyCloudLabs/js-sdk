@@ -271,6 +271,10 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
     callback(null, `${type} ./delegations-issued.${ext}`);
     return;
   }
+  if (request === "@tinycloud/sdk-core/delegations/renewal" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./delegations-renewal.${ext}`);
+    return;
+  }
   const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
   if (entry) {
     callback(null, `${type} ./${entry.file}.${ext}`);
@@ -312,11 +316,24 @@ const lazyEntries = {
   "encryption-keys": "./src/encryption-keys-entry.ts",
   "space-hosting": "./src/space-hosting-entry.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
+  "delegations-renewal": "./src/delegations-renewal-entry.ts",
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
 
+// CACAO verification uses viem's deferred secp256k1 import. Keep that primitive
+// inside the already-lazy entry: a second webpack chunk creates a computed import
+// whose downstream context includes declaration files in dist/.
+const lazyModule = {
+  ...baseConfig.module,
+  rules: [...rules, {
+    test: /[\\/]viem[\\/]_esm[\\/]utils[\\/]signature[\\/]recoverPublicKey\.js$/,
+    parser: { dynamicImportMode: "eager" },
+  }],
+};
+
 const lazyEsmConfig = {
   ...esmConfig,
+  module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("module", "mjs"),
   plugins: esmConfig.plugins.filter(notChunkLimit),
@@ -325,6 +342,7 @@ const lazyEsmConfig = {
 
 const lazyCjsConfig = {
   ...cjsConfig,
+  module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("commonjs", "cjs"),
   plugins: cjsConfig.plugins.filter(notChunkLimit),

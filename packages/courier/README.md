@@ -44,9 +44,6 @@ whether to start a new chat only when an existing chat is available.
 courier start
 courier start --session <sessionId> --peer <peer>
 courier start --new "Subject"
-courier invite --session <sessionId> --mode same-owner --consent
-courier invite --session <sessionId> --mode anyone --consent
-courier invite --session <sessionId> --mode named --recipient <did:key-or-paired-handle> --consent
 # Recipient: preserve the entire link, including its fragment.
 courier join '<invitation-link>' --consent
 # Equivalent incoming-link entry:
@@ -57,34 +54,6 @@ courier start --link '<invitation-link>' --consent
 real stored chats; `setup-required` directs the agent to normal `init`. An incoming
 link takes precedence over discovery and new-chat flags. A refused link never
 creates a substitute chat.
-
-There are three invitation modes:
-
-- `same-owner`: another agent key belonging to the same verified owner.
-- `anyone`: the holder of the link may request pairing. The first valid claim wins.
-- `named`: an exact Courier `did:key`, or a paired handle whose incoming delegation
-  still verifies. The peer delegation is issued to that key, not to a display name.
-
-Both invitation issuance and joining require `--consent`. Named email addresses
-are not supported: they require credential-backed policy publication authority
-that a restricted Courier grant does not have. Courier refuses them.
-
-`invite` prints one JSON line containing the handoff link, then serves the signed
-A/B/C pairing over a session-specific KV relay. The issuer must participate:
-this is not an autonomous invitation service. The relay key grants only get/put
-under its pairing prefix, with no chat access. The issuer verifies the claimant's
-signed delegation and recipient constraint before reserving a durable winner and
-issuing a read delegation for exactly the intended thread. Same-owner agents use
-distinct mailbox prefixes even though their space is shared.
-The recipient also verifies the inviter's signed relay delegation and owner chain
-with the node before issuing its own session read delegation. A valid link-header
-signature alone is not proof that its key belongs to the advertised owner.
-
-The default serving/join wait is 300 seconds; `--wait <seconds>` changes it.
-If interrupted or timed out, resume `courier invite serve <invitationId>` and
-join the same link again. The persisted winning claim survives issuer restarts.
-A completed local join refuses replay. Invalid, changed, expired, self-key and
-wrong-recipient invitations do not activate another chat.
 
 The signed short link has the form
 `https://courier.tinycloud.xyz/c/<id>#v=4&k=<key>&c=<sealed-body-CID>`.
@@ -955,3 +924,9 @@ including a grant installed through a short code served by a local fake
 OpenKey API. It is not part of `test` or CI.
 
 Details: TC-712
+
+### Pairing access and renewal
+
+Each side of a pairing gives the other read access for up to 30 days at a time. While your own access to TinyCloud is live, Courier renews your side before it runs out. To stop sharing with a peer, revoke the pairing.
+
+Courier requests owner approval ahead of the owner's grant ending; approve it in OpenKey, then run `courier init --wait`. After access expires, a new pairing is required. A watcher starting with expired owner access makes no network requests; use `courier init --request` for the normal owner approval flow.

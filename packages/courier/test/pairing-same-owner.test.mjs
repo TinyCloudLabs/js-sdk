@@ -1,3 +1,4 @@
+import { issuedFixture } from './support/issued-fixture.mjs';
 // TC-1248: Courier pairs agents by courier did:key, not by owner DID. Two agent keys of one
 // owner complete the real A→B→C protocol with the same explicit consent as two owners;
 // an artifact from the agent's own courier DID stays refused, and substituted or mismatched
@@ -30,19 +31,8 @@ const owners = {
   mira: randomBytes(32).toString('hex'),
 };
 
-const stub = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/delegate') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ activated: ['agents'], skipped: [] }));
-    return;
-  }
-  if (req.method === 'POST' && req.url === '/invoke') {
-    res.writeHead(200, { 'content-type': 'application/json', etag: '"stub-etag"' });
-    res.end('{}');
-    return;
-  }
-  res.writeHead(404).end('no such route');
-});
+const fixtureApi = issuedFixture();
+const stub = http.createServer((req, res) => { void fixtureApi.handle(req, res); });
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const HOST = `http://127.0.0.1:${stub.address().port}`;
 test.after(() => stub.close());
@@ -67,7 +57,7 @@ async function runFail(home, args) {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (e) {
-    return { code: e.code, stderr: String(e.stderr) };
+    return { code: e.code, stdout: String(e.stdout), stderr: String(e.stderr) };
   }
   throw new Error(`expected \`courier ${args.join(' ')}\` to fail`);
 }
@@ -149,7 +139,15 @@ async function makeHome(name, handle, ownerPrivateKey) {
   for (const [file, body] of [['profile.json', profile], ['key.json', key], ['grant.json', grant]]) {
     fs.writeFileSync(path.join(home, file), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
   }
-  return { home, profile };
+  return { home, profile, ownerPrivateKey };
+}
+
+async function approveLater(fixture) {
+  const key = JSON.parse(fs.readFileSync(path.join(fixture.home, 'key.json'), 'utf8'));
+  const result = await makeGrant(fixture.ownerPrivateKey, key);
+  fs.writeFileSync(path.join(fixture.home, 'grant.json'), JSON.stringify(result.grant), { mode: 0o600 });
+  const profile = profileAt(fixture.home); profile.grantExpiresAt = result.grant.expiresAt;
+  fs.writeFileSync(path.join(fixture.home, 'profile.json'), JSON.stringify(profile));
 }
 
 const profileAt = (home) => JSON.parse(fs.readFileSync(path.join(home, 'profile.json'), 'utf8'));
@@ -175,7 +173,8 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
 
   const issuerProfile = profileAt(issuer.home);
   for (const handle of ['issuer-one', 'issuer-two']) {
-    issuerProfile.peers[handle].outbound.at(-1).issuedAt = new Date(Date.now() - 21 * 3600 * 1000).toISOString();
+    issuerProfile.peers[handle].outbound.at(-1).issuedAt = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+    fixtureApi.age(issuerProfile.peers[handle].outbound.at(-1).cid, 25 * 3600 * 1000);
   }
   issuerProfile.peers['issuer-one'].inbound.delegation = 'not-a-valid-delegation';
   fs.writeFileSync(path.join(issuer.home, 'profile.json'), `${JSON.stringify(issuerProfile, null, 2)}\n`);
@@ -183,14 +182,18 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
   const unknown = await runFail(issuer.home, ['pair', 'renew', 'missing-peer', '--renew-artifact']);
   assert.match(unknown.stderr, /\[unknown-peer\]/);
 
+  await approveLater(issuer);
   const renewedOne = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--renew-artifact']);
   assert.equal(renewedOne.step, 'C');
   assert.equal(renewedOne.peer, 'issuer-one');
   assert.equal(renewedOne.callMe, 'recipient-one');
   await new Promise((resolve) => setTimeout(resolve, 1100));
+  await approveLater(issuer);
   const renewedOneLater = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--renew-artifact', '--force']);
 
   const before = profileAt(recipient.home);
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  await approveLater(issuer);
   const renewedTwo = await run(issuer.home, ['pair', 'renew', 'issuer-two', '--renew-artifact', '--force']);
   const changedScope = await runFail(recipient.home, ['pair', 'accept', JSON.stringify({ ...renewedTwo, callMe: 'recipient-one' })]);
   assert.match(changedScope.stderr, /\[bad-artifact\]/);
@@ -207,6 +210,21 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
   const recipientProfile = profileAt(recipient.home);
   recipientProfile.peers['recipient-one'].inbound.delegation = 'not-a-valid-delegation';
   fs.writeFileSync(path.join(recipient.home, 'profile.json'), `${JSON.stringify(recipientProfile, null, 2)}\n`);
+  const corruptBytes = fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8');
+  const invalidOriginal = await runFail(recipient.home, ['pair', 'accept', JSON.stringify(renewedOneLater)]);
+  assert.equal(invalidOriginal.stdout, '');
+  assert.equal(fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8'), corruptBytes);
+  recipientProfile.peers['recipient-one'].inbound = structuredClone(before.peers['recipient-one'].inbound);
+  recipientProfile.peers['recipient-one'].inbound.expiresAt = new Date(0).toISOString();
+  fs.writeFileSync(path.join(recipient.home, 'profile.json'), JSON.stringify(recipientProfile));
+  const expiredBytes = fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8');
+  const expiredOriginal = await runFail(recipient.home, ['pair', 'accept', JSON.stringify(renewedOneLater)]);
+  assert.match(expiredOriginal.stderr, /\[peer-expired\]/);
+  assert.equal(expiredOriginal.stdout, '');
+  assert.equal(fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8'), expiredBytes);
+  recipientProfile.peers['recipient-one'].inbound = structuredClone(before.peers['recipient-one'].inbound);
+  recipientProfile.peers['recipient-one'].inbound.expiresAt = before.peers['recipient-one'].inbound.expiresAt;
+  fs.writeFileSync(path.join(recipient.home, 'profile.json'), JSON.stringify(recipientProfile));
   const installed = await run(recipient.home, ['pair', 'accept', JSON.stringify(renewedOneLater)]);
   const after = profileAt(recipient.home);
   assert.equal(installed.ok, true);

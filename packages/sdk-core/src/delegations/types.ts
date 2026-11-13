@@ -28,6 +28,8 @@ export {
   type DelegationErrorCode,
   DelegationSchema,
   type Delegation,
+  RenewalStampHistorySchema,
+  type RenewalStampHistory,
   DelegationStatusSchema,
   type DelegationStatus,
   DelegationRevocationReceiptSchema,

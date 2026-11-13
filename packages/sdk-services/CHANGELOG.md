@@ -1,5 +1,15 @@
 # @tinycloudlabs/sdk-services
 
+## 3.12.0-beta.20
+
+### Minor Changes
+
+- 1c9206b: `tinycloud feed watch` no longer needs `--runner`: without it, each new owner response is printed as one JSON line on stdout. `--once` exits after the first batch of new responses is handed off, so an agent whose tools return only when a command exits can run the watcher in the background and be woken by the owner's next answer or comment. `listenFeedResponses` takes the matching `once` option.
+
+  Fixed: an idle `feed watch` no longer exits with status 0 after about a minute. That happened when the node closed an idle hooks stream and nothing kept Node's event loop alive during the reconnect backoff.
+
+  Details: TC-2205
+
 ## 3.12.0-beta.16
 
 ### Patch Changes
@@ -107,6 +117,18 @@
   Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
 
   Details: TC-2481
+
+## 3.11.1
+
+### Patch Changes
+
+- The feed listener's `once` option stops after the first delivered batch.
+
+  Details: TC-2205
+
+  This version was published from the hotfix branch `feat/tc-2205-cli-1.6.6-hotfix` (PR #937) as the exact tarball that was checked, so its npm entry has no `gitHead` field.
+
+Release record: published by Raw Publish runs 43358544813 (sdk-services) and 43360562991 (cli) from #937 at d914a90e. A stuck pre-queue Raw Publish run 43359468965 (cli, d914a90e) remains; any future enable of Raw Publish may start it, and its version-exists preflight will refuse it.
 
 ## 3.11.0
 

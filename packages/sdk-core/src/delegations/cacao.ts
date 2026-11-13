@@ -17,6 +17,10 @@ export interface SignedSiweCacao {
   readonly audience: string;
   /** The ReCap (last SIWE resource) attenuation, checked against the statement. Null-prototype maps. */
   readonly attenuation: ReCapAttenuation;
+  /** Signed ReCap proof CIDs. Empty means owner-direct; no proof is resolved here. */
+  readonly proofs: readonly string[];
+  readonly issuedAt: string;
+  readonly notBefore?: string;
   /** SIWE `Expiration Time` as signed. Reported only: the caller decides whether it matters. */
   readonly expiresAt?: string;
 }
@@ -97,6 +101,15 @@ function decodeDagCbor(bytes: Uint8Array): unknown {
   if (offset !== bytes.length) throw new Error("CBOR input has trailing bytes");
   return value;
 }
+/** Decode DAG-CBOR and refuse non-canonical encodings. */
+export function decodeCanonicalDagCbor(bytes: Uint8Array): unknown {
+  const value = decodeDagCbor(bytes);
+  const canonical = encodeDagCbor(value);
+  if (canonical.length !== bytes.length || canonical.some((byte, index) => byte !== bytes[index])) {
+    throw new Error("DAG-CBOR is not canonical");
+  }
+  return value;
+}
 
 /** Canonical DAG-CBOR: minimal heads, definite lengths, map keys ordered by encoded length then bytes. */
 export function encodeDagCbor(value: unknown): Uint8Array {
@@ -173,9 +186,26 @@ function reCapStatement(attenuation: ReCapAttenuation): string {
 }
 
 /** Parse a ReCap resource into resource -> ability -> non-empty caveat-object list. */
-function reCapAttenuation(resource: string): ReCapAttenuation {
+function reCapAttenuation(resource: string): { attenuation: ReCapAttenuation; proofs: readonly string[] } {
   const isObject = (value: unknown): value is object => typeof value === "object" && value !== null && !Array.isArray(value);
-  const parsed: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(resource.slice(RECAP_PREFIX.length))));
+  const json = new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(resource.slice(RECAP_PREFIX.length)));
+  // JSON.parse discards duplicate members. Reject them before trusting proof absence.
+  const objects: Array<Set<string> | null> = [];
+  const tokens = /"(?:[^"\\]|\\.)*"|[{}\[\]:,]|[^\s{}\[\]:,]+/g;
+  const parts = [...json.matchAll(tokens)].map((match) => match[0]!);
+  for (let i = 0; i < parts.length; i++) {
+    const token = parts[i]!;
+    if (token === "{") objects.push(new Set());
+    else if (token === "[") objects.push(null);
+    else if (token === "}" || token === "]") objects.pop();
+    else if (token.startsWith('"') && parts[i + 1] === ":") {
+      const keys = objects.at(-1);
+      const key = JSON.parse(token) as string;
+      if (keys?.has(key)) throw new Error("ReCap duplicate member is ambiguous");
+      keys?.add(key);
+    }
+  }
+  const parsed: unknown = JSON.parse(json);
   if (!isObject(parsed) || !("att" in parsed) || !isObject(parsed.att)) throw new Error("ReCap attenuation must be an object");
   const attenuation: Record<string, Record<string, readonly unknown[]>> = Object.create(null);
   for (const [target, abilities] of Object.entries(parsed.att)) {
@@ -188,7 +218,13 @@ function reCapAttenuation(resource: string): ReCapAttenuation {
     }
     attenuation[target] = copy;
   }
-  return attenuation;
+  if (Object.keys(parsed).some((key) => key !== "att" && key !== "prf")) throw new Error("ReCap fields are invalid");
+  const proofs: unknown = "prf" in parsed ? parsed.prf : [];
+  if (!Array.isArray(proofs) || !proofs.every((proof) => {
+    if (typeof proof !== "string") return false;
+    try { return CID.parse(proof).toString() === proof; } catch { return false; }
+  })) throw new Error("ReCap proofs must be canonical CID strings");
+  return { attenuation, proofs: Object.freeze([...proofs]) };
 }
 
 /**
@@ -237,7 +273,9 @@ export async function parseSignedSiweCacao(authorization: string, expectedCid?: 
   }
 
   const last = resources.at(-1);
-  const attenuation: ReCapAttenuation = last?.startsWith(RECAP_PREFIX) ? reCapAttenuation(last) : Object.create(null);
+  if (resources.slice(0, -1).some((resource) => resource.startsWith(RECAP_PREFIX))) throw new Error("CACAO has ambiguous ReCap resources");
+  const { attenuation, proofs } = last?.startsWith(RECAP_PREFIX)
+    ? reCapAttenuation(last) : { attenuation: Object.create(null) as ReCapAttenuation, proofs: Object.freeze([]) as readonly string[] };
   if (last?.startsWith(RECAP_PREFIX) && !statement?.endsWith(reCapStatement(attenuation))) throw new Error("CACAO statement does not match its ReCap");
 
   const message = new SiweMessage({
@@ -255,5 +293,5 @@ export async function parseSignedSiweCacao(authorization: string, expectedCid?: 
     ...(resources.length === 0 ? {} : { resources }),
   }).prepareMessage();
   if (!await verifyEip191MessageSignature(message, bytesToHex(signature.s), pkh[2]!)) throw new Error("CACAO signature is invalid");
-  return { cid, issuer, audience, attenuation, ...(expiresAt === undefined ? {} : { expiresAt }) };
+  return { cid, issuer, audience, attenuation, proofs, issuedAt: text(payload.iat, "iat"), ...(notBefore === undefined ? {} : { notBefore }), ...(expiresAt === undefined ? {} : { expiresAt }) };
 }

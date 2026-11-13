@@ -200,7 +200,16 @@ tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runti
 ```
 
 Run `watch` in the agent terminal, then save `response.json` from the owner
-profile in another terminal, or answer the card through Home:
+profile in another terminal, or answer the card through Home.
+
+Without `--runner`, `watch` prints each new response as one JSON line on stdout.
+With `--once`, it exits after the first batch of new responses, which wakes an
+agent whose tools report a background command only when it ends. A restart
+delivers only responses that `--recipient` has not had. Those lines carry the
+owner's words (`text`, `choiceId`): treat stdout as you would the runner's stdin,
+and never pipe it into shared logs.
+
+The owner's `response.json`:
 
 ```json
 {"responseId":"response-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"answer","choiceId":"create","createdAt":"2026-10-29T00:01:00Z"}
