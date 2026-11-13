@@ -31,10 +31,11 @@ async function fixture() {
   const client: NewShareApprovalClient = { beginShareApproval(intent, { verify }) {
     began = true;
     expect(intent.session.publicJwk).not.toHaveProperty("d");
+    expect(intent.approvalNonce).toMatch(/^[0-9a-f]{64}$/);
     const shareId = randomBytes(16).toString("hex");
     const resource = `urn:tinycloud:encryption:did:pkh:eip155:1:${address}:default/share/${shareId}`;
     return { cancel() {}, authorize: async () => {
-      const approval = wasm.prepareSession({ address, chainId, domain: "thirdparty.example", jwk: intent.session.publicJwk,
+      const approval = wasm.prepareSession({ address, chainId, nonce: intent.approvalNonce, domain: "thirdparty.example", jwk: intent.session.publicJwk,
         spaceId, issuedAt: new Date().toISOString(), expirationTime: intent.expiresAt, abilities: {},
         rawAbilities: { [resource]: ["tinycloud.encryption/decrypt"],
           ...Object.fromEntries(intent.permissions.map(entry => [`${wasm.makeSpaceId(address, chainId, entry.space)}/kv/${entry.path}`, entry.actions])) } });

@@ -8,10 +8,11 @@ async function fixture(extra = false) {
   const account = privateKeyToAccount(generatePrivateKey());
   const ownerDid = `did:pkh:eip155:1:${account.address}`;
   const shareId = randomBytes(16).toString("hex");
+  const approvalNonce = randomBytes(32).toString("hex");
   const resource = `urn:tinycloud:encryption:${ownerDid}:default/share/${shareId}`;
   const file = `tinycloud:pkh:eip155:1:${account.address}:applications/kv/app/shares/export.json`;
   const now = Date.now();
-  const prepared = prepareSession({ address: account.address, chainId: 1, domain: "thirdparty.example",
+  const prepared = prepareSession({ address: account.address, chainId: 1, nonce: approvalNonce, domain: "thirdparty.example",
     issuedAt: new Date(now).toISOString(), expirationTime: new Date(now + 3600_000).toISOString(),
     spaceId: `tinycloud:pkh:eip155:1:${account.address}:applications`,
     jwk: generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" }), abilities: {},
@@ -21,7 +22,7 @@ async function fixture(extra = false) {
   const identity = { requestId: randomBytes(32).toString("base64url"), shareId, ownerDid,
     sessionDid: prepared.verificationMethod, origin: "https://thirdparty.example", preparedSiwe: prepared.siwe, expiresAt: now + 60_000 };
   const result = { purpose: "share-create" as const, ...identity, prepared, signature: await account.signMessage({ message: prepared.siwe }) };
-  const expected: NewShareApprovalExpected = { identity, ownerAddress: account.address, chainId: 1,
+  const expected: NewShareApprovalExpected = { identity, approvalNonce, ownerAddress: account.address, chainId: 1,
     sessionDid: prepared.verificationMethod, origin: identity.origin, sessionExpiresAt: now + 7200_000,
     requestedExpiresAt: now + 3600_000, fileGrants: [{ resource: file, actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"] }] };
   return { result, expected, now, resource };
@@ -56,4 +57,23 @@ test("verification retains the exact checked bytes across its signature await", 
   expect(verified.signedMessage).toBe(original);
   expect(verified.signature).toBe(signature);
   expect(verified.sessionDid).not.toBe(f.expected.sessionDid);
+});
+
+
+test("a prior signature cannot satisfy a new call nonce", async () => {
+  const f = await fixture();
+  await expect(verifyNewShareApproval(f.result, { ...f.expected, approvalNonce: randomBytes(32).toString("hex") }, f.now)).rejects.toThrow();
+});
+
+test("malformed transport principals never echo their supplied value", async () => {
+  const f = await fixture();
+  const marker = 'SYNTHETIC_PRIVATE_JWK_SENTINEL';
+  const ownerDid = `{kty:OKP,d:${marker}}`;
+  try {
+    await verifyNewShareApproval(f.result, { ...f.expected, identity: { ...f.expected.identity, ownerDid } }, f.now);
+    throw new Error("expected rejection");
+  } catch (error) {
+    expect(String(error)).not.toContain(marker);
+    expect(String(error)).toContain("verification failed");
+  }
 });

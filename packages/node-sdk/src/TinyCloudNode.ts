@@ -1098,6 +1098,7 @@ export interface DelegateToResult {
  */
 export interface NewShareApprovalClient {
   beginShareApproval(intent: {
+    approvalNonce: string;
     session: { siwe: string; signature: string; publicJwk: Record<string, unknown> };
     expiresAt: string;
     permissions: Array<{ service: "tinycloud.kv"; space: string; path: string; actions: Array<"tinycloud.kv/get" | "tinycloud.kv/metadata"> }>;
@@ -7485,26 +7486,39 @@ export class TinyCloudNode {
     if (!Number.isFinite(expiry) || sessionExpiry === undefined || expiry <= Date.now() || expiry > sessionExpiry) {
       throw new Error("Share expiry must be within the signed session.");
     }
+    const baseCid = session.delegationCid;
+    const baseExpiry = sessionExpiry;
+    const epoch = this.sessionEpoch;
+    const assertCurrent = () => {
+      graph.assertActive();
+      const current = this.currentTinyCloudSession();
+      if (current !== session || this.sessionEpoch !== epoch || current.delegationCid !== baseCid ||
+        extractSiweExpiration(current.siwe)?.getTime() !== baseExpiry) throw new Error("Share session changed");
+    };
+    const approvalNonce = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
     const fileGrants = permissions.map(entry => ({
       resource: `${this.resolvePermissionSpace(entry.space, session)}/kv/${entry.path}`, actions: [...entry.actions],
     }));
-    const expected = { ownerAddress: session.address, chainId: session.chainId, sessionDid: this.sessionDid,
+    const expected = { approvalNonce, ownerAddress: session.address, chainId: session.chainId, sessionDid: this.sessionDid,
       origin, sessionExpiresAt: sessionExpiry, requestedExpiresAt: expiry, fileGrants };
     let verified: Awaited<ReturnType<typeof verifyNewShareApproval>> | undefined;
+    let consumed = false;
     const publicJwk = { kty: session.jwk.kty, crv: session.jwk.crv, x: session.jwk.x };
     // No await precedes beginShareApproval: this call preserves the browser's click gesture.
-    const handle = client.beginShareApproval({ session: { siwe: session.siwe, signature: session.signature, publicJwk },
+    const handle = client.beginShareApproval({ approvalNonce, session: { siwe: session.siwe, signature: session.signature, publicJwk },
       permissions, expiresAt: new Date(expiry).toISOString() }, { verify: async ({ result, identity, origin: observed }) => {
-        graph.assertActive();
-        if (observed !== origin || this.currentTinyCloudSession() !== session) throw new Error("Share session changed");
+        if (consumed) throw new Error("Share approval already consumed");
+        consumed = true;
+        assertCurrent();
+        if (observed !== origin) throw new Error("Share origin changed");
         verified = await verifyNewShareApproval(result, { ...expected,
           identity: { ...identity, preparedSiwe: identity.prepared.siwe } });
-        graph.assertActive();
-        return this.currentTinyCloudSession() === session;
+        assertCurrent();
+        return true;
       } });
     try {
       const result = await handle.authorize();
-      graph.assertActive();
+      assertCurrent();
       if (!verified || verified.expiresAt <= Date.now() || this.currentTinyCloudSession() !== session || result.prepared.siwe !== verified.signedMessage ||
         result.signature !== verified.signature) throw new Error("Share approval changed");
       const delegatedSession = this.wasmBindings.completeSessionSetup({ ...result.prepared,
@@ -7517,9 +7531,9 @@ export class TinyCloudNode {
       const delegation = this.runtimeDelegationFromSession(delegatedSession, entries, session.spaceId, session,
         new Date(verified.expiresAt), { siwe: verified.signedMessage, signature: verified.signature });
       await this.useRuntimeDelegation(delegation);
-      graph.assertActive();
+      assertCurrent();
       if (this.currentTinyCloudSession() !== session || verified.expiresAt <= Date.now()) throw new Error("Share session changed or expired");
-      this.mintedShareGrants.set(verified.resource, { sessionCid: session.delegationCid, expiresAt: verified.expiresAt });
+      this.mintedShareGrants.set(verified.resource, { sessionCid: baseCid, expiresAt: verified.expiresAt });
       return { shareId: verified.shareId, encryptionNetwork: verified.resource.slice(0, -(`/share/${verified.shareId}`.length)),
         registrationPermissions, delegation };
     } catch (error) { handle.cancel(); throw error; }
