@@ -1,5 +1,69 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.45
+
+### Patch Changes
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+- Updated dependencies [0080686]
+  - @tinycloud/sdk-core@3.12.0-beta.28
+  - @tinycloud/sdk-services@3.12.0-beta.28
+  - @tinycloud/node-sdk@3.12.0-beta.28
+  - @tinycloud/share-sdk@1.5.0-beta.4
+  - @tinycloud/operations@0.9.0-beta.32
+
+## 1.7.0-beta.44
+
+### Patch Changes
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/sdk-core@3.12.0-beta.27
+  - @tinycloud/node-sdk@3.12.0-beta.27
+  - @tinycloud/sdk-services@3.12.0-beta.27
+  - @tinycloud/operations@0.9.0-beta.31
+
+## 1.7.0-beta.43
+
+### Patch Changes
+
+- Updated dependencies [2a8edc2]
+  - @tinycloud/node-sdk@3.12.0-beta.26
+  - @tinycloud/operations@0.9.0-beta.30
+
+## 1.7.0-beta.42
+
+### Patch Changes
+
+- Updated dependencies [b6a8491]
+  - @tinycloud/operations@0.9.0-beta.29
+
+## 1.7.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+  - @tinycloud/operations@0.9.0-beta.28
+
+## 1.7.0-beta.40
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.23
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+  - @tinycloud/operations@0.9.0-beta.27
+
 ## 1.7.0-beta.39
 
 ### Patch Changes

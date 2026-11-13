@@ -233,6 +233,7 @@ import {
   err,
   serviceError,
   type Result,
+  endToEndNodeHost,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -998,10 +999,12 @@ export interface TinyCloudNodeConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
-  /** Include account bootstrap support in plain sessions and implicit manifest permissions. Default true. */
+  /** Include implicit account bootstrap authority. Default true; autoBootstrapAccount:false always disables it. */
   includeAccountRegistryPermissions?: boolean;
-  /** Run canonical first-account bootstrap when fresh account state is detected. Default true. */
+  /** Run canonical account bootstrap. Default true; false also omits implicit account and space capabilities-read grants. */
   autoBootstrapAccount?: boolean;
+  /** @internal Browser apps outside first-party origins must finish account setup first. */
+  requireExistingAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
   /** Retry of node busy/timeout answers; `{ maxAttempts: 1 }` disables it. See {@link RetryPolicy}. */
@@ -2205,9 +2208,11 @@ export class TinyCloudNode {
           ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
           : BOOTSTRAP_SESSION_REQUESTS.default
         : config.capabilityRequest,
-      includeAccountRegistryPermissions: useBootstrapSignInRequest
+      includeAccountRegistryPermissions: useBootstrapSignInRequest || config.autoBootstrapAccount === false
         ? false
         : config.includeAccountRegistryPermissions,
+      includeImplicitCapabilitiesRead: config.autoBootstrapAccount !== false,
+      requireExistingAccount: config.requireExistingAccount,
       // Sign-in needs only the entry inputs (prefixes + secrets opt-in);
       // storage and scheduling never leave TinyCloudNode.
       replication: config.replication?.enabled === true
@@ -2283,6 +2288,17 @@ export class TinyCloudNode {
   }
 
   private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+    const destinations = await this.registryDestinations(resource, access, noEntryHosts);
+    // Encryption-network traffic carries key material and public keys, so it
+    // only uses the origin whose TLS terminates inside the node (TC-2923). The
+    // identity check that follows runs against that origin; nothing retries on
+    // the other production name.
+    return access === "encryption"
+      ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) }))
+      : destinations;
+  }
+
+  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
         (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
@@ -4905,14 +4921,15 @@ export class TinyCloudNode {
     if (renewalRestore && !hasPersistedProof) {
       throw new InvalidRestoredSessionError("Renewal restore requires the original signed SIWE proof.");
     }
+    let delegationExpiry: Date | undefined;
     if (!hasPersistedProof) {
       // A SIWE-less session (a delegate session `tc auth import` bootstrapped)
       // lasts as long as the compact UCAN it restores. Refuse it once
       // that has passed, as an expired SIWE is refused below, before any host
       // lookup. Other bytes are left to the node, as before.
       const authorization = sessionData.delegationHeader?.Authorization;
-      const signedExpiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
-      if (signedExpiry !== undefined && signedExpiry.getTime() <= Date.now()) {
+      delegationExpiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
+      if (delegationExpiry !== undefined && delegationExpiry.getTime() <= Date.now()) {
         throw new InvalidRestoredSessionError("Persisted session delegation has expired.");
       }
     }
@@ -5078,6 +5095,14 @@ export class TinyCloudNode {
     await this.accountRegistryTail;
     // Nothing is committed yet: a sign-out since the start simply wins.
     this.assertSessionEpoch(epoch, "Session restore");
+    // Expiry was checked before the awaits above. A session that lapsed meanwhile is not installed; the
+    // renewal candidate pass (allowExpired without effectiveExpiry) restores an expired original on purpose.
+    const commitExpiry = !hasPersistedProof
+      ? delegationExpiry
+      : renewalRestore && !renewalRestore.effectiveExpiry ? undefined : stagedSessionExpiry;
+    if (commitExpiry !== undefined && commitExpiry.getTime() <= Date.now()) {
+      throw new InvalidRestoredSessionError("Persisted session expired during restore.");
+    }
 
     // Every operation below is a non-throwing pointer/value swap.
     const oldGraph = this._serviceGraph;
@@ -6298,8 +6323,13 @@ export class TinyCloudNode {
       wellKnown: {
         fetchWellKnown: async (principal, discoveryKey) => {
           graph.assertActive();
-          const destination = await this.encryptionDestination(this.getDefaultEncryptionNetworkId());
-          if (this.auth?.registryRecordPresent) return null;
+          const networkId = this.getDefaultEncryptionNetworkId();
+          // The advisory record is only for an owner with no registry record:
+          // a registered owner's descriptor is authoritative at its node. A
+          // session-only restore has no auth object, so ask the router.
+          const routed = await this.routingDestinations(networkId, "encryption");
+          if (this.auth?.registryRecordPresent || routed.some(({ nodeDid }) => nodeDid !== undefined)) return null;
+          const destination = await this.encryptionDestination(networkId);
           if (!address || !didPrincipalMatches(principal, did)) {
             return null;
           }
@@ -6307,7 +6337,7 @@ export class TinyCloudNode {
           const encodedKey = discoveryKey.split("/").map(encodeURIComponent).join("/");
           const response = await graph.fetch(
             `${destination.url}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
-            { method: "GET" },
+            { method: "GET", redirect: "error" },
           );
           graph.assertActive();
           if (!response.ok) {

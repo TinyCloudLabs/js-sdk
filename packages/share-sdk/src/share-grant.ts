@@ -8,6 +8,7 @@ import {
   DECRYPT_ABILITY, NETWORK_CREATE_ABILITY, NETWORK_REVOKE_ABILITY,
   assertActiveShareNetwork, lookupShareNetwork, nodeDidOf, perShareNetworkIdFor, retireShareNetwork, sameNetworkUrn, sendNetworkAdmin,
 } from "./share-network.js";
+import { encryptionNodeOrigin } from "./encryption-origin.js";
 import {
   SHARE_ROOT_LINK_MAX_LIFETIME_MS, ShareRootError,
   assertSpace, assertUsableKey, errorMessage, isExactKeyUnder, isRevokeReceiptFor, ownerPolicySigner, parseOwnerDid, requireNodeOrigin, sameOwner,
@@ -358,7 +359,7 @@ export class ShareGrant {
     const signer = this.#signer();
     const first = await lookupShareNetwork(this.nodeOrigin, this.networkId, this.#fetch);
     if (first.state === "absent") {
-      const nodeDid = await nodeDidOf(this.nodeOrigin, this.#fetch);
+      const nodeDid = await nodeDidOf(encryptionNodeOrigin(this.nodeOrigin), this.#fetch);
       await sendNetworkAdmin({ nodeOrigin: this.nodeOrigin, nodeDid, networkId: this.networkId, action: NETWORK_CREATE_ABILITY, signer, proof: this.cid, fetch: this.#fetch, now: this.#now });
       return this.assertNetworkActive();
     }
@@ -380,7 +381,7 @@ export class ShareGrant {
    */
   async retireNetwork(): Promise<"retired" | "absent"> {
     const signer = this.#signer();
-    const nodeDid = await nodeDidOf(this.nodeOrigin, this.#fetch);
+    const nodeDid = await nodeDidOf(encryptionNodeOrigin(this.nodeOrigin), this.#fetch);
     return retireShareNetwork({ nodeOrigin: this.nodeOrigin, nodeDid, networkId: this.networkId, signer, proof: this.cid, fetch: this.#fetch, now: this.#now });
   }
 

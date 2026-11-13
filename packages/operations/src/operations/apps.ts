@@ -8,7 +8,7 @@ import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { appsDatabase, checkCopyKinds, copyPermission, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
 import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
-import { appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, jsonBytes, listAppsKeys, markAppsKindStale, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
+import { appDiscoveryPermission, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, jsonBytes, listAppsKeys, markAppsKindStale, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
 import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, type KeyParts } from "../tc-apps/layout.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
@@ -59,14 +59,17 @@ const EXPOSURE: OperationExposure = {
   mcp: { status: "required" }, skill: { status: "required" }, docs: { status: "required" },
 };
 
-/** One entry per distinct scope. Each is the whole grant for its prefix, so one approval covers every later call. A discovery entry read needs only the app list; writing one also reads the app's own catalog. */
+/** One entry per distinct scope. Discovery mutations are exact-key grants; writing one also reads the app's own catalog. */
 function scopesFor(context: RuntimeOperationContext, targets: readonly string[], forWrite = false) {
   const entries = new Map<string, AppsPermission>();
   const add = (entry: AppsPermission) => entries.set(`${entry.space}|${entry.path}|${entry.service}`, entry);
   for (const target of targets) {
     const parts = parseKey(target);
     const prefix = parts === undefined ? parsePrefix(target) : undefined;
-    if (parts?.area === "discovery") { add(discoveryPermission(context)); if (forWrite) add(appRecordsPermission(context, parts.app)); }
+    if (parts?.area === "discovery") {
+      add(forWrite ? appDiscoveryPermission(context, parts.app) : discoveryPermission(context));
+      if (forWrite) add(appRecordsPermission(context, parts.app));
+    }
     else if (prefix?.discovery) add(discoveryPermission(context));
     else if (parts !== undefined || prefix?.app !== undefined) add(appRecordsPermission(context, (parts?.app ?? prefix!.app)!));
   }
@@ -81,12 +84,13 @@ const contextAuthority = async (context: RuntimeOperationContext, input: Context
   if (input.app === undefined) return [discoveryPermission(context)];
   if (Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, input.app)) {
     const catalog = TC_APPS_CATALOG_PERMISSIONS[input.app]!;
-    return [discoveryPermission(context, TC_APPS_CATALOG_READ_ACTIONS), {
+    return [discoveryPermission(context), {
       ...catalog, space: appsSpace(context),
       actions: catalog.actions.filter((action) => input.access !== "read" || action !== "tinycloud.sql/write"),
     }];
   }
-  return [discoveryPermission(context, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined),
+  return [discoveryPermission(context),
+    ...(input.access === "read" ? [] : [appDiscoveryPermission(context, input.app)]),
     appRecordsPermission(context, input.app, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined)];
 };
 const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]).map((entry) => {

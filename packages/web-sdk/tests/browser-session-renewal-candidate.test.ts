@@ -1,3 +1,4 @@
+import { signedBrowserSession } from "./fixtures/signed-browser-session";
 import { describe, expect, test } from "bun:test";
 import { BrowserSessionStorage } from "../src/adapters/BrowserSessionStorage";
 
@@ -11,29 +12,16 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string) { this.values.set(key, String(value)); }
 }
 
+const EXPIRED_SESSION = await signedBrowserSession(new Date(Date.now() - 60_000).toISOString());
+
 function expiredSessionData() {
-  return {
-    address: "0x1234567890123456789012345678901234567890",
-    chainId: 1,
-    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "public", d: "private" }),
-    siwe: "signed original SIWE",
-    signature: "owner signature",
-    tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer original" },
-      delegationCid: "bafkreioriginal",
-      spaceId: "tinycloud:test:space",
-      verificationMethod: "did:key:zsession#key-1",
-    },
-    expiresAt: new Date(Date.now() - 60_000).toISOString(),
-    createdAt: new Date(Date.now() - 3_600_000).toISOString(),
-    version: "1",
-  };
+  return structuredClone(EXPIRED_SESSION);
 }
 
 describe("BrowserSessionStorage renewal candidates", () => {
   test("returns an expired record without deleting it, while ordinary loads keep expiring it", async () => {
     const storage = new MemoryStorage();
-    const address = "0x1234567890123456789012345678901234567890";
+    const address = EXPIRED_SESSION.address;
     storage.setItem("renewal:" + address.toLowerCase(), JSON.stringify(expiredSessionData()));
     const sessions = new BrowserSessionStorage({ storage, keyPrefix: "renewal:" });
 

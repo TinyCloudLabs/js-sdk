@@ -41,6 +41,7 @@ jobs:
         run: bun run build
         env:
           BUILD_SETUP_ENABLED: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Resolve workspace:* versions
         run: |

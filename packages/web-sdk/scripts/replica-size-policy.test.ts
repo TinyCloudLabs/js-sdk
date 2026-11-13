@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
+import { MAX_REPLICA_WORKER_GZIP_BYTES as LIVE_MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES as LIVE_MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { approvedTc1428Ratchet, validateTc1428RatchetTransition, type Tc1428Ratchet } from "./replica-size-policy";
 import { approvedTc1476Ratchet, validateTc1476RatchetTransition, type Tc1476Ratchet } from "./replica-size-policy";
@@ -61,7 +61,7 @@ import {
   validateTc2872RenewalReplicaWorkerTransition,
   validateTc2872RenewalRootTransition,
 } from "./replica-size-policy";
-import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
+import { activeRootCeiling, approvedLedgerRows as shippedApprovedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
@@ -77,7 +77,16 @@ import { approvedTc2234InvitationPolicyRoot, validateTc2234InvitationPolicyRootT
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 
+const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2931BootstrapScope" && row !== "tc2923EncryptionTeeOriginRoot"));
+
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+// This file retains the pre-TC-2934 historical snapshots; its new row is tested separately.
+delete shipped.tc2934RequestedAccountRoot;
+delete shipped.tc2936RestoreCommitRoot;
+delete shipped.tc2931BootstrapScope;
+delete shipped.tc2923EncryptionTeeOriginRoot;
+const MAX_WORKER_GZIP_BYTES = shipped.tc2872RenewalKvWorker?.worker.ceiling ?? LIVE_MAX_WORKER_GZIP_BYTES;
+const MAX_REPLICA_WORKER_GZIP_BYTES = shipped.tc2872RenewalReplicaWorker?.replicaWorker.ceiling ?? LIVE_MAX_REPLICA_WORKER_GZIP_BYTES;
 // Historical cases keep the earlier root-only admission and its original cumulative budget.
 // Current-PR controls below exercise the final shipped record and its true accounting.
 const current = structuredClone(shipped);
@@ -85,6 +94,7 @@ delete current.tc2872RenewalRoot;
 delete current.tc2872RenewalKvWorker;
 delete current.tc2872RenewalReplicaWorker;
 delete current.tc2904OwnerDirectProofRoot;
+delete current.tc2924NodeAliasesRoot;
 delete current.tc2481OfflineReplicaTransport;
 delete current.tc2582PublicSessionKey;
 delete current.tc2281OpenKeyConnectedKeyId;
@@ -4823,6 +4833,7 @@ const finalTransportLedger = () => {
   const ledger = { ...structuredClone(shipped), tc2481OfflineReplicaTransport: offlineReplicaTransportAdmission() };
   removeTc2872RenewalRows(ledger);
   delete ledger.tc2904OwnerDirectProofRoot;
+  delete ledger.tc2924NodeAliasesRoot;
   delete ledger.tc2582PublicSessionKey;
   delete ledger.tc2281OpenKeyConnectedKeyId;
   delete ledger.tc2594ResourceTransport;
@@ -4995,6 +5006,7 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
   const throughTc2281 = copy(shipped);
   removeTc2872RenewalRows(throughTc2281);
   delete throughTc2281.tc2904OwnerDirectProofRoot;
+  delete throughTc2281.tc2924NodeAliasesRoot;
   delete throughTc2281.tc2594ResourceTransport;
   delete throughTc2281.tc2657RegistryPublication;
   delete throughTc2281.tc2518KeyWrap;
@@ -5056,6 +5068,7 @@ describe("TC-2594 resource transport root-only admission (#891)", () => {
   const throughTc2594 = copy(shipped);
   removeTc2872RenewalRows(throughTc2594);
   delete throughTc2594.tc2904OwnerDirectProofRoot;
+  delete throughTc2594.tc2924NodeAliasesRoot;
   delete throughTc2594.tc2657RegistryPublication;
   delete throughTc2594.tc2518KeyWrap;
   delete throughTc2594.tc2687PublishedSignIn;
@@ -5115,6 +5128,7 @@ describe("TC-2657 explicit publication root-only admission (#902)", () => {
   const throughTc2657 = copy(shipped);
   removeTc2872RenewalRows(throughTc2657);
   delete throughTc2657.tc2904OwnerDirectProofRoot;
+  delete throughTc2657.tc2924NodeAliasesRoot;
   delete throughTc2657.tc2518KeyWrap;
   delete throughTc2657.tc2687PublishedSignIn;
   delete throughTc2657.tc2691HostExpiryWorker;
@@ -5173,6 +5187,7 @@ describe("TC-2518 key wrap root-only admission (#906)", () => {
   const throughTc2518 = copy(shipped);
   removeTc2872RenewalRows(throughTc2518);
   delete throughTc2518.tc2904OwnerDirectProofRoot;
+  delete throughTc2518.tc2924NodeAliasesRoot;
   delete throughTc2518.tc2687PublishedSignIn;
   delete throughTc2518.tc2691HostExpiryWorker;
   delete throughTc2518.tc2691HostExpiryReplicaWorker;
@@ -5225,6 +5240,7 @@ describe("TC-2687 published sign-in root-only admission (#910)", () => {
   const throughTc2687 = copy(shipped);
   removeTc2872RenewalRows(throughTc2687);
   delete throughTc2687.tc2904OwnerDirectProofRoot;
+  delete throughTc2687.tc2924NodeAliasesRoot;
   delete throughTc2687.tc2691HostExpiryWorker;
   delete throughTc2687.tc2691HostExpiryReplicaWorker;
   delete throughTc2687.tc2691HostExpiry;
@@ -5278,6 +5294,7 @@ describe("host SIWE expiry (TC-2691) exact size admissions", () => {
   const throughTc2691 = copy(shipped);
   removeTc2872RenewalRows(throughTc2691);
   delete throughTc2691.tc2904OwnerDirectProofRoot;
+  delete throughTc2691.tc2924NodeAliasesRoot;
   delete throughTc2691.tc2773LazyRestoreReplicaWorker;
   delete throughTc2691.tc2234InvitationPolicyRoot;
   delete throughTc2691.tc2773LazyRestoreRoot;
@@ -5379,6 +5396,7 @@ describe("TC-2773 exact web-sdk root admission", () => {
   const throughTc2773 = copy(shipped);
   removeTc2872RenewalRows(throughTc2773);
   delete throughTc2773.tc2904OwnerDirectProofRoot;
+  delete throughTc2773.tc2924NodeAliasesRoot;
   delete throughTc2773.tc2234InvitationPolicyRoot;
   const row = throughTc2773.tc2773LazyRestoreRoot!;
 
@@ -5433,6 +5451,7 @@ describe("TC-2234 exact web-sdk root admission", () => {
   const throughTc2234 = copy(shipped);
   removeTc2872RenewalRows(throughTc2234);
   delete throughTc2234.tc2904OwnerDirectProofRoot;
+  delete throughTc2234.tc2924NodeAliasesRoot;
   it("admits the canonical root measurements and refuses the next byte", () => {
     validateLedger(shipped);
     expect(row).toEqual(approvedTc2234InvitationPolicyRoot);
@@ -5471,6 +5490,7 @@ describe("TC-2234 exact web-sdk root admission", () => {
     const missing = copy(shipped);
     removeTc2872RenewalRows(missing);
     delete missing.tc2904OwnerDirectProofRoot;
+    delete missing.tc2924NodeAliasesRoot;
     delete missing.tc2773LazyRestoreRoot;
     expect(() => validateLedger(missing)).toThrow("TC-2234 root");
   });
@@ -5498,7 +5518,7 @@ describe("TC-2872 exact web-sdk renewal root admission", () => {
     expect(row.root.delta).toEqual({ "index.mjs": 6200, "index.cjs": 4997 });
     expect(row.root.ceiling).toEqual({ "index.mjs": 1521709, "index.cjs": 1455532 });
     for (const [format, measured] of [["index.mjs", 1521709], ["index.cjs", 1455532]] as const) {
-      expect(rootCeilingFor({ ...shipped, tc2904OwnerDirectProofRoot: undefined }, format)).toMatchObject({
+      expect(rootCeilingFor({ ...shipped, tc2904OwnerDirectProofRoot: undefined, tc2924NodeAliasesRoot: undefined }, format)).toMatchObject({
         row: "tc2872RenewalRoot",
         ceiling: measured,
       });

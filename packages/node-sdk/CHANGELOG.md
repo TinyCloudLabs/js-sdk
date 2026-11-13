@@ -1,5 +1,66 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.28
+
+### Patch Changes
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+- Updated dependencies [0080686]
+  - @tinycloud/sdk-core@3.12.0-beta.28
+  - @tinycloud/sdk-services@3.12.0-beta.28
+  - @tinycloud/share-sdk@1.5.0-beta.4
+  - @tinycloud/replica@0.4.5-beta.8
+
+## 3.12.0-beta.27
+
+### Patch Changes
+
+- f4220cf: Scope implicit sign-in bootstrap permissions to approved first-party page origins. Explicit bootstrap opt-out omits implicit account and capabilities-read rows; explicitly requested permissions remain intact. Third-party accounts with no registered route receive a setup-required error with the Home setup URL before signing.
+
+  Details: TC-2931
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/sdk-core@3.12.0-beta.27
+  - @tinycloud/sdk-services@3.12.0-beta.27
+  - @tinycloud/replica@0.4.5-beta.7
+
+## 3.12.0-beta.26
+
+### Patch Changes
+
+- 2a8edc2: `restoreSession()` and `restoreSessionWithRenewal()` check the session's expiry again just before installing it. A session that expired while the restore was waiting, for example on a pending account-registry sync, is now refused with `InvalidRestoredSessionError` instead of being installed and then failing every call against the node.
+
+  In the web SDK, a restore whose session another instance on the same storage signed out while the node was restoring it now ends that node session and returns `"missing"` instead of `"restored"`.
+
+  Details: TC-2936
+
+## 3.12.0-beta.24
+
+### Patch Changes
+
+- 56df81d: Treat both production node names as one node for delegation validation while preserving configured hosts.
+
+  Details: TC-2923, TC-2924
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+
+## 3.12.0-beta.23
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+
 ## 3.12.0-beta.22
 
 ### Patch Changes

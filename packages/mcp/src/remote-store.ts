@@ -1,3 +1,4 @@
+import { sameTinyCloudNode } from "@tinycloud/sdk-core";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -37,12 +38,7 @@ const NATIVE_GRANT_IMPORT_REJECTION_CODES = new Set([
   "DELEGATION_HOST_MISMATCH",
   "DELEGATION_REJECTED",
 ]);
-/**
- * The node host hosted MCP tenants were created with until TC_HOST moved to
- * `https://tee.node.tinycloud.xyz` (js-sdk 48eca361). Profiles keep the host
- * they were created with, so tenants from that era still store it.
- */
-const LEGACY_DEFAULT_NODE_HOST = "https://node.tinycloud.xyz";
+const PRODUCTION_NODE_HOSTS = new Set(["https://node.tinycloud.xyz", "https://tee.node.tinycloud.xyz"]);
 const BOOTSTRAP_PERMISSIONS: PermissionEntry[] = [
   {
     service: "tinycloud.kv",
@@ -661,6 +657,7 @@ export class RemoteTenantStore {
       did: tenant.sessionDid,
       callback: callback.toString(),
       host: this.#config.nodeHost,
+      requesterOrigin: this.#config.publicUrl.origin,
       jwk: Buffer.from(JSON.stringify(publicJwk(tenant.jwk))).toString("base64url"),
       permissions: Buffer.from(JSON.stringify({
         permissions: pending.permissions,
@@ -1029,16 +1026,17 @@ export class RemoteTenantStore {
       });
     } else if (
       typeof profile.host === "string" &&
-      profile.host.replace(/\/+$/, "") === LEGACY_DEFAULT_NODE_HOST &&
-      this.#config.nodeHost.replace(/\/+$/, "") !== LEGACY_DEFAULT_NODE_HOST
+      PRODUCTION_NODE_HOSTS.has(profile.host.replace(/\/+$/, "")) &&
+      PRODUCTION_NODE_HOSTS.has(this.#config.nodeHost.replace(/\/+$/, "")) &&
+      profile.host.replace(/\/+$/, "") !== this.#config.nodeHost.replace(/\/+$/, "")
     ) {
       // The runtime already talks to TC_HOST, but `tinycloud.auth.import`
-      // checks the stored host, so a tenant left on the retired default
+      // checks the stored host, so a tenant left on another production name
       // refuses every authority approval. Any other stored host is a
       // deliberate pin and keeps its DELEGATION_HOST_MISMATCH.
       await secureWrite(profilePath, { ...profile, host: this.#config.nodeHost });
       process.stderr.write(
-        `[tinycloud-mcp-http] tenant node host migrated: from=${LEGACY_DEFAULT_NODE_HOST} to=${new URL(this.#config.nodeHost).origin}\n`,
+        `[tinycloud-mcp-http] tenant node host migrated: from=${profile.host.replace(/\/+$/, "")} to=${new URL(this.#config.nodeHost).origin}\n`,
       );
     }
     const approvalEpoch = this.#approvalEpochs.get(stateRoot) ??
@@ -1442,6 +1440,7 @@ function normalizeDid(value: string): string {
 }
 
 function sameNodeHost(left: string, right: string): boolean {
+  if (PRODUCTION_NODE_HOSTS.has(left) && sameTinyCloudNode(left, right)) return true;
   try {
     const normalize = (value: string): string => {
       const url = new URL(value);

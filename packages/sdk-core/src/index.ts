@@ -1226,3 +1226,7 @@ export {
   type UnsignedPolicyObject,
   type UnsignedPolicyStatus,
 } from "./policy";
+
+export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
+export { AccountSetupRequiredError } from "./account-setup";
+export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";

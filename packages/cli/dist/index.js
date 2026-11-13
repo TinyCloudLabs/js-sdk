@@ -1018,8 +1018,8 @@ function normalizePkhIdentifier(identifier) {
     (_match, prefix, address) => prefix + address.toLowerCase()
   );
 }
-function parsePkhDid(did) {
-  const match = did.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
+function parsePkhDid(did2) {
+  const match = did2.match(/^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/);
   if (!match) return null;
   return {
     chainId: Number(match[1]),
@@ -2288,10 +2288,10 @@ var init_raw_encryption = __esm({
 
 // src/lib/owner-did.ts
 import { ensureEip55 } from "@tinycloud/node-sdk-wasm";
-function canonicalOwnerDid(did, label = "--owner") {
-  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did);
+function canonicalOwnerDid(did2, label = "--owner") {
+  const match = /^did:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40})$/.exec(did2);
   if (!match) {
-    throw new CLIError("INVALID_ARGUMENT", `${label} "${did}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`, ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_ARGUMENT", `${label} "${did2}" is not a did:pkh:eip155:CHAIN:ADDRESS identity.`, ExitCode.USAGE_ERROR);
   }
   return `did:pkh:eip155:${match[1]}:${ensureEip55(match[2])}`;
 }
@@ -14737,9 +14737,11 @@ __export(links_exports, {
   LINK_TYPE_SPECS: () => LINK_TYPE_SPECS,
   LINK_WINDOW_SECONDS: () => LINK_WINDOW_SECONDS,
   LinkError: () => LinkError,
+  MAX_APPROVAL_LEASE_SECONDS: () => MAX_APPROVAL_LEASE_SECONDS,
   MAX_LINK_BODY_BYTES: () => MAX_LINK_BODY_BYTES,
   MAX_LINK_REQUEST_BYTES: () => MAX_LINK_REQUEST_BYTES,
   ackApprovalResult: () => ackApprovalResult,
+  approvalRequestPurpose: () => approvalRequestPurpose,
   approvalSessionProof: () => approvalSessionProof,
   assertDidKeySignature: () => assertDidKeySignature,
   buildFullLink: () => buildFullLink,
@@ -14769,6 +14771,7 @@ __export(links_exports, {
   normalizeLinkId: () => normalizeLinkId,
   openLinkRecord: () => openLinkRecord,
   openRelayResult: () => openRelayResult,
+  parseApprovalRenewal: () => parseApprovalRenewal,
   parseApprovalRequest: () => parseApprovalRequest,
   parseLink: () => parseLink,
   parseLinkTimestamp: () => parseLinkTimestamp,
@@ -14953,11 +14956,11 @@ function didKeyFromEd25519PublicKey(publicKey) {
   prefixed.set(publicKey, ED25519_MULTICODEC_PREFIX2.length);
   return `did:key:${base58btc2.encode(prefixed)}`;
 }
-function ed25519PublicKeyFromDidKey(did) {
-  if (!did.startsWith("did:key:")) {
-    throw new TypeError(`not a did:key: ${did}`);
+function ed25519PublicKeyFromDidKey(did2) {
+  if (!did2.startsWith("did:key:")) {
+    throw new TypeError(`not a did:key: ${did2}`);
   }
-  const multibase = did.slice("did:key:".length);
+  const multibase = did2.slice("did:key:".length);
   const prefixed = base58btc2.decode(multibase);
   if (prefixed.length !== ED25519_MULTICODEC_PREFIX2.length + PUBLIC_KEY_LENGTH || prefixed[0] !== ED25519_MULTICODEC_PREFIX2[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX2[1]) {
     throw new TypeError("did:key does not encode an ed25519 public key");
@@ -15017,11 +15020,11 @@ function parseLinkTimestamp(text) {
   const ms2 = Date.parse(text);
   return Number.isFinite(ms2) && new Date(ms2).toISOString() === text ? ms2 : null;
 }
-function linkIssuerPublicKey(did) {
-  if (!DID_KEY_PATTERN.test(did)) return null;
+function linkIssuerPublicKey(did2) {
+  if (!DID_KEY_PATTERN.test(did2)) return null;
   try {
-    const key = ed25519PublicKeyFromDidKey(did);
-    return didKeyFromEd25519PublicKey(key) === did ? key : null;
+    const key = ed25519PublicKeyFromDidKey(did2);
+    return didKeyFromEd25519PublicKey(key) === did2 ? key : null;
   } catch {
     return null;
   }
@@ -15290,6 +15293,11 @@ async function openLinkRecord(record2, key, options = {}) {
   await runBodyValidator(opened, options.validateBody);
   return opened;
 }
+function parseApprovalRenewal(value) {
+  const parsed = approvalRenewalSchema.safeParse(value);
+  if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval renewal");
+  return parsed.data;
+}
 function buildShareInvitationApprovalSpec(input) {
   const { context } = input;
   const lifetime = Math.floor((Date.parse(context.acceptanceExpiresAt) - input.now) / 1e3);
@@ -15315,6 +15323,9 @@ function parseApprovalRequest(value, options = {}) {
     throw new LinkError("issuer_binding_mismatch");
   }
   return request;
+}
+function approvalRequestPurpose(request) {
+  return request.purpose ?? "task";
 }
 function checkApiOrigin(origin2) {
   if (!AUDIENCE_ORIGIN.test(origin2)) throw new LinkError("invalid_argument", "the API origin is not a canonical https origin");
@@ -15760,6 +15771,22 @@ async function openRelayResult(envelope, requestId, relayPrivateKey) {
   return value;
 }
 function checkApprovalResultBinding(opened, expected) {
+  const allowed = /* @__PURE__ */ new Set(["resultVersion", "requestId", "requestDigest", "requesterDid", "targetDid", "ownerDid", "delegationExpiresAt", "delegation", "renewalChoice", "renewal"]);
+  if (Object.keys(opened).some((key) => !allowed.has(key))) throw invalidResult("The encrypted result contains unknown fields.");
+  let renewal;
+  if (expected.request.renewal) {
+    if (opened.renewalChoice === "leased") {
+      const parsed = approvalRenewalSchema.safeParse(opened.renewal);
+      if (!parsed.success || parsed.data.approvedLeaseLifetimeSeconds > expected.request.renewal.leaseLifetimeSeconds || Date.parse(parsed.data.approvedAt) > (expected.now ?? Date.now()) + 6e4) {
+        throw invalidResult("The approved renewal does not match this request.");
+      }
+      renewal = parsed.data;
+    } else if (opened.renewalChoice !== "finite" || opened.renewal !== void 0) {
+      throw invalidResult("The approved renewal choice is missing or inconsistent.");
+    }
+  } else if (opened.renewalChoice !== void 0 || opened.renewal !== void 0) {
+    throw invalidResult("The result contains renewal that was not requested.");
+  }
   const { ownerDid, delegationExpiresAt, delegation } = opened;
   const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) && new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
   const differing = [
@@ -15773,10 +15800,10 @@ function checkApprovalResultBinding(opened, expected) {
     ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)]
   ].filter(([, matches]) => !matches).map(([field]) => field);
   if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
-  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
-  return { ownerDid, delegationExpiresAt, delegation };
+  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now()) && !(expected.allowExpiredRenewal && renewal)) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid, delegationExpiresAt, delegation, ...expected.request.renewal ? { renewalChoice: opened.renewalChoice, ...renewal ? { renewal } : {} } : {} };
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, isoUtc, invitationContext, requestSchema, DAY_SECONDS, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, MAX_APPROVAL_LEASE_SECONDS, positiveSeconds, timestamp, did, approvalRenewalRequestSchema, approvalRenewalSchema, bytes32, ed25519Jwk, p256Jwk, origin, permission, isoUtc, invitationContext, requestSchema, DAY_SECONDS, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -15790,6 +15817,7 @@ var init_links = __esm({
     init_zod();
     init_base58();
     init_ed25519();
+    init_zod();
     init_zod();
     init_p256();
     init_zod();
@@ -15852,8 +15880,8 @@ var init_links = __esm({
     CID_PATTERN = /^bafkrei[a-z2-7]{52}$/;
     HEADER_KEYS = ["audience", "bodyCid", "expiresAt", "issuedAt", "issuer", "nonce", "size", "type", "version"];
     DELETE_KEYS = ["audience", "id", "issuedAt", "issuer", "nonce", "op", "version"];
-    ed25519DidKey = external_exports2.string().refine((did) => {
-      const key = linkIssuerPublicKey(did);
+    ed25519DidKey = external_exports2.string().refine((did2) => {
+      const key = linkIssuerPublicKey(did2);
       return key !== null && ed25519KeyProblem(key) === null;
     });
     linkTypeSchema = external_exports2.enum(LINK_TYPES);
@@ -15888,6 +15916,36 @@ var init_links = __esm({
     REMOVED_FRAGMENT = /^#v=[23](&|$)/;
     MAX_FULL_RECORD_JSON_BYTES = MAX_LINK_REQUEST_BYTES;
     jsonObject = external_exports2.record(external_exports2.unknown());
+    MAX_APPROVAL_LEASE_SECONDS = 365 * 86400;
+    positiveSeconds = external_exports2.number().int().positive().safe().max(MAX_APPROVAL_LEASE_SECONDS);
+    timestamp = external_exports2.string().datetime({ precision: 3 });
+    did = external_exports2.string().startsWith("did:key:z");
+    approvalRenewalRequestSchema = external_exports2.object({
+      version: external_exports2.literal(1),
+      leaseLifetimeSeconds: positiveSeconds
+    }).strict();
+    approvalRenewalSchema = external_exports2.object({
+      version: external_exports2.literal(1),
+      approvedLeaseLifetimeSeconds: positiveSeconds,
+      approvedAt: timestamp,
+      receipt: external_exports2.object({
+        originalCid: external_exports2.string().min(1),
+        leaseCid: external_exports2.string().min(1),
+        leaseAuthorization: external_exports2.string().min(1),
+        leaseExpiresAt: timestamp,
+        leaseGeneration: external_exports2.number().int().positive().safe(),
+        nodeIdentity: external_exports2.object({
+          nodeDid: did,
+          renewerDid: did,
+          renewerPublicKey: external_exports2.string().min(1),
+          renewerEpoch: external_exports2.number().int().nonnegative().safe()
+        }).strict()
+      }).strict()
+    }).strict().refine((value) => {
+      const approved = Date.parse(value.approvedAt);
+      const end = Date.parse(value.receipt.leaseExpiresAt);
+      return end > approved && end <= approved + value.approvedLeaseLifetimeSeconds * 1e3;
+    });
     bytes32 = external_exports2.string().refine((value) => decodeStrictBase64Url(value)?.length === 32);
     ed25519Jwk = external_exports2.object({ kty: external_exports2.literal("OKP"), crv: external_exports2.literal("Ed25519"), x: bytes32 }).strict();
     p256Jwk = external_exports2.object({ kty: external_exports2.literal("EC"), crv: external_exports2.literal("P-256"), x: bytes32, y: bytes32 }).strict().refine((key) => {
@@ -15939,6 +15997,9 @@ var init_links = __esm({
       grantLifetimeSeconds: external_exports2.number().int().positive(),
       resultEncryptionPublicJwk: p256Jwk,
       context: invitationContext.optional(),
+      /** D11: absence means task; keep absent bytes unchanged for signed request compatibility. */
+      purpose: external_exports2.enum(["task", "standing"]).optional(),
+      renewal: approvalRenewalRequestSchema.optional(),
       /**
        * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
        * maximum; it has no upper bound of its own, and the approver may still choose less.
@@ -16094,7 +16155,7 @@ var init_refusal = __esm({
 });
 
 // src/lib/named-keys.ts
-import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { endToEndNodeHost, extractRecapAttenuations } from "@tinycloud/sdk-core";
 import {
   EncryptionResourceError,
   KEY_CREATE_ABILITY,
@@ -27936,11 +27997,11 @@ function utf8Bytes3(text) {
 }
 var ED25519_MULTICODEC_PREFIX3 = Uint8Array.of(237, 1);
 var PUBLIC_KEY_LENGTH2 = 32;
-function ed25519PublicKeyFromDidKey2(did) {
-  if (!did.startsWith("did:key:")) {
-    throw new TypeError(`not a did:key: ${did}`);
+function ed25519PublicKeyFromDidKey2(did2) {
+  if (!did2.startsWith("did:key:")) {
+    throw new TypeError(`not a did:key: ${did2}`);
   }
-  const multibase = did.slice("did:key:".length);
+  const multibase = did2.slice("did:key:".length);
   const prefixed = base58btc3.decode(multibase);
   if (prefixed.length !== ED25519_MULTICODEC_PREFIX3.length + PUBLIC_KEY_LENGTH2 || prefixed[0] !== ED25519_MULTICODEC_PREFIX3[0] || prefixed[1] !== ED25519_MULTICODEC_PREFIX3[1]) {
     throw new TypeError("did:key does not encode an ed25519 public key");
