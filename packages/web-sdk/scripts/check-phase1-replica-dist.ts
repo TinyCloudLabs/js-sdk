@@ -1,3 +1,4 @@
+import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -199,6 +200,7 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
   validateTc2691HostExpiryTransition(baseLedger, ledger);
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);

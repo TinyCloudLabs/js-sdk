@@ -1,3 +1,4 @@
+export { SessionAccountMismatchError } from "./modules/restoreAccount";
 // Main class and config
 export {
   TinyCloudWeb,

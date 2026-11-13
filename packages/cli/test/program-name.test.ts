@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const PACKAGE_DIR = resolve(import.meta.dir, "..");
 const { bin } = JSON.parse(readFileSync(resolve(PACKAGE_DIR, "package.json"), "utf-8")) as { bin: Record<string, string> };
@@ -44,10 +45,19 @@ describe("program name", () => {
       const extracted = spawnSync("tar", ["-xzf", join(directory, filename), "-C", directory]);
       expect(extracted.status).toBe(0);
       const packaged = join(directory, "package");
-      const dependencies = existsSync(join(PACKAGE_DIR, "node_modules"))
-        ? join(PACKAGE_DIR, "node_modules")
-        : resolve(PACKAGE_DIR, "../../node_modules");
-      symlinkSync(dependencies, join(packaged, "node_modules"), "dir");
+      const require = createRequire(join(PACKAGE_DIR, "package.json"));
+      const sourceManifest = JSON.parse(readFileSync(join(PACKAGE_DIR, "package.json"), "utf-8"));
+      for (const dependency of Object.keys(sourceManifest.dependencies)) {
+        let root = dirname(require.resolve(dependency));
+        while (!existsSync(join(root, "package.json")) || JSON.parse(readFileSync(join(root, "package.json"), "utf-8")).name !== dependency) {
+          const parent = dirname(root);
+          if (parent === root) throw new Error(`Cannot locate package root for ${dependency}`);
+          root = parent;
+        }
+        const target = join(packaged, "node_modules", dependency);
+        mkdirSync(dirname(target), { recursive: true });
+        symlinkSync(root, target, "dir");
+      }
       const manifest = JSON.parse(readFileSync(join(packaged, "package.json"), "utf-8"));
       expect(manifest.bin.tc).toBe(manifest.bin.tinycloud);
       expect(typeof manifest.bin.tc).toBe("string");
