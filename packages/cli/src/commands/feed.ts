@@ -261,6 +261,10 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       let local: LocalFeedHandoff | undefined;
       const abort = new AbortController();
       const stop = () => abort.abort();
+      // The hooks service waits out reconnect backoff on unref'd timers, so when the
+      // node ends an idle stream (about every 60 s) nothing else holds the event loop
+      // and Node would exit 0 mid-watch. Hold it until the watch ends.
+      const alive = setInterval(() => {}, 60_000);
       try {
         const runner = options.runner === undefined ? undefined : parseFeedRunner(options.runner);
         const { profile, node, space, responses, resources } = await context(command);
@@ -277,6 +281,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         });
       } catch (error) { return handleError(error); }
       finally {
+        clearInterval(alive);
         process.off("SIGINT", stop);
         process.off("SIGTERM", stop);
         local?.close();
