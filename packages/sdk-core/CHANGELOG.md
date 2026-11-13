@@ -1,5 +1,19 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.27
+
+### Minor Changes
+
+- f4220cf: Scope implicit sign-in bootstrap permissions to approved first-party page origins. Explicit bootstrap opt-out omits implicit account and capabilities-read rows; explicitly requested permissions remain intact. Third-party accounts with no registered route receive a setup-required error with the Home setup URL before signing.
+
+  Details: TC-2931
+
+### Patch Changes
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/bootstrap@2.9.0-beta.0
+  - @tinycloud/sdk-services@3.12.0-beta.27
+
 ## 3.12.0-beta.24
 
 ### Patch Changes

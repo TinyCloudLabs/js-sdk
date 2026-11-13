@@ -2548,7 +2548,7 @@ function defaultEntriesForTier(tier) {
     ...e.skipPrefix !== void 0 ? { skipPrefix: e.skipPrefix } : {}
   }));
 }
-function resolveManifest(input) {
+function resolveManifest(input, options = {}) {
   const manifest = validateManifest(input);
   const prefix = manifest.prefix !== void 0 ? manifest.prefix : manifest.app_id;
   const space = manifest.space ?? DEFAULT_MANIFEST_SPACE;
@@ -2563,9 +2563,8 @@ function resolveManifest(input) {
     ...explicitEntries,
     ...secretEntries
   ];
-  const resources = withCapabilitiesReadForSpaces(
-    allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space))
-  );
+  const entries = allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space));
+  const resources = options.includeImplicitCapabilitiesRead === false ? dedupeResources(entries) : withCapabilitiesReadForSpaces(entries);
   const additionalDelegates = manifest.did === void 0 ? [] : [
     {
       did: manifest.did,

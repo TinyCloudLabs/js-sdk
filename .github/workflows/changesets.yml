@@ -109,6 +109,7 @@ jobs:
           bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       # The pins embedded in the CLI must still match the upstream node release
       # before this version is committed and published.
@@ -440,6 +441,7 @@ jobs:
         run: bun run build:release
         env:
           BUILD_SETUP_ENABLED: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Verify node release pin
         run: bun run --cwd packages/cli check:node-release
