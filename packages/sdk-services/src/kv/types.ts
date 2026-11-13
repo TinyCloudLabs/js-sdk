@@ -232,6 +232,13 @@ export interface KVListOptions {
   cursor?: string;
 
   /**
+   * Also return each key's stored size and last-modified time in
+   * {@link KVListResponse.entries}. Read from the network; a node that
+   * doesn't report them returns entries with the key only.
+   */
+  entries?: boolean;
+
+  /**
    * Custom timeout for this operation in milliseconds. Overrides
    * `KVServiceConfig.timeout`; `0` disables a configured timeout.
    */
@@ -357,7 +364,8 @@ export interface KVResponseHeaders {
   lastModified?: string;
 
   /**
-   * Content length in bytes.
+   * Content length in bytes. On a head, the stored value's size; absent when
+   * the node doesn't report it.
    */
   contentLength?: number;
 
@@ -391,6 +399,20 @@ export interface KVResponse<T = unknown> {
 }
 
 /**
+ * One listed key with its stored size and last-modified time, when the node
+ * reports them.
+ */
+export interface KVListEntry {
+  key: string;
+
+  /** The stored value's size in bytes. */
+  size?: number;
+
+  /** When the current value was written, as an RFC 3339 timestamp. */
+  updatedAt?: string;
+}
+
+/**
  * Response from KV list operations.
  */
 export interface KVListResponse {
@@ -398,6 +420,9 @@ export interface KVListResponse {
    * Array of keys matching the list criteria.
    */
   keys: string[];
+
+  /** The listed keys with size and modified time, when `entries` was requested. */
+  entries?: KVListEntry[];
 
   /** True when more matching keys exist than the requested limit. */
   truncated?: boolean;
