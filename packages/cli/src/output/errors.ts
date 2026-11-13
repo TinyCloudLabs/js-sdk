@@ -1,3 +1,4 @@
+import { finishUpdateNotice } from "../lib/auto-update.js";
 import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -253,8 +254,10 @@ export async function handleError(error: unknown): Promise<never> {
     // Not a failure: the owner has not answered yet. stdout carries the one JSON object an agent acts on.
     outputJson({ pending });
     process.stderr.write(`${safeBlock(cliError.message)}\n`);
+    await finishUpdateNotice();
     if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
-    return closeReplication().then(() => process.exit(cliError.exitCode));
+    await closeReplication();
+    return process.exit(cliError.exitCode);
   }
   // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
   // hint) takes precedence over the derived auth/network hints.
@@ -297,8 +300,10 @@ export async function handleError(error: unknown): Promise<never> {
     ...(Object.keys(meta).length ? { meta } : {}),
     warnings: mergeWarnings(drainWarnings(), operationWarnings(cliError.metadata?.warnings)),
   });
+  await finishUpdateNotice();
   if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
-  return closeReplication().then(() => process.exit(cliError.exitCode));
+  await closeReplication();
+  return process.exit(cliError.exitCode);
 }
 
 /**

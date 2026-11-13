@@ -150,7 +150,6 @@ describe("tinycloud bug-report --attach", () => {
     const program = new Command();
     registerBugReportCommand(program, {
       root,
-      attachmentUrl: "https://bugs.tinycloud.xyz/reports",
       confirm: async (_summary: string, content: string) => { uploaded = content; return true; },
       fetchImpl: async () => Response.json({ redactions: {} }, { status: 201 }),
       write: () => undefined,
