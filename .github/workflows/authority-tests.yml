@@ -144,6 +144,10 @@ jobs:
         working-directory: openkey
         run: bun install --frozen-lockfile
 
+      - name: Generate the OpenKey harness database client
+        working-directory: openkey
+        run: bun run --cwd packages/db db:generate
+
       - name: Build js-sdk authority packages
         working-directory: js-sdk
         run: |
@@ -234,6 +238,10 @@ jobs:
       - name: Install OpenKey dependencies
         working-directory: openkey
         run: bun install --frozen-lockfile
+
+      - name: Generate the OpenKey harness database client
+        working-directory: openkey
+        run: bun run --cwd packages/db db:generate
       - name: Read Playwright version
         id: playwright-version
         working-directory: js-sdk
