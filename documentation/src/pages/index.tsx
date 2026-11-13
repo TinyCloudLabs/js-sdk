@@ -235,12 +235,12 @@ function CoreValues() {
     { 
       title: "Sovereignty", 
       icon: "🔒",
-      desc: "Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned." 
+      desc: "You approve capability-based scopes for application access to your data."
     },
     { 
       title: "Privacy", 
       icon: "🛡️",
-      desc: "Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party." 
+      desc: "Ordinary hosted data is plaintext at rest. Capability-based access does not provide general stored-data end-to-end encryption or remove trust in the host."
     },
     { 
       title: "Interoperability", 
@@ -267,6 +267,9 @@ function CoreValues() {
             </div>
           ))}
         </div>
+        <p className={styles.valueDescription}>
+          <a href="https://docs.tinycloud.xyz/concepts/security-and-trust">Security and trust: storage, key management, and access boundaries</a>
+        </p>
       </div>
     </section>
   );
