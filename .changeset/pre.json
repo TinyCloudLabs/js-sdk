@@ -31,6 +31,7 @@
   "changesets": [
     "courier-collect-peer-renewal",
     "courier-unknown-flags",
+    "feed-watch-lines-once",
     "hide-courier-invite",
     "kv-503-not-applied-failed",
     "local-replica-restore",

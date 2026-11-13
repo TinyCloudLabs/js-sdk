@@ -1,5 +1,23 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.37
+
+### Minor Changes
+
+- 1c9206b: `tinycloud feed watch` no longer needs `--runner`: without it, each new owner response is printed as one JSON line on stdout. `--once` exits after the first batch of new responses is handed off, so an agent whose tools return only when a command exits can run the watcher in the background and be woken by the owner's next answer or comment. `listenFeedResponses` takes the matching `once` option.
+
+  Fixed: an idle `feed watch` no longer exits with status 0 after about a minute. That happened when the node closed an idle hooks stream and nothing kept Node's event loop alive during the reconnect backoff.
+
+  Details: TC-2205
+
+### Patch Changes
+
+- Updated dependencies [1c9206b]
+  - @tinycloud/sdk-services@3.12.0-beta.20
+  - @tinycloud/node-sdk@3.12.0-beta.20
+  - @tinycloud/operations@0.9.0-beta.24
+  - @tinycloud/sdk-core@3.12.0-beta.20
+
 ## 1.7.0-beta.36
 
 ### Patch Changes
