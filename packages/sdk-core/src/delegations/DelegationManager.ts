@@ -38,6 +38,52 @@ import {
 } from "./types";
 import { DelegationAction, createError } from "./shared";
 import type { IssuedContext } from "./issued";
+const MAX_DELEGATION_STATUS_BODY_BYTES = 16 * 1024 * 1024;
+
+async function readBoundedStatusBody(response: FetchResponse): Promise<string> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const bytes = Number(declaredLength);
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > MAX_DELEGATION_STATUS_BODY_BYTES) {
+      throw new Error("Delegation status response is too large");
+    }
+  }
+
+  const body = response.body as ReadableStream<Uint8Array> | null | undefined;
+  if (body && typeof body.getReader === "function") {
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > MAX_DELEGATION_STATUS_BODY_BYTES) {
+          await reader.cancel();
+          throw new Error("Delegation status response is too large");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(bytes);
+  }
+
+  const text = await response.text();
+  if (new TextEncoder().encode(text).byteLength > MAX_DELEGATION_STATUS_BODY_BYTES) {
+    throw new Error("Delegation status response is too large");
+  }
+  return text;
+}
+
 
 /**
  * Parses the JSON body of an `/invoke` response. The node answers an
@@ -349,7 +395,7 @@ export class DelegationManager {
           )
         : await send(this.fetchFn, this.host);
       if (!response.ok && response.status !== 404) {
-        const errorText = await response.text();
+        const errorText = await readBoundedStatusBody(response);
         return {
           ok: false,
           error: createError(
@@ -360,7 +406,7 @@ export class DelegationManager {
           ),
         };
       }
-      const parsed = DelegationStatusSchema.safeParse(await response.json());
+      const parsed = DelegationStatusSchema.safeParse(JSON.parse(await readBoundedStatusBody(response)));
       const responseStatusMatches = parsed.success && (
         response.status === 404
           ? parsed.data.status === "not_found" && !parsed.data.exists

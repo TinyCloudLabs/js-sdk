@@ -153,8 +153,8 @@ describe("verifyRenewalHistory", () => {
     }
   });
 
-  test("bounds a valid lease history to the node's one-year, whole-second issuance policy", () => {
-    expect(MAX_RENEWAL_HISTORY_STAMPS).toBe(365 * 24 * 60 * 60 + 1);
+  test("bounds a valid lease history to the one-year, 60-second admission policy", () => {
+    expect(MAX_RENEWAL_HISTORY_STAMPS).toBe(Math.ceil((365 * 24 * 60 * 60) / 60) + 1);
   });
 
   test("refuses a signed chain whose renewal expiry decreases", () => {

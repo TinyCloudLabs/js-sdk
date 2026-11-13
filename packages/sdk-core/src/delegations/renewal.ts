@@ -8,10 +8,12 @@ import { decodeBase64Url } from "../credentials/digest";
 import { decodeCanonicalDagCbor } from "./cacao";
 
 const STAMP_DOMAIN = "tinycloud/node/renewal-stamp/v1";
-// A lease is at most one year; node timestamps have whole-second precision and
-// an issuance must advance the effective end, so at most one stamp fits per second.
+// Bound browser work to one accepted stamp per minute across the node's one-year lease maximum.
+// This is a conservative SDK floor; a faster-admitting node history is refused.
 const MAX_LEASE_SECONDS = 365 * 24 * 60 * 60;
-export const MAX_RENEWAL_HISTORY_STAMPS = MAX_LEASE_SECONDS + 1;
+const MIN_ACCEPTED_RENEWAL_INTERVAL_SECONDS = 60;
+export const MAX_RENEWAL_HISTORY_STAMPS =
+  Math.ceil(MAX_LEASE_SECONDS / MIN_ACCEPTED_RENEWAL_INTERVAL_SECONDS) + 1;
 
 export interface RenewalStampHistoryEntry {
   readonly cid: string;

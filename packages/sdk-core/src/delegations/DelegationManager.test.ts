@@ -341,6 +341,33 @@ describe("DelegationManager.status", () => {
     expect((await manager.status("bafy-child")).ok).toBe(false);
     expect((await manager.status("bafy-child")).ok).toBe(false);
   });
+
+  test("refuses an oversized status body before JSON parsing", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+        controller.close();
+      },
+    });
+    const response = new Response(body, { status: 200 });
+    const json = mock(async () => {
+      throw new Error("oversized response must not be parsed");
+    });
+    response.json = json;
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny: mock(() => ({ Authorization: "fixture" })),
+      sessionInvocationSigner: { did: () => "did:key:holder", sign: async () => "fixture" },
+      fetch: mock(async () => response),
+    });
+
+    const result = await manager.status("bafy-child");
+
+    expect(result.ok).toBe(false);
+    expect(json).not.toHaveBeenCalled();
+  });
 });
 
 describe("DelegationManager invoke paths", () => {
