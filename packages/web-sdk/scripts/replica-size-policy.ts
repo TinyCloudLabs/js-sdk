@@ -3129,7 +3129,7 @@ export const approvedTc2872RenewalReplicaWorker: Tc2872RenewalReplicaWorkerRatch
 
 export const approvedTc2904OwnerDirectProofRoot: Tc2872RenewalRootBudget = {
   "label": "strict owner-direct proof parsing root budget (TC-2904)",
-  "ruling": "size-ruling: TC-2904: Naomi allows the measured root residual +878 B ESM / +503 B CJS (gzip -9) for strict proof parsing in the root parser, stacked on tc2872RenewalRoot; admission remains lazy. No general ceiling change.",
+  "ruling": "size-ruling: TC-2904: Naomi allows the measured root residual +1007 B ESM / +883 B CJS (gzip -9) for strict proof parsing and typed-code bindings in the root parser; error classes/messages remain lazy, stacked on tc2872RenewalRoot; admission remains lazy. No general ceiling change.",
   "base": "b8dc6c5e00757f8c676ae29dc98c53e8adf82f84",
   "sourceCommits": [
     "0388f921deb41398e34f0e65b5b814df57b83900"
@@ -3137,15 +3137,15 @@ export const approvedTc2904OwnerDirectProofRoot: Tc2872RenewalRootBudget = {
   "measuredWith": "Bun 1.4.4; production web-sdk build; reused TC-2872 WASM; gzip -9 -c",
   "root": {
     "delta": {
-      "index.mjs": 878,
-      "index.cjs": 503
+      "index.mjs": 1007,
+      "index.cjs": 883
     },
     "ceiling": {
-      "index.mjs": 1517948,
-      "index.cjs": 1451512
+      "index.mjs": 1518077,
+      "index.cjs": 1451892
     }
   },
-  "reason": "Only the strict signed proof list parser is eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
+  "reason": "Only the strict signed proof list parser and typed-code import bindings are eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
 };
 
 const tc2481WebEvidence = [
