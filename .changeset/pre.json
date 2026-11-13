@@ -84,6 +84,7 @@
     "tc-2872-proofless-status",
     "tc-2904-owner-direct-renewal",
     "tc-2904-renewal-approval-codec",
+    "tc-2913-openkey-continuation",
     "tc-2923-node-defaults",
     "tc-2923-tee-e2e-host",
     "tc-2924-node-alias",
