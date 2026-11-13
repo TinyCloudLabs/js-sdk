@@ -50,6 +50,7 @@ export function installProjectGuard(cwd: string, home: string, guard: ProjectGua
   if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== next) {
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, next, { mode });
+    fs.chmodSync(tmp, mode); // the umask narrows `mode`; the file keeps the mode it had
     fs.renameSync(tmp, file);
   }
   return file;
