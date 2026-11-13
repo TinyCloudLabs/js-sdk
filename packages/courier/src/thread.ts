@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { messageView, oneLine, taskView } from './a2a.js';
@@ -10,6 +11,8 @@ const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 /** All of one agent's cached threads together, in bytes as written. */
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const CACHE_MAX_AGE_MS = 7 * 24 * 3600_000;
+/** How long `courier read` uses its local record of this agent's own writes to a thread before listing them again. */
+const OWN_INDEX_TRUST_MS = 3600_000;
 
 /** Bodies of create-only thread entries (messages and meta) already read, by source identity and key. */
 export interface ThreadCache {
@@ -108,6 +111,87 @@ export function clearReadCache(): void {
   preparedRoot = undefined;
 }
 
+const ownDir = (agent: string, threadId: string) => path.join(cacheRoot(), agentId(agent), 'own', threadId);
+const ownName = (prefix: string, spaceId: string, key: string) => `${prefix}-${createHash('sha256').update(`${spaceId}\n${key}`).digest('hex')}.json`;
+
+/**
+ * Records one key this agent created under its own thread root, after the write succeeded (`send`, the outbox, a pause
+ * inform, a task, a session's meta). One file per entry, so concurrent writers never lose each other's records. It never
+ * fails the write: if the record can't be written, the thread's listing marks are dropped so the next read lists again.
+ */
+export function recordOwnWrite(agent: string, spaceId: string | undefined, threadId: string, key: string): void {
+  if (!SAFE_ID.test(threadId) || !spaceId) return;
+  let dir: string;
+  try { dir = ownDir(agent, threadId); } catch { return; } // no did:key: this agent has no read cache at all
+  try {
+    prepareCacheRoot();
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeSecure(path.join(dir, ownName('e', spaceId, key)), { space: spaceId, key });
+  } catch {
+    try {
+      for (const name of fs.readdirSync(dir)) if (name.startsWith('listed-')) fs.rmSync(path.join(dir, name), { force: true });
+    } catch { /* no listing marks: the next read lists anyway */ }
+  }
+}
+
+/** This agent's own entries of one thread, per thread root: from its local record while a listing is under an hour old. */
+export interface OwnIndex {
+  /** The keys under `root`, or undefined when the root must be listed. */
+  keys(root: string): string[] | undefined;
+  /** A listing of `root` just returned `keys`: they are recorded, then the listing is marked as current. */
+  listed(root: string, keys: readonly string[]): void;
+}
+
+export function diskOwnIndex(agent: string, spaceId: string, threadId: string, full = false, now = Date.now()): OwnIndex {
+  const dir = ownDir(agent, threadId);
+  const uid = process.getuid?.();
+  const regular = (file: string) => {
+    try { const stat = fs.lstatSync(file); return stat.isFile() && stat.uid === uid ? stat : undefined; } catch { return undefined; }
+  };
+  return {
+    keys(root) {
+      if (full || !SAFE_ID.test(threadId)) return undefined;
+      let listedAt: number;
+      try {
+        const file = path.join(dir, ownName('listed', spaceId, root));
+        if (!regular(file)) return undefined;
+        const mark: unknown = JSON.parse(readRegularFile(file) ?? 'null');
+        if (!mark || typeof mark !== 'object') return undefined;
+        const { space, root: markRoot, listedAt: at } = mark as { space?: unknown; root?: unknown; listedAt?: unknown };
+        if (space !== spaceId || markRoot !== root || typeof at !== 'string') return undefined;
+        listedAt = Date.parse(at);
+      } catch { return undefined; }
+      if (!(now - listedAt >= 0 && now - listedAt < OWN_INDEX_TRUST_MS)) return undefined;
+      const keys: string[] = [];
+      try {
+        for (const name of fs.readdirSync(dir)) {
+          if (!name.startsWith('e-')) continue;
+          const file = path.join(dir, name);
+          const stat = regular(file);
+          if (!stat) continue;
+          // Every listing re-records what it saw, so an entry this old is from before the current listing mark.
+          if (now - stat.mtimeMs >= CACHE_MAX_AGE_MS) { fs.rmSync(file, { force: true }); continue; }
+          const entry: unknown = JSON.parse(readRegularFile(file) ?? 'null');
+          if (!entry || typeof entry !== 'object') return undefined;
+          const { space, key } = entry as { space?: unknown; key?: unknown };
+          if (typeof key !== 'string' || typeof space !== 'string') return undefined;
+          if (space === spaceId && key.startsWith(`${root}/`)) keys.push(key);
+        }
+      } catch { return undefined; }
+      return keys.sort();
+    },
+    listed(root, keys) {
+      if (!SAFE_ID.test(threadId)) return;
+      try {
+        prepareCacheRoot();
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        for (const key of keys) if (key.startsWith(`${root}/`)) writeSecure(path.join(dir, ownName('e', spaceId, key)), { space: spaceId, key });
+        writeSecure(path.join(dir, ownName('listed', spaceId, root)), { space: spaceId, root, listedAt: new Date(now).toISOString() });
+      } catch { /* without a mark, the next read lists again */ }
+    },
+  };
+}
+
 export interface ThreadEntry {
   peer?: string;
   kind: 'meta' | 'msg' | 'task';
@@ -142,6 +226,8 @@ export async function collectThread(input: {
   exactPeer?: boolean;
   kvFor(peer: StoredPeer): Promise<KV>;
   cache?: ThreadCache;
+  /** This agent's record of its own entries: while current, our own thread root isn't listed. */
+  own?: OwnIndex;
   /** This agent's courier DID and space: cached own entries belong to them, so a re-init or a new key starts empty. */
   self?: { courierDid: string; spaceId: string };
 }): Promise<{ entries: ThreadEntry[]; errors: PeerReadError[]; partial: boolean }> {
@@ -159,13 +245,17 @@ export async function collectThread(input: {
       // Failure of our own listing cannot safely be interpreted as an absent mapping.
       const mine = await listAll(selfKv, `${k.threadRoot(peer.handle, threadId)}/`);
       local.set(peer.handle, mine);
+      input.own?.listed(k.threadRoot(peer.handle, threadId), mine);
       const mirrored = await listAll(selfKv, `${PREFIX}/me/mirror/${peer.handle}/threads/${threadId}/`);
       if (mine.length || mirrored.length) known.push(peer);
     }
     if (known.length) peers = known;
   }
 
-  /** `source`: whose space the keys are in (none: not cached). A cached body is used only for a key the current, authorized listing returned. */
+  /**
+   * `source`: whose space the keys are in (none: not cached). A cached body is used only for a key the current,
+   * authorized listing returned, or, for our own entries, that our own record holds.
+   */
   async function append(kv: KV, keys: string[], peer: string, side: 'me' | 'peer', source: string | undefined) {
     const root = side === 'me' ? k.threadRoot(peer, threadId) : undefined;
     for (const key of keys) {
@@ -187,7 +277,12 @@ export async function collectThread(input: {
   }
 
   for (const peer of peers) {
-    const mine = local.get(peer.handle) ?? await listAll(selfKv, `${k.threadRoot(peer.handle, threadId)}/`);
+    const root = k.threadRoot(peer.handle, threadId);
+    let mine = local.get(peer.handle) ?? input.own?.keys(root);
+    if (mine === undefined) {
+      mine = await listAll(selfKv, `${root}/`);
+      input.own?.listed(root, mine);
+    }
     await append(selfKv, mine, peer.handle, 'me', input.self && `self:${input.self.courierDid}:${input.self.spaceId}`);
     if (!peer.inbound || !peer.theirHandleForMe) continue;
     try {

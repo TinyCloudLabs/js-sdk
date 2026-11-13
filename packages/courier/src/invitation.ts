@@ -18,6 +18,7 @@ import { loadKey, loadProfile, profileDir, saveProfile, writeSecure } from './pr
 import type { AgentKey, Profile, StoredPeer } from './profile.js';
 import { courierNode } from './node.js';
 import { getJson, putCreate, putOverwrite } from './store.js';
+import { recordOwnWrite } from './thread.js';
 import { isRecord } from './a2a.js';
 import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
@@ -185,6 +186,7 @@ async function publishSession(node: TinyCloudNode, profile: Profile, body: Couri
   const handle = profile.courierDid === body.issuer ? body.artifact.peer : body.artifact.callMe;
   const key = k.threadMeta(handle, body.session.sessionId);
   if (!(await getJson(node.kv, key))) await putCreate(node.kv, key, meta);
+  recordOwnWrite(profile.courierDid, profile.spaceId, body.session.sessionId, key);
   const stateKey = sessionKey(body.session.sessionId);
   if (!(await getJson(node.kv, stateKey))) await putCreate(node.kv, stateKey, body.session);
   activateSession({ ...body.session, peer: handle });

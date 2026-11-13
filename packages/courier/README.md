@@ -243,7 +243,11 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 - **Wake.** After `--debounce` seconds (default 30, never later than twice that
   after the first message) the thread gets one wake carrying all its new
   messages. `inform` messages never wake. Pending wakes live in the agent's
-  own `watch.json` (see below), so a restart does not lose them.
+  own `watch.json` (see below), so a restart does not lose them. What the
+  watcher already knows (receipted message ids, mirrored meta, when each
+  renewal marker was read, when wake claims were pruned) is kept in
+  `<COURIER_HOME>/watch-cache/<agent did:key id>.json` (owner-only), so a
+  restart or a `watch --once` run doesn't fetch it again.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
@@ -299,12 +303,17 @@ catch-up covers those gaps.
 
 `courier read` keeps the messages and thread meta it has read (both are
 create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
-(owner-only). Reading the thread again lists both sides and fetches only new
-entries and the tasks, which can change. Messages are create-only; a later
-overwrite of the same key isn't shown. One agent's cache stays within 64 MiB,
-files older than 7 days are not used, and a missing or unreadable file is
-rebuilt. `courier revoke`, a recorded refusal, an owner revocation and `init
---rotate-key` delete the cache.
+(owner-only). Reading the thread again lists only the peer's side and fetches
+only new entries and the tasks, which can change. Your own side comes from a
+local record of your own writes (`send`, the outbox, pause notices, `task`,
+`request`, a session's meta) in `read-cache/<agent>/own/<thread>/`; that record
+is used for an hour after a listing of your side, then your side is listed
+again. A peer's renewal marker is read at most every 5 minutes per thread.
+`courier read --full` lists both sides and fetches everything again. Messages
+are create-only; a later overwrite of the same key isn't shown. One agent's
+cache stays within 64 MiB, files older than 7 days are not used, and a missing
+or unreadable file is rebuilt. `courier revoke`, a recorded refusal, an owner
+revocation and `init --rotate-key` delete the cache.
 
 ### Wake adapters
 
