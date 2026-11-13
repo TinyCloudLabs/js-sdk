@@ -78,7 +78,7 @@ export {
 } from "./header.js";
 export { checkLinkRecord, openLinkRecord, type CheckedLinkRecord, type LinkBodyValidator, type OpenedLink } from "./record.js";
 export { signerFromJwk, signerFromSeed, type Ed25519PrivateJwk, type LinkSigner } from "./signer.js";
-export { buildShareInvitationApprovalSpec, parseApprovalRequest, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "./approval-request.js";
+export { buildShareInvitationApprovalSpec, parseApprovalRequest, approvalRequestPurpose, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "./approval-request.js";
 export {
   APPROVAL_POLL_INTERVAL_MS,
   APPROVAL_RESULT_CLIENT_ID,
@@ -103,3 +103,5 @@ export {
   type DiscoverResult,
   type RelayKeyPair,
 } from "./approval-client.js";
+
+export { MAX_APPROVAL_LEASE_SECONDS, parseApprovalRenewal, type ApprovalRenewal } from "./approval-renewal.js";

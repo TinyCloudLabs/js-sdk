@@ -52,6 +52,7 @@ import {
   validateTc2872RenewalReplicaWorkerTransition,
   validateTc2872RenewalRootTransition,
 } from "./replica-size-policy";
+import { validateTc2924NodeAliasesRootTransition } from "./replica-size-policy";
 import { validateTc2904OwnerDirectProofRootTransition } from "./replica-size-policy";
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
@@ -697,6 +698,7 @@ if (prBaseSha) {
     failed = true;
   }
   validateTc2904OwnerDirectProofRootTransition(baseLedger.tc2904OwnerDirectProofRoot, ledger.tc2904OwnerDirectProofRoot);
+  validateTc2924NodeAliasesRootTransition(baseLedger.tc2924NodeAliasesRoot, ledger.tc2924NodeAliasesRoot);
   if (ledger.tc2904OwnerDirectProofRoot !== undefined && baseLedger.tc2904OwnerDirectProofRoot === undefined &&
       (baseLedger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, ledger.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)!))) {
     console.error("The TC-2904 root budget requires the TC-2872 root row and its measured source ancestor.");

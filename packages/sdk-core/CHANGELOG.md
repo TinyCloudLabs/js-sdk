@@ -1,5 +1,21 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.24
+
+### Patch Changes
+
+- 56df81d: Treat both production node names as one node for delegation validation while preserving configured hosts.
+
+  Details: TC-2923, TC-2924
+
+## 3.12.0-beta.23
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/share-sdk@1.5.0-beta.3
+
 ## 3.12.0-beta.22
 
 ### Minor Changes

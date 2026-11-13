@@ -7,7 +7,7 @@ test("TC-2934 admits only its exact canonical root bytes with unchanged workers"
   const row = ledger.tc2934RequestedAccountRoot;
   expect(row).toEqual(approvedTc2934RequestedAccountRoot);
   for (const format of ["index.mjs", "index.cjs"] as const) {
-    expect(row.root.ceiling[format] - ledger.tc2904OwnerDirectProofRoot.root.ceiling[format]).toBe(row.root.delta[format]);
+    expect(row.root.ceiling[format] - ledger.tc2924NodeAliasesRoot.root.ceiling[format]).toBe(row.root.delta[format]);
     expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc2934RequestedAccountRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({ row: "tc2934RequestedAccountRoot", pin: row.sourceCommits[0] });
@@ -29,5 +29,5 @@ test("TC-2934 refuses mutation, removal and a missing predecessor", () => {
     expect(() => validateLedger({ ...ledger, tc2934RequestedAccountRoot: changed })).toThrow("TC-2934");
   }
   expect(() => validateTc2934RequestedAccountRootTransition(row, undefined)).toThrow("TC-2934");
-  expect(() => validateLedger({ ...ledger, tc2904OwnerDirectProofRoot: undefined })).toThrow("TC-2934");
+  expect(() => validateLedger({ ...ledger, tc2924NodeAliasesRoot: undefined })).toThrow("TC-2934");
 });

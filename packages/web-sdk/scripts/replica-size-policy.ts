@@ -468,6 +468,7 @@ export type Ledger = {
   tc2872RenewalKvWorker?: Tc2872RenewalKvWorkerRatchet;
   tc2872RenewalReplicaWorker?: Tc2872RenewalReplicaWorkerRatchet;
   tc2904OwnerDirectProofRoot?: Tc2872RenewalRootBudget;
+  tc2924NodeAliasesRoot?: Tc2872RenewalRootBudget;
   tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
@@ -1091,6 +1092,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2872RenewalKvWorker !== undefined) pins.push({ row: "tc2872RenewalKvWorker", pin: root.tc2872RenewalKvWorker.sourceCommits.at(-1)! });
   if (root.tc2872RenewalReplicaWorker !== undefined) pins.push({ row: "tc2872RenewalReplicaWorker", pin: root.tc2872RenewalReplicaWorker.sourceCommits.at(-1)! });
   if (root.tc2904OwnerDirectProofRoot !== undefined) pins.push({ row: "tc2904OwnerDirectProofRoot", pin: root.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)! });
+  if (root.tc2924NodeAliasesRoot !== undefined) pins.push({ row: "tc2924NodeAliasesRoot", pin: root.tc2924NodeAliasesRoot.sourceCommits.at(-1)! });
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -1184,6 +1186,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
     ["tc2872RenewalRoot", root.tc2872RenewalRoot?.root.ceiling],
     ["tc2904OwnerDirectProofRoot", root.tc2904OwnerDirectProofRoot?.root.ceiling],
+    ["tc2924NodeAliasesRoot", root.tc2924NodeAliasesRoot?.root.ceiling],
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
@@ -3151,6 +3154,27 @@ export const approvedTc2904OwnerDirectProofRoot: Tc2872RenewalRootBudget = {
   "reason": "Only the strict signed proof list parser and typed-code import bindings are eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
 };
 
+export const approvedTc2924NodeAliasesRoot: Tc2872RenewalRootBudget = {
+  "label": "production node alias helper root budget (TC-2924)",
+  "ruling": "size-ruling: TC-2924: Naomi approves the exact canonical CI root measurement above tc2904OwnerDirectProofRoot, limited to +200 B per format; no headroom or worker changes.",
+  "base": "255e1c7e74cab178698e3d3fae5bae5b69f0f7c0",
+  "sourceCommits": [
+    "4d7795fa6e90acb62fcbf1626b1ff75b7a732d5a"
+  ],
+  "measuredWith": "Canonical Replica e2e CI run 43408618106, Node 22 / Bun 1.3.14; production webpack; gzip -9 -c. SQLite and Postgres root checks measured 1,522,784 ESM and 1,456,437 CJS.",
+  "root": {
+    "delta": {
+      "index.mjs": 66,
+      "index.cjs": 53
+    },
+    "ceiling": {
+      "index.mjs": 1522784,
+      "index.cjs": 1456437
+    }
+  },
+  "reason": "The shared exact two-name node alias helper adds a root export. Exact measured growth over TC-2904 is +66 ESM/+53 CJS, within the +200 B ruling. KV worker remains 780,742 B and replica worker remains 774,411 B; no general allowance changes."
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3220,8 +3244,8 @@ export const approvedTc2934RequestedAccountRoot: LogoutRatchet = {
   },
   "root": {
     "delta": {
-      "index.mjs": 438,
-      "index.cjs": 1389
+      "index.mjs": 372,
+      "index.cjs": 1336
     },
     "ceiling": {
       "index.mjs": 1523156,
@@ -3320,6 +3344,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2872RenewalKvWorker: approvedTc2872RenewalKvWorker,
   tc2872RenewalReplicaWorker: approvedTc2872RenewalReplicaWorker,
   tc2904OwnerDirectProofRoot: approvedTc2904OwnerDirectProofRoot,
+  tc2924NodeAliasesRoot: approvedTc2924NodeAliasesRoot,
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
 };
 
@@ -3729,8 +3754,12 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2872RenewalRoot || JSON.stringify(value.tc2904OwnerDirectProofRoot) !== JSON.stringify(approvedTc2904OwnerDirectProofRoot))) {
     throw new Error("Only Naomi's exact TC-2904 root budget admission is approved.");
   }
+  if (value.tc2924NodeAliasesRoot !== undefined &&
+      (!value.tc2904OwnerDirectProofRoot || JSON.stringify(value.tc2924NodeAliasesRoot) !== JSON.stringify(approvedTc2924NodeAliasesRoot))) {
+    throw new Error("Only Naomi's exact TC-2924 root budget admission is approved.");
+  }
   if (value.tc2934RequestedAccountRoot !== undefined &&
-      (!value.tc2904OwnerDirectProofRoot || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
+      (!value.tc2924NodeAliasesRoot || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
     throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
   }
 }
@@ -4523,6 +4552,14 @@ export function validateTc2904OwnerDirectProofRootTransition(base?: Tc2872Renewa
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2904OwnerDirectProofRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2904 root budget admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2924 alias-helper root budget is introduced once and immutable. */
+export function validateTc2924NodeAliasesRootTransition(base?: Tc2872RenewalRootBudget, current?: Tc2872RenewalRootBudget): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2924NodeAliasesRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2924 root budget admission may be introduced once and cannot change later.");
   }
 }
 
