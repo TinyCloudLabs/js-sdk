@@ -51,7 +51,7 @@ jobs:
           case "$PACKAGE" in both|sdk-services|cli) ;; *) exit 1 ;; esac
           case "$DRY_RUN" in true|false) ;; *) exit 1 ;; esac
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
@@ -64,17 +64,18 @@ jobs:
           [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
           [[ "$RELEASE_SHA" == "$GITHUB_SHA" ]]
 
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1.2.2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
           no-cache: true
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: 1.99.0
           targets: wasm32-unknown-unknown
 
       - name: Setup Node for packing and publishing
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.20.0'
           registry-url: 'https://registry.npmjs.org'
@@ -204,6 +205,7 @@ jobs:
             const info = result[0];
             assert.equal(info.name, `@tinycloud/${name}`);
             assert.equal(info.version, targets[name].version);
+            assert.equal(info.filename, `tinycloud-${name}-${targets[name].version}.tgz`);
             const tarball = path.join(out, info.filename);
             const integrity = 'sha512-' + createHash('sha512').update(fs.readFileSync(tarball)).digest('base64');
             assert.equal(info.integrity, integrity);
@@ -211,6 +213,8 @@ jobs:
             const files = unpack(tarball, directory).map(file => file.slice('package/'.length));
             save(`${name}-files.json`, files);
             assert.deepEqual(json(path.join(directory, 'package/package.json')), manifest(name));
+            assert(!Object.hasOwn(json(path.join(directory, 'package/package.json')), 'gitHead'),
+              'tarball publication must not carry gitHead');
             for (const file of files) {
               assert(/^(dist\/|bin\/|skills\/|package\.json$|README(?:\.md)?$|LICENSE(?:\.[^/]+)?$)/i.test(file), `unexpected packed file: ${file}`);
               assert(!/(^|\/)(\.npmrc|\.env[^/]*|profiles?|credentials?)(\/|$)|\.(sqlite|db)(-|$)|\.tsx?$/.test(file.replace(/\.d\.(ts|cts)$/, '.types')), `sensitive/source file: ${file}`);
@@ -384,7 +388,7 @@ jobs:
             const published = doc.versions[targets[name].version];
             assert(published, `${name} publication not visible; inspect accepted write, do not republish`);
             assert.equal(published.version, targets[name].version);
-            assert.equal(published.gitHead, sha);
+            assert(!Object.hasOwn(published, 'gitHead'), 'unexpected gitHead: publication must use the saved tarball');
             assert.equal(published.dist.integrity, json(path.join(out, `${name}-pack.json`))[0].integrity);
             for (const kind of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
               assert.deepEqual(published[kind] || {}, manifest(name)[kind] || {});
@@ -399,12 +403,35 @@ jobs:
             }
             assert.deepEqual(tags, expected, 'unexpected dist-tag change');
           }
+          function filename(name) {
+            assert(Object.hasOwn(targets, name));
+            const saved = json(path.join(out, `${name}-pack.json`));
+            assert(Array.isArray(saved) && saved.length === 1, 'expected exactly one saved pack');
+            const info = saved[0];
+            assert.equal(info.name, `@tinycloud/${name}`);
+            assert.equal(info.version, targets[name].version);
+            assert.equal(info.filename, `tinycloud-${name}-${targets[name].version}.tgz`);
+            const integrity = 'sha512-' + createHash('sha512')
+              .update(fs.readFileSync(path.join(out, info.filename))).digest('base64');
+            assert.equal(info.integrity, integrity, 'saved tarball changed after validation');
+            return info.filename;
+          }
+          function evidence() {
+            const integrities = {};
+            for (const name of Object.keys(targets)) {
+              filename(name);
+              integrities[`@tinycloud/${name}`] = json(path.join(out, `${name}-pack.json`))[0].integrity;
+            }
+            save('source-integrities.json', { source_sha: sha, integrities });
+          }
           async function main() {
             const [mode, name] = process.argv.slice(2);
             if (mode === 'preflight') await preflight();
             else if (mode === 'pack') await pack(name);
             else if (mode === 'verify') await verify(name);
             else if (mode === 'after') await after();
+            else if (mode === 'filename') console.log(filename(name));
+            else if (mode === 'evidence') evidence();
             else throw new Error('unknown validation mode');
           }
           main().catch(error => { console.error(error.message); process.exitCode = 1; });
@@ -415,11 +442,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Always retain a services pack so CLI-only recovery can verify its bytes.
+          # Pack both before any write, including recovery, to retain both source integrities.
           node "$RUNNER_TEMP/hotfix-check.cjs" pack sdk-services
-          if [ "$PACKAGE" = both ] || [ "$PACKAGE" = cli ]; then
-            node "$RUNNER_TEMP/hotfix-check.cjs" pack cli
-          fi
+          node "$RUNNER_TEMP/hotfix-check.cjs" pack cli
+          node "$RUNNER_TEMP/hotfix-check.cjs" evidence
           if [ "$PACKAGE" = cli ]; then
             node "$RUNNER_TEMP/hotfix-check.cjs" verify sdk-services
           fi
@@ -435,15 +461,14 @@ jobs:
           set -euo pipefail
           if [ "$DRY_RUN" != true ]; then
             if [ "$PACKAGE" = both ] || [ "$PACKAGE" = sdk-services ]; then
-              (cd packages/sdk-services && npm publish --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org)
-              curl --fail --silent --show-error -H 'Cache-Control: no-cache' \
-                'https://registry.npmjs.org/@tinycloud%2fsdk-services/3.11.1' \
-                | jq -e --arg sha "$RELEASE_SHA" '.version == "3.11.1" and .gitHead == $sha'
+              services_filename="$(node "$RUNNER_TEMP/hotfix-check.cjs" filename sdk-services)"
+              npm publish "$RUNNER_TEMP/hotfix-pack/$services_filename" --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org
               node "$RUNNER_TEMP/hotfix-check.cjs" verify sdk-services
             fi
             if [ "$PACKAGE" = both ] || [ "$PACKAGE" = cli ]; then
               node "$RUNNER_TEMP/hotfix-check.cjs" verify sdk-services
-              (cd packages/cli && npm publish --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org)
+              cli_filename="$(node "$RUNNER_TEMP/hotfix-check.cjs" filename cli)"
+              npm publish "$RUNNER_TEMP/hotfix-pack/$cli_filename" --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org
               node "$RUNNER_TEMP/hotfix-check.cjs" verify cli
             fi
           fi
@@ -459,7 +484,7 @@ jobs:
 
       - name: Retain registry and pack evidence on success or failure
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cli-1.6.6-hotfix-evidence
           path: ${{ runner.temp }}/hotfix-pack/

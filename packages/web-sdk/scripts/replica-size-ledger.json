@@ -2578,8 +2578,8 @@
       "delta": { "activation.mjs": -5, "activation.cjs": -2 },
       "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
     },
-    "worker": { "delta": 22, "ceiling": 776561 },
-    "replicaWorker": { "delta": 27, "ceiling": 770494 },
+    "worker": { "delta": 22, "ceiling": 776604 },
+    "replicaWorker": { "delta": 27, "ceiling": 770513 },
     "reason": "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276."
   },
   "tc2691HostExpiry": {

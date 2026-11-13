@@ -8,6 +8,8 @@
 
   Details: TC-2205
 
+  This version was published from the hotfix branch `feat/tc-2205-cli-1.6.6-hotfix` (PR #937) as the exact tarball that was checked, so its npm entry has no `gitHead` field.
+
 ## 3.11.0
 
 ### Patch Changes

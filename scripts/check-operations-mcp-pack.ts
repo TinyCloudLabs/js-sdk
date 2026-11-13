@@ -26,30 +26,39 @@ const packages = [
 type PublishedPackage = { manifest: Record<string, any>; bytes: Buffer; filename: string };
 
 async function startNpmRegistry(packagesToPublish: PublishedPackage[]): Promise<{ origin: string; close: () => Promise<void> }> {
-  const byName = new Map(packagesToPublish.map((package_) => [package_.manifest.name as string, package_]));
+  const byName = new Map<string, PublishedPackage[]>();
+  for (const package_ of packagesToPublish) {
+    const versions = byName.get(package_.manifest.name) ?? [];
+    versions.push(package_);
+    byName.set(package_.manifest.name, versions);
+  }
   const server = createServer((request, response) => {
     try {
       const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
       const separator = pathname.indexOf("/-/");
       const name = separator < 0 ? pathname.slice(1) : pathname.slice(1, separator);
-      const package_ = byName.get(name);
-      if (!package_) { response.writeHead(404).end(); return; }
+      const versions = byName.get(name);
+      if (!versions) { response.writeHead(404).end(); return; }
       if (separator < 0) {
-        const integrity = `sha512-${createHash("sha512").update(package_.bytes).digest("base64")}`;
         const body = JSON.stringify({
           name,
-          "dist-tags": { latest: package_.manifest.version },
-          versions: {
-            [package_.manifest.version]: {
+          "dist-tags": { latest: versions[0]!.manifest.version },
+          versions: Object.fromEntries(versions.map((package_) => [
+            package_.manifest.version,
+            {
               ...package_.manifest,
-              dist: { tarball: `${origin}/${encodeURIComponent(name)}/-/${package_.filename}`, integrity },
+              dist: {
+                tarball: `${origin}/${encodeURIComponent(name)}/-/${package_.filename}`,
+                integrity: `sha512-${createHash("sha512").update(package_.bytes).digest("base64")}`,
+              },
             },
-          },
+          ])),
         });
         response.writeHead(200, { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) }).end(body);
         return;
       }
-      if (pathname !== `/${name}/-/${package_.filename}`) { response.writeHead(404).end(); return; }
+      const package_ = versions.find((candidate) => pathname === `/${name}/-/${candidate.filename}`);
+      if (!package_) { response.writeHead(404).end(); return; }
       response.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(package_.bytes.length) }).end(package_.bytes);
     } catch {
       response.writeHead(400).end();
@@ -145,6 +154,31 @@ try {
     bytes: await readFile(tarball),
     filename: tarball.split("/").pop()!,
   })));
+  // Unchanged SDK pins still need the published services patch alongside the workspace pack.
+  const servicesResponse = await fetch("https://registry.npmjs.org/@tinycloud%2fsdk-services/3.11.0", {
+    headers: { "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(30_000),
+  });
+  if (servicesResponse.status !== 200) throw new Error(`services 3.11.0 metadata HTTP ${servicesResponse.status}`);
+  const services = await servicesResponse.json() as Record<string, any>;
+  if (services.name !== "@tinycloud/sdk-services" || services.version !== "3.11.0"
+    || typeof services.dist?.tarball !== "string"
+    || !services.dist.tarball.startsWith("https://registry.npmjs.org/")) {
+    throw new Error("unexpected services 3.11.0 registry metadata");
+  }
+  const tarballResponse = await fetch(services.dist.tarball, { signal: AbortSignal.timeout(30_000) });
+  if (tarballResponse.status !== 200) throw new Error(`services 3.11.0 tarball HTTP ${tarballResponse.status}`);
+  const bytes = Buffer.from(await tarballResponse.arrayBuffer());
+  if (`sha512-${createHash("sha512").update(bytes).digest("base64")}` !== services.dist.integrity) {
+    throw new Error("services 3.11.0 tarball integrity mismatch");
+  }
+  const filename = "tinycloud-sdk-services-3.11.0.tgz";
+  const publishedTarball = join(packDirectory, filename);
+  await writeFile(publishedTarball, bytes);
+  const manifest = JSON.parse((await exec("tar", ["-xOf", publishedTarball, "package/package.json"])).stdout);
+  if (manifest.name !== services.name || manifest.version !== services.version) {
+    throw new Error("services 3.11.0 tarball manifest mismatch");
+  }
+  publishedPackages.push({ manifest, bytes, filename });
   const npmRegistry = await startNpmRegistry(publishedPackages);
   try {
     const cliVersion = manifests.get("@tinycloud/cli")!.version;

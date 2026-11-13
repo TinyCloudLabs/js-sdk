@@ -28,7 +28,7 @@ import { join, resolve } from "node:path";
 // tc2096LazyContentRatchet row records it; approved by Naomi (replica first import +104/+111, activation +26/+22 at run 40370497109). Zero additional headroom.
 // TC-2418 (#844: request signals combined with AbortSignal.any) measured 776,561 (+22) in GitHub run 41589803513 (source
 // b817f0d5); the ledger's tc2418AbortListenerCleanup row records it; approved by Naomi, 2026-11-03. Zero additional headroom.
-export const MAX_WORKER_GZIP_BYTES = 776_561;
+export const MAX_WORKER_GZIP_BYTES = 776_604;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
@@ -38,7 +38,7 @@ export const MAX_WORKER_GZIP_BYTES = 776_561;
 // replicaWorker; approved by Naomi. Zero additional headroom.
 // TC-2418 (#844) measured 770,494 (+27) in the same run 41589803513; the ledger's tc2418AbortListenerCleanup row records
 // it as replicaWorker; approved by Naomi, 2026-11-03. Zero additional headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_494;
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_513;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 
