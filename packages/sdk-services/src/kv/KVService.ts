@@ -48,6 +48,7 @@ import {
   KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVListEntry,
   KVResponseHeaders,
   KVSignedReadUrlResponse,
   KVAction,
@@ -57,6 +58,23 @@ interface SignedKvUrlNodeResponse {
   url: string;
   ticketId: string;
   expiresAt: string;
+}
+
+/** A `kv/list` entry from a node asked for entries; `size` is null when unknown. */
+interface KVListNodeEntry {
+  key: string;
+  size?: number | null;
+  updatedAt?: string | null;
+}
+
+/** The entry for one listed item; a node that ignores the request lists bare keys. */
+function listEntry(item: string | KVListNodeEntry): KVListEntry {
+  if (typeof item === "string") return { key: item };
+  return {
+    key: item.key,
+    ...(typeof item.size === "number" ? { size: item.size } : {}),
+    ...(typeof item.updatedAt === "string" ? { updatedAt: item.updatedAt } : {}),
+  };
 }
 
 interface KvBatchNodeItem {
@@ -396,18 +414,24 @@ export class KVService extends BaseService implements IKVService {
    * Create KVResponseHeaders from fetch response headers.
    *
    * @param headers - Fetch response headers
+   * @param bodyIsValue - Whether the response body is the stored value, so
+   *   its `content-length` is the value's size. A head's empty body is not.
    * @returns KVResponseHeaders object
    */
-  private createResponseHeaders(headers: {
-    get(name: string): string | null;
-  }): KVResponseHeaders {
+  private createResponseHeaders(
+    headers: {
+      get(name: string): string | null;
+    },
+    bodyIsValue = true
+  ): KVResponseHeaders {
+    const storedSize =
+      headers.get("x-tinycloud-content-length") ??
+      (bodyIsValue ? headers.get("content-length") : null);
     return {
       etag: headers.get("etag") ?? undefined,
       contentType: headers.get("content-type") ?? undefined,
       lastModified: headers.get("last-modified") ?? undefined,
-      contentLength: headers.get("content-length")
-        ? parseInt(headers.get("content-length")!, 10)
-        : undefined,
+      contentLength: storedSize ? parseInt(storedSize, 10) : undefined,
       get: (name: string) => headers.get(name),
     };
   }
@@ -1410,7 +1434,8 @@ export class KVService extends BaseService implements IKVService {
               }
             }
           }
-        } else if (this.readThrough === null) {
+        } else if (this.readThrough === null || options?.entries) {
+          // A replica holds keys and values, not sizes or write times.
           page = await network();
         } else {
           page = await this.readThrough.list({
@@ -1441,11 +1466,12 @@ export class KVService extends BaseService implements IKVService {
       KVAction.LIST,
       undefined,
       signal,
-      options?.limit === undefined && options?.cursor === undefined
+      options?.limit === undefined && options?.cursor === undefined && !options?.entries
         ? undefined
         : {
             ...(options?.limit === undefined ? {} : { "x-tinycloud-limit": String(options.limit) }),
             ...(options?.cursor === undefined ? {} : { "x-tinycloud-cursor": options.cursor }),
+            ...(options?.entries ? { "x-tinycloud-list-entries": "true" } : {}),
           }
     );
     if (!response.ok) {
@@ -1469,9 +1495,16 @@ export class KVService extends BaseService implements IKVService {
         { meta: { status: response.status, statusText: response.statusText } }
       ));
     }
-    const keys = (await this.parseResponse<string[]>(response, options?.raw)) ?? [];
+    const listed =
+      (await this.parseResponse<Array<string | KVListNodeEntry>>(response, options?.raw)) ?? [];
+    // `raw` returns the body text unparsed, as before.
+    const items = Array.isArray(listed) ? listed : undefined;
+    const keys = items
+      ? items.map((item) => (typeof item === "string" ? item : item.key))
+      : (listed as unknown as string[]);
     return ok({
       keys,
+      ...(options?.entries && items ? { entries: items.map(listEntry) } : {}),
       ...(response.headers.get("x-tinycloud-truncated") === null
         ? {}
         : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
@@ -1487,13 +1520,16 @@ export class KVService extends BaseService implements IKVService {
     removePrefix: boolean | undefined
   ): Result<KVListResponse> {
     let keys = page.keys;
+    let entries = page.entries;
     if (removePrefix && listPath) {
       const prefixWithSlash = listPath.endsWith("/") ? listPath : `${listPath}/`;
-      keys = keys.map((key) =>
-        key.startsWith(prefixWithSlash) ? key.slice(prefixWithSlash.length) : key
-      );
+      const relative = (key: string) =>
+        key.startsWith(prefixWithSlash) ? key.slice(prefixWithSlash.length) : key;
+      keys = keys.map(relative);
+      entries = entries?.map((entry) => ({ ...entry, key: relative(entry.key) }));
     }
-    return ok({ keys, ...(page.truncated === undefined ? {} : { truncated: page.truncated }),
+    return ok({ keys, ...(entries === undefined ? {} : { entries }),
+      ...(page.truncated === undefined ? {} : { truncated: page.truncated }),
       ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) });
   }
 
@@ -1843,7 +1879,7 @@ export class KVService extends BaseService implements IKVService {
 
         return ok({
           data: undefined as void,
-          headers: this.createResponseHeaders(response.headers),
+          headers: this.createResponseHeaders(response.headers, false),
         });
       } catch (error) {
         return err(wrapError("kv", error));

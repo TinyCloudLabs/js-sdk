@@ -221,6 +221,7 @@ export type {
   KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVListEntry,
   KVSignedReadUrlResponse,
   KVChange,
   KVChangesAuthority,

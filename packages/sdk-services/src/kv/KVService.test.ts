@@ -2047,3 +2047,92 @@ describe("KVService stalled response bodies over loopback HTTP (TC-834)", () => 
     await expectSocketClosed();
   });
 });
+
+describe("KVService value size and modified time (TC-2492)", () => {
+  function withHeaders(result: FetchResponse, values: Record<string, string>): FetchResponse {
+    result.headers.get = (name: string) => values[name.toLowerCase()] ?? null;
+    return result;
+  }
+
+  test("head reports the stored size and modified time, not the empty body's length", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => withHeaders(response(true, 200, ""), {
+      "content-length": "0",
+      "x-tinycloud-content-length": "28",
+      "last-modified": "Fri, 13 Nov 2026 15:00:00 GMT",
+      etag: '"blake3-abc"',
+    })));
+
+    const result = await service.head("notes/a");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.headers.contentLength).toBe(28);
+    expect(result.data.headers.lastModified).toBe("Fri, 13 Nov 2026 15:00:00 GMT");
+  });
+
+  test("head against a node that sends no stored size reports none, not 0", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => withHeaders(response(true, 200, ""), {
+      "content-length": "0",
+    })));
+
+    const result = await service.head("notes/a");
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.headers.contentLength).toBeUndefined();
+  });
+
+  test("list with entries asks for them and returns each key's size and modified time", async () => {
+    const requests: FetchRequestInit[] = [];
+    const service = new KVService({ prefix: "app" });
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      return response(true, 200, [
+        { key: "app/a", size: 28, updatedAt: "2026-11-13T15:00:00Z" },
+        { key: "app/b", size: null, updatedAt: "2026-11-12T09:30:00Z" },
+      ]);
+    }));
+
+    const result = await service.list({ entries: true, removePrefix: true });
+
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-list-entries")).toBe("true");
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        keys: ["a", "b"],
+        entries: [
+          { key: "a", size: 28, updatedAt: "2026-11-13T15:00:00Z" },
+          { key: "b", updatedAt: "2026-11-12T09:30:00Z" },
+        ],
+      },
+    });
+  });
+
+  test("list with entries against a node that returns only keys still lists them", async () => {
+    const service = new KVService({});
+    service.initialize(createContext(async () => response(true, 200, ["a", "b"])));
+
+    const result = await service.list({ entries: true });
+
+    expect(result).toEqual({
+      ok: true,
+      data: { keys: ["a", "b"], entries: [{ key: "a" }, { key: "b" }] },
+    });
+  });
+
+  test("list without entries sends no entries header and returns keys only", async () => {
+    const requests: FetchRequestInit[] = [];
+    const service = new KVService({});
+    service.initialize(createContext(async (_url, init) => {
+      requests.push(init ?? {});
+      return response(true, 200, ["a"]);
+    }));
+
+    const result = await service.list();
+
+    expect(headerValue(requests[0]?.headers, "x-tinycloud-list-entries")).toBeUndefined();
+    expect(result).toEqual({ ok: true, data: { keys: ["a"] } });
+  });
+});

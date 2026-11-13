@@ -29,6 +29,7 @@ export {
   KVCreateSignedReadUrlOptions,
   KVResponse,
   KVListResponse,
+  KVListEntry,
   KVSignedReadUrlResponse,
   KVResponseHeaders,
   KVAction,
