@@ -749,7 +749,8 @@ tags) are for the owner. GitHub API writes refuse except literal POSTs to
 issue/PR comment endpoints; gh repo sync/run rerun/secrets, npm unpublish and
 dist-tag, semantic-release, wrangler rollback/delete/secrets and phala cvms
 writes refuse. Loopback requests and nested agent npm packages refuse too.
-`--wake exec --unguarded` cannot start an agent CLI as its first word.
+`--wake exec --unguarded` cannot start an agent CLI as its first word unless
+`--agent-cli` is also passed, and never `claude` or `paseo` (see below).
 
 **Installing it.** `courier watch --wake claude` writes
 `<COURIER_HOME>/guard/settings.json` on every start and passes it as
@@ -799,6 +800,32 @@ install a guard, so it is refused unless you pass `--unguarded`, and it says
 cannot merge, deploy or publish. On a Paseo host, set `--paseo-provider claude`
 (the default) and leave `--wake paseo` to install the guard; do not use
 `--paseo-provider` with another agent.
+
+**Other agent CLIs.** The guard is a Claude Code hook, so `codex`, `opencode`,
+`omp`, `gemini`, `cursor-agent`, `amp`, `aider` and `goose` have no guarded
+adapter. To wake one, pass `--agent-cli` as well:
+
+```bash
+courier watch --wake exec --unguarded --agent-cli \
+  --exec 'codex exec "$COURIER_PROMPT"' --home-file .codex/auth.json --cwd ~/agents/analyst
+```
+
+`$COURIER_PROMPT` is the same wake prompt the Claude adapter sends, plus the
+unguarded notice. `--agent-cli` is the owner accepting that nothing checks what
+that agent does with a peer's message: it can run any command its own CLI
+allows and read anything the watcher's OS user can read, by path, whatever
+`HOME` says. Run such a watcher under an OS account that holds only what the
+agent may use, and restrict the agent with its own CLI's sandbox or approval
+flags inside `--exec`. `claude` and `paseo` stay refused under `exec` with or
+without the flag: use their guarded adapters.
+
+The clean HOME holds no model login for an `exec` wake. `--home-file <path>`
+(repeatable, relative to your HOME) copies one file into it on every wake, mode
+0600, for a CLI that keeps its login in a file; `--env-pass NAME` passes one
+environment variable, for a CLI that takes an API key. Shell start-up files,
+tool settings and credential stores the clean HOME never holds (`.ssh`, `.aws`,
+`.npmrc`, `.netrc`, `.config/gh`, `.config/git`, Claude and MCP settings) are
+refused.
 
 Executable allowances require an identity recorded by the guard: the resolved
 path and device/inode of the installed tool. A basename such as `gh`, `git` or

@@ -1,4 +1,4 @@
-import type { RenewalNodeIdentity } from '@tinycloud/sdk-core';
+import { parseSignedSiweCacao, type RenewalNodeIdentity } from '@tinycloud/sdk-core';
 import { assertOwnerRenewalNodeIdentity, RENEWAL_LEASE_MISMATCH, verifyOwnerRenewalLease } from '@tinycloud/sdk-core/delegations/renewal-receipt';
 import { parseApprovalRenewal, type ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { CourierError } from './errors.js';
@@ -18,6 +18,17 @@ export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string
   catch (error) {
     throw asCourierError(error, `This renewal doesn't match the permission you approved, so it wasn't turned on. Run \`${cmd('init')}\` and approve again in OpenKey.`);
   }
+}
+
+/**
+ * The lease's expiry exactly as the owner signed it. Node admission compares it with the signed bytes, which may
+ * spell it without the receipt's milliseconds; the receipt's ISO value is checked equal by {@link verifyOwnerRenewal}.
+ */
+export async function signedLeaseExpiry(renewal: ApprovalRenewal): Promise<string> {
+  const { receipt } = parseApprovalRenewal(renewal);
+  const lease = await parseSignedSiweCacao(receipt.leaseAuthorization.replace(/^Bearer\s+/i, ''), receipt.leaseCid);
+  if (!lease.expiresAt) throw new CourierError('bad-grant', `This renewal doesn't match the permission you approved, so it wasn't turned on. Run \`${cmd('init')}\` and approve again in OpenKey.`);
+  return lease.expiresAt;
 }
 
 export function assertOwnerRenewalIdentity(renewal: ApprovalRenewal, live: RenewalNodeIdentity): void {

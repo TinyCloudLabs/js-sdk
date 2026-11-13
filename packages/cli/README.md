@@ -117,14 +117,16 @@ tinycloud init
 # Authenticate via browser
 tinycloud auth login
 
-# Authenticate on a remote/headless machine: the owner approves an explicit
-# manifest on their phone (URL + code printed to stderr). Use a new profile
-# name if it already exists; keep the user's existing profiles.
+# Authenticate on a remote/headless machine: the CLI prints one OpenKey
+# approval link to stderr; the owner opens it on any device and approves, with
+# no code to paste back. A manifest login lasts 1 hour (Share publishing: 7 days,
+# so its links keep their 7-day life) unless --expiry is given.
+# Use a new profile name if it already exists; keep the user's existing profiles.
 tinycloud init --name publisher --key-only
-tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
+tinycloud --profile publisher auth login --manifest builtin:share-publishing --no-popup
 
-# Same Share publishing scope, as a shortcut (on the dedicated profile)
-tinycloud --profile publisher enable share
+# Device code on the owner's phone, only when asked for
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
 
 # Selected profile, owner, host and space (JSON; does not test access)
 tinycloud context
@@ -476,8 +478,8 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 |---------|-------------|
 | `tinycloud init` | Set up a profile and generate keys |
 | `tinycloud auth login` | Authenticate via browser |
-| `tinycloud auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) |
-| `tinycloud auth login --manifest <file>` | Browser OpenKey login scoped to a manifest |
+| `tinycloud auth login --manifest <file>` | OpenKey approval link scoped to a manifest; 1 hour (7 days for `builtin:share-publishing`) unless `--expiry` is given |
+| `tinycloud auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) with a device code |
 | `tinycloud enable share` | Device login with the built-in Share publishing manifest (use a dedicated profile) |
 | `tinycloud context` | Show the selected profile, owner, host, space and session state |
 | `tinycloud auth status` | Show authentication status |
@@ -638,7 +640,9 @@ is needed. `--no-popup` skips opening a local browser, not automatic result
 retrieval. The CLI verifies the encrypted result, durably saves it, then
 acknowledges delivery. Re-run the same command after an interruption to resume.
 The one-hour request expiry is independent of the requested grant lifetime and
-result retention. Normal login keeps its seven-day default; onboarding requests
+result retention. A manifest login without `--expiry` requests one hour (seven
+days for `builtin:share-publishing`), a login without a manifest keeps its
+seven-day default, and onboarding requests
 30 days explicitly. `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 

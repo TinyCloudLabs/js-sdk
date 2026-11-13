@@ -9,9 +9,12 @@
 // This runs `changeset publish` once per layer of the dependency graph
 // (dependencies, peerDependencies and optionalDependencies between public
 // workspace packages) and, after each layer, waits until npm serves every
-// tarball that layer published. A package is never published until everything
-// it requires answers 200 at its tarball URL. A layer that fails to publish or
-// to appear stops the run, so a dependent of a missing package never goes out.
+// tarball that layer published (45 minutes of waiting in total across the run:
+// the packument must list the version first, then the tarball must answer 200;
+// see waitForTarballs and withWaitBudget).
+// A package is never published until everything it requires answers 200 at its
+// tarball URL. A layer that fails to publish or to appear stops the run, so a
+// dependent of a missing package never goes out.
 //
 // `changeset publish` has no package filter, so every package outside the
 // current layer is marked `private` while it runs (changesets skips private
@@ -32,8 +35,12 @@ import { pathToFileURL } from "node:url";
 import { acceptedFromPublishLog, gitRepo, publicPackages } from "./check-npm-release-provenance.mjs";
 
 const REGISTRY = "https://registry.npmjs.org";
-const POLL_INTERVAL_MS = 5_000;
-const POLL_TIMEOUT_MS = 10 * 60_000;
+const POLL_INTERVAL_MS = 15_000;
+const POLL_MAX_INTERVAL_MS = 60_000;
+// The whole run's waiting budget, shared by all layers (see withWaitBudget). npm has needed more than 10 minutes to show
+// a version it had accepted (Release run 43492423341).
+const TOTAL_WAIT_MS = 45 * 60_000;
+const PROGRESS_EVERY_MS = 5 * 60_000;
 
 // Layers of public workspace packages: every package comes after all the
 // packages it requires. `requires` is [[name, range], ...] as in
@@ -63,44 +70,113 @@ export function tarballUrl(name, version, registry = REGISTRY) {
   return `${registry}/${name}/-/${base}-${version}.tgz`;
 }
 
-// The ids ("name@version") whose tarball answers 200 within the timeout, and
-// those that do not.
+const NO_CACHE = { "cache-control": "no-cache", pragma: "no-cache" };
+
+/**
+ * Wait until npm serves every id ("name@version"), for at most `timeoutMs`, and return which it served and which it
+ * did not. npm accepts a publish minutes before the version is visible (TC-1457; Release run
+ * 43492423341: accepted 19:38:10Z, listed 19:43:19Z, tarball present 19:43:21Z, still 404 to the runner at 19:48:12Z),
+ * so a version is judged in two steps, each request cache-busted:
+ *   1. the packument (`<registry>/<name>`, abbreviated form) lists the version;
+ *   2. only then the tarball answers 200 to a HEAD.
+ * Polls back off from `intervalMs` to `maxIntervalMs`; the last poll is made at the deadline, so a version is declared
+ * missing only after the whole window.
+ */
 export async function waitForTarballs(ids, {
   fetchFn = fetch,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = Date.now,
   intervalMs = POLL_INTERVAL_MS,
-  timeoutMs = POLL_TIMEOUT_MS,
+  maxIntervalMs = POLL_MAX_INTERVAL_MS,
+  timeoutMs = TOTAL_WAIT_MS,
+  progressMs = PROGRESS_EVERY_MS,
   registry = REGISTRY,
   log = console.log,
 } = {}) {
-  const deadline = now() + timeoutMs;
-  const waiting = new Set(ids);
+  const started = now();
+  const deadline = started + timeoutMs;
+  const state = new Map([...ids].map((id) => {
+    const at = id.lastIndexOf("@");
+    return [id, { name: id.slice(0, at), version: id.slice(at + 1), listed: false, status: "not polled yet", lastModified: undefined }];
+  }));
   const served = new Set();
-  const status = new Map();
+  let requests = 0;
+  const bust = () => `cb=${now()}-${requests++}`;
+  const get = async (url, init) => {
+    try {
+      return await fetchFn(url, { ...init, redirect: "follow" });
+    } catch (error) {
+      return { status: `error: ${error.message}`, error };
+    }
+  };
+  let interval = intervalMs;
+  let nextProgress = started + progressMs;
   for (;;) {
-    for (const id of [...waiting]) {
-      const at = id.lastIndexOf("@");
-      const url = tarballUrl(id.slice(0, at), id.slice(at + 1), registry);
-      let code;
-      try {
-        code = (await fetchFn(url, { method: "HEAD", redirect: "follow" })).status;
-      } catch (error) {
-        code = `error: ${error.message}`;
+    for (const [id, item] of [...state]) {
+      if (!item.listed) {
+        const response = await get(`${registry}/${item.name}?${bust()}`, {
+          headers: { accept: "application/vnd.npm.install-v1+json", ...NO_CACHE },
+        });
+        if (response.status !== 200) {
+          item.status = `packument ${response.status}`;
+          continue;
+        }
+        let versions;
+        try {
+          versions = (await response.json())?.versions;
+        } catch {
+          item.status = "packument is not valid JSON";
+          continue;
+        }
+        if (!versions || typeof versions !== "object" || !Object.hasOwn(versions, item.version)) {
+          item.status = "packument does not list the version yet";
+          continue;
+        }
+        item.listed = true;
+        log(`npm lists ${id}; checking its tarball`);
       }
-      status.set(id, code);
-      if (code === 200) {
-        waiting.delete(id);
+      const tarball = await get(`${tarballUrl(item.name, item.version, registry)}?${bust()}`, {
+        method: "HEAD",
+        headers: NO_CACHE,
+      });
+      item.status = `tarball ${tarball.status}`;
+      const modified = tarball.headers?.get?.("last-modified");
+      if (modified) item.lastModified = modified;
+      if (tarball.status === 200) {
+        state.delete(id);
         served.add(id);
-        log(`npm serves ${url}`);
+        log(`npm serves ${tarballUrl(item.name, item.version, registry)} (${Math.round((now() - started) / 1000)} s after the wait began${item.lastModified ? `; tarball Last-Modified ${item.lastModified}` : ""})`);
       }
     }
-    if (waiting.size === 0 || now() >= deadline) break;
-    await sleep(intervalMs);
+    if (state.size === 0 || now() >= deadline) break;
+    if (now() >= nextProgress) {
+      nextProgress = now() + progressMs;
+      for (const [id, item] of state) log(`still waiting for ${id} after ${Math.round((now() - started) / 60_000)} min: ${describe(item)}`);
+    }
+    await sleep(Math.min(interval, Math.max(deadline - now(), 0)));
+    interval = Math.min(maxIntervalMs, Math.round(interval * 1.5));
   }
   return {
     served: [...served].sort(),
-    missing: [...waiting].sort().map((id) => ({ id, status: status.get(id) })),
+    missing: [...state].sort(([left], [right]) => (left < right ? -1 : 1)).map(([id, item]) => ({
+      id, status: item.status, ...(item.lastModified ? { lastModified: item.lastModified } : {}), waitedMs: now() - started,
+    })),
+  };
+}
+
+const describe = (item) => `${item.status}${item.lastModified ? ` (tarball Last-Modified ${item.lastModified})` : ""}`;
+
+/**
+ * One waiting budget for the whole run: each layer's wait gets what the earlier layers left, so a registry that is slow
+ * for every layer cannot hold the job for a multiple of `totalMs`. An exhausted budget still allows one poll.
+ */
+export function withWaitBudget(totalMs, wait, { now = Date.now } = {}) {
+  let waited = 0;
+  return async (ids) => {
+    const started = now();
+    const result = await wait(ids, { timeoutMs: Math.max(totalMs - waited, 0) });
+    waited += now() - started;
+    return result;
   };
 }
 
@@ -132,8 +208,9 @@ export async function publishInOrder({ layers, publishLayer, waitFor, log = cons
     const accepted = [...acceptedFromPublishLog(result.output)];
     // Whatever npm accepted must be served before it is announced, even when a sibling failed.
     const { missing } = accepted.length === 0 ? { missing: [] } : await waitFor(accepted);
-    for (const { id, status } of missing) {
-      log(`::error title=npm does not serve ${id}::${tarballUrl(id.slice(0, id.lastIndexOf("@")), id.slice(id.lastIndexOf("@") + 1))} did not answer 200 (${status}). Packages that require it were not published.`);
+    for (const { id, status, lastModified, waitedMs } of missing) {
+      const last = `${status}${lastModified ? `, tarball Last-Modified ${lastModified}` : ""}`;
+      log(`::error title=npm does not serve ${id}::${tarballUrl(id.slice(0, id.lastIndexOf("@")), id.slice(id.lastIndexOf("@") + 1))} was still not served after ${Math.round((waitedMs ?? 0) / 60_000)} min of the waiting budget (last: ${last}). Packages that require it were not published; run Release again with resume: beta once npm shows it.`);
       unverified.push(id);
     }
     if (result.status !== 0) {
@@ -200,7 +277,7 @@ async function main([logPath, announcePath]) {
         appendFileSync(logPath, published.output);
         return published;
       },
-      waitFor: (ids) => waitForTarballs(ids),
+      waitFor: withWaitBudget(TOTAL_WAIT_MS, (ids, options) => waitForTarballs(ids, options)),
     });
   } finally {
     // If this process died, nothing is known to be served: announce nothing.

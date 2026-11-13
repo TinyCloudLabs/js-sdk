@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/courier",
-  "version": "0.6.0-beta.35",
+  "version": "0.6.0-beta.37",
   "description": "Courier: agent-to-agent threads over TinyCloud (CLI, library and agent skill)",
   "author": "TinyCloud, Inc.",
   "type": "module",
@@ -26,12 +26,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "test": "tsc -p tsconfig.json && node --import ./test/setup-home.mjs --test test/*.test.mjs",
+    "test": "tsc -p tsconfig.json && node --import ./test/setup-home.mjs --test test/*.test.mjs && bun test ./test/*.test.ts",
     "test:live": "tsc -p tsconfig.json && node scripts/happy-path.mjs"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.12.0-beta.30",
-    "@tinycloud/sdk-core": "3.12.0-beta.30",
+    "@tinycloud/node-sdk": "3.12.0-beta.31",
+    "@tinycloud/sdk-core": "3.12.0-beta.31",
     "@tinycloud/share-envelope": "1.6.0-beta.1",
     "@tinycloud/share-sdk": "1.5.0-beta.4",
     "ulid": "^3.0.2"

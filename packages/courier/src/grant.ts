@@ -1,5 +1,5 @@
 import { assertRenewalAdmissionLeadTime, recoverAdmittedRenewal } from './renewal-recovery.js';
-import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
+import { assertOwnerRenewalIdentity, signedLeaseExpiry, verifyOwnerRenewal } from './owner-renewal.js';
 import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
@@ -331,7 +331,7 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
       originalCid: payload.delegationCid, ownerDid: `did:pkh:eip155:${payload.chainId}:${payload.address}`,
       agentDid: profile.courierDid, spaceId: payload.spaceId, nodeIdentity: identity,
       leaseAuthorization: payload.renewal.receipt.leaseAuthorization, leaseCid: payload.renewal.receipt.leaseCid,
-      leaseExpiresAt: payload.renewal.receipt.leaseExpiresAt });
+      leaseExpiresAt: await signedLeaseExpiry(payload.renewal) });
   }
   assertAgentGrant(node.getVerifiedSessionCapabilities(), times, payload.renewal ? Math.min(Date.now(), expiresAt.getTime() - 1) : Date.now());
   if (node.credentialHolderDid !== profile.courierDid) {

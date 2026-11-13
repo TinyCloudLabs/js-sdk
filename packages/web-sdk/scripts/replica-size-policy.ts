@@ -475,6 +475,7 @@ export type Ledger = {
   tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
   tc2949PanelChunkRecoveryRoot?: LogoutRatchet;
   tc2970RegistryVerdictCacheRoot?: LogoutRatchet;
+  tc2913OpenKeyContinuationRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1104,6 +1105,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
   if (root.tc2949PanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949PanelChunkRecoveryRoot", pin: root.tc2949PanelChunkRecoveryRoot.sourceCommits.at(-1)! });
   if (root.tc2970RegistryVerdictCacheRoot !== undefined) pins.push({ row: "tc2970RegistryVerdictCacheRoot", pin: root.tc2970RegistryVerdictCacheRoot.sourceCommits.at(-1)! });
+  if (root.tc2913OpenKeyContinuationRoot !== undefined) pins.push({ row: "tc2913OpenKeyContinuationRoot", pin: root.tc2913OpenKeyContinuationRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1203,6 +1205,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
     ["tc2949PanelChunkRecoveryRoot", root.tc2949PanelChunkRecoveryRoot?.root.ceiling],
     ["tc2970RegistryVerdictCacheRoot", root.tc2970RegistryVerdictCacheRoot?.root.ceiling],
+    ["tc2913OpenKeyContinuationRoot", root.tc2913OpenKeyContinuationRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3397,6 +3400,26 @@ export const approvedTc2970RegistryVerdictCacheRoot: LogoutRatchet = {
   "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
 };
 
+/** Naomi's exact TC-2913 OpenKey continuation root allowance from canonical CI. */
+export const approvedTc2913OpenKeyContinuationRoot: LogoutRatchet = {
+  "label": "OpenKey one-window sign-in continuation root admission (TC-2913)",
+  "ruling": "Naomi's TC-2913 size ruling: exact canonical CI bytes, capped at +800 B per format over the newest root row when it merges; stacked on TC-2970 after rebasing onto c8e53a9a. Details: TC-2913",
+  "base": "c8e53a9aad80758dd3492c1714e40e6bd348c61b",
+  "sourceCommits": ["8219765ba399cbcc85630c2057cf913bb82dcb43"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245/job/132097360178",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245/job/132097360229"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 765, "index.cjs": 686 },
+    "ceiling": { "index.mjs": 1525060, "index.cjs": 1459418 }
+  },
+  "reason": "TinyCloudWeb.signIn() reserves the OpenKey window in the click handler and continues the server-selected identity's sign-in and approval in that window; before activation the SDK verifies the pinned identity, the exact signed SIWE bytes, strict ReCaps, session key, origin and nonce. Canonical Node 22/Bun 1.3.14 CI measured 1525060/1459418 gzip -9 bytes on 8219765b, based on c8e53a9a. This is +765/+686 over the TC-2970 ceilings 1524295/1458732, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2913"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3493,6 +3516,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
   tc2949PanelChunkRecoveryRoot: approvedTc2949PanelChunkRecoveryRoot,
   tc2970RegistryVerdictCacheRoot: approvedTc2970RegistryVerdictCacheRoot,
+  tc2913OpenKeyContinuationRoot: approvedTc2913OpenKeyContinuationRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3931,6 +3955,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2949PanelChunkRecoveryRoot ||
         JSON.stringify(value.tc2970RegistryVerdictCacheRoot) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot))) {
     throw new Error("Only Naomi's exact TC-2970 root admission is approved.");
+  }
+  if (value.tc2913OpenKeyContinuationRoot !== undefined &&
+      (!value.tc2970RegistryVerdictCacheRoot ||
+        JSON.stringify(value.tc2913OpenKeyContinuationRoot) !== JSON.stringify(approvedTc2913OpenKeyContinuationRoot))) {
+    throw new Error("Only Naomi's exact TC-2913 root admission is approved.");
   }
 }
 
@@ -4776,5 +4805,13 @@ export function validateTc2970RegistryVerdictCacheRootTransition(base?: LogoutRa
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2970 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2913 OpenKey continuation root admission is introduced once and immutable. */
+export function validateTc2913OpenKeyContinuationRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2913OpenKeyContinuationRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2913 root admission may be introduced once and cannot change later.");
   }
 }

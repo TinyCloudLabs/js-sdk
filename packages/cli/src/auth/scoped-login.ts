@@ -13,6 +13,7 @@ import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } fro
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { markClockDependent } from "./refusal.js";
 import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
+import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -31,6 +32,15 @@ export const SIGNED_RECAP = "signed-recap";
  */
 export interface RequestedExpiry {
   readonly durationMs: number;
+}
+
+/**
+ * Lifetime a non-device `auth login --manifest` requests when `--expiry` is omitted: one hour, the shortest practical
+ * session. `builtin:share-publishing` asks for seven days instead, because every Share link it publishes ends when
+ * the publishing session ends and a published link's own default is seven days.
+ */
+export function defaultManifestLoginExpiry(manifest: string): string {
+  return manifest === SHARE_PUBLISHING_MANIFEST_REF ? "7d" : "1h";
 }
 
 /** Parse an OpenKey login `--expiry`: `30m`/`7d`/`1w` or raw milliseconds. */
