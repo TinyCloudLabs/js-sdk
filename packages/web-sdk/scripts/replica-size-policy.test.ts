@@ -1,3 +1,8 @@
+import type { LedgerEntry } from "./replica-size-policy";
+import { validateTc2771PriorityLanesRootEntry } from "./replica-size-policy";
+import { approvedTc2771PriorityLanesReplicaWorker, validateTc2771PriorityLanesReplicaWorkerTransition } from "./replica-size-policy";
+import { approvedTc2771PriorityLanesWorker, validateTc2771PriorityLanesWorkerTransition } from "./replica-size-policy";
+import { approvedTc2771PriorityLanesRoot, validateTc2771PriorityLanesRootTransition } from "./replica-size-policy";
 import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -86,6 +91,10 @@ delete current.tc2691HostExpiry;
 delete current.tc2773LazyRestoreReplicaWorker;
 delete current.tc2234InvitationPolicyRoot;
 delete current.tc2773LazyRestoreRoot;
+delete current.tc2771PriorityLanesRoot;
+current.entries = current.entries.filter((entry) => entry.pr !== "#920");
+delete current.tc2771PriorityLanesReplicaWorker;
+delete current.tc2771PriorityLanesWorker;
 current.entries = current.entries.filter((entry) => entry.pr !== "#873");
 current.allowance["index.mjs"] = 388;
 
@@ -102,8 +111,8 @@ const newestKvWorkerCeiling = () => {
   const newest = Object.keys(rows).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && rows[key]?.worker !== undefined).at(-1)!;
   return rows[newest]!.worker!.ceiling;
 };
-const newestReplicaWorkerCeiling = () => {
-  const rows = shipped as unknown as Record<string, { replicaWorker?: { ceiling: number } } | undefined>;
+const newestReplicaWorkerCeiling = (ledger: Ledger = shipped) => {
+  const rows = ledger as unknown as Record<string, { replicaWorker?: { ceiling: number } } | undefined>;
   const newest = Object.keys(rows).filter((key) => rows[key]?.replicaWorker !== undefined).at(-1)!;
   return rows[newest]!.replicaWorker!.ceiling;
 };
@@ -4816,6 +4825,10 @@ const finalTransportLedger = () => {
   delete ledger.tc2773LazyRestoreReplicaWorker;
   delete ledger.tc2234InvitationPolicyRoot;
   delete ledger.tc2773LazyRestoreRoot;
+  delete ledger.tc2771PriorityLanesRoot;
+  ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#920");
+  delete ledger.tc2771PriorityLanesReplicaWorker;
+  delete ledger.tc2771PriorityLanesWorker;
   ledger.allowance = { "index.mjs": 391, "index.cjs": 861 };
   ledger.entries = ledger.entries.filter((entry) => entry.pr !== "#873");
   ledger.entries.push({
@@ -4984,6 +4997,10 @@ describe("TC-2281 OpenKey runtime-grant signing root-only admission (#889)", () 
   delete throughTc2281.tc2773LazyRestoreReplicaWorker;
   delete throughTc2281.tc2234InvitationPolicyRoot;
   delete throughTc2281.tc2773LazyRestoreRoot;
+  delete throughTc2281.tc2771PriorityLanesRoot;
+  throughTc2281.entries = throughTc2281.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2281.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2281.tc2771PriorityLanesWorker;
 
   it("is the newest root row, exactly the TC-2582 caps plus the measured delta, with no owned charge", () => {
     expect(() => validateLedger(throughTc2281)).not.toThrow();
@@ -5042,6 +5059,10 @@ describe("TC-2594 resource transport root-only admission (#891)", () => {
   delete throughTc2594.tc2773LazyRestoreReplicaWorker;
   delete throughTc2594.tc2234InvitationPolicyRoot;
   delete throughTc2594.tc2773LazyRestoreRoot;
+  delete throughTc2594.tc2771PriorityLanesRoot;
+  throughTc2594.entries = throughTc2594.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2594.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2594.tc2771PriorityLanesWorker;
 
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2594);
@@ -5098,6 +5119,10 @@ describe("TC-2657 explicit publication root-only admission (#902)", () => {
   delete throughTc2657.tc2773LazyRestoreReplicaWorker;
   delete throughTc2657.tc2234InvitationPolicyRoot;
   delete throughTc2657.tc2773LazyRestoreRoot;
+  delete throughTc2657.tc2771PriorityLanesRoot;
+  throughTc2657.entries = throughTc2657.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2657.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2657.tc2771PriorityLanesWorker;
 
   it("admits the publication root sizes and refuses one additional byte", () => {
     validateLedger(throughTc2657);
@@ -5153,6 +5178,10 @@ describe("TC-2518 key wrap root-only admission (#906)", () => {
   delete throughTc2518.tc2773LazyRestoreReplicaWorker;
   delete throughTc2518.tc2234InvitationPolicyRoot;
   delete throughTc2518.tc2773LazyRestoreRoot;
+  delete throughTc2518.tc2771PriorityLanesRoot;
+  throughTc2518.entries = throughTc2518.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2518.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2518.tc2771PriorityLanesWorker;
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2518);
     for (const [format, measured] of [["index.mjs", 1514668], ["index.cjs", 1450017]] as const) {
@@ -5202,6 +5231,10 @@ describe("TC-2687 published sign-in root-only admission (#910)", () => {
   delete throughTc2687.tc2773LazyRestoreReplicaWorker;
   delete throughTc2687.tc2234InvitationPolicyRoot;
   delete throughTc2687.tc2773LazyRestoreRoot;
+  delete throughTc2687.tc2771PriorityLanesRoot;
+  throughTc2687.entries = throughTc2687.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2687.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2687.tc2771PriorityLanesWorker;
   it("admits the measured root assets and refuses one additional byte", () => {
     validateLedger(throughTc2687);
     for (const [format, measured] of [["index.mjs", 1514830], ["index.cjs", 1450177]] as const) {
@@ -5250,6 +5283,10 @@ describe("host SIWE expiry (TC-2691) exact size admissions", () => {
   delete throughTc2691.tc2773LazyRestoreReplicaWorker;
   delete throughTc2691.tc2234InvitationPolicyRoot;
   delete throughTc2691.tc2773LazyRestoreRoot;
+  delete throughTc2691.tc2771PriorityLanesRoot;
+  throughTc2691.entries = throughTc2691.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2691.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2691.tc2771PriorityLanesWorker;
   it("admits exactly the final roots and refuses the next byte", () => {
     validateLedger(throughTc2691);
     for (const [format, measured] of [["index.mjs", 1514897], ["index.cjs", 1450238]] as const) {
@@ -5305,7 +5342,9 @@ describe("TC-2773 exact replica worker admission", () => {
   it("admits the canonical measurement and refuses the next byte", () => {
     validateLedger(shipped);
     expect(row.replicaWorker.ceiling).toBe(771106);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(771106);
+    const historical = copy(shipped);
+    delete historical.tc2771PriorityLanesReplicaWorker;
+    expect(newestReplicaWorkerCeiling(historical)).toBe(771106);
     expect(771106 <= row.replicaWorker.ceiling).toBe(true);
     expect(771107 > row.replicaWorker.ceiling).toBe(true);
     expect(ancestryPins(shipped, false)).toContainEqual({
@@ -5344,9 +5383,13 @@ describe("TC-2773 exact replica worker admission", () => {
 
 
 describe("TC-2773 exact web-sdk root admission", () => {
-  // The ledger as TC-2773 shipped it: the shipped ledger with ONLY the later TC-2234 row removed.
+  // The ledger as TC-2773 shipped it: remove only the later TC-2234 and TC-2771 admissions.
   const throughTc2773 = copy(shipped);
   delete throughTc2773.tc2234InvitationPolicyRoot;
+  delete throughTc2773.tc2771PriorityLanesRoot;
+  throughTc2773.entries = throughTc2773.entries.filter((entry) => entry.pr !== "#920");
+  delete throughTc2773.tc2771PriorityLanesReplicaWorker;
+  delete throughTc2773.tc2771PriorityLanesWorker;
   const row = throughTc2773.tc2773LazyRestoreRoot!;
 
   it("admits the canonical root measurements and refuses the next byte", () => {
@@ -5395,7 +5438,14 @@ describe("TC-2773 exact web-sdk root admission", () => {
   });
 });
 
+const throughTc2234 = copy(shipped);
+delete throughTc2234.tc2771PriorityLanesRoot;
+throughTc2234.entries = throughTc2234.entries.filter((entry) => entry.pr !== "#920");
+delete throughTc2234.tc2771PriorityLanesReplicaWorker;
+delete throughTc2234.tc2771PriorityLanesWorker;
+
 describe("TC-2234 exact web-sdk root admission", () => {
+  const shipped = throughTc2234;
   const row = shipped.tc2234InvitationPolicyRoot!;
 
   it("admits the canonical root measurements and refuses the next byte", () => {
@@ -5435,6 +5485,10 @@ describe("TC-2234 exact web-sdk root admission", () => {
     }
     const missing = copy(shipped);
     delete missing.tc2773LazyRestoreRoot;
+delete missing.tc2771PriorityLanesRoot;
+missing.entries = missing.entries.filter((entry) => entry.pr !== "#920");
+delete missing.tc2771PriorityLanesReplicaWorker;
+delete missing.tc2771PriorityLanesWorker;
     expect(() => validateLedger(missing)).toThrow("TC-2234 root");
   });
 
@@ -5446,5 +5500,196 @@ describe("TC-2234 exact web-sdk root admission", () => {
     expect(() => validateTc2234InvitationPolicyRootTransition(undefined, changed)).toThrow("TC-2234 root");
     expect(() => validateTc2234InvitationPolicyRootTransition(row, changed)).toThrow("TC-2234 root");
     expect(() => validateTc2234InvitationPolicyRootTransition(row, undefined)).toThrow("TC-2234 root");
+  });
+});
+
+describe("TC-2771 exact web-sdk root admission", () => {
+  const row = shipped.tc2771PriorityLanesRoot!;
+
+  it("admits the canonical root measurements and refuses the next byte", () => {
+    validateLedger(shipped);
+    expect(row).toEqual(approvedTc2771PriorityLanesRoot);
+    for (const [format, measured] of [["index.mjs", 1516613], ["index.cjs", 1451136]] as const) {
+      const active = rootCeilingFor(shipped, format);
+      expect(active.row).toBe("tc2771PriorityLanesRoot");
+      expect(active.ceiling).toBe(measured);
+      expect(measured <= active.ceiling).toBe(true);
+      expect(measured + 1 > active.ceiling).toBe(true);
+    }
+    expect(ancestryPins(shipped, false)).toContainEqual({
+      row: "tc2771PriorityLanesRoot", pin: row.sourceCommits.at(-1)!,
+    });
+  });
+
+  it("records only the exact root deltas above its immutable predecessor", () => {
+    expect(row.root.delta).toEqual({ "index.mjs": 1104, "index.cjs": 601 });
+    expect(shipped.tc2234InvitationPolicyRoot).toEqual(approvedTc2234InvitationPolicyRoot);
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row.root.ceiling[format] - shipped.tc2234InvitationPolicyRoot!.root.ceiling[format]).toBe(row.root.delta[format]);
+    }
+  });
+
+  it("rejects changed provenance, extra buckets and a missing predecessor", () => {
+    const mutations: Array<(entry: typeof row) => void> = [
+      (entry) => { entry.root.ceiling["index.mjs"]++; },
+      (entry) => { entry.root.delta["index.cjs"]++; },
+      (entry) => { entry.base = "0".repeat(40); },
+      (entry) => { entry.sourceCommits[0] = "0".repeat(40); },
+      (entry) => { entry.canonicalCI.jobs.pop(); },
+      (entry) => { Object.assign(entry, { worker: { ceiling: 777225, delta: 1 } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      mutate(changed.tc2771PriorityLanesRoot!);
+      expect(() => validateLedger(changed)).toThrow("TC-2771 root");
+    }
+    const missing = copy(shipped);
+    delete missing.tc2234InvitationPolicyRoot;
+    expect(() => validateLedger(missing)).toThrow("TC-2771 root");
+  });
+
+  it("admits its exact transition once and rejects mutation or removal", () => {
+    expect(() => validateTc2771PriorityLanesRootTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2771PriorityLanesRootTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2771PriorityLanesRootTransition(undefined, changed)).toThrow("TC-2771 root");
+    expect(() => validateTc2771PriorityLanesRootTransition(row, changed)).toThrow("TC-2771 root");
+    expect(() => validateTc2771PriorityLanesRootTransition(row, undefined)).toThrow("TC-2771 root");
+  });
+});
+
+
+describe("TC-2771 exact worker admission", () => {
+  const row = shipped.tc2771PriorityLanesWorker!;
+
+  it("admits its canonical bytes and refuses the next byte", () => {
+    validateLedger(shipped);
+    expect(row).toEqual(approvedTc2771PriorityLanesWorker);
+    expect(row.worker).toEqual({ delta: 1331, ceiling: 778555 });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(778555);
+    expect(778555 <= row.worker.ceiling).toBe(true);
+    expect(778555 + 1 > row.worker.ceiling).toBe(true);
+    expect(ancestryPins(shipped, false)).toContainEqual({ row: "tc2771PriorityLanesWorker", pin: row.sourceCommits.at(-1)! });
+  });
+
+  it("rejects changed bytes, provenance, extra buckets and a missing predecessor", () => {
+    const mutations: Array<(entry: typeof row) => void> = [
+      (entry) => { entry.worker.ceiling++; },
+      (entry) => { entry.worker.delta++; },
+      (entry) => { entry.base = "0".repeat(40); },
+      (entry) => { entry.sourceCommits[0] = "0".repeat(40); },
+      (entry) => { entry.canonicalCI.jobs.pop(); },
+      (entry) => { Object.assign(entry, { root: { ceiling: { "index.mjs": 1 }, delta: {} } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      mutate(changed.tc2771PriorityLanesWorker!);
+      expect(() => validateLedger(changed)).toThrow("TC-2771 worker");
+    }
+    const missing = copy(shipped);
+    delete missing.tc2691HostExpiryWorker;
+    expect(() => validateLedger(missing)).toThrow("TC-2771 worker");
+  });
+
+  it("admits its exact transition once and rejects mutation or removal", () => {
+    expect(() => validateTc2771PriorityLanesWorkerTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2771PriorityLanesWorkerTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.worker.ceiling++;
+    expect(() => validateTc2771PriorityLanesWorkerTransition(undefined, changed)).toThrow("TC-2771 worker");
+    expect(() => validateTc2771PriorityLanesWorkerTransition(row, changed)).toThrow("TC-2771 worker");
+    expect(() => validateTc2771PriorityLanesWorkerTransition(row, undefined)).toThrow("TC-2771 worker");
+  });
+});
+
+
+describe("TC-2771 exact replicaWorker admission", () => {
+  const row = shipped.tc2771PriorityLanesReplicaWorker!;
+
+  it("admits its canonical bytes and refuses the next byte", () => {
+    validateLedger(shipped);
+    expect(row).toEqual(approvedTc2771PriorityLanesReplicaWorker);
+    expect(row.replicaWorker).toEqual({ delta: 1406, ceiling: 772512 });
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(772512);
+    expect(772512 <= row.replicaWorker.ceiling).toBe(true);
+    expect(772512 + 1 > row.replicaWorker.ceiling).toBe(true);
+    expect(ancestryPins(shipped, false)).toContainEqual({ row: "tc2771PriorityLanesReplicaWorker", pin: row.sourceCommits.at(-1)! });
+  });
+
+  it("rejects changed bytes, provenance, extra buckets and a missing predecessor", () => {
+    const mutations: Array<(entry: typeof row) => void> = [
+      (entry) => { entry.replicaWorker.ceiling++; },
+      (entry) => { entry.replicaWorker.delta++; },
+      (entry) => { entry.base = "0".repeat(40); },
+      (entry) => { entry.sourceCommits[0] = "0".repeat(40); },
+      (entry) => { entry.canonicalCI.jobs.pop(); },
+      (entry) => { Object.assign(entry, { root: { ceiling: { "index.mjs": 1 }, delta: {} } }); },
+    ];
+    for (const mutate of mutations) {
+      const changed = copy(shipped);
+      mutate(changed.tc2771PriorityLanesReplicaWorker!);
+      expect(() => validateLedger(changed)).toThrow("TC-2771 replicaWorker");
+    }
+    const missing = copy(shipped);
+    delete missing.tc2773LazyRestoreReplicaWorker;
+    expect(() => validateLedger(missing)).toThrow();
+  });
+
+  it("admits its exact transition once and rejects mutation or removal", () => {
+    expect(() => validateTc2771PriorityLanesReplicaWorkerTransition(undefined, row)).not.toThrow();
+    expect(() => validateTc2771PriorityLanesReplicaWorkerTransition(row, structuredClone(row))).not.toThrow();
+    const changed = structuredClone(row);
+    changed.replicaWorker.ceiling++;
+    expect(() => validateTc2771PriorityLanesReplicaWorkerTransition(undefined, changed)).toThrow("TC-2771 replicaWorker");
+    expect(() => validateTc2771PriorityLanesReplicaWorkerTransition(row, changed)).toThrow("TC-2771 replicaWorker");
+    expect(() => validateTc2771PriorityLanesReplicaWorkerTransition(row, undefined)).toThrow("TC-2771 replicaWorker");
+  });
+});
+
+
+describe("TC-2771 exact zero-owned-charge accounting", () => {
+  const admission = () => structuredClone(approvedTc2771PriorityLanesRoot);
+  const entry = () => structuredClone(admission().ownedEntry);
+  const observed = () => ({ "index.mjs": 1104, "index.cjs": 620 });
+
+  it("uses its exact absolute admission without changing the cumulative allowance", () => {
+    expect(shipped.allowance).toEqual({ "index.mjs": 391, "index.cjs": 861 });
+    expect(admission().measuredGrowth).toEqual(observed());
+    expect(shipped.entries.filter((row) => row.pr === "#920")).toEqual([entry()]);
+    expect(() => validateTc2771PriorityLanesRootEntry(entry(), observed(), admission())).not.toThrow();
+  });
+
+  it("refuses either next byte or any different observed growth", () => {
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      for (const delta of [-1, 1]) {
+        const changed = observed(); changed[format] += delta;
+        expect(() => validateTc2771PriorityLanesRootEntry(entry(), changed, admission())).toThrow("TC-2771");
+      }
+    }
+  });
+
+  it("refuses mismatched PR, ticket, charge, note or provenance", () => {
+    for (const mutate of [
+      (row: LedgerEntry) => { row.pr = "#921"; },
+      (row: LedgerEntry) => { row.ticket = "TC-2773"; },
+      (row: LedgerEntry) => { row["index.mjs"] = 1; },
+      (row: LedgerEntry) => { row["index.cjs"] = 1; },
+      (row: LedgerEntry) => { row.note += " changed"; },
+    ]) {
+      const changed = entry(); mutate(changed);
+      expect(() => validateTc2771PriorityLanesRootEntry(changed, observed(), admission())).toThrow("TC-2771");
+    }
+    const changed = admission(); changed.canonicalCI.jobs.pop();
+    expect(() => validateTc2771PriorityLanesRootEntry(entry(), observed(), changed)).toThrow("TC-2771");
+    expect(() => validateTc2771PriorityLanesRootEntry(entry(), observed(), undefined)).toThrow("TC-2771");
+  });
+
+  it("requires one matching entry whenever the admission is present", () => {
+    for (const entries of [shipped.entries.filter((row) => row.pr !== "#920"), [...shipped.entries, entry()]]) {
+      expect(() => validateLedger({ ...copy(shipped), entries })).toThrow("TC-2771");
+    }
+    const without = copy(shipped); delete without.tc2771PriorityLanesRoot;
+    expect(() => validateLedger(without)).toThrow("TC-2771");
   });
 });

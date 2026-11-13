@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { ServiceContext } from "./context";
 import type { FetchResponse, RetryPolicy } from "./types";
 
@@ -35,7 +35,7 @@ function contextFor(fetch: () => Promise<FetchResponse>, retryPolicy?: Partial<R
 
 /** Advance fake time in 1 ms steps, flushing promise continuations between steps. */
 async function advance(ms: number) {
-  const flush = async () => { for (let j = 0; j < 10; j++) await Promise.resolve(); };
+  const flush = async () => { for (let j = 0; j < 40; j++) await Promise.resolve(); };
   await flush(); // let the pending request reach its first wait at the current time
   for (let i = 0; i < ms; i++) {
     jest.advanceTimersByTime(1);
@@ -48,6 +48,10 @@ const busy = (retryAfter?: string) => () => reply(503, BUSY, retryAfter);
 const ok = () => reply(200, "ok");
 
 describe("ServiceContext.invokeWithRetry", () => {
+  beforeAll(async () => {
+    await contextFor(fakeNode([ok]).fetch).fetch("https://node/priority-ready");
+  });
+
   beforeEach(() => {
     jest.useFakeTimers();
     spyOn(Math, "random").mockReturnValue(0.5);
@@ -181,4 +185,36 @@ describe("ServiceContext.invokeWithRetry", () => {
     expect(builds).toBe(2);
     expect(cancelled).toBe(1);
   });
+
+  test("the browser foreground budget returns typed busy when Retry-After cannot fit", async () => {
+    const node = fakeNode([busy("5"), ok]);
+    const response = await contextFor(node.fetch, { foregroundBusyMaxTotalMs: 4_000 })
+      .invokeWithRetry("https://node/invoke", mint);
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe(BUSY);
+    expect(response.retry).toEqual({ attempts: 1, backoffMs: 0 });
+  });
+
+  test("the browser foreground budget allows retries at 1, 2 and 3 seconds", async () => {
+    const node = fakeNode([busy("1")]);
+    const pending = contextFor(node.fetch, { foregroundBusyMaxTotalMs: 4_000, maxAttempts: 8 })
+      .invokeWithRetry("https://node/invoke", mint);
+    await advance(4000);
+    expect((await pending).status).toBe(503);
+    expect(node.calls.map((time) => time - node.calls[0]!)).toEqual([0, 1000, 2000, 3000]);
+  });
+
+  test("the browser foreground budget preserves the caller's backoff abort reason", async () => {
+    const node = fakeNode([busy("1"), ok]);
+    const controller = new AbortController();
+    const pending = contextFor(node.fetch, { foregroundBusyMaxTotalMs: 4_000 })
+      .invokeWithRetry("https://node/invoke", () => ({ signal: controller.signal }));
+    const outcome = pending.catch((error: unknown) => error);
+    await advance(100);
+    const reason = new Error("caller gave up");
+    controller.abort(reason);
+    expect(await outcome).toBe(reason);
+    expect(node.calls).toHaveLength(1);
+  });
+
 });

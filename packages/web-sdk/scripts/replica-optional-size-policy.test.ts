@@ -678,6 +678,9 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
   const observed = { "replica.mjs": 53129, "replica.cjs": 68401, "activation.mjs": 19143, "activation.cjs": 20115 };
   const fixture = () => {
     const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+    delete root.tc2771PriorityLanesRoot;
+    delete root.tc2771PriorityLanesWorker;
+    delete root.tc2771PriorityLanesReplicaWorker;
     root.allowance = { "index.mjs": 391, "index.cjs": 861 };
     root.entries = root.entries.slice(0, root.entries.findIndex((entry) => entry.pr === "#873"));
     root.entries.push({

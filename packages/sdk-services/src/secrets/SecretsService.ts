@@ -137,6 +137,7 @@ export class SecretsService implements ISecretsService {
   }
 
   async listAll(): Promise<Result<SecretCatalogEntry[], SecretsError>> {
+    const vault = this.vault;
     const entries = new Map<string, SecretCatalogEntry>();
     // A node older than bounded list paging ignores the cursor and returns the
     // same page again; a repeated cursor would loop forever, so it fails.
@@ -144,7 +145,7 @@ export class SecretsService implements ISecretsService {
     let cursor: string | undefined;
 
     do {
-      const result = await this.vault.listPage({
+      const result = await vault.listPage({
         prefix: "secrets/",
         removePrefix: true,
         limit: 1000,

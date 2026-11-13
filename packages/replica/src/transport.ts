@@ -1,23 +1,22 @@
+import type { FetchFunction } from "@tinycloud/sdk-services";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
 import { isInstant } from "./scope.js";
 import type { AuthorityWindow, Change, FetchedContent, ReplicaTransport, SyncPage } from "./types.js";
 
 const featureCache = new Map<string, Promise<readonly string[] | undefined>>();
 
-function featuresForHost(host: string, fetchFn: typeof globalThis.fetch): Promise<readonly string[] | undefined> {
+function featuresForHost(host: string, fetchFn: FetchFunction): Promise<readonly string[] | undefined> {
   const cached = featureCache.get(host);
   if (cached !== undefined) return cached;
-  const discovered = fetchFn(`${host.replace(/\/+$/, "")}/info`)
-    .then(async (response) => {
-      if (!response.ok) return undefined;
-      const info: unknown = await response.json();
-      if (typeof info !== "object" || info === null || !("features" in info)) return undefined;
-      const features = info.features;
-      return Array.isArray(features) && features.every((feature) => typeof feature === "string")
-        ? features
-        : undefined;
-    })
-    .catch(() => undefined);
+  const discovered = import("@tinycloud/sdk-services/internal/response-body").then(({ usingResponse }) => usingResponse(() => fetchFn(`${host.replace(/\/+$/, "")}/info`), async (response) => {
+    if (!response.ok) return undefined;
+    const info: unknown = await response.json();
+    if (typeof info !== "object" || info === null || !("features" in info)) return undefined;
+    const features = info.features;
+    return Array.isArray(features) && features.every((feature) => typeof feature === "string")
+      ? features
+      : undefined;
+  })).catch(() => undefined);
   featureCache.set(host, discovered);
   void discovered.then((features) => {
     if (features === undefined) featureCache.delete(host);
@@ -203,7 +202,7 @@ function fetched(key: string, result: Result<KVValue>, request: string): Fetched
 /** A `ReplicaTransport` over a KV service bound to the replica's space and grant. */
 export function kvSyncTransport(
   kv: KVSyncClient,
-  options: { host?: string; fetch?: typeof globalThis.fetch } = {},
+  options: { host?: string; fetch?: FetchFunction } = {},
 ): ReplicaTransport {
   const host = options.host ?? (kv as KVSyncClient & { host?: unknown }).host;
   const fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);

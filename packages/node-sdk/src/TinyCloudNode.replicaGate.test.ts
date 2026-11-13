@@ -179,6 +179,37 @@ describe("replica gate: restore", () => {
     }
   });
 
+  test("lazy restore preflight uses the background lane on first replica use", async () => {
+    const dir = profileDir();
+    const proof = await signedRestorableSession();
+    const replicaStamp = await replicaGate.establishSessionStamp(dir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.now(),
+    });
+    const node = replicatedNode(dir);
+    const realFetch = globalThis.fetch;
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === `${RESTORE_HOST}/info`) {
+        return Response.json({ protocol: new NodeWasmBindings().protocolVersion(), version: "fixture", features: [] });
+      }
+      return realFetch(input, init);
+    };
+    try {
+      await node.restoreSession({ ...proof, replicaStamp });
+      expect(requests).toEqual([]);
+      await node.replication!.status();
+      const info = requests.filter(({ url }) => url === `${RESTORE_HOST}/info`);
+      expect(info).toHaveLength(1);
+      expect(info[0]!.init).toMatchObject({ priority: "low" });
+      expect(new Headers(info[0]!.init?.headers).has("authorization")).toBe(false);
+      expect(info[0]!.init?.body).toBeUndefined();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   test("a rejected replacement cannot cancel lazy binding for the current session", async () => {
     const dir = profileDir();
     const proof = await signedRestorableSession();

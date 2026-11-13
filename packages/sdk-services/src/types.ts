@@ -241,6 +241,7 @@ export interface FetchRequestInit {
   body?: Blob | FormData | string;
   signal?: AbortSignal;
   redirect?: "error";
+  priority?: "high" | "low" | "auto";
 }
 
 /**
@@ -306,6 +307,8 @@ export interface RetryPolicy {
   retryableErrors: string[];
   /** Total time budget for all attempts and waits, in milliseconds. Unset: no cap. */
   maxTotalMs?: number;
+  /** Optional shorter budget for foreground NODE_BUSY retries. */
+  foregroundBusyMaxTotalMs?: number;
 }
 
 /**

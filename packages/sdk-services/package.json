@@ -31,6 +31,11 @@
       "import": "./dist/context.js",
       "require": "./dist/context.cjs"
     },
+    "./request-priority": {
+      "types": "./dist/request-priority.d.ts",
+      "import": "./dist/request-priority.js",
+      "require": "./dist/request-priority.cjs"
+    },
     "./telemetry/requestLog": {
       "import": {
         "types": "./dist/telemetry/requestLog.d.ts",
@@ -140,6 +145,16 @@
       "types": "./dist/internal/decrypt-transport-response-error.d.cts",
       "import": "./dist/internal/decrypt-transport-response-error.cjs",
       "require": "./dist/internal/decrypt-transport-response-error.cjs"
+    },
+    "./internal/response-body": {
+      "import": {
+        "types": "./dist/internal/response-body.d.ts",
+        "default": "./dist/internal/response-body.js"
+      },
+      "require": {
+        "types": "./dist/internal/response-body.d.cts",
+        "default": "./dist/internal/response-body.cjs"
+      }
     }
   },
   "typesVersions": {

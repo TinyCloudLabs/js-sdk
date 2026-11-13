@@ -5,6 +5,7 @@
  * Uses dependency injection via IServiceContext for platform dependencies.
  */
 
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { BaseService } from "../base/BaseService";
 import {
   Result,
@@ -14,6 +15,7 @@ import {
   serviceError,
   FetchResponse,
   ServiceHeaders,
+  ServiceSession,
 } from "../types";
 import type { KVReadThrough, KVListPage } from "./replication/types";
 import {
@@ -275,6 +277,7 @@ export class KVService extends BaseService implements IKVService {
    * @returns Fetch response
    */
   private async invokeOperation(
+    session: ServiceSession,
     path: string,
     action: string,
     body: Blob | string | undefined,
@@ -283,7 +286,11 @@ export class KVService extends BaseService implements IKVService {
   ): Promise<FetchResponse> {
     return this.invokeWithRetry(
       `${this.host}/invoke`,
-      () => this.context.invoke(this.context.session!, "kv", path, action),
+      () => {
+        signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        return this.context.invoke(session, "kv", path, action);
+      },
       { headers: extraHeaders, body, signal }
     );
   }
@@ -520,6 +527,7 @@ export class KVService extends BaseService implements IKVService {
     action: typeof KVAction.GET | typeof KVAction.HEAD,
     options?: KVGetOptions | KVHeadOptions
   ): Promise<Result<KVBatchReadResponse<T>>> {
+    const session = this.context?.session!;
     if (!this.requireAuth()) return err(authRequiredError("kv"));
     if (keys.length === 0) return ok({ results: [], count: 0 });
     if (keys.length > MAX_KV_BATCH_READ_ITEMS) {
@@ -577,90 +585,95 @@ export class KVService extends BaseService implements IKVService {
           getOptions.maxResponseBytes
         );
       }
-      const response = await this.invokeWithRetry(
-        `${this.host}/invoke`,
-        () => {
-          const session = this.context.session!;
-          return this.context.invokeAny!(
-            session,
-            paths.map((path) => ({
-              spaceId: session.spaceId,
-              service: "kv",
-              path,
-              action,
-            }))
-          );
-        },
-        { headers: limitHeaders, signal: request.signal }
-      );
-
-      if (!response.ok) {
-        const errorText = response.status === 401 || response.status === 403
-          ? await this.readAuthorizationText(response)
-          : await response.text();
-        if (response.status === 401 || response.status === 403) {
-          return this.authorizationFailure(
-            `Failed to batch read ${keys.length} key(s)`,
-            response,
-            errorText,
-            paths,
-            action
-          );
-        }
-        if (response.status === 413) {
-          return err(serviceError(
-            ErrorCodes.KV_RESPONSE_TOO_LARGE,
-            "A KV batch value exceeds the requested response limit",
-            "kv",
-            { meta: { status: response.status, statusText: response.statusText } }
-          ));
-        }
-        return err(serviceError(
-          ErrorCodes.NETWORK_ERROR,
-          `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
-
-      const items = this.normalizeBatchReadResponse(
-        await response.json(),
-        paths,
-        action === KVAction.GET
-      );
-      if (!items) {
-        return err(serviceError(
-          ErrorCodes.NETWORK_ERROR,
-          "KV batch read response did not match the requested keys",
-          "kv"
-        ));
-      }
-
-      const results = items.map((item, index) => {
-        if (!item.ok) {
-          return {
-            key: keys[index]!,
-            result: err(serviceError(item.error!.code, item.error!.message, "kv")),
-          };
-        }
-        const headers = item.headers!;
-        const data = action === KVAction.HEAD
-          ? undefined
-          : this.parseBatchValue<T>(
-              item.dataBase64!,
-              headers,
-              getOptions?.raw,
-              getOptions?.binary
+      return await usingResponse(
+        () => this.invokeWithRetry(
+          `${this.host}/invoke`,
+          () => {
+            request.signal.throwIfAborted();
+            if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+            return this.context.invokeAny!(
+              session,
+              paths.map((path) => ({
+                spaceId: session.spaceId,
+                service: "kv",
+                path,
+                action,
+              }))
             );
-        return {
-          key: keys[index]!,
-          result: ok({
-            data: data as T,
-            headers: this.createBatchResponseHeaders(headers),
-          }),
-        };
-      });
-      return ok({ results, count: results.length });
+          },
+          { headers: limitHeaders, signal: request.signal }
+        ),
+        async (response) => {
+          if (!response.ok) {
+            const errorText = response.status === 401 || response.status === 403
+              ? await this.readAuthorizationText(response)
+              : await response.text();
+            if (response.status === 401 || response.status === 403) {
+              return this.authorizationFailure(
+                session,
+                `Failed to batch read ${keys.length} key(s)`,
+                response,
+                errorText,
+                paths,
+                action
+              );
+            }
+            if (response.status === 413) {
+              return err(serviceError(
+                ErrorCodes.KV_RESPONSE_TOO_LARGE,
+                "A KV batch value exceeds the requested response limit",
+                "kv",
+                { meta: { status: response.status, statusText: response.statusText } }
+              ));
+            }
+            return err(serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+
+          const items = this.normalizeBatchReadResponse(
+            await response.json(),
+            paths,
+            action === KVAction.GET
+          );
+          if (!items) {
+            return err(serviceError(
+              ErrorCodes.NETWORK_ERROR,
+              "KV batch read response did not match the requested keys",
+              "kv"
+            ));
+          }
+
+          const results = items.map((item, index) => {
+            if (!item.ok) {
+              return {
+                key: keys[index]!,
+                result: err(serviceError(item.error!.code, item.error!.message, "kv")),
+              };
+            }
+            const headers = item.headers!;
+            const data = action === KVAction.HEAD
+              ? undefined
+              : this.parseBatchValue<T>(
+                  item.dataBase64!,
+                  headers,
+                  getOptions?.raw,
+                  getOptions?.binary
+                );
+            return {
+              key: keys[index]!,
+              result: ok({
+                data: data as T,
+                headers: this.createBatchResponseHeaders(headers),
+              }),
+            };
+          });
+          return ok({ results, count: results.length });
+        }
+      );
     } catch (error) {
       return err(wrapError("kv", error));
     } finally {
@@ -712,6 +725,7 @@ export class KVService extends BaseService implements IKVService {
   }
 
   private async createSignedReadUrlError(
+    session: ServiceSession,
     response: FetchResponse,
     key: string,
     path: string
@@ -728,6 +742,7 @@ export class KVService extends BaseService implements IKVService {
 
     if (response.status === 401 || response.status === 403) {
       return this.authorizationFailure(
+        session,
         `Failed to create signed read URL for key ${JSON.stringify(key)}`,
         response,
         errorText,
@@ -767,6 +782,7 @@ export class KVService extends BaseService implements IKVService {
    * canonical resource under the authenticated session's space.
    */
   private authorizationFailure(
+    session: ServiceSession,
     context: string,
     response: FetchResponse,
     errorText: string,
@@ -777,7 +793,7 @@ export class KVService extends BaseService implements IKVService {
     const { resource, action } = parseAuthError(errorText);
     const requestedPath = paths.find((path) =>
       resource === path ||
-      resource === `${this.context.session!.spaceId}/kv/${path}`
+      resource === `${session.spaceId}/kv/${path}`
     );
     const capability = requestedPath !== undefined && action === expectedAction
       ? validatedCapabilityOf({
@@ -785,7 +801,7 @@ export class KVService extends BaseService implements IKVService {
           code: ErrorCodes.AUTH_UNAUTHORIZED,
           meta: {
             status: response.status,
-            resource: `${this.context.session!.spaceId}/kv/${requestedPath}`,
+            resource: `${session.spaceId}/kv/${requestedPath}`,
             requiredAction: action,
           },
         })
@@ -832,7 +848,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVGetOptions
   ): Promise<Result<KVResponse<T>>> {
     return this.withTelemetry("get", key, async () => {
-      if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -852,7 +868,10 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.getFromNetwork<T>(key, path, options, request.signal);
+        if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.getFromNetwork<T>(session, key, path, options, request.signal);
         if (options?.source === "network") {
           const observer = this.readThrough;
           if (observer === null) return await network();
@@ -866,7 +885,7 @@ export class KVService extends BaseService implements IKVService {
             try {
               observer.observeNetworkRequested({
                 op: "get",
-                space: this.context.session!.spaceId,
+                space: session.spaceId,
                 path,
                 reason: "NETWORK_REQUESTED",
                 outcome,
@@ -880,7 +899,7 @@ export class KVService extends BaseService implements IKVService {
         }
         if (this.readThrough === null) return await network();
         return await this.readThrough.get({
-          space: this.context.session!.spaceId,
+          space: session.spaceId,
           key,
           path,
           options,
@@ -895,68 +914,75 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async getFromNetwork<T>(
+    session: ServiceSession,
     key: string,
     path: string,
     options: KVGetOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVResponse<T>>> {
-    const response = await this.invokeOperation(
-      path,
-      KVAction.GET,
-      undefined,
-      signal,
-      options?.maxResponseBytes === undefined
-        ? undefined
-        : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
+    return await usingResponse(
+      () => this.invokeOperation(
+        session,
+        path,
+        KVAction.GET,
+        undefined,
+        signal,
+        options?.maxResponseBytes === undefined
+          ? undefined
+          : { "x-tinycloud-max-response-bytes": String(options.maxResponseBytes) }
+      ),
+      async (response) => {
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            const errorText = await this.readAuthorizationText(response);
+            const permissionHint = parsePermissionHintFromErrorText(errorText);
+            const structuredCapability = permissionHint?.service === "tinycloud.kv" &&
+              permissionHint.space === session.spaceId &&
+              permissionHint.path === path
+              ? validatedCapabilityOf({
+                  service: "kv",
+                  code: ErrorCodes.AUTH_UNAUTHORIZED,
+                  meta: {
+                    status: response.status,
+                    resource: `${session.spaceId}/kv/${path}`,
+                    requiredAction: KVAction.GET,
+                  },
+                })
+              : undefined;
+            return this.authorizationFailure(
+              session,
+              `Failed to get key ${JSON.stringify(key)}`,
+              response,
+              errorText,
+              [path],
+              KVAction.GET,
+              structuredCapability ? { permissionHint, ...structuredCapability } : {}
+            );
+          }
+          if (response.status === 404) return this.classifyNotFound(response, key);
+          const errorText = await response.text();
+          if (response.status === 413) {
+            return err(serviceError(
+              ErrorCodes.KV_RESPONSE_TOO_LARGE,
+              `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          const message = `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+          const retryError = nodeRetryError("kv", message, response, errorText);
+          if (retryError) return err(retryError);
+          return err(serviceError(
+            ErrorCodes.NETWORK_ERROR,
+            message,
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          ));
+        }
+        const data = await this.parseResponse<T>(response, options?.raw, options?.binary);
+        return ok({ data: data as T, headers: this.createResponseHeaders(response.headers), ...(response.retry && { retry: response.retry }) });
+      }
     );
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        const errorText = await this.readAuthorizationText(response);
-        const permissionHint = parsePermissionHintFromErrorText(errorText);
-        const structuredCapability = permissionHint?.service === "tinycloud.kv" &&
-          permissionHint.space === this.context.session!.spaceId &&
-          permissionHint.path === path
-          ? validatedCapabilityOf({
-              service: "kv",
-              code: ErrorCodes.AUTH_UNAUTHORIZED,
-              meta: {
-                status: response.status,
-                resource: `${this.context.session!.spaceId}/kv/${path}`,
-                requiredAction: KVAction.GET,
-              },
-            })
-          : undefined;
-        return this.authorizationFailure(
-          `Failed to get key ${JSON.stringify(key)}`,
-          response,
-          errorText,
-          [path],
-          KVAction.GET,
-          structuredCapability ? { permissionHint, ...structuredCapability } : {}
-        );
-      }
-      if (response.status === 404) return this.classifyNotFound(response, key);
-      const errorText = await response.text();
-      if (response.status === 413) {
-        return err(serviceError(
-          ErrorCodes.KV_RESPONSE_TOO_LARGE,
-          `KV value at key ${JSON.stringify(key)} exceeds the requested response limit`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
-      const message = `Failed to get key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
-      const retryError = nodeRetryError("kv", message, response, errorText);
-      if (retryError) return err(retryError);
-      return err(serviceError(
-        ErrorCodes.NETWORK_ERROR,
-        message,
-        "kv",
-        { meta: { status: response.status, statusText: response.statusText } }
-      ));
-    }
-    const data = await this.parseResponse<T>(response, options?.raw, options?.binary);
-    return ok({ data: data as T, headers: this.createResponseHeaders(response.headers), ...(response.retry && { retry: response.retry }) });
   }
 
   async batchGet<T = unknown>(
@@ -977,7 +1003,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVPutOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("put", key, async () => {
-      if (this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -999,11 +1025,14 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.putToNetwork(key, path, body, options, request.signal);
+        if (this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.putToNetwork(session, key, path, body, options, request.signal);
         if (this.readThrough === null) return await network();
         return await this.readThrough.write({
           op: "put",
-          space: this.context.session!.spaceId,
+          space: session.spaceId,
           entries: [{ path, body }],
           signal: request.signal,
           conditional: options?.ifMatch !== undefined || options?.ifNoneMatch !== undefined,
@@ -1017,60 +1046,67 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async putToNetwork(
+    session: ServiceSession,
     key: string,
     path: string,
     body: Blob | string,
     options: KVPutOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVResponse<void>>> {
-    const response = await this.invokeOperation(
-      path,
-      KVAction.PUT,
-      body,
-      signal,
-      {
-        ...(options?.ifMatch === undefined ? {} : { "if-match": options.ifMatch }),
-        ...(options?.ifNoneMatch === undefined ? {} : { "if-none-match": options.ifNoneMatch }),
+    return await usingResponse(
+      () => this.invokeOperation(
+        session,
+        path,
+        KVAction.PUT,
+        body,
+        signal,
+        {
+          ...(options?.ifMatch === undefined ? {} : { "if-match": options.ifMatch }),
+          ...(options?.ifNoneMatch === undefined ? {} : { "if-none-match": options.ifNoneMatch }),
+        }
+      ),
+      async (response) => {
+        if (response.status === 401 || response.status === 403) {
+          return this.authorizationFailure(
+            session,
+            `Failed to put key ${JSON.stringify(key)}`,
+            response,
+            await this.readAuthorizationText(response),
+            [path],
+            KVAction.PUT
+          );
+        }
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (response.status === 412) {
+            return err(serviceError(
+              ErrorCodes.KV_PRECONDITION_FAILED,
+              `KV precondition failed for key ${JSON.stringify(key)}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          // A 503 is never a precondition failure (that is the 412 above): it is
+          // the node's busy/timeout signal, or an unclassified outage.
+          const message = `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+          const retryError = nodeRetryError("kv", message, response, errorText);
+          if (retryError) return err(retryError);
+          const quotaError = this.handleQuotaErrorResponse(response, errorText, key);
+          if (quotaError) return quotaError;
+          return err(serviceError(
+            ErrorCodes.KV_WRITE_FAILED,
+            message,
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          ));
+        }
+        return ok({
+          data: undefined as void,
+          headers: this.createResponseHeaders(response.headers),
+          ...(response.retry && { retry: response.retry }),
+        });
       }
     );
-    if (response.status === 401 || response.status === 403) {
-      return this.authorizationFailure(
-        `Failed to put key ${JSON.stringify(key)}`,
-        response,
-        await this.readAuthorizationText(response),
-        [path],
-        KVAction.PUT
-      );
-    }
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (response.status === 412) {
-        return err(serviceError(
-          ErrorCodes.KV_PRECONDITION_FAILED,
-          `KV precondition failed for key ${JSON.stringify(key)}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
-      // A 503 is never a precondition failure (that is the 412 above): it is
-      // the node's busy/timeout signal, or an unclassified outage.
-      const message = `Failed to put key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
-      const retryError = nodeRetryError("kv", message, response, errorText);
-      if (retryError) return err(retryError);
-      const quotaError = this.handleQuotaErrorResponse(response, errorText, key);
-      if (quotaError) return quotaError;
-      return err(serviceError(
-        ErrorCodes.KV_WRITE_FAILED,
-        message,
-        "kv",
-        { meta: { status: response.status, statusText: response.statusText } }
-      ));
-    }
-    return ok({
-      data: undefined as void,
-      headers: this.createResponseHeaders(response.headers),
-      ...(response.retry && { retry: response.retry }),
-    });
   }
 
   /**
@@ -1081,7 +1117,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVBatchPutOptions
   ): Promise<Result<KVBatchPutResponse>> {
     return this.withTelemetry("batchPut", String(items.length), async () => {
-      if (this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1100,7 +1136,6 @@ export class KVService extends BaseService implements IKVService {
         );
       }
 
-      const session = this.context.session!;
       const paths = items.map((item) => this.getFullPath(item.key, options?.prefix));
       const seen = new Set<string>();
       for (const path of paths) {
@@ -1118,7 +1153,10 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.batchPutToNetwork(items, paths, request.signal);
+        if (this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.batchPutToNetwork(session, items, paths, request.signal);
         if (this.readThrough === null) return await network();
         const entries = items.map((item, index) => ({
           path: paths[index]!,
@@ -1129,7 +1167,7 @@ export class KVService extends BaseService implements IKVService {
           space: session.spaceId,
           entries,
           signal: request.signal,
-          network: () => this.batchPutToNetwork(items, paths, request.signal, entries),
+          network: () => this.batchPutToNetwork(session, items, paths, request.signal, entries),
         });
       } catch (error) {
         const wrapped = wrapError("kv", error);
@@ -1140,12 +1178,12 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async batchPutToNetwork(
+    session: ServiceSession,
     items: KVBatchPutItem[],
     paths: string[],
     signal: AbortSignal,
     entries?: Array<{ path: string; body: Blob }>
   ): Promise<Result<KVBatchPutResponse>> {
-    const session = this.context.session!;
     // Conservative: `true` means we handed a fully-constructed request to
     // fetch(). It does NOT prove bytes reached the node — DNS/connect
     // failures and synchronous fetch rejections are included. Proving
@@ -1167,184 +1205,190 @@ export class KVService extends BaseService implements IKVService {
         // one with 409). The flag flips only after minting succeeded and the
         // context accepted the call: a throw before that never reached a
         // transport, so it must not be labeled "may have dispatched" (Sol B2).
-        const response = await this.invokeWithRetry(
-          `${this.host}/invoke`,
-          () => {
-            const headers = this.context.invokeAny!(
-              session,
-              paths.map((path) => ({
-                spaceId: session.spaceId,
-                service: "kv",
-                path,
-                action: KVAction.PUT,
-              }))
-            );
-            requestMayHaveDispatched = true;
-            return headers;
-          },
-          { body, signal }
+        return await usingResponse(
+          () => this.invokeWithRetry(
+            `${this.host}/invoke`,
+            () => {
+              signal.throwIfAborted();
+              if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+              const headers = this.context.invokeAny!(
+                session,
+                paths.map((path) => ({
+                  spaceId: session.spaceId,
+                  service: "kv",
+                  path,
+                  action: KVAction.PUT,
+                }))
+              );
+              requestMayHaveDispatched = true;
+              return headers;
+            },
+            { body, signal }
+          ),
+          async (response) => {
+            if (!response.ok) {
+              let errorText: string;
+              try {
+                errorText = await response.text();
+              } catch (textError) {
+                // A response was received — the status is known and
+                // authoritative — but its body could not be read. Falling
+                // through to the generic catch below would report
+                // NETWORK_ERROR + requestMayHaveDispatched: true, which the
+                // allow-list treats as ambiguous regardless of status. That
+                // would turn a deterministic 4xx (nothing written) into a false
+                // ambiguity (Sol B4). Classify by status alone instead; whether
+                // this is later reconciled is still governed solely by
+                // AMBIGUOUS_WRITE_STATUSES, exactly like the body-readable path.
+                //
+                // Sol B2 (round 2): preserve the underlying rejection instead of
+                // discarding it — a bare `catch {}` here would make a
+                // body-read failure silently invisible, which is exactly the
+                // debugging trap the no-swallowed-errors rule exists to
+                // prevent.
+                const cause = textError instanceof Error ? textError : new Error(String(textError));
+                return err(
+                  serviceError(
+                    ErrorCodes.KV_WRITE_FAILED,
+                    `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
+                    "kv",
+                    { cause, meta: { status: response.status, statusText: response.statusText } }
+                  )
+                );
+              }
+
+              if (response.status === 401 || response.status === 403) {
+                return this.authorizationFailure(
+                  session,
+                  `Failed to batch put ${items.length} key(s)`,
+                  response,
+                  errorText,
+                  paths,
+                  KVAction.PUT
+                );
+              }
+
+              const quotaError = this.handleQuotaErrorResponse(
+                response,
+                errorText,
+                "batch"
+              );
+              if (quotaError) {
+                return quotaError;
+              }
+
+              return err(
+                serviceError(
+                  ErrorCodes.KV_WRITE_FAILED,
+                  `Failed to batch put ${items.length} key(s): ${response.status} - ${errorText}`,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+
+            let rawBody: unknown;
+            try {
+              rawBody = await response.json();
+            } catch (jsonError) {
+              // A 2xx response whose body isn't valid JSON is precisely the
+              // unconfirmed-2xx case — the node answered success but the write
+              // set can't be confirmed. Falling through to the generic catch
+              // below would carry only `requestMayHaveDispatched`, omitting
+              // `responseReceived`/`status`/`outcome`, so this must be classified
+              // here with the identical metadata block used by the two sibling
+              // unconfirmed branches (Sol B3).
+              //
+              // Sol B2 (round 2): preserve the underlying rejection instead of
+              // discarding it — a bare `catch {}` here would make a
+              // JSON-parse failure silently invisible, which is exactly the
+              // debugging trap the no-swallowed-errors rule exists to
+              // prevent.
+              const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+              // The configured timeout can also elapse while the 2xx body is
+              // still streaming: report TIMEOUT, with the same unconfirmed meta.
+              const timedOut = isRequestTimeoutError(cause);
+              return err(
+                serviceError(
+                  timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
+                  timedOut
+                    ? `KV batchPut response body did not arrive in time: ${cause.message}`
+                    : `KV batchPut response was not valid JSON: ${cause.message}`,
+                  "kv",
+                  {
+                    cause,
+                    meta: {
+                      ...(timedOut ? { timeoutMs: cause.timeoutMs } : {}),
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed",
+                    },
+                  }
+                )
+              );
+            }
+
+            const batchResponse = this.normalizeBatchPutResponse(rawBody);
+            if (!batchResponse) {
+              // The code stays NETWORK_ERROR deliberately: adding a member to
+              // ErrorCodes (types.ts:73-115) widens the exported ErrorCode union
+              // (:117) and would break consumers with exhaustive switches. The
+              // node answered 2xx (the write very likely landed) but the body
+              // could not confirm it, so the ambiguity is carried in metadata
+              // instead of a dedicated code.
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  "KV batchPut response did not include matching written keys and count",
+                  "kv",
+                  {
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed",
+                    },
+                  }
+                )
+              );
+            }
+
+            // Validate against the exact requested path set, not just internal
+            // self-consistency (count === written.length would accept a
+            // malformed response that reports the right count for the wrong
+            // keys, e.g. a partial write padded to look complete).
+            const requestedPaths = new Set(paths);
+            const writtenPaths = new Set(batchResponse.written);
+            const matchesRequest =
+              batchResponse.count === paths.length &&
+              batchResponse.written.length === paths.length &&
+              writtenPaths.size === paths.length &&
+              batchResponse.written.every((key) => requestedPaths.has(key));
+
+            if (!matchesRequest) {
+              // Same rationale as above: NETWORK_ERROR is kept and the
+              // ambiguity is carried in meta rather than a new ErrorCodes member.
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
+                  "kv",
+                  {
+                    meta: {
+                      requestMayHaveDispatched: true,
+                      responseReceived: true,
+                      status: response.status,
+                      outcome: "batch-unconfirmed",
+                    },
+                  }
+                )
+              );
+            }
+
+            return ok(batchResponse);
+          }
         );
-
-        if (!response.ok) {
-          let errorText: string;
-          try {
-            errorText = await response.text();
-          } catch (textError) {
-            // A response was received — the status is known and
-            // authoritative — but its body could not be read. Falling
-            // through to the generic catch below would report
-            // NETWORK_ERROR + requestMayHaveDispatched: true, which the
-            // allow-list treats as ambiguous regardless of status. That
-            // would turn a deterministic 4xx (nothing written) into a false
-            // ambiguity (Sol B4). Classify by status alone instead; whether
-            // this is later reconciled is still governed solely by
-            // AMBIGUOUS_WRITE_STATUSES, exactly like the body-readable path.
-            //
-            // Sol B2 (round 2): preserve the underlying rejection instead of
-            // discarding it — a bare `catch {}` here would make a
-            // body-read failure silently invisible, which is exactly the
-            // debugging trap the no-swallowed-errors rule exists to
-            // prevent.
-            const cause = textError instanceof Error ? textError : new Error(String(textError));
-            return err(
-              serviceError(
-                ErrorCodes.KV_WRITE_FAILED,
-                `Failed to batch put ${items.length} key(s): ${response.status} - <response body could not be read: ${cause.message}>`,
-                "kv",
-                { cause, meta: { status: response.status, statusText: response.statusText } }
-              )
-            );
-          }
-
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              `Failed to batch put ${items.length} key(s)`,
-              response,
-              errorText,
-              paths,
-              KVAction.PUT
-            );
-          }
-
-          const quotaError = this.handleQuotaErrorResponse(
-            response,
-            errorText,
-            "batch"
-          );
-          if (quotaError) {
-            return quotaError;
-          }
-
-          return err(
-            serviceError(
-              ErrorCodes.KV_WRITE_FAILED,
-              `Failed to batch put ${items.length} key(s): ${response.status} - ${errorText}`,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-
-        let rawBody: unknown;
-        try {
-          rawBody = await response.json();
-        } catch (jsonError) {
-          // A 2xx response whose body isn't valid JSON is precisely the
-          // unconfirmed-2xx case — the node answered success but the write
-          // set can't be confirmed. Falling through to the generic catch
-          // below would carry only `requestMayHaveDispatched`, omitting
-          // `responseReceived`/`status`/`outcome`, so this must be classified
-          // here with the identical metadata block used by the two sibling
-          // unconfirmed branches (Sol B3).
-          //
-          // Sol B2 (round 2): preserve the underlying rejection instead of
-          // discarding it — a bare `catch {}` here would make a
-          // JSON-parse failure silently invisible, which is exactly the
-          // debugging trap the no-swallowed-errors rule exists to
-          // prevent.
-          const cause = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
-          // The configured timeout can also elapse while the 2xx body is
-          // still streaming: report TIMEOUT, with the same unconfirmed meta.
-          const timedOut = isRequestTimeoutError(cause);
-          return err(
-            serviceError(
-              timedOut ? ErrorCodes.TIMEOUT : ErrorCodes.NETWORK_ERROR,
-              timedOut
-                ? `KV batchPut response body did not arrive in time: ${cause.message}`
-                : `KV batchPut response was not valid JSON: ${cause.message}`,
-              "kv",
-              {
-                cause,
-                meta: {
-                  ...(timedOut ? { timeoutMs: cause.timeoutMs } : {}),
-                  requestMayHaveDispatched: true,
-                  responseReceived: true,
-                  status: response.status,
-                  outcome: "batch-unconfirmed",
-                },
-              }
-            )
-          );
-        }
-
-        const batchResponse = this.normalizeBatchPutResponse(rawBody);
-        if (!batchResponse) {
-          // The code stays NETWORK_ERROR deliberately: adding a member to
-          // ErrorCodes (types.ts:73-115) widens the exported ErrorCode union
-          // (:117) and would break consumers with exhaustive switches. The
-          // node answered 2xx (the write very likely landed) but the body
-          // could not confirm it, so the ambiguity is carried in metadata
-          // instead of a dedicated code.
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              "KV batchPut response did not include matching written keys and count",
-              "kv",
-              {
-                meta: {
-                  requestMayHaveDispatched: true,
-                  responseReceived: true,
-                  status: response.status,
-                  outcome: "batch-unconfirmed",
-                },
-              }
-            )
-          );
-        }
-
-        // Validate against the exact requested path set, not just internal
-        // self-consistency (count === written.length would accept a
-        // malformed response that reports the right count for the wrong
-        // keys, e.g. a partial write padded to look complete).
-        const requestedPaths = new Set(paths);
-        const writtenPaths = new Set(batchResponse.written);
-        const matchesRequest =
-          batchResponse.count === paths.length &&
-          batchResponse.written.length === paths.length &&
-          writtenPaths.size === paths.length &&
-          batchResponse.written.every((key) => requestedPaths.has(key));
-
-        if (!matchesRequest) {
-          // Same rationale as above: NETWORK_ERROR is kept and the
-          // ambiguity is carried in meta rather than a new ErrorCodes member.
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              `KV batchPut response did not confirm all ${paths.length} requested key(s) were written`,
-              "kv",
-              {
-                meta: {
-                  requestMayHaveDispatched: true,
-                  responseReceived: true,
-                  status: response.status,
-                  outcome: "batch-unconfirmed",
-                },
-              }
-            )
-          );
-        }
-
-        return ok(batchResponse);
       } catch (error) {
         const wrapped = wrapError("kv", error);
         return err({
@@ -1359,7 +1403,7 @@ export class KVService extends BaseService implements IKVService {
    */
   async list(options?: KVListOptions): Promise<Result<KVListResponse>> {
     return this.withTelemetry("list", options?.prefix, async () => {
-      if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1383,7 +1427,10 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.listFromNetwork(listPath, options, request.signal);
+        if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.listFromNetwork(session, listPath, options, request.signal);
         let page: Result<KVListPage>;
         if (options?.source === "network") {
           const observer = this.readThrough;
@@ -1399,7 +1446,7 @@ export class KVService extends BaseService implements IKVService {
               try {
                 observer.observeNetworkRequested({
                   op: "list",
-                  space: this.context.session!.spaceId,
+                  space: session.spaceId,
                   path: listPath,
                   reason: "NETWORK_REQUESTED",
                   outcome,
@@ -1414,7 +1461,7 @@ export class KVService extends BaseService implements IKVService {
           page = await network();
         } else {
           page = await this.readThrough.list({
-            space: this.context.session!.spaceId,
+            space: session.spaceId,
             listPath,
             options,
             signal: request.signal,
@@ -1432,53 +1479,60 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async listFromNetwork(
+    session: ServiceSession,
     listPath: string,
     options: KVListOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVListPage>> {
-    const response = await this.invokeOperation(
-      listPath,
-      KVAction.LIST,
-      undefined,
-      signal,
-      options?.limit === undefined && options?.cursor === undefined
-        ? undefined
-        : {
-            ...(options?.limit === undefined ? {} : { "x-tinycloud-limit": String(options.limit) }),
-            ...(options?.cursor === undefined ? {} : { "x-tinycloud-cursor": options.cursor }),
+    return await usingResponse(
+      () => this.invokeOperation(
+        session,
+        listPath,
+        KVAction.LIST,
+        undefined,
+        signal,
+        options?.limit === undefined && options?.cursor === undefined
+          ? undefined
+          : {
+              ...(options?.limit === undefined ? {} : { "x-tinycloud-limit": String(options.limit) }),
+              ...(options?.cursor === undefined ? {} : { "x-tinycloud-cursor": options.cursor }),
+            }
+      ),
+      async (response) => {
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            return this.authorizationFailure(
+              session,
+              "Failed to list keys",
+              response,
+              await this.readAuthorizationText(response),
+              [listPath],
+              KVAction.LIST
+            );
           }
-    );
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        return this.authorizationFailure(
-          "Failed to list keys",
-          response,
-          await this.readAuthorizationText(response),
-          [listPath],
-          KVAction.LIST
-        );
+          const errorText = await response.text();
+          const message = `Failed to list keys: ${response.status} - ${errorText}`;
+          const retryError = nodeRetryError("kv", message, response, errorText);
+          if (retryError) return err(retryError);
+          return err(serviceError(
+            ErrorCodes.NETWORK_ERROR,
+            message,
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          ));
+        }
+        const keys = (await this.parseResponse<string[]>(response, options?.raw)) ?? [];
+        return ok({
+          keys,
+          ...(response.headers.get("x-tinycloud-truncated") === null
+            ? {}
+            : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
+          ...(response.headers.get("x-tinycloud-next-cursor") === null
+            ? {}
+            : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? undefined }),
+        });
       }
-      const errorText = await response.text();
-      const message = `Failed to list keys: ${response.status} - ${errorText}`;
-      const retryError = nodeRetryError("kv", message, response, errorText);
-      if (retryError) return err(retryError);
-      return err(serviceError(
-        ErrorCodes.NETWORK_ERROR,
-        message,
-        "kv",
-        { meta: { status: response.status, statusText: response.statusText } }
-      ));
-    }
-    const keys = (await this.parseResponse<string[]>(response, options?.raw)) ?? [];
-    return ok({
-      keys,
-      ...(response.headers.get("x-tinycloud-truncated") === null
-        ? {}
-        : { truncated: response.headers.get("x-tinycloud-truncated") === "true" }),
-      ...(response.headers.get("x-tinycloud-next-cursor") === null
-        ? {}
-        : { nextCursor: response.headers.get("x-tinycloud-next-cursor") ?? undefined }),
-    });
+    );
   }
 
   private finishList(
@@ -1502,6 +1556,7 @@ export class KVService extends BaseService implements IKVService {
    */
   async changes(options: KVChangesOptions): Promise<Result<KVChangesResponse>> {
     return this.withTelemetry("changes", options?.prefix, async () => {
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1535,37 +1590,41 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options.signal, options.timeout);
       try {
-        const response = await this.invokeOperation(
-          requestPrefix,
-          KVAction.SYNC,
-          undefined,
-          request.signal,
-          headers
+        return await usingResponse(
+          () => this.invokeOperation(
+            session,
+            requestPrefix,
+            KVAction.SYNC,
+            undefined,
+            request.signal,
+            headers
+          ),
+          async (response) => {
+            if (!response.ok) {
+              // Awaited so the timeout and abort listeners stay live while the
+              // error body is read; `finally` disposes them only afterwards.
+              return await this.changesFailure(session, response, options.prefix, request.signal);
+            }
+
+            const text = await response.text();
+            let body: unknown;
+            try {
+              body = JSON.parse(text);
+            } catch {
+              body = undefined;
+            }
+            const page = this.normalizeChangesResponse(body, options.prefix);
+            if (!page) {
+              return err(serviceError(
+                ErrorCodes.NETWORK_ERROR,
+                "KV changes response was not a tinycloud.kv/sync page",
+                "kv",
+                { meta: { status: response.status, statusText: response.statusText } }
+              ));
+            }
+            return ok(page);
+          }
         );
-
-        if (!response.ok) {
-          // Awaited so the timeout and abort listeners stay live while the
-          // error body is read; `finally` disposes them only afterwards.
-          return await this.changesFailure(response, options.prefix, request.signal);
-        }
-
-        const text = await response.text();
-        let body: unknown;
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = undefined;
-        }
-        const page = this.normalizeChangesResponse(body, options.prefix);
-        if (!page) {
-          return err(serviceError(
-            ErrorCodes.NETWORK_ERROR,
-            "KV changes response was not a tinycloud.kv/sync page",
-            "kv",
-            { meta: { status: response.status, statusText: response.statusText } }
-          ));
-        }
-        return ok(page);
       } catch (error) {
         return err(wrapError("kv", error));
       } finally {
@@ -1582,6 +1641,7 @@ export class KVService extends BaseService implements IKVService {
    * caller sees `ABORTED`/`TIMEOUT` rather than a mapped status.
    */
   private async changesFailure(
+    session: ServiceSession,
     response: FetchResponse,
     prefix: string,
     signal: AbortSignal
@@ -1634,7 +1694,7 @@ export class KVService extends BaseService implements IKVService {
       }
     }
     if (response.status === 401 || response.status === 403) {
-      return this.authorizationFailure(context, response, errorText, [prefix], KVAction.SYNC);
+      return this.authorizationFailure(session, context, response, errorText, [prefix], KVAction.SYNC);
     }
     return err(serviceError(
       response.status === 400 ? ErrorCodes.INVALID_INPUT : ErrorCodes.NETWORK_ERROR,
@@ -1713,7 +1773,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVDeleteOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("delete", key, async () => {
-      if (this.readThroughReady !== null) await this.readThroughReady();
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1722,11 +1782,14 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const network = () => this.deleteFromNetwork(key, path, options, request.signal);
+        if (this.readThroughReady !== null) await this.readThroughReady();
+        request.signal.throwIfAborted();
+        if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
+        const network = () => this.deleteFromNetwork(session, key, path, options, request.signal);
         if (this.readThrough === null) return await network();
         return await this.readThrough.write({
           op: "delete",
-          space: this.context.session!.spaceId,
+          space: session.spaceId,
           entries: [{ path }],
           signal: request.signal,
           conditional: options?.ifMatch !== undefined,
@@ -1740,53 +1803,60 @@ export class KVService extends BaseService implements IKVService {
     });
   }
   private async deleteFromNetwork(
+    session: ServiceSession,
     key: string,
     path: string,
     options: KVDeleteOptions | undefined,
     signal: AbortSignal
   ): Promise<Result<KVResponse<void>>> {
-    const response = await this.invokeOperation(
-      path,
-      KVAction.DELETE,
-      undefined,
-      signal,
-      options?.ifMatch === undefined ? undefined : { "if-match": options.ifMatch }
+    return await usingResponse(
+      () => this.invokeOperation(
+        session,
+        path,
+        KVAction.DELETE,
+        undefined,
+        signal,
+        options?.ifMatch === undefined ? undefined : { "if-match": options.ifMatch }
+      ),
+      async (response) => {
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            return this.authorizationFailure(
+              session,
+              `Failed to delete key ${JSON.stringify(key)}`,
+              response,
+              await this.readAuthorizationText(response),
+              [path],
+              KVAction.DELETE
+            );
+          }
+          if (response.status === 404) return this.classifyNotFound(response, key);
+          const errorText = await response.text();
+          if (response.status === 412) {
+            return err(serviceError(
+              ErrorCodes.KV_PRECONDITION_FAILED,
+              `KV precondition failed for key ${JSON.stringify(key)}`,
+              "kv",
+              { meta: { status: response.status, statusText: response.statusText } }
+            ));
+          }
+          const message = `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+          const retryError = nodeRetryError("kv", message, response, errorText);
+          if (retryError) return err(retryError);
+          return err(serviceError(
+            ErrorCodes.NETWORK_ERROR,
+            message,
+            "kv",
+            { meta: { status: response.status, statusText: response.statusText } }
+          ));
+        }
+        return ok({
+          data: undefined as void,
+          headers: this.createResponseHeaders(response.headers),
+          ...(response.retry && { retry: response.retry }),
+        });
+      }
     );
-    if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        return this.authorizationFailure(
-          `Failed to delete key ${JSON.stringify(key)}`,
-          response,
-          await this.readAuthorizationText(response),
-          [path],
-          KVAction.DELETE
-        );
-      }
-      if (response.status === 404) return this.classifyNotFound(response, key);
-      const errorText = await response.text();
-      if (response.status === 412) {
-        return err(serviceError(
-          ErrorCodes.KV_PRECONDITION_FAILED,
-          `KV precondition failed for key ${JSON.stringify(key)}`,
-          "kv",
-          { meta: { status: response.status, statusText: response.statusText } }
-        ));
-      }
-      const message = `Failed to delete key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
-      const retryError = nodeRetryError("kv", message, response, errorText);
-      if (retryError) return err(retryError);
-      return err(serviceError(
-        ErrorCodes.NETWORK_ERROR,
-        message,
-        "kv",
-        { meta: { status: response.status, statusText: response.statusText } }
-      ));
-    }
-    return ok({
-      data: undefined as void,
-      headers: this.createResponseHeaders(response.headers),
-      ...(response.retry && { retry: response.retry }),
-    });
   }
 
   /**
@@ -1797,6 +1867,7 @@ export class KVService extends BaseService implements IKVService {
     options?: KVHeadOptions
   ): Promise<Result<KVResponse<void>>> {
     return this.withTelemetry("head", key, async () => {
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
@@ -1805,46 +1876,51 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeOperation(
-          path,
-          KVAction.HEAD,
-          undefined,
-          request.signal
+        return await usingResponse(
+          () => this.invokeOperation(
+            session,
+            path,
+            KVAction.HEAD,
+            undefined,
+            request.signal
+          ),
+          async (response) => {
+            if (!response.ok) {
+              if (response.status === 401 || response.status === 403) {
+                return this.authorizationFailure(
+                  session,
+                  `Failed to get metadata for key ${JSON.stringify(key)}`,
+                  response,
+                  await this.readAuthorizationText(response),
+                  [path],
+                  KVAction.HEAD
+                );
+              }
+
+              if (response.status === 404) {
+                return await this.classifyNotFound(response, key);
+              }
+
+              const errorText = await response.text();
+              const message = `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
+              const retryError = nodeRetryError("kv", message, response, errorText);
+              if (retryError) return err(retryError);
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  message,
+                  "kv",
+                  { meta: { status: response.status, statusText: response.statusText } }
+                )
+              );
+            }
+
+            return ok({
+              data: undefined as void,
+              headers: this.createResponseHeaders(response.headers),
+            });
+          }
         );
-
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            return this.authorizationFailure(
-              `Failed to get metadata for key ${JSON.stringify(key)}`,
-              response,
-              await this.readAuthorizationText(response),
-              [path],
-              KVAction.HEAD
-            );
-          }
-
-          if (response.status === 404) {
-            return await this.classifyNotFound(response, key);
-          }
-
-          const errorText = await response.text();
-          const message = `Failed to get metadata for key ${JSON.stringify(key)}: ${response.status} - ${errorText}`;
-          const retryError = nodeRetryError("kv", message, response, errorText);
-          if (retryError) return err(retryError);
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              message,
-              "kv",
-              { meta: { status: response.status, statusText: response.statusText } }
-            )
-          );
-        }
-
-        return ok({
-          data: undefined as void,
-          headers: this.createResponseHeaders(response.headers),
-        });
       } catch (error) {
         return err(wrapError("kv", error));
       } finally {
@@ -1870,12 +1946,12 @@ export class KVService extends BaseService implements IKVService {
     options?: KVCreateSignedReadUrlOptions
   ): Promise<Result<KVSignedReadUrlResponse>> {
     return this.withTelemetry("createSignedReadUrl", key, async () => {
+      const session = this.context?.session!;
       if (!this.requireAuth()) {
         return err(authRequiredError("kv"));
       }
 
       const path = this.getFullPath(key, options?.prefix);
-      const session = this.context.session!;
       const body: {
         space: string;
         path: string;
@@ -1899,34 +1975,37 @@ export class KVService extends BaseService implements IKVService {
 
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        const response = await this.invokeWithRetry(
-          `${this.host}/signed/kv`,
-          () => this.context.invoke(session, "kv", path, KVAction.GET),
-          {
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-            signal: request.signal,
+        return await usingResponse(
+          () => this.invokeWithRetry(
+            `${this.host}/signed/kv`,
+            () => this.context.invoke(session, "kv", path, KVAction.GET),
+            {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+              signal: request.signal,
+            }
+          ),
+          async (response) => {
+            if (!response.ok) {
+              return await this.createSignedReadUrlError(session, response, key, path);
+            }
+
+            const signedUrl = this.normalizeSignedReadUrlResponse(
+              await response.json()
+            );
+            if (!signedUrl) {
+              return err(
+                serviceError(
+                  ErrorCodes.NETWORK_ERROR,
+                  "Signed read URL response did not include url, ticketId, and expiresAt",
+                  "kv"
+                )
+              );
+            }
+
+            return ok(signedUrl);
           }
         );
-
-        if (!response.ok) {
-          return await this.createSignedReadUrlError(response, key, path);
-        }
-
-        const signedUrl = this.normalizeSignedReadUrlResponse(
-          await response.json()
-        );
-        if (!signedUrl) {
-          return err(
-            serviceError(
-              ErrorCodes.NETWORK_ERROR,
-              "Signed read URL response did not include url, ticketId, and expiresAt",
-              "kv"
-            )
-          );
-        }
-
-        return ok(signedUrl);
       } catch (error) {
         return err(wrapError("kv", error));
       } finally {

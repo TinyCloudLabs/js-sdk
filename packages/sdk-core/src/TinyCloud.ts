@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import {
   IUserAuthorization,
   ClientSession,
@@ -594,50 +595,40 @@ export class TinyCloud {
         "tinycloud.space/info",
       );
 
-      const response = await this._serviceContext.fetch(
-        `${this._serviceContext.hosts[0]}/invoke`,
+      const existing = await usingResponse(() => this._serviceContext!.fetch(
+        `${this._serviceContext!.hosts[0]}/invoke`,
         { method: "POST", headers, body: JSON.stringify({ spaceId }) },
+      ), async (response) => {
+        if (response.ok) return ok(undefined);
+        if (response.status === 404) return null;
+        return err(await serviceHttpError(
+          response, ErrorCodes.NETWORK_ERROR, "Failed to check public space", "public-space",
+        ));
+      });
+      if (existing !== null) return existing;
+
+      // Release the info response before acquiring a creation slot in the same lane.
+      const createHeaders = this._serviceContext.invoke(
+        session,
+        "space",
+        "public",
+        "tinycloud.space/create",
       );
-
-      if (response.ok) {
-        return ok(undefined);
-      }
-
-      if (response.status === 404) {
-        // Space doesn't exist — create it
-        const createHeaders = this._serviceContext.invoke(
-          session,
-          "space",
-          "public",
-          "tinycloud.space/create",
-        );
-
-        const createResponse = await this._serviceContext.fetch(
-          `${this._serviceContext.hosts[0]}/invoke`,
-          {
-            method: "POST",
-            headers: createHeaders,
-            body: JSON.stringify({ name: "public" }),
-          },
-        );
-
-        if (!createResponse.ok) {
-          // 409 means it already exists — that's fine
-          if (createResponse.status === 409) {
-            return ok(undefined);
-          }
+      return await usingResponse(() => this._serviceContext!.fetch(
+        `${this._serviceContext!.hosts[0]}/invoke`,
+        {
+          method: "POST",
+          headers: createHeaders,
+          body: JSON.stringify({ name: "public" }),
+        },
+      ), async (createResponse) => {
+        if (!createResponse.ok && createResponse.status !== 409) {
           return err(await serviceHttpError(
             createResponse, ErrorCodes.NETWORK_ERROR, "Failed to create public space", "public-space",
           ));
         }
-
         return ok(undefined);
-      }
-
-      // Other error from info check
-      return err(await serviceHttpError(
-        response, ErrorCodes.NETWORK_ERROR, "Failed to check public space", "public-space",
-      ));
+      });
     } catch (error) {
       return err(
         serviceError(

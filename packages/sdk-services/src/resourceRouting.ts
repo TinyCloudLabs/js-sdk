@@ -1,4 +1,6 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import type { FetchFunction, FetchResponse, ServiceHeaders, ServiceSession } from "./types";
+import { fetchResolved, routesRequests } from "./resolvedDispatch";
 
 export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
@@ -41,17 +43,22 @@ export async function verifyResourceDestination(target: ResourceDestination, fet
   let keys: unknown;
   try {
     const signal = AbortSignal.timeout(5_000);
-    const responses = await Promise.all([
-      fetchFn(`${target.url}/info`, { signal, redirect: "error" }),
-      fetchFn(`${target.url}/.well-known/tinycloud/node-keys`, { signal, redirect: "error" }),
-    ]);
-    if (responses.some((response) => response.status >= 500)) throw new NodeNotRespondingError([target.url]);
-    if (responses.some((response) => !response.ok)) throw new NodeIdentityMismatchError(target.url, target.nodeDid);
-    try {
-      [info, keys] = await Promise.all(responses.map((response) => response.json()));
-    } catch {
-      throw new NodeIdentityMismatchError(target.url, target.nodeDid);
-    }
+    const replies = await Promise.all([
+      `${target.url}/info`,
+      `${target.url}/.well-known/tinycloud/node-keys`,
+    ].map((url) => usingResponse(
+      () => fetchFn(url, { signal, redirect: "error" }),
+      async (response) => {
+        // Consume each first body before another background request needs its slot.
+        const status = response.status;
+        const accepted = response.ok;
+        const content = await Promise.resolve().then(() => accepted ? response.json() : undefined).catch(() => undefined);
+        return { status, accepted, content };
+      },
+    )));
+    if (replies.some(({ status }) => status >= 500)) throw new NodeNotRespondingError([target.url]);
+    if (replies.some(({ accepted }) => !accepted)) throw new NodeIdentityMismatchError(target.url, target.nodeDid);
+    [info, keys] = replies.map(({ content }) => content);
   } catch (error) {
     if (error instanceof NodeIdentityMismatchError || error instanceof NodeNotRespondingError) throw error;
     throw new NodeNotRespondingError([target.url], error);
@@ -150,6 +157,22 @@ export function routingResourceOf(uri: string): string {
   throw new ResourceNotRoutedError(uri);
 }
 
+type WriteReplies = { pending: number; retained: FetchResponse[] };
+type OwnedReplies = { responses: FetchResponse[]; writes: Map<string, WriteReplies>; closed: boolean };
+
+/** A FetchFunction owns its unreturned replies; generic resource transports do not. */
+async function withOwnedReplies(run: (replies: OwnedReplies) => Promise<FetchResponse>): Promise<FetchResponse> {
+  const replies: OwnedReplies = { responses: [], writes: new Map(), closed: false };
+  let response: FetchResponse | undefined;
+  try {
+    response = await run(replies);
+    return response;
+  } finally {
+    replies.closed = true;
+    await Promise.all(replies.responses.filter((reply) => reply !== response).map((reply) => usingResponse(() => Promise.resolve(reply), () => undefined)));
+  }
+}
+
 function invocationResources(authorization: string): Array<{ resource: string; access: ResourceAccess }> {
   const encoded = authorization.split(".")[1];
   if (!encoded) throw new ResourceNotRoutedError("invalid invocation");
@@ -238,48 +261,103 @@ export async function routeResourceRequest(
   return response!;
 }
 
+/** Finish an intermediate reply before another write needs that host's slot.
+ * Reading a clone preserves the original receipt and its body for the caller. */
+async function drainWriteClone(response: FetchResponse): Promise<void> {
+  if (response.clone) await usingResponse(() => Promise.resolve(response.clone!()), (clone) => clone.arrayBuffer()).catch(() => undefined);
+}
+
+async function prepareWrite(replies: OwnedReplies, url: string, write: boolean): Promise<WriteReplies | undefined> {
+  if (!write) return undefined;
+  const host = new URL(url).origin;
+  let state = replies.writes.get(host);
+  if (!state) { state = { pending: 0, retained: [] }; replies.writes.set(host, state); }
+  await Promise.all(state.retained.splice(0).map(drainWriteClone));
+  state.pending++;
+  return state;
+}
+
+async function retainedWriteReply(response: FetchResponse, state: WriteReplies | undefined): Promise<FetchResponse> {
+  // A custom transport can also dispatch its targets concurrently.
+  if (state && state.pending > 1) await drainWriteClone(response);
+  return response;
+}
+
+async function rememberReply(replies: OwnedReplies, response: FetchResponse, state: WriteReplies | undefined): Promise<FetchResponse> {
+  if (replies.closed) {
+    // The transport may have rejected before an abort-ignoring fetch replied.
+    await usingResponse(() => Promise.resolve(response), () => undefined);
+  } else {
+    replies.responses.push(response);
+    state?.retained.push(response);
+  }
+  return response;
+}
+
 /** Route only locally generated data invocations through a captured share session. */
 export function createResourceTransportInvocationFetch(transport: ResourceTransport, session: ServiceSession): FetchFunction {
-  return async (url, init) => {
+  return Object.assign(async (url: string, init?: Parameters<FetchFunction>[1]) => {
     const parsed = new URL(url);
     if (parsed.pathname !== "/invoke") throw new ResourceNotRoutedError(parsed.pathname);
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
-    return transport(invocationResources(authorization), async (target) => {
+    const resources = invocationResources(authorization);
+    const write = resources.some(({ access }) => access === "write" || access === "host");
+    return withOwnedReplies((replies) => transport(resources, async (target) => {
       const signed = await target.bindAudience(authorization);
+      init?.signal?.throwIfAborted();
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
         .filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
-      return target.fetch(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers });
-    }, { invocationSession: session });
-  };
+      const state = await prepareWrite(replies, target.url, write);
+      try {
+        init?.signal?.throwIfAborted();
+        const response = await usingResponse(
+          () => fetchResolved(target.fetch, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers }),
+          (reply) => retainedWriteReply(reply, state),
+        );
+        return await rememberReply(replies, response, state);
+      } finally { if (state) state.pending--; }
+    }, { invocationSession: session }));
+  }, { [routesRequests]: true });
 }
 
 /** Route signed /invoke traffic. Non-invocation endpoints retain their own resource-specific adapters. */
 export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: ResourceRoutingConfig): FetchFunction {
-  return async (url, init) => {
+  return Object.assign(async (url: string, init?: Parameters<FetchFunction>[1]) => {
     const parsed = new URL(url);
-    if (parsed.pathname !== "/invoke") return fetchFn(url, init);
+    if (parsed.pathname !== "/invoke") return fetchResolved(fetchFn, url, init);
     const authorization = authorizationOf(init?.headers);
     if (!authorization) throw new ResourceNotRoutedError("unsigned invocation");
     const resources = invocationResources(authorization);
-    const send = async (target: ResourceDestination): Promise<FetchResponse> => {
-      init?.signal?.throwIfAborted();
-      if (routing.verifyDestination) await routing.verifyDestination(target);
-      else await verifyResourceDestination(target, fetchFn);
-      const signed = target.nodeDid ? await routing.bindAudience(authorization, target.nodeDid) : authorization;
-      const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
-      headers.push(["Authorization", signed]);
-      const timeout = AbortSignal.timeout(5_000);
-      const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
-      try {
-        return await fetchFn(`${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" });
-      } catch (error) {
-        if (init?.signal?.aborted) throw error;
-        if (routingFailure(error)) throw error;
-        throw new NodeNotRespondingError([target.url], error);
-      }
-    };
-    return routeResourceRequest(resources, routing, send);
-  };
+    return withOwnedReplies(async (replies) => {
+      const write = resources.some(({ access }) => access === "write" || access === "host");
+      const send = async (target: ResourceDestination): Promise<FetchResponse> => {
+        if (!write && replies.responses.at(-1)?.status === 404) await usingResponse(() => Promise.resolve(replies.responses.at(-1)!), () => undefined);
+        init?.signal?.throwIfAborted();
+        if (routing.verifyDestination) await routing.verifyDestination(target);
+        else await verifyResourceDestination(target, fetchFn);
+        const signed = target.nodeDid ? await routing.bindAudience(authorization, target.nodeDid) : authorization;
+        init?.signal?.throwIfAborted();
+        const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
+        headers.push(["Authorization", signed]);
+        const timeout = AbortSignal.timeout(5_000);
+        const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+        const state = await prepareWrite(replies, target.url, write);
+        try {
+          signal.throwIfAborted();
+          const response = await usingResponse(
+            () => fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" }),
+            (reply) => retainedWriteReply(reply, state),
+          );
+          return await rememberReply(replies, response, state);
+        } catch (error) {
+          if (init?.signal?.aborted) throw error;
+          if (routingFailure(error)) throw error;
+          throw new NodeNotRespondingError([target.url], error);
+        } finally { if (state) state.pending--; }
+      };
+      return routeResourceRequest(resources, routing, send);
+    });
+  }, { [routesRequests]: true });
 }

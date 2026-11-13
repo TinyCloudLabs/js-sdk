@@ -1,3 +1,7 @@
+import { validateTc2771PriorityLanesRootEntry } from "./replica-size-policy";
+import { validateTc2771PriorityLanesReplicaWorkerTransition } from "./replica-size-policy";
+import { validateTc2771PriorityLanesWorkerTransition } from "./replica-size-policy";
+import { validateTc2771PriorityLanesRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
@@ -667,6 +671,27 @@ if (prBaseSha) {
     console.error("The TC-2234 root admission requires the merged TC-2773 root row and its measured source ancestor.");
     failed = true;
   }
+  validateTc2771PriorityLanesRootTransition(baseLedger.tc2771PriorityLanesRoot, ledger.tc2771PriorityLanesRoot);
+  const priorityRoot = ledger.tc2771PriorityLanesRoot;
+  if (priorityRoot !== undefined && baseLedger.tc2771PriorityLanesRoot === undefined &&
+      (baseLedger.tc2234InvitationPolicyRoot === undefined || !hasAncestor(repoRoot, priorityRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2771 root admission requires the merged TC-2234 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2771PriorityLanesWorkerTransition(baseLedger.tc2771PriorityLanesWorker, ledger.tc2771PriorityLanesWorker);
+  const priorityWorker = ledger.tc2771PriorityLanesWorker;
+  if (priorityWorker !== undefined && baseLedger.tc2771PriorityLanesWorker === undefined &&
+      (baseLedger.tc2691HostExpiryWorker === undefined || !hasAncestor(repoRoot, priorityWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2771 worker admission requires its merged predecessor and measured source ancestor.");
+    failed = true;
+  }
+  validateTc2771PriorityLanesReplicaWorkerTransition(baseLedger.tc2771PriorityLanesReplicaWorker, ledger.tc2771PriorityLanesReplicaWorker);
+  const priorityReplicaWorker = ledger.tc2771PriorityLanesReplicaWorker;
+  if (priorityReplicaWorker !== undefined && baseLedger.tc2771PriorityLanesReplicaWorker === undefined &&
+      (baseLedger.tc2773LazyRestoreReplicaWorker === undefined || !hasAncestor(repoRoot, priorityReplicaWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2771 replicaWorker admission requires its merged predecessor and measured source ancestor.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -1085,6 +1110,14 @@ if (prBaseSha) {
           failed = true;
         }
         console.log("TC-2481 records the actual growth in its absolute root row; its owned-budget charge is zero.");
+      } else if (priorityRoot !== undefined && baseLedger.tc2771PriorityLanesRoot === undefined && prefixMatches && appended.length === 1) {
+        try {
+          validateTc2771PriorityLanesRootEntry(appended[0], deltas, priorityRoot);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : "Invalid TC-2771 root accounting");
+          failed = true;
+        }
+        console.log("TC-2771 records exact growth in its absolute root admission; its owned-budget charge is zero.");
       } else if (!prefixMatches || appended.length !== 1) {
         const pr = process.env.REPLICA_BUDGET_PR_NUMBER ? `#${process.env.REPLICA_BUDGET_PR_NUMBER}` : "#<PR>";
         const ticket = process.env.REPLICA_BUDGET_TICKET?.match(/\bTC-\d+\b/i)?.[0] ?? "TC-UNKNOWN";

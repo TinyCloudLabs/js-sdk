@@ -581,7 +581,7 @@ export class TinyCloudWeb {
         this.config.includeAccountRegistryPermissions,
       autoBootstrapAccount: this.config.autoBootstrapAccount,
       telemetry: this.config.telemetry,
-      retryPolicy: this.config.retryPolicy,
+      retryPolicy: { foregroundBusyMaxTotalMs: 4_000, ...this.config.retryPolicy },
     };
     const resolved = await resolveReplicationConfig(this.config, this.walletSigner);
     if (resolved) nodeConfig.replication = resolved;
@@ -1031,6 +1031,7 @@ export class TinyCloudWeb {
           (grant) =>
             activateValidatedRuntimeDelegationOnNode(node, grant, {
               host: node.hosts[0]!,
+              priority: "background",
               authorize: (permissions) => {
                 if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
                   throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
@@ -1061,7 +1062,7 @@ export class TinyCloudWeb {
   private async probeSpaceHosting(node: TinyCloudNode): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([node.checkSpaceHosting(), new Promise((resolve) => { timer = setTimeout(resolve, this.spaceHostingCapMs); })]);
+      await Promise.race([node.checkSpaceHosting(undefined, "background"), new Promise((resolve) => { timer = setTimeout(resolve, this.spaceHostingCapMs); })]);
     } catch { /* a probe never fails a restore */ } finally {
       clearTimeout(timer);
     }

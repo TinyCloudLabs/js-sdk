@@ -145,12 +145,13 @@ function lockName(replicaId: string): string {
 }
 
 /** A KV service bound to one grant, the device key and the pinned host. */
-function boundKv(grant: GrantRecord, s: Session) {
+function boundTransport(grant: GrantRecord, s: Session) {
   const context = new ServiceContext({
     invoke: tinycloud.invoke,
     invokeAny: tinycloud.invokeAny,
     fetch: globalThis.fetch.bind(globalThis),
     hosts: [s.host],
+    priority: "background",
   });
   const kv = new KVService({});
   kv.initialize(context);
@@ -162,7 +163,7 @@ function boundKv(grant: GrantRecord, s: Session) {
     verificationMethod: s.device.did,
     jwk: s.device.jwk,
   });
-  return kv;
+  return kvSyncTransport(kv, { host: s.host, fetch: context.fetch });
 }
 
 /**
@@ -316,7 +317,7 @@ async function handleSync(request: SyncRequest): Promise<SyncResult> {
   if (state === null) throw new ReplicaError(ReplicaErrorCode.NOT_FOUND, "The replica has not been created.");
   const engine = new Replica({
     store: s.store,
-    transportFor: (grant) => kvSyncTransport(boundKv(grant, s), { host: s.host }),
+    transportFor: (grant) => boundTransport(grant, s),
     // Siblings hear every committed page and repair batch, not only whole
     // syncs: a sync that fails on page 2 still reports page 1.
     onCommit: () => broadcastCommitted(s),

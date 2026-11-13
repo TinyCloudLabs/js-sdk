@@ -1,3 +1,4 @@
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import type { StorageQuotaInfo } from "../types";
 
 /** @deprecated Use `tc.on("storage.full", handler)` instead. Nothing in the SDK calls `onUpgradeRequired`. */
@@ -43,15 +44,21 @@ export class TinyCloudQuota {
   async getQuota(spaceId: string): Promise<QuotaStatus | null> {
     if (!this.quotaUrl) return null;
 
-    const resp = await fetch(
-      `${this.quotaUrl}/api/quota/${encodeURIComponent(spaceId)}`
-    );
-    if (!resp.ok) return null;
+    return await usingResponse(
+      () => fetch(
+        `${this.quotaUrl}/api/quota/${encodeURIComponent(spaceId)}`
+      ),
+      async (resp) => {
+        if (!resp.ok) {
+          return null;
+        }
 
-    const data = (await resp.json()) as { storage_limit_bytes?: number };
-    return {
-      limitBytes: data.storage_limit_bytes ?? 0,
-    };
+        const data = (await resp.json()) as { storage_limit_bytes?: number };
+        return {
+          limitBytes: data.storage_limit_bytes ?? 0,
+        };
+      }
+    );
   }
 
   /** Trigger the upgrade callback when a quota error is encountered */
