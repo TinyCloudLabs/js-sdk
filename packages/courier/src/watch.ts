@@ -48,6 +48,8 @@ const MAX_OUTBOX = 50;
 const MAX_OUTBOX_TRIES = 8;
 const MAX_NOTICE_ATTEMPTS = 3;
 const MAX_HELD_PER_THREAD = 100;
+/** An action put off because its authority check gave no verdict is dropped after this; its peer's human is told once. */
+const DEFERRAL_LIMIT_MS = DAY_MS;
 /** The subject is peer-controlled text that reaches state, prompts and environments: one line, control characters removed, capped. */
 const MAX_SUBJECT = 200;
 /** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
@@ -62,6 +64,8 @@ export interface PendingWake {
   approvals?: WakeApproval[];
   firstSeenAt: number;
   lastSeenAt: number;
+  /** When an authority check first gave no verdict for this wake; cleared by a verdict. */
+  deferredSince?: number;
 }
 
 interface ApprovalWake {
@@ -104,6 +108,17 @@ interface PauseEpisode extends NoticeRetry {
 const emptyEpisode = (): PauseEpisode => ({ kind: '', eventId: ZERO_ULID, repeats: '000000', ...emptyNoticeRetry() });
 const incrementCount = (count: string) => String(Math.min(MAX_COALESCED_PAUSES, Number(count) + 1)).padStart(6, '0');
 const episodeKey = (key: string, slot: number) => `notice:${key}:${slot}`;
+const accessKey = (peer: string) => `access:${peer}`;
+
+/**
+ * A peer whose authority checks give no verdict: since when, and once that lasts `DEFERRAL_LIMIT_MS`, the one notice
+ * (`eventId`) its human gets for this outage. A verdict ends the outage; a later one notifies again.
+ */
+interface UnverifiedPeer extends NoticeRetry {
+  since: number;
+  eventId: string;
+  notified: boolean;
+}
 
 /** Allocated only from our own thread/wake/pause records, never from incoming notice ids. */
 interface ThreadNoticeState {
@@ -146,6 +161,8 @@ export interface WatchState {
   noticeGlobalLog: number[];
   /** Every dispatch attempt, success or failure, per peer for the shared rolling-hour cap. */
   noticeLog: Record<string, number[]>;
+  /** Paired peers whose authority checks currently give no verdict. */
+  unverified: Record<string, UnverifiedPeer>;
 }
 
 /**
@@ -166,7 +183,7 @@ export interface LocalWatchCache {
 
 /** `tries`: notification dispatch attempts (max 3), or failed inform attempts (max 8). */
 export type OutboxItem =
-  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; pauseId?: string; tries?: number; nextAttemptAt?: number }
+  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; pauseId?: string; tries?: number; nextAttemptAt?: number; deferredSince?: number }
   | { id: string; kind: 'notify'; notice: Notice; tries?: number; nextAttemptAt?: number; logged?: boolean };
 
 /** Messages that arrived while a thread was paused; they wake the agent once, together, after `courier resume`. */
@@ -248,7 +265,7 @@ export interface WatchDeps {
 type Via = 'startup' | 'hook' | 'poll';
 
 export function emptyWatchState(): WatchState {
-  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], wakeRetries: {}, approvalRetries: {}, outbox: [], held: {}, threadNotices: {}, peerNotices: {}, noticeGlobalLog: [], noticeLog: {} };
+  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], wakeRetries: {}, approvalRetries: {}, outbox: [], held: {}, threadNotices: {}, peerNotices: {}, noticeGlobalLog: [], noticeLog: {}, unverified: {} };
 }
 
 /** Wake time: `debounce` after the latest message, but never later than twice `debounce` after the first. */
@@ -440,6 +457,11 @@ export class Watcher {
     }
     this.state.outbox = this.state.outbox.filter(item => {
       if (item.kind === 'inform') return true;
+      if (item.notice.kind === 'access-unverified') {
+        if (!this.noticeSlot(item) || item.id !== accessKey(item.notice.peer)) return false;
+        this.rememberNotice(item);
+        return true;
+      }
       const kind = needsKind(item.notice.kind);
       if (kind) {
         const slot = this.noticeSlot(item);
@@ -663,8 +685,39 @@ export class Watcher {
   private async authorized(peer: string | StoredPeer): Promise<boolean> {
     const handle = typeof peer === 'string' ? peer : peer.handle;
     if (!this.deps.checkAuthority) return true; // a library caller without an authority source
-    await this.deps.checkAuthority(handle);
+    try {
+      await this.deps.checkAuthority(handle);
+    } catch (error) {
+      await this.noteUnverified(handle);
+      throw error;
+    }
+    if (Object.hasOwn(this.state.unverified, handle)) await this.mutate(() => this.endUnverified(handle));
     return this.deps.loadPeers().some(current => current.handle === handle);
+  }
+
+  /**
+   * A check gave no verdict for this peer: the outage starts now if it isn't already running. Once it has lasted
+   * `DEFERRAL_LIMIT_MS`, the peer's human is told once (Naomi's TC-2951 ruling: imports keep retrying; wakes and informs
+   * deferred that long are dropped). Only configured paired peers allocate a record.
+   */
+  private async noteUnverified(handle: string): Promise<void> {
+    if (!HANDLE.test(handle) || !this.deps.loadPeers().some(peer => peer.handle === handle && peer.status === 'paired')) return;
+    const now = this.now();
+    const record = this.state.unverified[handle];
+    if (record && (record.eventId || now - record.since < DEFERRAL_LIMIT_MS)) return;
+    await this.mutate(() => {
+      const current = this.state.unverified[handle] ??= { since: now, eventId: '', notified: false, ...emptyNoticeRetry() };
+      if (current.eventId || now - current.since < DEFERRAL_LIMIT_MS) return;
+      current.eventId = ulid(now);
+      this.deps.log('access-unverified', { peer: handle, since: new Date(current.since).toISOString() });
+      this.fillOutbox();
+    });
+  }
+
+  /** A verdict ends the outage; a notice not yet sent for it is withdrawn. Called inside mutate. */
+  private endUnverified(handle: string): void {
+    delete this.state.unverified[handle];
+    this.state.outbox = this.state.outbox.filter(item => item.id !== accessKey(handle) || this.outboxBusy.has(item.id));
   }
 
   /** The scheduled renewal and authority check for every peer; each peer's next sync also reads its renewal marker. */
@@ -1044,6 +1097,21 @@ export class Watcher {
       allowed = await this.authorized(pending.peer);
     } catch (error) {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
+      const now = this.now();
+      const since = this.state.pending[key]?.deferredSince ?? now;
+      if (now - since >= DEFERRAL_LIMIT_MS) {
+        // Put off for 24 h without a verdict: dropped. The peer's human gets the one outage notice.
+        await this.mutate(() => {
+          delete this.state.pending[key];
+          delete this.state.wakeRetries[key];
+          delete this.state.approvalRetries[key];
+        });
+        this.deps.log('wake-dropped', { peer: pending.peer, threadId: pending.threadId, messageIds: woken, approvalIds: approvedIds, reason: 'authority-unverified-24h', ...errInfo(error) });
+        return;
+      }
+      if (this.state.pending[key] && this.state.pending[key].deferredSince === undefined) {
+        await this.mutate(() => { if (this.state.pending[key]) this.state.pending[key].deferredSince ??= since; });
+      }
       this.retryAt.set(key, at + WAKE_RETRY_MS);
       this.deps.log('wake-deferred', { peer: pending.peer, threadId: pending.threadId, reason: 'authority-unverified', ...errInfo(error) });
       return;
@@ -1064,6 +1132,7 @@ export class Watcher {
       await this.mutate(() => {
         this.state.threadNotices[key] ??= threadNoticeState();
         if (woken.length) this.state.wakes[key] = [...this.recentWakes(key), this.now()];
+        if (this.state.pending[key]) delete this.state.pending[key].deferredSince;
       });
     } catch (error) {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
@@ -1196,7 +1265,11 @@ export class Watcher {
     }
   }
 
-  private noticeSlot(item: Extract<OutboxItem, { kind: 'notify' }>): PauseEpisode | NeedsSlot | undefined {
+  private noticeSlot(item: Extract<OutboxItem, { kind: 'notify' }>): PauseEpisode | NeedsSlot | UnverifiedPeer | undefined {
+    if (item.notice.kind === 'access-unverified') {
+      const record = this.state.unverified[item.notice.peer];
+      return record?.eventId && !record.notified && record.eventId === item.notice.eventId ? record : undefined;
+    }
     const kind = needsKind(item.notice.kind);
     if (kind) {
       const slot = this.state.peerNotices[item.notice.peer]?.[kind];
@@ -1286,6 +1359,12 @@ export class Watcher {
           } };
       }
     }
+    for (const [peer, record] of Object.entries(this.state.unverified)) {
+      if (record.eventId && !record.notified) yield { id: accessKey(peer), kind: 'notify',
+        tries: record.tries, nextAttemptAt: record.nextAttemptAt, logged: record.logged, notice: {
+          kind: 'access-unverified', peer, threadId: ZERO_ULID, eventId: record.eventId, detail: 'authority unverified for 24 h',
+        } };
+    }
   }
 
   /** Admit local work first, allowing eligible peers to pass deferred entries in a full queue. */
@@ -1317,7 +1396,11 @@ export class Watcher {
     const peer = item.kind === 'inform' ? item.peer : item.notice.peer;
     const threadId = item.kind === 'inform' ? item.threadId : item.notice.threadId;
     const record = this.state.threadNotices[`${peer}/${threadId}`];
-    if (item.kind === 'notify' && needsKind(item.notice.kind)) {
+    if (item.kind === 'notify' && item.notice.kind === 'access-unverified') {
+      // One notice per outage, delivered or given up on: it is not queued again until a verdict ends the outage.
+      const slot = this.noticeSlot(item) as UnverifiedPeer | undefined;
+      if (slot) slot.notified = true;
+    } else if (item.kind === 'notify' && needsKind(item.notice.kind)) {
       const slot = this.noticeSlot(item) as NeedsSlot | undefined;
       if (slot) {
         const arrivals = slot.dispatchArrivals === '------' ? '000000' : slot.dispatchArrivals;
@@ -1428,10 +1511,21 @@ export class Watcher {
             try {
               allowed = await this.authorized(item.peer);
             } catch (error) {
+              const now = this.now();
+              const stored = this.state.outbox.find(o => o.id === item.id);
+              const since = stored?.kind === 'inform' ? stored.deferredSince ?? now : now;
+              if (now - since >= DEFERRAL_LIMIT_MS) {
+                // Put off for 24 h without a verdict: dropped. The peer's human gets the one outage notice.
+                this.deps.log('inform-dropped', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'authority-unverified-24h', ...errInfo(error) });
+                await this.mutate(() => this.finishOutbox(item));
+                return;
+              }
               this.deps.log('inform-deferred', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'authority-unverified', ...errInfo(error) });
               await this.mutate(() => {
-                const stored = this.state.outbox.find(o => o.id === item.id);
-                if (stored) stored.nextAttemptAt = this.now() + WAKE_RETRY_MS;
+                const current = this.state.outbox.find(o => o.id === item.id);
+                if (current?.kind !== 'inform') return;
+                current.nextAttemptAt = now + WAKE_RETRY_MS;
+                current.deferredSince ??= since;
               });
               return;
             }
@@ -1463,7 +1557,7 @@ export class Watcher {
               const episode = this.noticeSlot(stored);
               if (episode) {
                 if ('repeats' in episode) item.notice.repeats = stored.notice.repeats = episode.repeats;
-                else {
+                else if ('count' in episode) {
                   item.notice.threadId = stored.notice.threadId = episode.threadId;
                   item.notice.count = stored.notice.count = episode.count;
                   episode.arrivalFirstSeenAt = EPOCH;

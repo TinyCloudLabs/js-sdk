@@ -229,7 +229,12 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   it each take a fresh check on the node first (no cached verdict), and a
   removed or refused peer's queued wake or inform is dropped and logged. A
   check that cannot confirm access (a node error, a timeout) does nothing:
-  the item stays queued and is retried on the next pass. With
+  the item stays queued and is retried on the next pass, for up to 24 hours.
+  A wake or inform held that long is dropped and logged; imports keep
+  retrying, since the peer's messages stay in its space. After 24 hours
+  without a verdict the human gets one notice for that peer
+  (`access-unverified`), not repeated until a check succeeds and access is
+  lost again. With
   `--poll` above 5 minutes, this check and the retry of a peer whose sync did
   not finish still run every 5 minutes. A hook event for a
   peer's renewal marker (`pairing/delegation.json`) reads the marker and checks
