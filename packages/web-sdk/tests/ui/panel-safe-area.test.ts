@@ -154,7 +154,7 @@ describe("the loading stand-in", () => {
 
     pending.showError(() => void (reloads += 1));
 
-    expect(pending.el.textContent).toContain("This didn't load. Reloading the page may fix it, but could discard unsaved changes.");
+    expect(pending.el.textContent).toContain("This didn't load. Reloading the page can fix it. Save anything you're working on first.");
     const button = [...pending.el.querySelectorAll("button")].find((candidate) => candidate.textContent === "Reload page");
     expect(button).toBeDefined();
     button?.click();
