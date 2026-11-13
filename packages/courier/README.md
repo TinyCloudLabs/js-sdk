@@ -855,6 +855,12 @@ no `--home-file`; its login (`.claude/.credentials.json`) is copied automaticall
 and is refused the same way if it is a link or sits behind one: copy the real file
 into place.
 
+The agent owns its clean HOME between wakes, so Courier also checks it: before it
+makes, removes or writes a path there, every component is checked without
+following links. A link the agent left behind is removed (the link only, never what
+it points at) and the wake logs `removed a symbolic link the agent left in its
+clean HOME: <path>`. A clean HOME that is itself a link is refused.
+
 Executable allowances require an identity recorded by the guard: the resolved
 path and device/inode of the installed tool. A basename such as `gh`, `git` or
 `courier` grants no allowance. Only this install's Courier entrypoint can use the

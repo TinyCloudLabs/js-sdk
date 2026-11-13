@@ -264,12 +264,14 @@ export function createWaker(
     const courier = realpathBest(config.home);
     const cwd = realpathBest(config.cwd);
     if (cwd === courier || cwd.startsWith(`${courier}${path.sep}`)) throw new Error('agent cwd must be outside the Courier tree');
-    prepareCleanHome({
+    const cleaned = prepareCleanHome({
       realHome: config.realHome ?? env.HOME ?? os.homedir(),
       cleanHome: agentHome(config.home), claude: config.adapter !== 'exec', files: config.homeFiles,
       agentCli: config.adapter === 'exec' && config.exec ? agentCliStarted(config.exec) : undefined,
     });
-    prepareAgentProfile(config.home);
+    for (const link of [...cleaned.removedLinks, ...prepareAgentProfile(config.home)]) {
+      notice(`removed a symbolic link the agent left in its clean HOME: ${link}`);
+    }
   };
 
   const exec: Waker = async (request) => {
