@@ -10,7 +10,6 @@
  * @packageDocumentation
  */
 
-import { createRegistryVerdictCache } from "@tinycloud/sdk-core/registry-verdict-cache";
 import { assertRequestedRestoreAccount, requestedRestoreAccount, SessionAccountMismatchError } from "./restoreAccount";
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
@@ -550,6 +549,7 @@ export class TinyCloudWeb {
    */
   private async _init(): Promise<void> {
     await this.wasmBindings.ensureInitialized();
+    const { createRegistryVerdictCache } = await import("@tinycloud/sdk-core/registry-verdict-cache");
     const loc = typeof window !== 'undefined' ? window.location : undefined;
 
     const nodeConfig: TinyCloudNodeConfig = {
