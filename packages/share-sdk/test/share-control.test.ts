@@ -4,7 +4,7 @@ import { keccak_256 } from "@noble/hashes/sha3";
 import { fromBase64Url, verifyCompactUcanAuthorization } from "@tinycloud/share-envelope";
 import { parseSignedSiweCacao } from "../../sdk-core/src/delegations/cacao.js";
 import { ADDRESS, APPLICATIONS, DEFAULT_SPACE, OWNER_DID, rejects } from "./support/fake-owner.js";
-import { fakeNode, type FakeNodeRequest } from "./support/fake-node.js";
+import { NODE_DID, fakeNode, type FakeNodeRequest } from "./support/fake-node.js";
 import { decodeOwnerRootCacao, perShareNetworkIdFor, planShareControlBatches, runShareControlBatch, SHARE_CONTROL_HEADER_BUDGET_BYTES, type ShareControlBatch, type ShareControlOwner, type ShareControlTarget } from "../src/share-root-entry.js";
 
 const NODE = "https://node.example";
@@ -125,6 +125,29 @@ describe("runShareControlBatch", () => {
     const { payload } = verifyCompactUcanAuthorization(revoke.authorization!);
     expect(payload.prf).toEqual([result.controlCid]);
     expect(payload.att).toEqual({ [`urn:cid:${batch!.targets[0]!.grantCid}`]: { "tinycloud.delegation/revoke": [{}] } });
+  });
+
+  it("retires networks on the production node's TEE origin, addressed to the identity that origin reports", async () => {
+    const owner = wallet();
+    const [batch] = planShareControlBatches({ owner, targets: targets(1), spaceIds: [APPLICATIONS] });
+    const node = fakeNode({ override: (entry) => entry.method === "POST" ? (entry.path === "/delegate" ? json({}) : entry.path === "/revoke" ? json({ revoked: true, cid: revokedCid(entry) }) : undefined) : undefined });
+    const target = batch!.targets[0]!;
+    node.networks.set(target.networkId, { networkId: target.networkId, name: target.networkId.slice(target.networkId.lastIndexOf(":") + 1), ownerDid: OWNER_DID, alg: "x25519-aes256gcm/v1", keyVersion: 1, threshold: { n: 1, t: 1 }, state: "active" });
+    const WRONG_DID = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
+    const seen: { origin: string; path: string; authorization?: string }[] = [];
+    const fetch = async (input: URL, init?: RequestInit) => {
+      seen.push({ origin: input.origin, path: input.pathname, ...(init?.headers ? { authorization: new Headers(init.headers).get("authorization") ?? undefined } : {}) });
+      // The proxied name reports another identity; only the TEE origin's answer may address the retirement.
+      if (input.origin === "https://node.tinycloud.xyz" && input.pathname === "/info") return json({ nodeId: WRONG_DID });
+      return node.fetch(input, init);
+    };
+
+    const result = await runShareControlBatch({ owner, nodeOrigin: "https://node.tinycloud.xyz", batch: batch!, fetch });
+    expect(result.networks.map((entry) => entry.result)).toEqual(["retired"]);
+    const encryption = seen.filter((entry) => entry.path === "/info" || entry.path.startsWith("/encryption/"));
+    expect(new Set(encryption.map((entry) => entry.origin))).toEqual(new Set(["https://tee.node.tinycloud.xyz"]));
+    const retire = seen.find((entry) => entry.path.endsWith("/revoke") && entry.path.startsWith("/encryption/"))!;
+    expect(verifyCompactUcanAuthorization(retire.authorization!).payload.aud).toBe(NODE_DID);
   });
 
   it("falls back to one owner revoke per grant the Node refuses through the control", async () => {
