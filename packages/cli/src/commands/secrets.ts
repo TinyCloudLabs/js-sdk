@@ -10,7 +10,7 @@ import {
 } from "@tinycloud/node-sdk";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { isLocalOwnerProfile, ownerSessionLacksProof, storedLease } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
   buildSecretRequestUrl,
@@ -1080,8 +1080,7 @@ function isStoredSessionExpired(session: object): boolean {
   const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
   const signedOrSiweExpiry = direct ? direct.toISOString() : sessionExpiresAt(record);
   if (signedOrSiweExpiry === null || Date.parse(signedOrSiweExpiry) > Date.now()) return false;
-  const lease = storedLease(record);
-  return lease === undefined || Date.parse(lease.expiresAt) <= Date.now();
+  return liveStoredLease(record) === undefined;
 }
 
 function parseDate(value: unknown): Date | null {

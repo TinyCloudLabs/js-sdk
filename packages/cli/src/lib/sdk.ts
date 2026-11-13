@@ -8,7 +8,7 @@ import { CLIError, wrapError } from "../output/errors.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
-import { ownerSessionLacksProof, restoreStoredSession, storedLease } from "@tinycloud/operations/profile";
+import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
 import { recordWarnings, recordRegistryFallbackWarning } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
@@ -160,7 +160,7 @@ export async function restoreProfileSessionNode(
     typeof session.delegationHeader.Authorization !== "string") {
     return { unavailable: "session_invalid" };
   }
-  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now() && storedLease(session) === undefined) {
+  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now() && liveStoredLease(session) === undefined) {
     return { unavailable: "session_expired" };
   }
   const key = await ProfileManager.getKey(ctx.profile);

@@ -19,7 +19,7 @@ import {
   permissionsFromDelegation,
   type StoredAdditionalDelegation,
 } from "../lib/permissions.js";
-import { ownerSessionLacksProof, storedLease } from "@tinycloud/operations/profile";
+import { liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 
 interface StatusSummary {
   generatedAt: string;
@@ -139,8 +139,8 @@ async function inspectProfile(params: {
   const sessionPermissions = session ? sessionPermissionsFromRecap(session) : [];
   const signedExpiry = session ? extractSessionExpiry(session) : null;
   // Past its original grant, a session saved with an owner renewal lease lasts until the lease's signed end.
-  const lease = session && signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? storedLease(session) : undefined;
-  const sessionExpiry = lease !== undefined && Date.parse(lease.expiresAt) > Date.now() ? new Date(lease.expiresAt) : signedExpiry;
+  const lease = session && signedExpiry !== null && signedExpiry.getTime() <= Date.now() ? liveStoredLease(session) : undefined;
+  const sessionExpiry = lease !== undefined ? new Date(lease.expiresAt) : signedExpiry;
   const sessionExpired =
     sessionExpiry === null ? null : sessionExpiry.getTime() <= Date.now();
   const statusSession: StatusSession = {

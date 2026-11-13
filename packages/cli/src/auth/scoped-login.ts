@@ -1,6 +1,6 @@
 import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile, ownerSessionLacksProof, storedLease } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -192,8 +192,8 @@ export function storedSessionState(session: Record<string, unknown> | null, prof
     : sessionExpiresAt(session);
   if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
   if (Date.parse(expiresAt) > Date.now()) return { state: "present", expiresAt };
-  const lease = storedLease(session);
-  return lease !== undefined && Date.parse(lease.expiresAt) > Date.now()
+  const lease = liveStoredLease(session);
+  return lease !== undefined
     ? { state: "renewed", expiresAt: new Date(lease.expiresAt).toISOString() }
     : { state: "expired", expiresAt };
 }

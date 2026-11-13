@@ -174,14 +174,18 @@ export function ownerSessionLacksProof(
     (typeof session.siwe !== "string" || typeof session.signature !== "string");
 }
 
-/** The owner renewal lease a stored session was saved with at sign-in, if any, and its signed end. */
-export function storedLease(session: object): { authorization: string; expiresAt: string } | undefined {
+/**
+ * The owner renewal lease a stored session was saved with at sign-in, while its signed end is still ahead (by
+ * this machine's clock). An ended or malformed lease is no lease: the session is judged by its original grant.
+ * Local metadata only; the node still decides whether the lease is live (renewal restore).
+ */
+export function liveStoredLease(session: object, now = Date.now()): { authorization: string; expiresAt: string } | undefined {
   const renewal = "renewal" in session ? session.renewal : undefined;
   const receipt = typeof renewal === "object" && renewal !== null && "receipt" in renewal ? renewal.receipt : undefined;
   if (typeof receipt !== "object" || receipt === null || !("leaseAuthorization" in receipt) || !("leaseExpiresAt" in receipt)) return undefined;
   const { leaseAuthorization, leaseExpiresAt } = receipt;
   return typeof leaseAuthorization === "string" && leaseAuthorization.length > 0 &&
-    typeof leaseExpiresAt === "string" && Number.isFinite(Date.parse(leaseExpiresAt))
+    typeof leaseExpiresAt === "string" && Date.parse(leaseExpiresAt) > now
     ? { authorization: leaseAuthorization, expiresAt: leaseExpiresAt }
     : undefined;
 }
@@ -209,7 +213,7 @@ export async function restoreStoredSession<S>(
   sessionData: S,
   stored: object,
 ): Promise<void> {
-  const lease = storedLease(stored)?.authorization;
+  const lease = liveStoredLease(stored)?.authorization;
   if (lease === undefined) return node.restoreSession(sessionData);
   try {
     await node.restoreSession(sessionData);

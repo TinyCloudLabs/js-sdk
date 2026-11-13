@@ -409,10 +409,10 @@ async function admitApprovedRenewal(host: string, entry: PendingApproval, verifi
     return error;
   };
   // The shared verifier's messages are technical; the owner sees what happened and what to do next.
-  let originalExpiresAt: string;
-  try { ({ originalExpiresAt } = await verifyOwnerRenewalLease(original, session.ownerDid, renewal)); }
+  let signed: { originalExpiresAt: string; leaseSignedExpiresAt: string };
+  try { signed = await verifyOwnerRenewalLease(original, session.ownerDid, renewal); }
   catch { throw refused("This renewal doesn't match the permission you approved, so it wasn't turned on. Sign in again for a new approval."); }
-  if (Date.parse(originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
+  if (Date.parse(signed.originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
     throw refused("The approved session ends too soon for its renewal to start. Sign in again for a new approval.");
   }
   try {
@@ -420,7 +420,7 @@ async function admitApprovedRenewal(host: string, entry: PendingApproval, verifi
       host: new URL(host).origin, originalAuthorization: original.delegationHeader.Authorization, originalCid: original.delegationCid,
       ownerDid: session.ownerDid, agentDid: entry.request.targetDid, spaceId: String(delegation.spaceId),
       nodeIdentity: renewal.receipt.nodeIdentity, leaseAuthorization: renewal.receipt.leaseAuthorization,
-      leaseCid: renewal.receipt.leaseCid, leaseExpiresAt: renewal.receipt.leaseExpiresAt,
+      leaseCid: renewal.receipt.leaseCid, leaseExpiresAt: signed.leaseSignedExpiresAt,
     });
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {

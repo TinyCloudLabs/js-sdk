@@ -40,13 +40,14 @@ export const RENEWAL_ADMISSION_LEAD_MS = 15 * 60_000;
 /**
  * Verify the signed lease against the signed original grant before saving it. Receipt metadata
  * alone is never authority. Live node admission is checked separately by renewal restore.
- * Returns the original grant's signed expiry.
+ * Returns the original grant's signed expiry and the lease's signed expiry exactly as signed
+ * (node admission compares the signed bytes' value, which may lack the receipt's milliseconds).
  */
 export async function verifyOwnerRenewalLease(
   original: OwnerRenewalOriginal,
   ownerDid: string,
   renewal: OwnerRenewalApproval,
-): Promise<{ originalExpiresAt: string }> {
+): Promise<{ originalExpiresAt: string; leaseSignedExpiresAt: string }> {
   const parsed = await parseSignedSiweCacao(original.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""), original.delegationCid);
   const { receipt } = renewal;
   const lease = await parseSignedSiweCacao(receipt.leaseAuthorization.replace(/^Bearer\s+/i, ""), receipt.leaseCid);
@@ -70,7 +71,7 @@ export async function verifyOwnerRenewalLease(
     || Date.parse(receipt.leaseExpiresAt) <= now) {
     throw new OwnerRenewalMismatchError("The renewal lease does not match the signed owner grant.");
   }
-  return { originalExpiresAt: parsed.expiresAt };
+  return { originalExpiresAt: parsed.expiresAt, leaseSignedExpiresAt: lease.expiresAt };
 }
 
 /** The node identity a live host reports must be the one the owner's lease was issued to. */

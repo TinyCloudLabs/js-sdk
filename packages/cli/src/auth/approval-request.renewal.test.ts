@@ -24,6 +24,7 @@ const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
 const { readJson, writeJsonDurable } = await import("../config/storage.js");
 const { acquireApprovalRequest, approvalRenewalOf } = await import("./approval-request.js");
+const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 function restoreEnvironment(): void {
   for (const [name, value] of Object.entries(original)) {
@@ -49,19 +50,20 @@ const nodeIdentity = { nodeDid: renewerDid, renewerDid, renewerPublicKey: Buffer
 
 let admitted: string[] = [];
 let admissionStatus = 200;
+let nodeKeysStatus = 200;
 let advertised: typeof nodeIdentity = nodeIdentity;
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === "/.well-known/tinycloud/node-keys") return Response.json(advertised);
+  if (path === "/.well-known/tinycloud/node-keys") return nodeKeysStatus === 200 ? Response.json(advertised) : new Response("unavailable", { status: nodeKeysStatus });
   if (path === "/delegate") {
     admitted.push(request.headers.get("Authorization") ?? "");
     return admissionStatus === 200 ? Response.json({ cid: "admitted", activated: [] }) : new Response("unavailable", { status: admissionStatus });
   }
-  const body = await request.json() as { bodyCid: string };
+  const body = await request.json() as { bodyCid: string; ackId?: string };
   const pending = await readJson<Array<{ resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("renewal"), "approval-pending.json"));
   if (path.endsWith("/result")) return Response.json({ resultRef, expiresAt: pending![0]!.resultExpiresAt });
   if (path.endsWith("/fetch")) return Response.json({ requestId, bodyCid: body.bodyCid, resultRef, expiresAt: pending![0]!.resultExpiresAt, relay: pending![0]!.resultEnvelope });
-  return Response.json({ status: "acknowledged" });
+  return Response.json({ ackId: body.ackId, status: "acknowledged" });
 } });
 const host = server.url.origin;
 
@@ -75,19 +77,39 @@ async function signedDelegation(lifetimeSeconds = 3600) {
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature } as Record<string, unknown> & { delegationCid: string };
 }
 
-/** An owner-signed lease that lets the node renew `target`, in the receipt shape OpenKey returns. */
-async function renewalFor(target: string) {
+/** The ReCap statement suffix sdk-core checks a CACAO's statement against (siwe-recap `to_statement`). */
+function recapStatement(att: Record<string, Record<string, unknown[]>>): string {
+  let index = 0;
+  let lines = "";
+  for (const resource of Object.keys(att).sort()) {
+    const byNamespace: Record<string, string[]> = {};
+    for (const ability of Object.keys(att[resource]!).sort()) (byNamespace[ability.split("/")[0]!] ??= []).push(ability.split("/")[1]!);
+    for (const namespace of Object.keys(byNamespace).sort()) lines += ` (${++index}) '${namespace}': ${byNamespace[namespace]!.map((name) => `'${name}'`).join(", ")} for '${resource}'.`;
+  }
+  return `I further authorize the stated URI to perform the following actions on my behalf:${lines}`;
+}
+
+/**
+ * An owner-signed lease that lets the node renew `target`, in the receipt shape OpenKey returns. `signer` signs it in
+ * place of the owner, `att` replaces its one renew ability, and `signedEnd` is the lease's signed expiry spelling.
+ */
+async function renewalFor(target: string, options: { signer?: PrivateKeySigner; att?: Record<string, Record<string, unknown[]>>; signedEnd?: string } = {}) {
+  const signer = options.signer ?? wallet;
+  const signerAddress = await signer.getAddress();
   const issuedAt = new Date(Date.now() - 1000).toISOString();
   const approvedAt = new Date(Date.now() - 500).toISOString();
-  const expiresAt = new Date(Date.now() + LEASE_SECONDS * 1000 - 60_000).toISOString();
-  const resource = `urn:cid:${target}`;
-  const statement = `I further authorize the stated URI to perform the following actions on my behalf: (1) 'tinycloud.delegation': 'renew' for '${resource}'.`;
-  const resources = [`urn:recap:${Buffer.from(JSON.stringify({ att: { [resource]: { "tinycloud.delegation/renew": [{}] } }, prf: [] })).toString("base64url")}`];
-  const message = new SiweMessage({ domain: "localhost", address, uri: renewerDid, version: "1", chainId: 1,
-    nonce: "12345678", issuedAt, expirationTime: expiresAt, statement, resources }).prepareMessage();
-  const signature = await wallet.signMessage(message);
-  const leaseAuthorization = Buffer.from(encodeDagCbor({ h: { t: "eip4361" }, p: { domain: "localhost", iss: ownerDid,
-    aud: renewerDid, version: 1, nonce: "12345678", iat: issuedAt, exp: expiresAt, statement, resources },
+  const end = new Date(Date.now() + LEASE_SECONDS * 1000 - 60_000);
+  end.setUTCMilliseconds(0);
+  const expiresAt = end.toISOString();
+  const signedEnd = options.signedEnd === "seconds" ? expiresAt.replace(".000Z", "Z") : expiresAt;
+  const att = options.att ?? { [`urn:cid:${target}`]: { "tinycloud.delegation/renew": [{}] } };
+  const statement = recapStatement(att);
+  const resources = [`urn:recap:${Buffer.from(JSON.stringify({ att, prf: [] })).toString("base64url")}`];
+  const message = new SiweMessage({ domain: "localhost", address: signerAddress, uri: renewerDid, version: "1", chainId: 1,
+    nonce: "12345678", issuedAt, expirationTime: signedEnd, statement, resources }).prepareMessage();
+  const signature = await signer.signMessage(message);
+  const leaseAuthorization = Buffer.from(encodeDagCbor({ h: { t: "eip4361" }, p: { domain: "localhost", iss: `did:pkh:eip155:1:${signerAddress}`,
+    aud: renewerDid, version: 1, nonce: "12345678", iat: issuedAt, exp: signedEnd, statement, resources },
     s: { t: "eip191", s: new Uint8Array(Buffer.from(signature.slice(2), "hex")) } })).toString("base64url");
   const lease = await parseSignedSiweCacao(leaseAuthorization);
   return { version: 1 as const, approvedAt, approvedLeaseLifetimeSeconds: LEASE_SECONDS, receipt: {
@@ -124,18 +146,19 @@ async function stage(delegation: Record<string, unknown>, result: Record<string,
     resultExpiresAt: new Date(Date.now() + 600_000).toISOString(), resultEnvelope, ackId: "synthetic-durable-ack-123456789" }]);
 }
 
-const acquire = (askRenewal = true) => acquireApprovalRequest(did, {
+const acquireOptions = (askRenewal = true) => ({
   profileName: "renewal", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
   openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true,
   ...(askRenewal ? { renewalLeaseSeconds: LEASE_SECONDS } : {}),
   onApprovalRequest: () => { throw new Error("The approval was already given"); },
 });
+const acquire = (askRenewal = true) => acquireApprovalRequest(did, acquireOptions(askRenewal));
 const pendingCount = async () => (await readJson<unknown[]>(join(profilePath("renewal"), "approval-pending.json")))?.length ?? 0;
 
 beforeEach(async () => {
   // Links API is the local fixture: a case that failed to resume could never post a real approval link.
   Object.assign(process.env, fixtureEnvironment, { TC_LINKS_API_ORIGIN: server.url.origin });
-  admitted = []; admissionStatus = 200; advertised = nodeIdentity;
+  admitted = []; admissionStatus = 200; nodeKeysStatus = 200; advertised = nodeIdentity;
   await ProfileManager.setProfile("renewal", { name: "renewal", did, sessionDid: did, ownerDid, host, tinycloudRegistryUrl: server.url.origin, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("renewal", key);
 });
@@ -224,5 +247,63 @@ test("the SDK reports a changed renewer with the exact message the CLI matches",
   await expect(admitOwnerRenewalLease({ host, originalAuthorization: (delegation.delegationHeader as { Authorization: string }).Authorization,
     originalCid: delegation.delegationCid, ownerDid, agentDid: did, spaceId, nodeIdentity, leaseAuthorization: receipt.leaseAuthorization,
     leaseCid: receipt.leaseCid, leaseExpiresAt: receipt.leaseExpiresAt })).rejects.toThrow(/^Renewal node identity changed$/);
+  expect(admitted).toEqual([]);
+});
+
+test("a lease signed by anyone but the grant's owner is refused and never admitted", async () => {
+  const delegation = await signedDelegation();
+  await stage(delegation, { renewalChoice: "leased", renewal: await renewalFor(delegation.delegationCid, { signer: new PrivateKeySigner(randomBytes(32).toString("hex")) }) });
+  await expect(acquire()).rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+  expect(admitted).toEqual([]);
+});
+
+test.each([
+  ["a second ability", (target: string) => ({ [`urn:cid:${target}`]: { "tinycloud.delegation/renew": [{}], "tinycloud.delegation/list": [{}] } })],
+  ["a second resource", (target: string) => ({ [`urn:cid:${target}`]: { "tinycloud.delegation/renew": [{}] }, "urn:cid:bafyreiother": { "tinycloud.delegation/renew": [{}] } })],
+])("a lease that grants %s besides renewing this grant is refused and never admitted", async (_label, att) => {
+  const delegation = await signedDelegation();
+  await stage(delegation, { renewalChoice: "leased", renewal: await renewalFor(delegation.delegationCid, { att: att(delegation.delegationCid) }) });
+  await expect(acquire()).rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+  expect(admitted).toEqual([]);
+});
+
+test("a lease signed with a whole-second expiry is admitted with exactly the signed value", async () => {
+  const delegation = await signedDelegation();
+  const renewal = await renewalFor(delegation.delegationCid, { signedEnd: "seconds" });
+  await stage(delegation, { renewalChoice: "leased", renewal });
+  expect(approvalRenewalOf(await acquire())).toEqual(renewal);
+  expect(admitted).toEqual([renewal.receipt.leaseAuthorization]);
+});
+
+test("a node that cannot report its identity right now keeps the approval for a retry", async () => {
+  const delegation = await signedDelegation();
+  await stage(delegation, { renewalChoice: "leased", renewal: await renewalFor(delegation.delegationCid) });
+  nodeKeysStatus = 503;
+  await expect(acquire()).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+  expect(admitted).toEqual([]);
+  expect(await pendingCount()).toBe(1);
+});
+
+const session = async () => JSON.parse(await Bun.file(join(profilePath("renewal"), "session.json")).text()) as Record<string, unknown>;
+
+test("a sign-in saves the verified lease with its session", async () => {
+  const delegation = await signedDelegation();
+  const renewal = await renewalFor(delegation.delegationCid);
+  await stage(delegation, { renewalChoice: "leased", renewal });
+  await refreshOpenKeySession("renewal", host, {
+    openKeyAcquisition: (async (d: string, flow: Record<string, unknown>) => acquireApprovalRequest(d, { ...flow, ...acquireOptions() } as never)) as never,
+  });
+  expect((await session()).renewal).toEqual(renewal);
+});
+
+test("a lease attached to the sign-in result outside the verified approval is never saved", async () => {
+  const delegation = await signedDelegation();
+  const injected = await renewalFor(delegation.delegationCid);
+  await stage(delegation, {}, false);
+  await refreshOpenKeySession("renewal", host, {
+    openKeyAcquisition: (async (d: string, flow: Record<string, unknown>) =>
+      Object.assign(await acquireApprovalRequest(d, { ...flow, ...acquireOptions(false) } as never), { renewal: injected })) as never,
+  });
+  expect(await session()).not.toHaveProperty("renewal");
   expect(admitted).toEqual([]);
 });
