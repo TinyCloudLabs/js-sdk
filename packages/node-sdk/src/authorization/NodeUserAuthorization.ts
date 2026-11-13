@@ -744,9 +744,6 @@ export class NodeUserAuthorization implements IUserAuthorization {
     assertCurrent?.();
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     const destinations = await this.resolveResourceDestinations(spaceId, "read");
-    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered") {
-      throw new AccountSetupRequiredError();
-    }
     for (const destination of destinations) {
       assertCurrent?.();
       await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
@@ -776,6 +773,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         });
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {
+          if (this.requireExistingAccount) throw new AccountSetupRequiredError();
           if (noEntryHosts.length === 0 && (this.autoDiscoverLocalNode ?? true)) {
             const local = await discoverLocalTinyCloudNode({
               localNodeUrl: this.localNodeUrl,
@@ -2030,6 +2028,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
+    if (this.requireExistingAccount) await this.resolveTinyCloudHostsForSignIn(address, chainId);
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
     // Create a session key

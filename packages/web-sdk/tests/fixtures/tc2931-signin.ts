@@ -17,12 +17,14 @@ const results: object[] = [];
 let TinyCloudWeb: typeof import("../../src/modules/tcw").TinyCloudWeb;
 const { TinyCloudNode } = await import("@tinycloud/node-sdk");
 for (const config of [
+  { name: "SSR defaults to app-only authority", origin: "https://home.tinycloud.xyz", ssr: true, rows: 1 },
   { name: "third-party default", origin: "https://notes.example", rows: 1 },
   { name: "third-party cannot opt in", origin: "https://notes.example", rows: 1, autoBootstrapAccount: true, includeAccountRegistryPermissions: true },
   { name: "domain override cannot opt in", origin: "https://notes.example", rows: 1, domain: "home.tinycloud.xyz" },
   { name: "first-party unchanged", origin: "https://home.tinycloud.xyz", rows: 8 },
   { name: "first-party explicit opt out", origin: "https://home.tinycloud.xyz", rows: 1, autoBootstrapAccount: false, includeAccountRegistryPermissions: true },
   { name: "direct node explicit opt out", origin: "https://home.tinycloud.xyz", rows: 1, directNode: true, autoBootstrapAccount: false, includeAccountRegistryPermissions: true },
+  { name: "unregistered without a fallback needs setup", origin: "https://notes.example", error: "ACCOUNT_SETUP_REQUIRED", registered: false, noHost: true },
   { name: "new account needs first-party setup", origin: "https://notes.example", error: "ACCOUNT_SETUP_REQUIRED", registered: false },
   { name: "prepared OpenKey request requires setup before signing", origin: "https://notes.example", directNode: true, prepareOnly: true, requireExistingAccount: true, error: "ACCOUNT_SETUP_REQUIRED", registered: false },
   { name: "unknown registry remains unavailable", origin: "https://notes.example", error: "unavailable", unavailable: true },
@@ -65,12 +67,13 @@ for (const config of [
   const options = {
     provider, ui: false, persistSession: false, autoDiscoverLocalNode: false,
     registryCacheStore: createInMemoryRegistryCacheStore(), registrySequenceStore: createInMemoryRegistrySequenceStore(),
-    tinycloudHosts: ["https://node.test"], tinycloudRegistryUrl: "https://registry.test",
+    tinycloudHosts: config.noHost ? [] : ["https://node.test"], newUserHost: config.noHost ? null : "https://node.test", tinycloudRegistryUrl: "https://registry.test",
     manifest: { app_id: "tc2931-notes", name: "Notes", defaults: false, includePublicSpace: false, permissions: [{ service: "tinycloud.kv", path: "notes/", actions: ["get", "put"] }] },
     ...(config.autoBootstrapAccount === undefined ? {} : { autoBootstrapAccount: config.autoBootstrapAccount }),
     ...(config.includeAccountRegistryPermissions === undefined ? {} : { includeAccountRegistryPermissions: config.includeAccountRegistryPermissions }),
     ...(config.domain === undefined ? {} : { domain: config.domain }),
   };
+  if (config.ssr) Reflect.deleteProperty(globalThis, "window");
   const app = config.directNode ? new TinyCloudNode({
     ...options, host: "https://node.test", requireExistingAccount: config.requireExistingAccount, signer: {
       getAddress: async () => account.address, getChainId: async () => 1,
@@ -106,6 +109,7 @@ for (const config of [
     }
   } finally {
     await app.signOut();
+    if (config.ssr) Object.defineProperty(globalThis, "window", { value: dom.window, configurable: true, writable: true });
     dom.window.close();
   }
 }
