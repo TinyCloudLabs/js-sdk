@@ -1,5 +1,12 @@
 # @tinycloud/manage-key-reference-clients
 
+## 0.0.23
+
+### Patch Changes
+
+- Updated dependencies [8b0dbff]
+  - @tinycloud/web-sdk@3.11.4
+
 ## 0.0.22
 
 ### Patch Changes
