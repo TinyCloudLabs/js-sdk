@@ -224,8 +224,12 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 - **Authority.** Every 5 minutes, separately from the catch-up, the watcher
   checks each peer's renewal and authority on the node, so detecting an idle
   revocation and cleaning up sibling grants takes up to 5 minutes; the node
-  itself refuses revoked grants at once. Before it imports anything from a peer
-  whose last check is older than `--poll`, it checks again. A hook event for a
+  itself refuses revoked grants at once. That window is for noticing only:
+  importing what a peer sent, waking an agent for it and writing an inform to
+  it each take a fresh check on the node first (no cached verdict), and a
+  removed or refused peer's queued wake or inform is dropped and logged. With
+  `--poll` above 5 minutes, this check and the retry of a peer whose sync did
+  not finish still run every 5 minutes. A hook event for a
   peer's renewal marker (`pairing/delegation.json`) reads the marker and checks
   that peer at once. A refusal reads the marker and checks the peer at once,
   and retries only under a different grant; otherwise the refusal is final.
@@ -290,9 +294,13 @@ events); the SDK's own ticket renewals are invisible to it, and the 5-minute
 catch-up covers those gaps.
 
 `courier read` keeps the messages and thread meta it has read (both are
-create-only) in `<COURIER_HOME>/read-cache/<thread>.json` (owner-only). Reading
-the thread again lists both sides and fetches only new entries and the tasks,
-which can change. A missing or unreadable cache file is rebuilt.
+create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
+(owner-only). Reading the thread again lists both sides and fetches only new
+entries and the tasks, which can change. Messages are create-only; a later
+overwrite of the same key isn't shown. One agent's cache stays within 64 MiB,
+files older than 7 days are not used, and a missing or unreadable file is
+rebuilt. `courier revoke`, a recorded refusal, an owner revocation and `init
+--rotate-key` delete the cache.
 
 ### Wake adapters
 
