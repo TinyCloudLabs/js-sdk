@@ -616,6 +616,45 @@ if (seam === "after-save") {
     expect((await savedState("hosting")).session?.delegationCid).toBe(entry.delegation!.delegationCid);
   });
 
+  test("a re-run with a usable session on a space the node does not host waits for it and ends as SPACE_SETUP_PENDING, with no step 2 link", async () => {
+    await mkdir(home("hosting-rerun"), { recursive: true, mode: 0o700 });
+    const newOwner = new PrivateKeySigner(randomBytes(32).toString("hex"));
+    const first = await run("hosting-rerun", ["onboard", "--timeout", "1s"]);
+    expect(first.exitCode).toBe(8);
+    const entry = await openLink("hosting-rerun", first.stderr);
+    await approve(entry, entry.request!, newOwner, { spaceReady: null, spacePending: true });
+    const ended = await run("hosting-rerun", ["onboard", "--timeout", "1s"]);
+    expect(ended.stdout + ended.stderr).toContain("SPACE_SETUP_PENDING");
+    const requests = approvalRequests.size;
+
+    // The session is saved and usable; the space is still not hosted. Before TC-2380 this run went on to a step 2 link.
+    const started = Date.now();
+    const rerun = await run("hosting-rerun", ["onboard", "--timeout", "1s"]);
+    const elapsed = Date.now() - started;
+    expect(rerun.exitCode, rerun.stderr).toBe(1);
+    expect(rerun.stdout + rerun.stderr).toContain("SPACE_SETUP_PENDING");
+    expect(rerun.stdout).not.toContain('"pending"');
+    expect(approvalRequests.size).toBe(requests);
+    expect(elapsed).toBeLessThan(45_000);
+  });
+
+  test("a fresh run whose first approval says OpenKey will not host the space goes on to the step 2 link at once, with no wait", async () => {
+    await mkdir(home("autosign-off"), { recursive: true, mode: 0o700 });
+    const newOwner = new PrivateKeySigner(randomBytes(32).toString("hex"));
+    const first = await run("autosign-off", ["onboard", "--timeout", "1s"]);
+    expect(first.exitCode).toBe(8);
+    const entry = await openLink("autosign-off", first.stderr);
+    // OpenKey's relay for an account it will not set up (Auto-Sign off): not pending, not an error.
+    await approve(entry, entry.request!, newOwner, { spaceReady: false });
+    const started = Date.now();
+    const second = await run("autosign-off", ["onboard", "--timeout", "1s"]);
+    const elapsed = Date.now() - started;
+    expect(second.exitCode, second.stderr).toBe(8);
+    expect(stdoutPending(second.stdout).pending.step).toBe(2);
+    expect(second.stderr).not.toContain("Setting up your space");
+    expect(elapsed).toBeLessThan(15_000);
+  });
+
   for (const seam of ["after-poll", "after-fetch", "after-save", "before-ack"] as const) {
     test(`SIGKILLed ${seam}: the next run resumes the same approval with no new request, and the owner's approval is acknowledged once`, async () => {
       const name = "kill-" + seam;
