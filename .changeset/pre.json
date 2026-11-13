@@ -77,6 +77,7 @@
     "tc-2748-courier-read-isolation",
     "tc-2872-proofless-status",
     "tc-2904-owner-direct-renewal",
+    "tc-2904-renewal-approval-codec",
     "tc-712-issued-resource",
     "tc-712-proofless-revoke",
     "tc2234-cli-invite-approval",
