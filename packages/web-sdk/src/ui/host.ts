@@ -83,6 +83,17 @@ function onUnhandledRejection(event: PromiseRejectionEvent): void {
   }
 }
 
+function panelLoadErrorCode(error: unknown): "type-error" | "syntax-error" | "error" | "unknown" {
+  try {
+    if (error instanceof TypeError) return "type-error";
+    if (error instanceof SyntaxError) return "syntax-error";
+    if (error instanceof Error) return "error";
+  } catch {
+    // A malformed thrown value must not make the failure handler throw.
+  }
+  return "unknown";
+}
+
 export function createHostRuntime(): HostRuntime {
   const clients = new Map<number, ClientEntry>();
   const clientListeners = new Set<() => void>();
@@ -329,7 +340,7 @@ export function createHostRuntime(): HostRuntime {
       })
       .catch((error: unknown) => {
         if (loadingFor === owner) loadingFor = undefined;
-        console.error("[tinycloud] ui-panel-load-failed", error);
+        console.error("[tinycloud] ui-panel-load-failed", panelLoadErrorCode(error));
         if (mounted === owner) owner.pending.showError(() => window.location.reload());
       });
   }

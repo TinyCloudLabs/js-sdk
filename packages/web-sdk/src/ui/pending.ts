@@ -63,7 +63,7 @@ export function createPendingPanel(onClose: () => void): PendingPanel {
     },
     showError(reloadPage) {
       onReload = reloadPage;
-      status.textContent = text("view.error");
+      status.textContent = text("panel.loadError");
       reload.hidden = false;
     },
   };
