@@ -306,7 +306,7 @@ export function createHostRuntime(): HostRuntime {
   /**
    * Loads the panel chunk on first open or launcher hover/focus. The module is
    * cached for the page; each mount attaches its own panel. The pending
-   * stand-in shows loading, then a neutral error with Retry if the chunk fails.
+   * stand-in shows loading, then offers a page reload if the chunk fails.
    */
   function requestPanel(): void {
     const client = activeEntry()?.registration.handle.client;
@@ -327,9 +327,10 @@ export function createHostRuntime(): HostRuntime {
         if (loadingFor === owner) loadingFor = undefined;
         if (mounted === owner) attachPanel(owner, entry);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (loadingFor === owner) loadingFor = undefined;
-        if (mounted === owner) owner.pending.showError(requestPanel);
+        console.error("[tinycloud] ui-panel-load-failed", error);
+        if (mounted === owner) owner.pending.showError(() => window.location.reload());
       });
   }
 
