@@ -12,14 +12,14 @@ import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
 
 /**
- * One registry verdict cache for every node this process creates (TC-2970): each owner is looked up once per command,
- * and a long-running `watch`, `intake` or `outbox serve` looks again after the SDK's 60 s bound. Failed or unavailable
- * lookups are not kept. The nodes also share one registry sequence store and one saved-settings
- * store: the SDK serves a cached verdict only to a client whose own stores agree with it, so shared stores keep the
- * rollback and known-owner checks the same for every node and let all of them reuse the lookup.
+ * One registry verdict cache for every node this process creates (TC-2970), in `absent-reads` mode (TC-2481): only a
+ * confirmed absence is kept, for 60 s, and only reads use it. An owner with a registry record is looked up before every
+ * call, and every write (send, delivery, informs, tasks, pairing) looks its owner up before it runs. The nodes also share
+ * one registry sequence store and one saved-settings store, so every node keeps the same rollback floor and known-owner
+ * evidence, and a cached absence is never served to a node that knows the owner as registered.
  */
 const registry = {
-  registryVerdictCache: createRegistryVerdictCache(),
+  registryVerdictCache: createRegistryVerdictCache({ mode: "absent-reads" }),
   registrySequenceStore: createInMemoryRegistrySequenceStore() as RegistrySequenceStore,
   registryCacheStore: createInMemoryRegistryCacheStore() as RegistryCacheStore,
 };
