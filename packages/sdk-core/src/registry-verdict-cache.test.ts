@@ -160,15 +160,15 @@ describe("registry verdict cache (TC-2970)", () => {
     expect(r.requests).toHaveLength(3);
   });
 
-  it("a registered record is reused for 5 minutes, then looked up again", async () => {
-    expect(REGISTRY_VERDICT_REGISTERED_TTL_MS).toBe(300_000);
+  it("a registered record is reused for 60 s, then looked up again", async () => {
+    expect(REGISTRY_VERDICT_REGISTERED_TTL_MS).toBe(60_000);
     const body = await recordBody();
     const r = registry(() => new Response(body));
     const time = clock();
     const verdictCache = createRegistryVerdictCache({ now: time.now });
     const lookup = () => lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, verdictCache });
     await lookup();
-    time.advance(299_999);
+    time.advance(59_999);
     await lookup();
     expect(r.requests).toHaveLength(1);
     time.advance(1);
@@ -337,9 +337,14 @@ describe("registry verdict cache bounds and keys (TC-2970 review F2-F4)", () => 
     const time = clock();
     const verdictCache = createRegistryVerdictCache({ now: time.now });
     let lookups = 0;
-    await verdictCache.get({ registryUrl: REGISTRY, subject: "did:key:zLive" }, async () => { lookups++; return registered("did:key:zLive"); });
+    // The oldest entry settles last, so it outlives the 255 entries inserted after it.
+    const reply = Promise.withResolvers<RegistryVerdict>();
+    const live = verdictCache.get({ registryUrl: REGISTRY, subject: "did:key:zLive" }, () => { lookups++; return reply.promise; });
     for (let i = 0; i < 255; i++) await verdictCache.get({ registryUrl: REGISTRY, subject: `did:key:z${i}` }, async () => unregistered(`did:key:z${i}`));
-    time.advance(REGISTRY_VERDICT_UNREGISTERED_TTL_MS);
+    time.advance(REGISTRY_VERDICT_UNREGISTERED_TTL_MS / 2);
+    reply.resolve(registered("did:key:zLive"));
+    await live;
+    time.advance(REGISTRY_VERDICT_UNREGISTERED_TTL_MS / 2);
     await verdictCache.get({ registryUrl: REGISTRY, subject: "did:key:zNew" }, async () => unregistered("did:key:zNew"));
     await verdictCache.get({ registryUrl: REGISTRY, subject: "did:key:zLive" }, async () => { lookups++; return registered("did:key:zLive"); });
     expect(lookups).toBe(1);

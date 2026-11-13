@@ -13,8 +13,8 @@ import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './au
 
 /**
  * One registry verdict cache for every node this process creates (TC-2970): each owner is looked up once per command,
- * and a long-running `watch`, `intake` or `outbox serve` looks again after the SDK's bounds (a record 5 min, no record
- * 60 s). Failed or unavailable lookups are not kept. The nodes also share one registry sequence store and one saved-settings
+ * and a long-running `watch`, `intake` or `outbox serve` looks again after the SDK's 60 s bound. Failed or unavailable
+ * lookups are not kept. The nodes also share one registry sequence store and one saved-settings
  * store: the SDK serves a cached verdict only to a client whose own stores agree with it, so shared stores keep the
  * rollback and known-owner checks the same for every node and let all of them reuse the lookup.
  */

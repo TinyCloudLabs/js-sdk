@@ -939,8 +939,8 @@ export interface TinyCloudNodeConfig {
   /** Exact signed-v2 responses; pass a persistent adapter to survive restarts. */
   registryCacheStore?: RegistryCacheStore;
   /**
-   * Opt-in reuse of registry verdicts, shareable across clients in one process: a registered record for 5 minutes, a
-   * confirmed absence for 60 s; failures and outage fallbacks are never reused. Default: every lookup asks the registry.
+   * Opt-in reuse of registry verdicts, shareable across clients in one process: a registered record or a confirmed
+   * absence for 60 s; failures and outage fallbacks are never reused. Default: every lookup asks the registry.
    */
   registryVerdictCache?: RegistryVerdictCache;
   /** Value-free warning after an actual cached-settings or default-node fallback. */

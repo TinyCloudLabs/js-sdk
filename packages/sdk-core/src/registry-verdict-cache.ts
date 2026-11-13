@@ -8,8 +8,8 @@ import { registryOwnerKeyV2, type RegistryVerdict } from "./registry-verdict";
 
 export type { RegistryVerdictCache, RegistryVerdictScope };
 
-/** How long a {@link RegistryVerdictCache} reuses a verified registered record. */
-export const REGISTRY_VERDICT_REGISTERED_TTL_MS = 300_000;
+/** How long a {@link RegistryVerdictCache} reuses a verified registered record, so a revoked registration stops routing within a minute. */
+export const REGISTRY_VERDICT_REGISTERED_TTL_MS = 60_000;
 /** How long it reuses a confirmed absence (v2 and v1 both not found), so a new registration is seen within a minute. */
 export const REGISTRY_VERDICT_UNREGISTERED_TTL_MS = 60_000;
 /** Owners one cache holds; expired entries go first, then the oldest. */
@@ -62,7 +62,7 @@ async function registration(store: RegistrySequenceStore | undefined, ownerKey: 
 
 /**
  * Concurrent lookups of one owner share one request. Only a live registered
- * record (5 min) or a confirmed absence (60 s) is kept; an unavailable verdict,
+ * record or a confirmed absence is kept, each for 60 s; an unavailable verdict,
  * an outage fallback from saved settings and a failed lookup are dropped as
  * they settle, so the next call asks the registry again. A kept verdict is
  * served to a client only if its own stores allow it. Times use a monotonic

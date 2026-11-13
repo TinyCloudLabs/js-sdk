@@ -10,7 +10,7 @@ sdk-core adds an opt-in `verdictCache` option on `lookupOwnerRegistryVerdict`, `
 
 How the cache behaves:
 - It is keyed by registry URL (one entry however the URL is spelled) and owner DID, and concurrent lookups of one owner share one request.
-- It keeps a registered record for 5 minutes and a confirmed absence (v2 and v1 both not found) for 60 seconds, on a monotonic clock, and holds at most 256 owners.
+- It keeps a registered record and a confirmed absence (v2 and v1 both not found) for 60 seconds each, on a monotonic clock, so a revoked registration stops routing and a new one is seen within a minute. It holds at most 256 owners.
 - It never keeps an unavailable verdict, an outage fallback from saved settings or a failed lookup.
 - A kept verdict is served to a client only if that client's own registry stores agree with it: a registered record no older than the sequence the client remembers and present in its saved settings, or an absence for an owner the client has no registration evidence for. Otherwise the client looks the owner up itself.
 - A route the record does not list, in routing or at sign-in, drops the owner's entry at once, and a refresh that finds no record drops the registered one.
