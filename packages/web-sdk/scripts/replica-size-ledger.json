@@ -3002,9 +3002,9 @@
   "tc2904OwnerDirectProofRoot": {
     "label": "strict owner-direct proof parsing root budget (TC-2904)",
     "ruling": "size-ruling: TC-2904: Naomi allows the measured root residual +878 B ESM / +503 B CJS (gzip -9) for strict proof parsing in the root parser, stacked on tc2872RenewalRoot; admission remains lazy. No general ceiling change.",
-    "base": "c01c8fe9d",
+    "base": "b8dc6c5e00757f8c676ae29dc98c53e8adf82f84",
     "sourceCommits": [
-      "4f32b4feda39c2955039631f683323911139f913"
+      "0388f921deb41398e34f0e65b5b814df57b83900"
     ],
     "measuredWith": "Bun 1.4.4; production web-sdk build; reused TC-2872 WASM; gzip -9 -c",
     "root": {
