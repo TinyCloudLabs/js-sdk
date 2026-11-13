@@ -4,8 +4,9 @@ import path from 'node:path';
 import { messageView, oneLine, taskView } from './a2a.js';
 import type { KV } from './inbox.js';
 import { agentId, k, PREFIX } from './keys.js';
-import { profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
+import { mkdirOwnerOnly, profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
 import { getJson, listAll } from './store.js';
+import { ULID } from './request.js';
 
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 /** All of one agent's cached threads together, in bytes as written. */
@@ -26,24 +27,53 @@ let preparedRoot: string | undefined;
 
 /**
  * Once per process: the cache directories are owner-only (0700) even if an earlier run left them looser, and thread
- * files from before the cache was per agent (`read-cache/<thread>.json`) are deleted. Symlinks and other users' entries
- * are never followed or changed.
+ * files from before the cache was per agent (`read-cache/<thread ULID>.json`) are deleted; nothing else at the root is.
+ * Modes are set through a descriptor opened without following a symlink, so a directory swapped for a link between the
+ * check and the change is never changed. Other users' entries are left alone.
  */
 function prepareCacheRoot(): void {
   const root = cacheRoot();
   if (preparedRoot === root) return;
   preparedRoot = root;
-  let stat: fs.Stats;
-  try { stat = fs.lstatSync(root); } catch { return; }
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.()) return;
-  if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(root, 0o700);
+  if (!ownerOnlyDir(root)) return;
   for (const name of fs.readdirSync(root)) {
     const entry = path.join(root, name);
     const child = fs.lstatSync(entry);
     if (child.uid !== process.getuid?.()) continue;
-    if (child.isFile() && name.endsWith('.json')) fs.rmSync(entry, { force: true });
-    else if (child.isDirectory() && (child.mode & 0o777) !== 0o700) fs.chmodSync(entry, 0o700);
+    if (child.isFile() && name.endsWith('.json') && ULID.test(name.slice(0, -5))) fs.rmSync(entry, { force: true });
+    else if (child.isDirectory()) ownerOnlyDir(entry);
   }
+}
+
+/** Sets a directory of this user to 0700 through a no-follow descriptor; false for a symlink, a non-directory or another user's. */
+function ownerOnlyDir(dir: string): boolean {
+  let fd: number;
+  try { fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW); } catch { return false; }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isDirectory() || stat.uid !== process.getuid?.()) return false;
+    if ((stat.mode & 0o777) !== 0o700) fs.fchmodSync(fd, 0o700);
+    return true;
+  } finally { fs.closeSync(fd); }
+}
+
+/**
+ * `read-cache/<parts…>` as a chain of real directories of this user, created 0700 where missing (`create`). A component
+ * that is a symlink, not a directory or another user's gives undefined: nothing is read or written through it.
+ */
+function cacheDir(parts: readonly string[], create: boolean): string | undefined {
+  if (create) mkdirOwnerOnly(profileDir());
+  let dir = cacheRoot();
+  for (const part of ['', ...parts]) {
+    if (part) dir = path.join(dir, part);
+    if (create) {
+      try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return undefined; }
+    }
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(dir); } catch { return undefined; }
+    if (!stat.isDirectory() || stat.uid !== process.getuid?.()) return undefined;
+  }
+  return dir;
 }
 
 /** The bounds of one agent's read cache; tests pass smaller ones. */
@@ -95,8 +125,7 @@ export function diskThreadCache(agent: string, threadId: string,
     set: (id, body) => { entries[id] = body; changed = true; },
     save() {
       if (!changed || !SAFE_ID.test(threadId)) return;
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      if (!fs.lstatSync(cacheRoot()).isDirectory() || !fs.lstatSync(dir).isDirectory()) return;
+      if (cacheDir([agentId(agent)], true) !== dir) return;
       // writeSecure writes pretty JSON and a newline.
       if (Buffer.byteLength(JSON.stringify(entries, null, 2)) + 1 > limits.maxBytes) fs.rmSync(file, { force: true });
       else writeSecure(file, entries);
@@ -111,7 +140,8 @@ export function clearReadCache(): void {
   preparedRoot = undefined;
 }
 
-const ownDir = (agent: string, threadId: string) => path.join(cacheRoot(), agentId(agent), 'own', threadId);
+const ownParts = (agent: string, threadId: string) => [agentId(agent), 'own', threadId];
+const ownDir = (agent: string, threadId: string) => path.join(cacheRoot(), ...ownParts(agent, threadId));
 const ownName = (prefix: string, spaceId: string, key: string) => `${prefix}-${createHash('sha256').update(`${spaceId}\n${key}`).digest('hex')}.json`;
 
 /**
@@ -125,10 +155,11 @@ export function recordOwnWrite(agent: string, spaceId: string | undefined, threa
   try { dir = ownDir(agent, threadId); } catch { return; } // no did:key: this agent has no read cache at all
   try {
     prepareCacheRoot();
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (cacheDir(ownParts(agent, threadId), true) !== dir) throw new Error('unsafe cache directory');
     writeSecure(path.join(dir, ownName('e', spaceId, key)), { space: spaceId, key });
   } catch {
     try {
+      if (cacheDir(ownParts(agent, threadId), false) !== dir) return; // no safe directory: no listing marks to trust
       for (const name of fs.readdirSync(dir)) if (name.startsWith('listed-')) fs.rmSync(path.join(dir, name), { force: true });
     } catch { /* no listing marks: the next read lists anyway */ }
   }
@@ -150,7 +181,7 @@ export function diskOwnIndex(agent: string, spaceId: string, threadId: string, f
   };
   return {
     keys(root) {
-      if (full || !SAFE_ID.test(threadId)) return undefined;
+      if (full || !SAFE_ID.test(threadId) || cacheDir(ownParts(agent, threadId), false) !== dir) return undefined;
       let listedAt: number;
       try {
         const file = path.join(dir, ownName('listed', spaceId, root));
@@ -184,7 +215,7 @@ export function diskOwnIndex(agent: string, spaceId: string, threadId: string, f
       if (!SAFE_ID.test(threadId)) return;
       try {
         prepareCacheRoot();
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        if (cacheDir(ownParts(agent, threadId), true) !== dir) return;
         for (const key of keys) if (key.startsWith(`${root}/`)) writeSecure(path.join(dir, ownName('e', spaceId, key)), { space: spaceId, key });
         writeSecure(path.join(dir, ownName('listed', spaceId, root)), { space: spaceId, root, listedAt: new Date(now).toISOString() });
       } catch { /* without a mark, the next read lists again */ }
