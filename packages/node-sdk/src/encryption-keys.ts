@@ -86,6 +86,11 @@ export function createNamedKeyClient(
   // same identity check as other encryption calls, and never follow a
   // redirect elsewhere (TC-2923).
   const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  // Bun's `typeof fetch` also declares `preconnect`, a connection hint with no effect on requests.
+  const fetchWithoutRedirects = Object.assign(
+    (input: Parameters<typeof fetch>[0], init?: RequestInit) => baseFetch(input, { ...init, redirect: "error" }),
+    { preconnect: () => {} },
+  ) as typeof fetch;
   const config: NamedKeyClientConfig = {
     keyWrapV2: options.keyWrapV2 ?? signer.config?.keyWrapV2 ?? false,
     requireKeyWrapV2: options.requireKeyWrapV2 ?? signer.config?.requireKeyWrapV2 ?? false,
@@ -95,7 +100,7 @@ export function createNamedKeyClient(
       return { url, nodeDid };
     },
     crypto: signer.createEncryptionCrypto(),
-    fetch: (input, init) => baseFetch(input, { ...init, redirect: "error" }),
+    fetch: fetchWithoutRedirects,
     defaultNetworkId: () => options.networkId ?? node.getDefaultEncryptionNetworkId(),
     signInvocation: (input) =>
       signer.signRawNetworkAuthorization({
