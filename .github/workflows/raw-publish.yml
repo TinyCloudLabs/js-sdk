@@ -215,23 +215,153 @@ jobs:
               assert(/^(dist\/|bin\/|skills\/|package\.json$|README(?:\.md)?$|LICENSE(?:\.[^/]+)?$)/i.test(file), `unexpected packed file: ${file}`);
               assert(!/(^|\/)(\.npmrc|\.env[^/]*|profiles?|credentials?)(\/|$)|\.(sqlite|db)(-|$)|\.tsx?$/.test(file.replace(/\.d\.(ts|cts)$/, '.types')), `sensitive/source file: ${file}`);
             }
-            assert(files.some(file => /^LICENSE(?:\.|$)/i.test(file)));
-            assert(files.some(file => /^README(?:\.|$)/i.test(file)));
-            // Preserve every file shipped in the published stable package.
-            const baseline = json(path.join(out, `before-${name}.json`)).versions[targets[name].previous];
-            assert(baseline?.dist?.tarball?.startsWith('https://registry.npmjs.org/'));
-            const response = await fetch(baseline.dist.tarball, { headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(30000) });
-            assert.equal(response.status, 200);
-            const bytes = Buffer.from(await response.arrayBuffer());
-            assert.equal(createHash('sha1').update(bytes).digest('hex'), baseline.dist.shasum);
-            const oldTarball = path.join(out, `${name}-baseline.tgz`);
-            fs.writeFileSync(oldTarball, bytes);
-            const oldFiles = unpack(oldTarball, path.join(out, `${name}-baseline`));
-            for (const file of oldFiles) assert(files.includes(file.slice('package/'.length)), `missing stable file: ${file}`);
+            // Exact published CLI 1.6.5 and services 3.11.0 inventories (registry tarballs).
+            const publishedFiles = {
+              'cli': [
+                "README.md",
+                "bin/tc",
+                "bin/tinycloud",
+                "dist/courier-entry.d.ts",
+                "dist/courier-entry.js",
+                "dist/courier-entry.js.map",
+                "dist/index.d.ts",
+                "dist/index.js",
+                "dist/index.js.map",
+                "dist/legacy-entry.d.ts",
+                "dist/legacy-entry.js",
+                "dist/legacy-entry.js.map",
+                "package.json",
+                "skills/courier/SKILL.md",
+                "skills/courier/release.json",
+                "skills/courier/start.md",
+                "skills/tinycloud-cli/AUTH.md",
+                "skills/tinycloud-cli/INSTALL.md",
+                "skills/tinycloud-cli/REFERENCE.md",
+                "skills/tinycloud-cli/SDK.md",
+                "skills/tinycloud-cli/SKILL.md",
+                "skills/tinycloud-cli/release.json",
+              ],
+              'sdk-services': [
+                "dist/BaseService-Ma2MwJAd.d.ts",
+                "dist/BaseService-O0iyuFLk.d.cts",
+                "dist/IHooksService-4QNODVy6.d.cts",
+                "dist/IHooksService-CvTpJbQD.d.ts",
+                "dist/ISQLService-Aly1CBsW.d.ts",
+                "dist/ISQLService-BOgWzHLT.d.cts",
+                "dist/context.cjs",
+                "dist/context.cjs.map",
+                "dist/context.d.cts",
+                "dist/context.d.ts",
+                "dist/context.js",
+                "dist/context.js.map",
+                "dist/encryption/index.cjs",
+                "dist/encryption/index.cjs.map",
+                "dist/encryption/index.d.cts",
+                "dist/encryption/index.d.ts",
+                "dist/encryption/index.js",
+                "dist/encryption/index.js.map",
+                "dist/encryption/named-keys.cjs",
+                "dist/encryption/named-keys.cjs.map",
+                "dist/encryption/named-keys.d.cts",
+                "dist/encryption/named-keys.d.ts",
+                "dist/encryption/named-keys.js",
+                "dist/encryption/named-keys.js.map",
+                "dist/encryption/resource.cjs",
+                "dist/encryption/resource.cjs.map",
+                "dist/encryption/resource.d.cts",
+                "dist/encryption/resource.d.ts",
+                "dist/encryption/resource.js",
+                "dist/encryption/resource.js.map",
+                "dist/feed/index.cjs",
+                "dist/feed/index.cjs.map",
+                "dist/feed/index.d.cts",
+                "dist/feed/index.d.ts",
+                "dist/feed/index.js",
+                "dist/feed/index.js.map",
+                "dist/index.cjs",
+                "dist/index.cjs.map",
+                "dist/index.d.cts",
+                "dist/index.d.ts",
+                "dist/index.js",
+                "dist/index.js.map",
+                "dist/internal/decrypt-transport-response-error.cjs",
+                "dist/internal/decrypt-transport-response-error.cjs.map",
+                "dist/internal/decrypt-transport-response-error.d.cts",
+                "dist/internal/decrypt-transport-response-error.d.ts",
+                "dist/internal/decrypt-transport-response-error.js",
+                "dist/internal/decrypt-transport-response-error.js.map",
+                "dist/kv/index.cjs",
+                "dist/kv/index.cjs.map",
+                "dist/kv/index.d.cts",
+                "dist/kv/index.d.ts",
+                "dist/kv/index.js",
+                "dist/kv/index.js.map",
+                "dist/kv/replication/contractConstants.cjs",
+                "dist/kv/replication/contractConstants.cjs.map",
+                "dist/kv/replication/contractConstants.d.cts",
+                "dist/kv/replication/contractConstants.d.ts",
+                "dist/kv/replication/contractConstants.js",
+                "dist/kv/replication/contractConstants.js.map",
+                "dist/kv/replication/grantPolicy.cjs",
+                "dist/kv/replication/grantPolicy.cjs.map",
+                "dist/kv/replication/grantPolicy.d.cts",
+                "dist/kv/replication/grantPolicy.d.ts",
+                "dist/kv/replication/grantPolicy.js",
+                "dist/kv/replication/grantPolicy.js.map",
+                "dist/kv/replication/grantPolicyConstants.cjs",
+                "dist/kv/replication/grantPolicyConstants.cjs.map",
+                "dist/kv/replication/grantPolicyConstants.d.cts",
+                "dist/kv/replication/grantPolicyConstants.d.ts",
+                "dist/kv/replication/grantPolicyConstants.js",
+                "dist/kv/replication/grantPolicyConstants.js.map",
+                "dist/kv/replication/grantPolicyTypes.cjs",
+                "dist/kv/replication/grantPolicyTypes.cjs.map",
+                "dist/kv/replication/grantPolicyTypes.d.cts",
+                "dist/kv/replication/grantPolicyTypes.d.ts",
+                "dist/kv/replication/grantPolicyTypes.js",
+                "dist/kv/replication/grantPolicyTypes.js.map",
+                "dist/kv/replication/index.cjs",
+                "dist/kv/replication/index.cjs.map",
+                "dist/kv/replication/index.d.cts",
+                "dist/kv/replication/index.d.ts",
+                "dist/kv/replication/index.js",
+                "dist/kv/replication/index.js.map",
+                "dist/kv/replication/prefix.cjs",
+                "dist/kv/replication/prefix.cjs.map",
+                "dist/kv/replication/prefix.d.cts",
+                "dist/kv/replication/prefix.d.ts",
+                "dist/kv/replication/prefix.js",
+                "dist/kv/replication/prefix.js.map",
+                "dist/scope-BZr0QwxX.d.ts",
+                "dist/scope-DEgc9f-W.d.cts",
+                "dist/sql/index.cjs",
+                "dist/sql/index.cjs.map",
+                "dist/sql/index.d.cts",
+                "dist/sql/index.d.ts",
+                "dist/sql/index.js",
+                "dist/sql/index.js.map",
+                "dist/telemetry/requestLog.cjs",
+                "dist/telemetry/requestLog.cjs.map",
+                "dist/telemetry/requestLog.d.cts",
+                "dist/telemetry/requestLog.d.ts",
+                "dist/telemetry/requestLog.js",
+                "dist/telemetry/requestLog.js.map",
+                "dist/types-Bf91gup6.d.ts",
+                "dist/types-CSd0RYir.d.cts",
+                "dist/types-CSd0RYir.d.ts",
+                "dist/types-D4XbIfFJ.d.cts",
+                "package.json",
+              ],
+            };
+            // Only top-level generated declaration chunks may change their 8-character hash.
+            // Keep duplicate normalized names: equality checks both membership and multiplicity.
+            const entry = file => name === 'sdk-services'
+              ? file.replace(/^(dist\/(?:BaseService|IHooksService|ISQLService|scope|types))-[A-Za-z0-9_-]{8}(\.d\.(?:ts|cts))$/, '$1-HASH$2')
+              : file;
+            assert.deepEqual(files.map(entry).sort(), publishedFiles[name].map(entry).sort(),
+              `${name} packed file inventory differs from published stable`);
             const packed = file => fs.readFileSync(path.join(directory, 'package', file), 'utf8');
             if (name === 'cli') {
-              assert(files.includes('bin/tinycloud'));
-              assert(files.some(file => file.startsWith('skills/')));
               const bundle = files.filter(file => /^dist\/.*\.(js|cjs)$/.test(file)).map(packed).join('\n');
               assert(bundle.includes('JSON.stringify(response)') && bundle.includes('process.stdout.write'));
               assert(bundle.includes('setInterval(') && bundle.includes('clearInterval(alive)'));
