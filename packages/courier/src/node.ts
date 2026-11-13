@@ -1,4 +1,6 @@
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
+import { createInMemoryRegistryCacheStore, createInMemoryRegistrySequenceStore, type RegistryCacheStore, type RegistrySequenceStore } from '@tinycloud/sdk-core';
 import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
@@ -9,6 +11,19 @@ import { canonicalJson } from './canonical.js';
 import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
 
+/**
+ * One registry verdict cache for every node this process creates (TC-2970): each owner is looked up once per command,
+ * and a long-running `watch`, `intake` or `outbox serve` looks again after the SDK's 60 s bound. Failed or unavailable
+ * lookups are not kept. The nodes also share one registry sequence store and one saved-settings
+ * store: the SDK serves a cached verdict only to a client whose own stores agree with it, so shared stores keep the
+ * rollback and known-owner checks the same for every node and let all of them reuse the lookup.
+ */
+const registry = {
+  registryVerdictCache: createRegistryVerdictCache(),
+  registrySequenceStore: createInMemoryRegistrySequenceStore() as RegistrySequenceStore,
+  registryCacheStore: createInMemoryRegistryCacheStore() as RegistryCacheStore,
+};
+
 export function nodeOpts(host: string) {
   return {
     host,
@@ -17,6 +32,7 @@ export function nodeOpts(host: string) {
     enablePublicSpace: false,
     autoBootstrapAccount: false,
     includeAccountRegistryPermissions: false,
+    ...registry,
   };
 }
 

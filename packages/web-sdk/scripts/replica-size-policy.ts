@@ -474,6 +474,7 @@ export type Ledger = {
   tc2931BootstrapScope?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
   tc2949PanelChunkRecoveryRoot?: LogoutRatchet;
+  tc2970RegistryVerdictCacheRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1102,6 +1103,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2931BootstrapScope !== undefined) pins.push({ row: "tc2931BootstrapScope", pin: root.tc2931BootstrapScope.sourceCommits.at(-1)! });
   if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
   if (root.tc2949PanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949PanelChunkRecoveryRoot", pin: root.tc2949PanelChunkRecoveryRoot.sourceCommits.at(-1)! });
+  if (root.tc2970RegistryVerdictCacheRoot !== undefined) pins.push({ row: "tc2970RegistryVerdictCacheRoot", pin: root.tc2970RegistryVerdictCacheRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1200,6 +1202,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2931BootstrapScope", root.tc2931BootstrapScope?.root.ceiling],
     ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
     ["tc2949PanelChunkRecoveryRoot", root.tc2949PanelChunkRecoveryRoot?.root.ceiling],
+    ["tc2970RegistryVerdictCacheRoot", root.tc2970RegistryVerdictCacheRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3374,6 +3377,26 @@ export const approvedTc2949PanelChunkRecoveryRoot: LogoutRatchet = {
   "reason": "Chunk-load recovery logs a value-free failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI measured 1524168/1458646 gzip -9 bytes on 7af3a69c, based on 790c8b08; #963 changed only a CI workflow env line, so the measurement applies to current base 4ff23e8e. This is +119/+129 over the TC-2923 ceilings 1524049/1458517, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2949"
 };
 
+/** Naomi's exact TC-2970 registry verdict cache root allowance from canonical CI. */
+export const approvedTc2970RegistryVerdictCacheRoot: LogoutRatchet = {
+  "label": "registry verdict cache option root admission (TC-2970)",
+  "ruling": "Naomi's TC-2970 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root row when it merges; re-stacked on TC-2949 after #955 merged and re-measured. Details: TC-2970",
+  "base": "efb14e603ba4a49c4bb70690a4c501295e2292cf",
+  "sourceCommits": ["e04620cbd235645a02b55cf077efcaa2e7381fdf"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794375",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794928"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 127, "index.cjs": 86 },
+    "ceiling": { "index.mjs": 1524295, "index.cjs": 1458732 }
+  },
+  "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3469,6 +3492,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2931BootstrapScope: approvedTc2931BootstrapScope,
   tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
   tc2949PanelChunkRecoveryRoot: approvedTc2949PanelChunkRecoveryRoot,
+  tc2970RegistryVerdictCacheRoot: approvedTc2970RegistryVerdictCacheRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3902,6 +3926,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2923EncryptionTeeOriginRoot ||
         JSON.stringify(value.tc2949PanelChunkRecoveryRoot) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot))) {
     throw new Error("Only Naomi's exact TC-2949 root admission is approved.");
+  }
+  if (value.tc2970RegistryVerdictCacheRoot !== undefined &&
+      (!value.tc2949PanelChunkRecoveryRoot ||
+        JSON.stringify(value.tc2970RegistryVerdictCacheRoot) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot))) {
+    throw new Error("Only Naomi's exact TC-2970 root admission is approved.");
   }
 }
 
@@ -4739,5 +4768,13 @@ export function validateTc2949PanelChunkRecoveryRootTransition(base?: LogoutRatc
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2949 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2970 registry verdict cache root admission is introduced once and immutable. */
+export function validateTc2970RegistryVerdictCacheRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2970 root admission may be introduced once and cannot change later.");
   }
 }

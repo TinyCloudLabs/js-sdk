@@ -184,8 +184,10 @@ import {
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
   refreshOwnerRegistry,
+  lookupOwnerRegistryVerdict,
   registryOwnerKeyV2,
   type RegistryCacheStore,
+  type RegistryVerdictCache,
   type RegistryFallbackReason,
   publishLocationRecord,
   type LocalNodeIdentityStore,
@@ -936,6 +938,11 @@ export interface TinyCloudNodeConfig {
   registrySequenceStore?: RegistrySequenceStore;
   /** Exact signed-v2 responses; pass a persistent adapter to survive restarts. */
   registryCacheStore?: RegistryCacheStore;
+  /**
+   * Opt-in reuse of registry verdicts, shareable across clients in one process: a registered record or a confirmed
+   * absence for 60 s; failures and outage fallbacks are never reused. Default: every lookup asks the registry.
+   */
+  registryVerdictCache?: RegistryVerdictCache;
   /** Value-free warning after an actual cached-settings or default-node fallback. */
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Retry or abort when registry resolution fails; `use-host` is accepted only for genuine no-entry onboarding. */
@@ -2317,6 +2324,7 @@ export class TinyCloudNode {
       registryChainId: this.config.registryChainId,
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
+      verdictCache: this.config.registryVerdictCache,
       onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
@@ -2745,6 +2753,8 @@ export class TinyCloudNode {
         return response;
       },
     });
+    // Our own registration changed: the next lookup asks the registry.
+    this.config.registryVerdictCache?.invalidate(registryUrl, subject);
     graph.assertActive();
     return record;
   }
@@ -2821,12 +2831,16 @@ export class TinyCloudNode {
     const key = registryOwnerKeyV2(subject);
     if (this.registryRefreshOwners.has(key)) return;
     this.registryRefreshOwners.add(key);
-    void refreshOwnerRegistry(subject, {
+    const options = {
       registryUrl: this.config.tinycloudRegistryUrl,
       registryChainId: this.config.registryChainId,
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
-    }).catch(() => undefined);
+    };
+    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one.
+    void (this.config.registryVerdictCache
+      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache })
+      : refreshOwnerRegistry(subject, options)).catch(() => undefined);
   }
 
   /** Normalize signed capabilities without collapsing nested encryption into raw authority. */
@@ -4670,10 +4684,10 @@ export class TinyCloudNode {
   /** Registry-policy settings shared by every authorization this client creates. */
   private registryPolicyConfig(): Pick<
     TinyCloudNodeConfig,
-    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "onNodeNotFound" | "onRegistryFallback"
+    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "registryVerdictCache" | "onNodeNotFound" | "onRegistryFallback"
   > & { registryNoEntryHosts: readonly string[] } {
-    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback } = this.config;
-    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback,
+    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, registryVerdictCache, onNodeNotFound, onRegistryFallback } = this.config;
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, registryVerdictCache, onNodeNotFound, onRegistryFallback,
       registryNoEntryHosts: this.trustedNoEntryHosts };
   }
 

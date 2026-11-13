@@ -1122,7 +1122,7 @@ export {
   verifyLocationRecordV2,
 } from "./location";
 export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
-export { resolveRegistryResource } from "./registry-policy";
+export { resolveRegistryResource, type RegistryVerdictCache, type RegistryVerdictScope } from "./registry-policy";
 
 export {
   createInMemoryRegistryCacheStore,

@@ -58,6 +58,11 @@
       "import": "./dist/registry-publication.js",
       "require": "./dist/registry-publication.cjs"
     },
+    "./registry-verdict-cache": {
+      "types": "./dist/registry-verdict-cache.d.ts",
+      "import": "./dist/registry-verdict-cache.js",
+      "require": "./dist/registry-verdict-cache.cjs"
+    },
     "./kv-list-matching": {
       "types": "./dist/kv-list-matching/index.d.ts",
       "import": "./dist/kv-list-matching/index.js",
