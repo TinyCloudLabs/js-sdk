@@ -5,7 +5,7 @@ import { CourierError, errInfo } from './errors.js';
 import { k, PREFIX } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { COUNTERPARTY_NOTICE, isRecord, messageView, oneLine } from './a2a.js';
-import { getJson, listAll, putCreate, putMatch } from './store.js';
+import { getJson, getJsonMany, listAll, putCreate, putMatch } from './store.js';
 import { cmd } from './program.js';
 
 export type KV = ReturnType<TinyCloudNode['kvForSpace']>;
@@ -72,29 +72,34 @@ export async function collectInbound(input: {
       const receipts = (await getJson<Receipts>(input.selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
       receipts.threads ??= {};
       const deliveries: PendingDelivery[] = [];
-      for (const selected of selectUndelivered(keys, receipts)) {
-        const result = await getJson<unknown>(peerKv, selected.key);
+      const selected = selectUndelivered(keys, receipts);
+      const fetched = await getJsonMany<unknown>(peerKv, selected.map(item => item.key));
+      for (const item of selected.filter(item => fetched.tooLarge.includes(item.key))) {
+        errors.push({ peer: peer.handle, code: 'message-too-large', message: `message ${item.messageId} in thread ${item.threadId}: too large to read` });
+      }
+      for (const item of selected) {
+        const result = fetched.values.get(item.key);
         if (!result) continue;
         const value = result.value;
-        if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
+        if (!isRecord(value) || value.messageId !== item.messageId || value.contextId !== item.threadId) continue;
         const view = messageView(value);
         if (view.invalid.length) {
           errors.push({
             peer: peer.handle,
             code: 'bad-message',
-            message: `message ${selected.messageId} in thread ${selected.threadId}: ignored malformed ${view.invalid.join(', ')}`,
+            message: `message ${item.messageId} in thread ${item.threadId}: ignored malformed ${view.invalid.join(', ')}`,
           });
         }
         items.push({
           peer: peer.handle,
-          threadId: selected.threadId,
-          messageId: selected.messageId,
+          threadId: item.threadId,
+          messageId: item.messageId,
           from: view.from,
           intent: view.intent,
           asks: view.asks,
           text: view.text,
         });
-        deliveries.push({ threadId: selected.threadId, messageId: selected.messageId });
+        deliveries.push({ threadId: item.threadId, messageId: item.messageId });
       }
       if (deliveries.length) pending.set(peer.handle, deliveries);
     } catch (error) {

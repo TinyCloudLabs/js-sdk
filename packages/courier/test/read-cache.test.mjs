@@ -20,6 +20,11 @@ function countingKv(calls) {
       const row = rows.get(key);
       return row ? { ok: true, data: { data: row, headers: { etag: 'e' } } } : { ok: false, error: { status: 404, message: 'not found' } };
     },
+    async batchGet(keys, options) {
+      const results = [];
+      for (const key of keys) results.push({ key, result: await this.get(key, options) });
+      return { ok: true, data: { results, count: results.length } };
+    },
   };
 }
 
@@ -95,7 +100,7 @@ test('a cached body is shown only for a key the current authorized listing retur
   // The same handle re-paired to another agent: its same-named keys are fetched from it, never served from the old peer's cache.
   const impostor = { ...peer, courierDid: 'did:key:zMallory', spaceId: 'space-mallory' };
   const replaced = new Map([...th.theirs.rows].map(([key, body]) => [key, { ...body, parts: [{ kind: 'text', text: 'not bob' }] }]));
-  const theirs = { list: th.theirs.list, async get(key) { return { ok: true, data: { data: replaced.get(key), headers: { etag: 'e' } } }; } };
+  const theirs = { list: th.theirs.list, async get(key) { return { ok: true, data: { data: replaced.get(key), headers: { etag: 'e' } } }; }, batchGet: th.theirs.batchGet };
   const other = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [impostor], exactPeer: true, kvFor: async () => theirs, cache, self: th.self });
   const otherMessages = other.entries.filter((e) => e.side === 'peer' && e.kind === 'msg');
   assert.equal(otherMessages.length, 2);

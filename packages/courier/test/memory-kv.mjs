@@ -13,6 +13,11 @@ export function memoryKv() {
         ? { ok: true, data: { data: row.value, headers: { etag: row.etag } } }
         : { ok: false, error: { code: 'KV_NOT_FOUND', message: `Key not found: ${key}`, service: 'kv' } };
     },
+    async batchGet(keys, options) {
+      const results = [];
+      for (const key of keys) results.push({ key, result: await this.get(key, options) });
+      return { ok: true, data: { results, count: results.length } };
+    },
     async put(key, value, options = {}) {
       const prior = rows.get(key);
       const conflict = (options.ifNoneMatch === '*' && prior) || (options.ifMatch && options.ifMatch !== prior?.etag);

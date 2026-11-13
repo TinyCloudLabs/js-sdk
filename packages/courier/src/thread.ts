@@ -1,15 +1,20 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { messageView, oneLine, taskView } from './a2a.js';
 import type { KV } from './inbox.js';
 import { agentId, k, PREFIX } from './keys.js';
-import { profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
-import { getJson, listAll } from './store.js';
+import { profileDir, type StoredPeer } from './profile.js';
+import { privateChild, privateDir, readPrivateFile, removePrivate, stillPrivate, unlinkPrivateFile, writePrivateFile, type PrivateDir } from './private-dir.js';
+import { getJsonMany, listAll } from './store.js';
+import { ULID } from './request.js';
 
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 /** All of one agent's cached threads together, in bytes as written. */
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const CACHE_MAX_AGE_MS = 7 * 24 * 3600_000;
+/** How long `courier read` uses its local record of this agent's own writes to a thread before listing them again. */
+const OWN_INDEX_TRUST_MS = 3600_000;
 
 /** Bodies of create-only thread entries (messages and meta) already read, by source identity and key. */
 export interface ThreadCache {
@@ -17,29 +22,31 @@ export interface ThreadCache {
   set(id: string, body: unknown): void;
 }
 
-const cacheRoot = () => path.join(profileDir(), 'read-cache');
+const READ_CACHE = 'read-cache';
+const WATCH_CACHE = 'watch-cache';
 
 let preparedRoot: string | undefined;
 
 /**
  * Once per process: the cache directories are owner-only (0700) even if an earlier run left them looser, and thread
- * files from before the cache was per agent (`read-cache/<thread>.json`) are deleted. Symlinks and other users' entries
- * are never followed or changed.
+ * files from before the cache was per agent (`read-cache/<thread ULID>.json`) are deleted; nothing else at the root is.
+ * Every directory is opened without following a symlink and the chain from the profile down is checked again right
+ * before each change, so a component swapped for a link is never followed. Other users' entries are left alone.
  */
 function prepareCacheRoot(): void {
-  const root = cacheRoot();
-  if (preparedRoot === root) return;
-  preparedRoot = root;
-  let stat: fs.Stats;
-  try { stat = fs.lstatSync(root); } catch { return; }
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.()) return;
-  if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(root, 0o700);
-  for (const name of fs.readdirSync(root)) {
-    const entry = path.join(root, name);
-    const child = fs.lstatSync(entry);
+  const marker = path.join(profileDir(), READ_CACHE);
+  if (preparedRoot === marker) return;
+  preparedRoot = marker;
+  const root = privateDir([READ_CACHE], false);
+  if (!root) return;
+  for (const name of fs.readdirSync(root.path)) {
+    if (!stillPrivate(root)) return;
+    let child: fs.Stats;
+    try { child = fs.lstatSync(path.join(root.path, name)); } catch { continue; }
     if (child.uid !== process.getuid?.()) continue;
-    if (child.isFile() && name.endsWith('.json')) fs.rmSync(entry, { force: true });
-    else if (child.isDirectory() && (child.mode & 0o777) !== 0o700) fs.chmodSync(entry, 0o700);
+    // Only our own pre-upgrade thread files, unlinked after the chain and the entry are checked again.
+    if (child.isFile() && name.endsWith('.json') && ULID.test(name.slice(0, -5))) unlinkPrivateFile(root, name);
+    else if (child.isDirectory()) privateChild(root, name);
   }
 }
 
@@ -55,16 +62,17 @@ function fresh(file: string, limits: CacheLimits): boolean {
 }
 
 /** Keeps the agent's newest thread files within the byte bound and drops any older than the age bound. */
-function prune(dir: string, limits: CacheLimits): void {
-  const files = fs.readdirSync(dir).filter(name => name.endsWith('.json')).map(name => {
-    const file = path.join(dir, name);
-    const stat = fs.lstatSync(file);
-    return { file, mtime: stat.mtimeMs, bytes: stat.size, keep: stat.isFile() && limits.now - stat.mtimeMs < limits.maxAgeMs };
+function prune(dir: PrivateDir, limits: CacheLimits): void {
+  const files = fs.readdirSync(dir.path).filter(name => name.endsWith('.json')).flatMap(name => {
+    try {
+      const stat = fs.lstatSync(path.join(dir.path, name));
+      return [{ name, mtime: stat.mtimeMs, bytes: stat.size, keep: stat.isFile() && limits.now - stat.mtimeMs < limits.maxAgeMs }];
+    } catch { return []; }
   }).sort((a, b) => b.mtime - a.mtime);
   let total = 0;
   for (const entry of files) {
     total += entry.bytes;
-    if (!entry.keep || total > limits.maxBytes) fs.rmSync(entry.file, { force: true });
+    if (!entry.keep || total > limits.maxBytes) unlinkPrivateFile(dir, entry.name);
   }
 }
 
@@ -72,17 +80,19 @@ function prune(dir: string, limits: CacheLimits): void {
  * `courier read`'s private cache of one thread, per agent (`<COURIER_HOME>/read-cache/<did:key id>/<thread>.json`,
  * owner-only): messages and meta are create-only, so a repeated read fetches only entries it has not read yet. Tasks
  * change and are always fetched. A missing, foreign, expired (7 days) or corrupt file is an empty cache; the agent's
- * files stay within 64 MiB together, oldest dropped first.
+ * files stay within 64 MiB together, oldest dropped first. `full` starts empty: everything is fetched again and kept.
+ * Nothing is read or written unless every directory from the profile down is a real, owner-only directory of this user.
  */
 export function diskThreadCache(agent: string, threadId: string,
-  limits: CacheLimits = { now: Date.now(), maxBytes: CACHE_MAX_BYTES, maxAgeMs: CACHE_MAX_AGE_MS }): ThreadCache & { save(): void } {
+  limits: CacheLimits = { now: Date.now(), maxBytes: CACHE_MAX_BYTES, maxAgeMs: CACHE_MAX_AGE_MS }, full = false): ThreadCache & { save(): void } {
   prepareCacheRoot();
-  const dir = path.join(cacheRoot(), agentId(agent));
-  const file = path.join(dir, `${threadId}.json`);
+  const parts = [READ_CACHE, agentId(agent)];
+  const name = `${threadId}.json`;
   let entries: Record<string, unknown> = {};
-  if (SAFE_ID.test(threadId) && fresh(file, limits)) {
+  const existing = !full && SAFE_ID.test(threadId) ? privateDir(parts, false) : undefined;
+  if (existing && fresh(path.join(existing.path, name), limits)) {
     try {
-      const parsed: unknown = JSON.parse(readRegularFile(file) ?? '{}');
+      const parsed: unknown = JSON.parse(readPrivateFile(existing, name) ?? '{}');
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries = parsed as Record<string, unknown>;
     } catch { /* an unreadable cache is rebuilt */ }
   }
@@ -92,20 +102,124 @@ export function diskThreadCache(agent: string, threadId: string,
     set: (id, body) => { entries[id] = body; changed = true; },
     save() {
       if (!changed || !SAFE_ID.test(threadId)) return;
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      if (!fs.lstatSync(cacheRoot()).isDirectory() || !fs.lstatSync(dir).isDirectory()) return;
-      // writeSecure writes pretty JSON and a newline.
-      if (Buffer.byteLength(JSON.stringify(entries, null, 2)) + 1 > limits.maxBytes) fs.rmSync(file, { force: true });
-      else writeSecure(file, entries);
+      const dir = privateDir(parts, true);
+      if (!dir) return;
+      // The file is pretty JSON and a newline.
+      if (Buffer.byteLength(JSON.stringify(entries, null, 2)) + 1 > limits.maxBytes) unlinkPrivateFile(dir, name);
+      else writePrivateFile(dir, name, entries);
       prune(dir, limits);
     },
   };
 }
 
-/** Revocation, refusal, peer removal or a new agent key: every cached counterparty body on this machine goes. */
+/** Only the read cache: every cached counterparty body on this machine, removed through checked directories only. */
 export function clearReadCache(): void {
-  fs.rmSync(cacheRoot(), { recursive: true, force: true });
+  removePrivate(READ_CACHE);
   preparedRoot = undefined;
+}
+
+/**
+ * Revocation, refusal, owner revocation or a new agent key: the read cache and the watcher's local knowledge
+ * (`watch-cache/`) both go.
+ */
+export function clearLocalCaches(): void {
+  clearReadCache();
+  removePrivate(WATCH_CACHE);
+}
+
+/**
+ * The owner-space index: keys written under this agent's thread roots in the owner's space, which may be by this agent
+ * or by another agent of the same owner (same-owner agents are one principal, as the grants are). `courier read`
+ * shows them as `authority: 'self'`.
+ */
+const ownerSpaceParts = (agent: string, threadId: string) => [READ_CACHE, agentId(agent), 'owner-space', threadId];
+const ownerSpaceName = (prefix: string, spaceId: string, key: string) => `${prefix}-${createHash('sha256').update(`${spaceId}\n${key}`).digest('hex')}.json`;
+
+/**
+ * Records one key this agent created under its thread root in the owner's space, after the write succeeded (`send`,
+ * the outbox, a pause inform, a task, a session's meta). One file per entry, so concurrent writers never lose each
+ * other's records. It never fails the write: if the record can't be written, the thread's listing marks are dropped
+ * so the next read lists again.
+ */
+export function recordOwnerSpaceWrite(agent: string, spaceId: string | undefined, threadId: string, key: string): void {
+  if (!SAFE_ID.test(threadId) || !spaceId) return;
+  let parts: string[];
+  try { parts = ownerSpaceParts(agent, threadId); } catch { return; } // no did:key: this agent has no read cache at all
+  try {
+    prepareCacheRoot();
+    const dir = privateDir(parts, true);
+    if (!dir || !writePrivateFile(dir, ownerSpaceName('e', spaceId, key), { space: spaceId, key })) throw new Error('not recorded');
+  } catch {
+    try {
+      const dir = privateDir(parts, false);
+      if (!dir) return; // no safe directory: no listing marks to trust
+      for (const name of fs.readdirSync(dir.path)) if (name.startsWith('listed-')) unlinkPrivateFile(dir, name);
+    } catch { /* no listing marks: the next read lists anyway */ }
+  }
+}
+
+/** This agent's thread roots in the owner's space: from the local record while a listing is under an hour old. */
+export interface OwnerSpaceIndex {
+  /** The keys under `root`, or undefined when the root must be listed. */
+  keys(root: string): string[] | undefined;
+  /** A listing of `root` just returned `keys`: they are recorded, then the listing is marked as current. */
+  listed(root: string, keys: readonly string[]): void;
+}
+
+export function diskOwnerSpaceIndex(agent: string, spaceId: string, threadId: string, full = false, now = Date.now()): OwnerSpaceIndex {
+  const parts = ownerSpaceParts(agent, threadId);
+  const uid = process.getuid?.();
+  const regular = (dir: PrivateDir, name: string) => {
+    try { const stat = fs.lstatSync(path.join(dir.path, name)); return stat.isFile() && stat.uid === uid ? stat : undefined; } catch { return undefined; }
+  };
+  return {
+    keys(root) {
+      if (full || !SAFE_ID.test(threadId)) return undefined;
+      const dir = privateDir(parts, false);
+      if (!dir) return undefined;
+      let listedAt: number;
+      try {
+        const name = ownerSpaceName('listed', spaceId, root);
+        if (!regular(dir, name)) return undefined;
+        const mark: unknown = JSON.parse(readPrivateFile(dir, name) ?? 'null');
+        if (!mark || typeof mark !== 'object') return undefined;
+        const { space, root: markRoot, listedAt: at } = mark as { space?: unknown; root?: unknown; listedAt?: unknown };
+        if (space !== spaceId || markRoot !== root || typeof at !== 'string') return undefined;
+        listedAt = Date.parse(at);
+      } catch { return undefined; }
+      if (!(now - listedAt >= 0 && now - listedAt < OWN_INDEX_TRUST_MS)) return undefined;
+      const keys: string[] = [];
+      try {
+        for (const name of fs.readdirSync(dir.path)) {
+          if (!name.startsWith('e-')) continue;
+          const stat = regular(dir, name);
+          if (!stat) continue;
+          // Every listing re-records what it saw, so an entry this old is from before the current listing mark.
+          if (now - stat.mtimeMs >= CACHE_MAX_AGE_MS) { unlinkPrivateFile(dir, name); continue; }
+          const text = readPrivateFile(dir, name);
+          if (text === undefined) return undefined;
+          const entry: unknown = JSON.parse(text);
+          if (!entry || typeof entry !== 'object') return undefined;
+          const { space, key } = entry as { space?: unknown; key?: unknown };
+          if (typeof key !== 'string' || typeof space !== 'string') return undefined;
+          if (space === spaceId && key.startsWith(`${root}/`)) keys.push(key);
+        }
+      } catch { return undefined; }
+      return keys.sort();
+    },
+    listed(root, keys) {
+      if (!SAFE_ID.test(threadId)) return;
+      try {
+        prepareCacheRoot();
+        const dir = privateDir(parts, true);
+        if (!dir) return;
+        for (const key of keys) {
+          if (key.startsWith(`${root}/`) && !writePrivateFile(dir, ownerSpaceName('e', spaceId, key), { space: spaceId, key })) return;
+        }
+        writePrivateFile(dir, ownerSpaceName('listed', spaceId, root), { space: spaceId, root, listedAt: new Date(now).toISOString() });
+      } catch { /* without a mark, the next read lists again */ }
+    },
+  };
 }
 
 export interface ThreadEntry {
@@ -142,6 +256,8 @@ export async function collectThread(input: {
   exactPeer?: boolean;
   kvFor(peer: StoredPeer): Promise<KV>;
   cache?: ThreadCache;
+  /** The owner-space index of our thread roots: while current, our side of the thread isn't listed. */
+  ownerSpace?: OwnerSpaceIndex;
   /** This agent's courier DID and space: cached own entries belong to them, so a re-init or a new key starts empty. */
   self?: { courierDid: string; spaceId: string };
 }): Promise<{ entries: ThreadEntry[]; errors: PeerReadError[]; partial: boolean }> {
@@ -159,24 +275,36 @@ export async function collectThread(input: {
       // Failure of our own listing cannot safely be interpreted as an absent mapping.
       const mine = await listAll(selfKv, `${k.threadRoot(peer.handle, threadId)}/`);
       local.set(peer.handle, mine);
+      input.ownerSpace?.listed(k.threadRoot(peer.handle, threadId), mine);
       const mirrored = await listAll(selfKv, `${PREFIX}/me/mirror/${peer.handle}/threads/${threadId}/`);
       if (mine.length || mirrored.length) known.push(peer);
     }
     if (known.length) peers = known;
   }
 
-  /** `source`: whose space the keys are in (none: not cached). A cached body is used only for a key the current, authorized listing returned. */
+  /**
+   * `source`: whose space the keys are in (none: not cached). A cached body is used only for a key the current,
+   * authorized listing returned, or, for our own entries, that our own record holds.
+   */
   async function append(kv: KV, keys: string[], peer: string, side: 'me' | 'peer', source: string | undefined) {
     const root = side === 'me' ? k.threadRoot(peer, threadId) : undefined;
-    for (const key of keys) {
-      if (root && !key.startsWith(`${root}/`)) continue;
-      const kind = key.endsWith('/meta.json') ? 'meta'
-        : /\/msg\/[^/]+\.json$/.test(key) ? 'msg'
-        : /\/task\/[^/]+\.json$/.test(key) ? 'task' : undefined;
-      if (!kind) continue;
+    const wanted = keys.flatMap(key => {
+      if (root && !key.startsWith(`${root}/`)) return [];
+      const kind = key.endsWith('/meta.json') ? 'meta' as const
+        : /\/msg\/[^/]+\.json$/.test(key) ? 'msg' as const
+        : /\/task\/[^/]+\.json$/.test(key) ? 'task' as const : undefined;
+      if (!kind) return [];
       const cacheId = kind === 'task' || !source ? undefined : `${source}:${key}`;
-      const cached = cacheId === undefined ? undefined : input.cache?.get(cacheId);
-      const got = cached !== undefined ? { value: cached } : await getJson(kv, key);
+      return [{ key, kind, cacheId, cached: cacheId === undefined ? undefined : input.cache?.get(cacheId) }];
+    });
+    // Everything not already cached in bounded batches; each entry is still checked on its own below. A value over
+    // the cap is reported as an error for that entry, and every other entry is shown.
+    const fetched = await getJsonMany(kv, wanted.filter(entry => entry.cached === undefined).map(entry => entry.key));
+    for (const key of fetched.tooLarge) {
+      errors.push({ peer, code: 'entry-too-large', message: `An entry of ${oneLine(peer, 80)} is too large to read (${oneLine(key.slice(key.lastIndexOf('/') + 1), 80)}).` });
+    }
+    for (const { key, kind, cacheId, cached } of wanted) {
+      const got = cached !== undefined ? { value: cached } : fetched.values.get(key);
       if (!got) continue;
       if (cacheId !== undefined && cached === undefined) input.cache?.set(cacheId, got.value);
       const id = kind === 'meta' ? threadId : key.slice(key.lastIndexOf('/') + 1, -5);
@@ -187,7 +315,12 @@ export async function collectThread(input: {
   }
 
   for (const peer of peers) {
-    const mine = local.get(peer.handle) ?? await listAll(selfKv, `${k.threadRoot(peer.handle, threadId)}/`);
+    const root = k.threadRoot(peer.handle, threadId);
+    let mine = local.get(peer.handle) ?? input.ownerSpace?.keys(root);
+    if (mine === undefined) {
+      mine = await listAll(selfKv, `${root}/`);
+      input.ownerSpace?.listed(root, mine);
+    }
     await append(selfKv, mine, peer.handle, 'me', input.self && `self:${input.self.courierDid}:${input.self.spaceId}`);
     if (!peer.inbound || !peer.theirHandleForMe) continue;
     try {
