@@ -241,6 +241,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
     selfKv: node.kv,
+    agent: profile.courierDid,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,
     peerHooks: (peer) => peerHooks(node, loadProfile(), peer),

@@ -30,7 +30,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
-import { collectThread, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
+import { collectThread, diskThreadCache, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
@@ -684,13 +684,16 @@ export type { ThreadEntry } from './thread.js';
 export async function cmdRead(args: ParsedArgs) {
   const { profile, node } = await ctx(true, args.get('peer'));
   const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
+  const cache = diskThreadCache(threadId);
   const result = await collectThread({
     threadId,
     selfKv: node.kv,
     peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
     exactPeer: Boolean(args.get('peer')),
     kvFor: (peer) => peerKv(node, profile, peer),
+    cache,
   });
+  cache.save();
   if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
   if (args.has('json')) {
     await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');

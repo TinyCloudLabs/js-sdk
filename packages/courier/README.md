@@ -221,28 +221,40 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   `--poll` cycle lists again only a peer (or approvals) whose last sync did not
   finish. A subscription that is refused (for example an expired delegation)
   backs off and the poll keeps delivering.
-- **Authority.** Every `--poll` seconds, separately from the catch-up, the
-  watcher checks each peer's renewal and authority on the node; before it
-  imports anything from a peer whose last check is older than that, it checks
-  again. A peer's renewal marker is read on that schedule, on a hook event for
-  the marker, and before a refusal is treated as final.
+- **Authority.** Every 5 minutes, separately from the catch-up, the watcher
+  checks each peer's renewal and authority on the node, so detecting an idle
+  revocation and cleaning up sibling grants takes up to 5 minutes; the node
+  itself refuses revoked grants at once. Before it imports anything from a peer
+  whose last check is older than `--poll`, it checks again. A hook event for a
+  peer's renewal marker (`pairing/delegation.json`) reads the marker and checks
+  that peer at once. A refusal reads the marker and checks the peer at once,
+  and retries only under a different grant; otherwise the refusal is final.
+  The marker is also read on the 5-minute schedule.
 - **Deliver.** Each new message is copied create-only into
   `me/mirror/<peer>/threads/<id>/msg/`, the peer's `meta.json` and tasks are
   copied next to it (`task/` is overwritten until the task is terminal), and
   the receipts file is updated. The view reads only this mirror.
 - **Wake.** After `--debounce` seconds (default 30, never later than twice that
   after the first message) the thread gets one wake carrying all its new
-  messages. `inform` messages never wake. Pending wakes live in
-  `me/state/watch.json`, so a restart does not lose them.
+  messages. `inform` messages never wake. Pending wakes live in the agent's
+  own `watch.json` (see below), so a restart does not lose them.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
 adapter start), `woke` with `runMs`, errors). `--once` does a single catch-up pass,
-wakes immediately and exits. Run one watcher per profile.
+wakes immediately and exits. Run one watcher per Courier agent.
+
+Each Courier agent keeps its watcher state under its own key,
+`me/state/agents/<its did:key id>/` (`watch.json`, `paused/`, `wake-claims/`),
+so two agents of one owner can share the space and run their watchers at the
+same time. On an agent's first start with this version, the watcher copies the
+old shared `me/state/` records that concern its own peers into its keys
+(create-only, so the copy is safe to repeat) and leaves the shared records in
+place.
 
 Wake claims keep a second watcher from waking what the first is waking. Before
 an adapter runs, the watcher takes a create-only claim
-(`me/state/wake-claims/<peer>/<thread>/<first message>.json`) naming itself:
+(`me/state/agents/<agent>/wake-claims/<peer>/<thread>/<first message>.json`) naming itself:
 a profile id kept in `<COURIER_HOME>/watcher-id` (created once, machine-local:
 never copy or sync a `COURIER_HOME` between machines, or two watchers would
 share an id), a run id and its pid.
@@ -260,9 +272,15 @@ share an id), a run id and its pid.
   minutes) across all the processes a wake starts (`paseo ls` then `send`,
   claude's retry without `--resume`), so a wake always ends before its claim
   can be taken over.
-- The state file (`me/state/watch.json`) is written with if-match. A second
-  watcher that writes it with a stale etag stops with `state-conflict` (exit 1)
-  and releases any claim it had taken.
+- The agent's `watch.json` is written with if-match. A second watcher of the
+  same agent that writes it with a stale etag stops subscribing, waking and
+  writing, releases any claim it had taken and logs `standby` once. It does not
+  exit, because a service manager with `Restart=always` would restart it into a
+  full catch-up each time. It reads `watch.json` once per window (5 minutes,
+  doubling to 30) and takes over, with one catch-up, only after a whole window
+  in which the other watcher wrote nothing. Meanwhile the other watcher, which
+  belongs to the same agent, keeps that agent's messages watched. `--once`
+  still exits with `state-conflict` (exit 1).
 
 Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).
@@ -270,6 +288,11 @@ When a subscription is re-opened the watcher also runs a catch-up sync two
 seconds later (the SDK's hook stream exposes no "connected" signal, only
 events); the SDK's own ticket renewals are invisible to it, and the 5-minute
 catch-up covers those gaps.
+
+`courier read` keeps the messages and thread meta it has read (both are
+create-only) in `<COURIER_HOME>/read-cache/<thread>.json` (owner-only). Reading
+the thread again lists both sides and fetches only new entries and the tasks,
+which can change. A missing or unreadable cache file is rebuilt.
 
 ### Wake adapters
 
@@ -450,7 +473,7 @@ loop) neither counts nor is ever blocked.
 When a thread has used its budget, the next message that would wake it pauses it
 instead:
 
-1. a marker is written at `me/state/paused/<peer>/<thread>.json` (so the pause
+1. a marker is written at `me/state/agents/<agent>/paused/<peer>/<thread>.json` (so the pause
    survives restarts and is visible to the view and to `courier resume`);
 2. an `inform` "thread paused" message goes to the peer (machine-readable
    `notice: "thread-paused"`; it never wakes the peer's agent);
@@ -814,6 +837,10 @@ It does not send anything, and it does not change the watcher.
 courier intake --once --queue-dir <dir> --state-dir <dir> --peers-file <file>
 courier intake --interval 60 --queue-dir <dir> --state-dir <dir> --peers-file <file>
 ```
+
+`--interval` (default 60 s) is how often an active intake reads. A cycle that
+queues nothing doubles the wait, up to 5 minutes (or the interval, if that is
+longer); the first cycle that queues something returns to the interval.
 
 Defaults for `--queue-dir`, `--state-dir` and `--peers-file` are under
 `<COURIER_HOME>/intake/`. Only peers with status `paired` are read. `intake.lock` in the state directory allows one

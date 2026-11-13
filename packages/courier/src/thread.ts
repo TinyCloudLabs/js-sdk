@@ -1,8 +1,47 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { messageView, oneLine, taskView } from './a2a.js';
 import type { KV } from './inbox.js';
 import { k, PREFIX } from './keys.js';
-import type { StoredPeer } from './profile.js';
+import { profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
 import { getJson, listAll } from './store.js';
+
+const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
+const MAX_CACHE_BYTES = 32 * 1024 * 1024;
+
+/** Bodies of create-only thread entries (messages and meta) already read, by side, peer and key. */
+export interface ThreadCache {
+  get(id: string): unknown;
+  set(id: string, body: unknown): void;
+}
+
+/**
+ * `courier read`'s private cache of one thread (`<COURIER_HOME>/read-cache/<thread>.json`, owner-only): messages and meta
+ * are create-only, so a repeated read fetches only entries it has not read yet. Tasks change and are always fetched.
+ * A missing, foreign or corrupt file is an empty cache.
+ */
+export function diskThreadCache(threadId: string): ThreadCache & { save(): void } {
+  const dir = path.join(profileDir(), 'read-cache');
+  const file = path.join(dir, `${threadId}.json`);
+  let entries: Record<string, unknown> = {};
+  if (SAFE_ID.test(threadId)) {
+    try {
+      const parsed: unknown = JSON.parse(readRegularFile(file) ?? '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries = parsed as Record<string, unknown>;
+    } catch { /* an unreadable cache is rebuilt */ }
+  }
+  let changed = false;
+  return {
+    get: (id) => Object.hasOwn(entries, id) ? entries[id] : undefined,
+    set: (id, body) => { entries[id] = body; changed = true; },
+    save() {
+      if (!changed || !SAFE_ID.test(threadId) || JSON.stringify(entries).length > MAX_CACHE_BYTES) return;
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      if (!fs.lstatSync(dir).isDirectory()) return;
+      writeSecure(file, entries);
+    },
+  };
+}
 
 export interface ThreadEntry {
   peer?: string;
@@ -37,6 +76,7 @@ export async function collectThread(input: {
   peers: StoredPeer[];
   exactPeer?: boolean;
   kvFor(peer: StoredPeer): Promise<KV>;
+  cache?: ThreadCache;
 }): Promise<{ entries: ThreadEntry[]; errors: PeerReadError[]; partial: boolean }> {
   const { threadId, selfKv } = input;
   const entries: ThreadEntry[] = [];
@@ -66,8 +106,11 @@ export async function collectThread(input: {
         : /\/msg\/[^/]+\.json$/.test(key) ? 'msg'
         : /\/task\/[^/]+\.json$/.test(key) ? 'task' : undefined;
       if (!kind) continue;
-      const got = await getJson(kv, key);
+      const cacheId = kind === 'task' ? undefined : `${side}:${peer}:${key}`;
+      const cached = cacheId === undefined ? undefined : input.cache?.get(cacheId);
+      const got = cached !== undefined ? { value: cached } : await getJson(kv, key);
       if (!got) continue;
+      if (cacheId !== undefined && cached === undefined) input.cache?.set(cacheId, got.value);
       const id = kind === 'meta' ? threadId : key.slice(key.lastIndexOf('/') + 1, -5);
       const invalid = kind === 'msg' ? messageView(got.value).invalid : kind === 'task' ? taskView(got.value).invalid : [];
       entries.push({ peer, kind, id, side, authority: side === 'me' ? 'self' : 'counterparty', body: got.value,

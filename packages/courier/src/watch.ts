@@ -3,7 +3,7 @@ import { defer } from './defer.js';
 import { decodeTime, ulid } from 'ulid';
 import type { HookSubscription } from '@tinycloud/node-sdk';
 import { errInfo, CourierError } from './errors.js';
-import { k, PREFIX } from './keys.js';
+import { k, PREFIX, stateKeys, type StateKeys } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
@@ -24,6 +24,11 @@ const WAKE_RETRY_MS = 60_000;
 const RECONNECT_CATCH_UP_MS = 2000;
 /** Spec §8: while every hook subscription is healthy, the full catch-up listing runs this often (otherwise every `pollMs`). */
 const HEALTHY_RECONCILE_MS = 300_000;
+/** The scheduled renewal and authority check (TC-2917): idle revocation detection and sibling cleanup take up to this. */
+const AUTHORITY_CHECK_MS = 300_000;
+/** A same-agent state conflict: first standby window, doubling to the cap. */
+const CONFLICT_STANDBY_MS = 300_000;
+const CONFLICT_STANDBY_MAX_MS = 1_800_000;
 /** Spec §7: an approval expires after 24 hours; an older one found at startup wakes nobody. */
 const APPROVAL_MAX_AGE_MS = 24 * 3600 * 1000;
 /** Adapter runs are capped at 30 min in total (`--wake-timeout`, one deadline across all its calls). This profile's own claim is respected 35 min unless its holder is provably gone; another profile's or machine's, 45. */
@@ -187,6 +192,11 @@ export interface WatchDeps {
   checkAuthority?(handle?: string): Promise<void>;
   onAuthorityRefusal?(source: string): Promise<void>;
   selfKv: KV;
+  /**
+   * This side's Courier agent DID. Its watch state, pause markers and wake claims live under its own keys
+   * (`stateKeys`), so two agents of one owner in one space never share them. Omitted: the shared `me/state/` keys.
+   */
+  agent?: string;
   /** Own space id, for the `me/approvals/` subscription. */
   spaceId: string;
   /** The owner's own space. */
@@ -264,7 +274,7 @@ export class Watcher {
   private readonly retryAt = new Map<string, number>();
   private readonly waking = new Set<string>();
   private approvalsRunning = false;
-  /** Thread keys currently paused: markers under me/state/paused/ plus those this watcher just wrote. */
+  /** Thread keys currently paused: this agent's pause markers plus those this watcher just wrote. */
   private pausedKeys = new Set<string>();
   /** Serialises everything that reads or writes pause markers, so a stale listing cannot drop a pause just written. */
   private pausedLock: Promise<unknown> = Promise.resolve();
@@ -281,7 +291,7 @@ export class Watcher {
   /** Set once `run` is told to stop: nothing new is woken after that. */
   private stopping = false;
   private onFatal: (() => void) | undefined;
-  /** Etag of me/state/watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
+  /** Etag of this agent's watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   private readonly metaMirrored = new Set<string>();
@@ -291,24 +301,64 @@ export class Watcher {
   private approvalsDirty = false;
   /** Peers whose next sync also reads their renewal marker. */
   private readonly renewalDue = new Set<string>();
+  /** Peers whose delegation changed (a marker hook event): their next sync checks authority before anything else. */
+  private readonly authorityDue = new Set<string>();
   /** When each peer's authority was last checked against the node. */
   private readonly authorityAt = new Map<string, number>();
   /** Open hook streams by subscription id; absent while one is failed, ended or not yet opened. */
   private readonly hookStreams = new Map<string, { openedAt: number; proven: boolean }>();
+  /** Message keys each peer's receipts already list; receipts only grow, so a listing within this set has nothing new. */
+  private readonly receipted = new Map<string, Set<string>>();
   private stateQueue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
+  private readonly keys: StateKeys;
 
   constructor(private readonly deps: WatchDeps, private readonly opts: WatchOptions = WATCH_DEFAULTS) {
     this.now = deps.now ?? Date.now;
     this.profileId = deps.holder?.profileId ?? this.runId;
     this.pid = deps.holder?.pid ?? process.pid;
     this.isAlive = deps.holder?.isAlive ?? pidAlive;
+    this.keys = stateKeys(deps.agent);
+  }
+
+  /**
+   * Before TC-2917 every agent of the owner shared `me/state/`. On an agent's first start its own keys get a copy of
+   * what concerns its own peers: pause markers first, then watch.json, whose existence marks the move done. Every
+   * write is create-only, so a crash or a second process repeats it harmlessly; the shared keys are left in place.
+   */
+  private async migrateLegacyState(): Promise<void> {
+    const { selfKv, log } = this.deps;
+    if (!this.deps.agent || await getJson(selfKv, this.keys.watch)) return;
+    const mine = new Set(this.deps.loadPeers().map(peer => peer.handle));
+    const ownKey = (key: string) => mine.has(key.split('/')[0]);
+    let markers = 0;
+    for (const key of await listAll(selfKv, k.pausedPrefix)) {
+      const match = /\/paused\/([^/]+)\/([^/]+)\.json$/.exec(key);
+      if (!match || !SAFE_ID.test(match[1]) || !SAFE_ID.test(match[2]) || !mine.has(match[1])) continue;
+      const marker = await getJson<unknown>(selfKv, key);
+      if (!marker) continue;
+      await this.mirrorCreate(this.keys.paused(match[1], match[2]), marker.value);
+      markers++;
+    }
+    const legacy = (await getJson<WatchState>(selfKv, k.watchState))?.value;
+    const state: WatchState = isRecord(legacy) && legacy.v === 1 ? { ...emptyWatchState(), ...(legacy as Partial<WatchState>) } : emptyWatchState();
+    const byThread = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record ?? {}).filter(([key]) => ownKey(key)));
+    const byPeer = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record ?? {}).filter(([peer]) => mine.has(peer)));
+    const copy: WatchState = {
+      ...state,
+      pending: byThread(state.pending), wakes: byThread(state.wakes), wakeRetries: byThread(state.wakeRetries),
+      approvalRetries: byThread(state.approvalRetries), held: byThread(state.held), threadNotices: byThread(state.threadNotices),
+      paused: (state.paused ?? []).filter(ownKey), peerNotices: byPeer(state.peerNotices), noticeLog: byPeer(state.noticeLog),
+      outbox: (state.outbox ?? []).filter(item => mine.has(item.kind === 'inform' ? item.peer : item.notice.peer)),
+    };
+    await this.mirrorCreate(this.keys.watch, copy);
+    log('state-migrated', { pending: Object.keys(copy.pending).length, paused: markers });
   }
 
   // ---------- state ----------
 
   async loadState(): Promise<void> {
-    const got = await getJson<WatchState>(this.deps.selfKv, k.watchState);
+    const got = await getJson<WatchState>(this.deps.selfKv, this.keys.watch);
     const value = got?.value;
     this.stateEtag = got?.etag ?? null;
     this.state = isRecord(value) && value.v === 1
@@ -373,22 +423,22 @@ export class Watcher {
 
   /**
    * Serialised: callers mutate `this.state` inside `fn`, then it is written with if-match against the etag this
-   * watcher last saw. A second `watch` on the same profile therefore fails with `state-conflict` instead of
+   * watcher last saw. A second `watch` for the same agent therefore fails with `state-conflict` instead of
    * silently overwriting (last writer wins) the other's pending wakes.
    */
   private mutate<T>(fn: () => T): Promise<T> {
     const run = this.stateQueue.then(async () => {
       const result = fn();
       const { selfKv } = this.deps;
-      if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, k.watchState))?.etag ?? null;
+      if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, this.keys.watch))?.etag ?? null;
       try {
         const written = this.stateEtag
-          ? await putMatch(selfKv, k.watchState, this.state, this.stateEtag)
-          : await putCreate(selfKv, k.watchState, this.state);
+          ? await putMatch(selfKv, this.keys.watch, this.state, this.stateEtag)
+          : await putCreate(selfKv, this.keys.watch, this.state);
         this.stateEtag = written ?? undefined;
       } catch (error) {
         if (error instanceof CourierError && error.code === 'conflict') {
-          throw this.stateConflict('me/state/watch.json was changed by another process; a second `watch` is running for this profile. This watcher is stopping.');
+          throw this.stateConflict('watch.json was changed by another process: a second `watch` is running for this Courier agent.');
         }
         throw error;
       }
@@ -419,7 +469,7 @@ export class Watcher {
    */
   private async claimWake(peer: string, threadId: string, firstId: string): Promise<boolean> {
     const { selfKv, log } = this.deps;
-    const key = k.wakeClaim(peer, threadId, firstId);
+    const key = this.keys.wakeClaim(peer, threadId, firstId);
     const claim = { v: 1, profile: this.profileId, run: this.runId, pid: this.pid, at: new Date(this.now()).toISOString() };
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -462,7 +512,7 @@ export class Watcher {
 
   /** Drops this run's own claim (best effort): a failed wake must not keep the thread from being woken. */
   private async releaseClaim(peer: string, threadId: string, firstId: string): Promise<void> {
-    const key = k.wakeClaim(peer, threadId, firstId);
+    const key = this.keys.wakeClaim(peer, threadId, firstId);
     try {
       const existing = await getJson<{ run?: unknown }>(this.deps.selfKv, key);
       if (existing?.value.run === this.runId) await del(this.deps.selfKv, key);
@@ -474,7 +524,7 @@ export class Watcher {
   /** Claim markers are only needed while a double wake is possible; drop those older than two days. */
   private async pruneClaims(): Promise<void> {
     try {
-      for (const key of await listAll(this.deps.selfKv, k.wakeClaimsPrefix)) {
+      for (const key of await listAll(this.deps.selfKv, this.keys.wakeClaimsPrefix)) {
         const id = /\/([^/]+)\.json$/.exec(key)?.[1];
         const sentAt = id ? Date.parse(sentAtOf(id)) : NaN;
         if (Number.isFinite(sentAt) && this.now() - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
@@ -499,25 +549,36 @@ export class Watcher {
     }
     const entry = { again: false, via, listPaused: !pausedListed };
     this.syncing.set(peer.handle, entry);
-    let renewAfterRefusal = false;
     try {
       do {
         entry.again = false;
         const listPaused = entry.listPaused;
         entry.listPaused = false;
-        const renew = renewAfterRefusal || this.renewalDue.has(peer.handle);
+        const renew = this.renewalDue.has(peer.handle);
         this.dirtyPeers.delete(peer.handle);
         try {
           await this.syncPeer(peer, entry.via, listPaused, renew);
         } catch (error) {
-          if (isAuthorizationRefusal(error)) {
-            // The peer may have renewed: a refusal is final only once its latest renewal marker has been read.
-            if (!renew) { renewAfterRefusal = entry.again = true; continue; }
+          if (!isAuthorizationRefusal(error)) {
+            this.dirtyPeers.add(peer.handle);
+            this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
+            continue;
+          }
+          let renewed: StoredPeer | undefined;
+          try {
+            renewed = await this.afterRefusal(peer, renew);
+          } catch (failure) {
+            // Neither renewed nor refused for certain: retried by the next cycle, nothing recorded.
+            this.dirtyPeers.add(peer.handle);
+            this.deps.log('sync-error', { peer: peer.handle, ...errInfo(failure) });
+            continue;
+          }
+          if (!renewed) {
             await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`);
             return;
           }
-          this.dirtyPeers.add(peer.handle);
-          this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
+          peer = renewed;
+          entry.again = true;
         }
       } while (entry.again);
     } finally {
@@ -525,14 +586,37 @@ export class Watcher {
     }
   }
 
+  /**
+   * A refusal may mean the peer moved to a new grant or revoked ours. Re-read its renewal marker (unless this sync just
+   * did) and check its authority at once. Returns the peer to retry only under a different grant, never the refused one.
+   */
+  private async afterRefusal(peer: StoredPeer, markerRead: boolean): Promise<StoredPeer | undefined> {
+    const refused = peer.inbound?.cid;
+    try {
+      if (!markerRead) {
+        await this.deps.kvFor(peer, true);
+        this.renewalDue.delete(peer.handle);
+      }
+      await this.checkPeerAuthority(peer.handle);
+    } catch (error) {
+      if (isAuthorizationRefusal(error)) return undefined;
+      throw error;
+    }
+    const current = this.deps.loadPeers().find(candidate => candidate.handle === peer.handle);
+    return current?.inbound && current.inbound.cid !== refused ? current : undefined;
+  }
+
+  private async checkPeerAuthority(handle: string): Promise<void> {
+    if (!this.deps.checkAuthority) return;
+    const at = this.now();
+    await this.deps.checkAuthority(handle);
+    this.authorityAt.set(handle, at);
+  }
+
   /** What a peer sent is imported only under authority checked within the last `pollMs`; false once the peer is gone. */
   private async authorized(peer: StoredPeer): Promise<boolean> {
     if (!this.deps.checkAuthority) return true;
-    const at = this.now();
-    if (!(at - (this.authorityAt.get(peer.handle) ?? -Infinity) < this.opts.pollMs)) {
-      await this.deps.checkAuthority(peer.handle);
-      this.authorityAt.set(peer.handle, at);
-    }
+    if (!(this.now() - (this.authorityAt.get(peer.handle) ?? -Infinity) < this.opts.pollMs)) await this.checkPeerAuthority(peer.handle);
     return this.deps.loadPeers().some(current => current.handle === peer.handle);
   }
 
@@ -553,18 +637,29 @@ export class Watcher {
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer, renew);
     if (renew) this.renewalDue.delete(peer.handle);
+    if (this.authorityDue.delete(peer.handle)) {
+      try { await this.checkPeerAuthority(peer.handle); } catch (error) { this.authorityDue.add(peer.handle); throw error; }
+    }
     let allowed: Promise<boolean> | undefined;
     const authorized = () => allowed ??= this.authorized(peer);
     // Pause markers are read with every listing (a cycle lists them once for all its peers just before), so a
     // `courier resume` or `courier pause` takes effect on the very next message instead of at the next poll (a
     // message delivered while the watcher still thought the thread was paused would never wake anyone).
     const prefix = peer.sessionId ? `${k.threadRoot(mailbox, peer.sessionId)}/` : `${PREFIX}/to/${mailbox}/threads/`;
-    const [keys] = await Promise.all([listAll(peerKv, prefix), listPaused ? this.syncPaused() : undefined, this.syncKnownThreads(peer)]);
-    const receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
-    receipts.threads ??= {};
+    const [keys] = await Promise.all([listAll(peerKv, prefix), listPaused ? this.syncPaused() : undefined]);
+    // Receipts are read only when the listing holds a message they were not already known to cover.
+    const seen = this.receipted.get(peer.handle) ?? new Set<string>();
+    const unseen = selectUndelivered(keys, { v: 1, threads: {} }).filter(item => !seen.has(`${item.threadId}/${item.messageId}`));
+    let receipts: Receipts = { v: 1, threads: {} };
+    if (unseen.length) {
+      receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? receipts;
+      receipts.threads ??= {};
+      for (const [threadId, thread] of Object.entries(receipts.threads)) for (const id of thread.delivered ?? []) seen.add(`${threadId}/${id}`);
+      this.receipted.set(peer.handle, seen);
+    }
 
     const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
-    for (const selected of selectUndelivered(keys, receipts)) {
+    for (const selected of unseen.filter(item => !seen.has(`${item.threadId}/${item.messageId}`))) {
       if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
         log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
         continue;
@@ -603,6 +698,10 @@ export class Watcher {
         ...(this.pausedKeys.has(`${peer.handle}/${item.threadId}`) ? { paused: true } : {}),
         sentAt, latencyMs: sentAt ? at - Date.parse(sentAt) : null,
       });
+    }
+    // Only our local listing establishes a known thread, and only a peer's pause notice needs one.
+    if (delivered.some(item => item.intent === 'inform' && (item.notice === 'thread-paused' || item.notice === 'thread-resumed'))) {
+      await this.syncKnownThreads(peer);
     }
     await this.mutate(() => {
       if (this.deps.notifyOnly) {
@@ -644,6 +743,7 @@ export class Watcher {
       this.fillOutbox();
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
+    for (const item of delivered) seen.add(`${item.threadId}/${item.messageId}`);
     await this.mirrorThreads(peer, peerKv, keys, authorized);
   }
 
@@ -949,7 +1049,7 @@ export class Watcher {
     const at = new Date(this.now()).toISOString();
     const pauseId = await nextNoticeId(this.deps.selfKv, pending.peer, pending.threadId, this.now());
     const wrote = await this.exclusive(async () => {
-      const created = await writePauseMarker(this.deps.selfKv, { v: 1, peer: pending.peer, threadId: pending.threadId, by: 'budget', at, reason, informId: pauseId });
+      const created = await writePauseMarker(this.deps.selfKv, { v: 1, peer: pending.peer, threadId: pending.threadId, by: 'budget', at, reason, informId: pauseId }, this.keys.paused(pending.peer, pending.threadId));
       this.pausedKeys.add(key);
       return created;
     });
@@ -1170,13 +1270,13 @@ export class Watcher {
   }
 
   /**
-   * Markers under me/state/paused/ are the truth. A marker that disappeared means the human resumed: the budget starts
+   * This agent's pause markers are the truth. A marker that disappeared means the human resumed: the budget starts
    * over and what arrived meanwhile wakes the agent once. Serialised, so overlapping calls never apply a stale listing.
    */
   syncPaused(): Promise<void> {
     return this.exclusive(async () => {
       try {
-        const keys = await listAll(this.deps.selfKv, k.pausedPrefix);
+        const keys = await listAll(this.deps.selfKv, this.keys.pausedPrefix);
         const listed = new Set<string>();
         for (const key of keys) {
           const match = /\/paused\/([^/]+)\/([^/]+)\.json$/.exec(key);
@@ -1368,14 +1468,50 @@ export class Watcher {
   }
 
   /**
-   * Runs until `signal` aborts. With `once`, does one catch-up and wakes everything immediately. Throws
-   * `state-conflict` (after stopping everything) if another watcher is writing this profile's state.
+   * Runs until `signal` aborts. With `once`, does one catch-up and wakes everything immediately, and throws
+   * `state-conflict` (after stopping everything) if another watcher is writing this agent's state.
+   *
+   * Without `once` (a service, which systemd restarts whatever it exits with), a conflict never ends the process: the
+   * watcher stops subscribing, waking and writing, and stands by. It reads watch.json once per window (5 minutes,
+   * doubling to 30) and takes over, with one catch-up, only after a whole window in which the other writer wrote nothing.
+   * The other watcher is the same agent's, so its messages stay watched meanwhile.
    */
   async run(external: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
+    if (options.once) return this.session(external, options);
+    const { log, selfKv } = this.deps;
+    let windowMs = CONFLICT_STANDBY_MS;
+    for (;;) {
+      const started = this.now();
+      try {
+        return await this.session(external, options);
+      } catch (error) {
+        if (!(error instanceof CourierError && error.code === 'state-conflict') || external.aborted) throw error;
+      }
+      if (this.now() - started >= CONFLICT_STANDBY_MAX_MS) windowMs = CONFLICT_STANDBY_MS;
+      log('standby', {
+        reason: 'state-conflict', retryInMs: windowMs,
+        message: `Another \`watch\` is writing this Courier agent's watch.json. This watcher has stopped waking and checks again in ${Math.round(windowMs / 60_000)} min; stop one of the two.`,
+      });
+      let seen = (await getJson(selfKv, this.keys.watch).catch(() => undefined))?.etag;
+      for (;;) {
+        await sleep(windowMs, external);
+        if (external.aborted) return;
+        windowMs = Math.min(windowMs * 2, CONFLICT_STANDBY_MAX_MS);
+        const etag = (await getJson(selfKv, this.keys.watch).catch(() => undefined))?.etag;
+        if (etag === seen) break;
+        seen = etag;
+      }
+      log('standby-over', { reason: 'other-writer-quiet' });
+    }
+  }
+
+  private async session(external: AbortSignal, options: { once?: boolean }): Promise<void> {
     const { log } = this.deps;
     const stop = new AbortController();
     const signal = stop.signal;
     const onExternalAbort = () => stop.abort();
+    this.fatalError = undefined;
+    this.stopping = false;
     signal.addEventListener('abort', () => { this.stopping = true; }, { once: true });
     external.addEventListener('abort', onExternalAbort, { once: true });
     if (external.aborted) stop.abort();
@@ -1385,6 +1521,8 @@ export class Watcher {
     try {
       await this.deps.beforePoll?.();
       await this.checkAuthority();
+      let authorityAt = this.now();
+      await this.migrateLegacyState();
       await this.loadState();
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
       await this.pruneClaims();
@@ -1398,8 +1536,12 @@ export class Watcher {
             sub: { space: peer.spaceId, service: 'kv', pathPrefix: peer.sessionId ? k.threadRoot(peer.theirHandleForMe, peer.sessionId) : `${PREFIX}/to/${peer.theirHandleForMe}` },
             hooks: () => this.deps.peerHooks(peer),
             onEvent: (event) => {
-              // A peer renewing its delegation to us writes this marker; a path-less event may be it.
-              if (event && (event.path === undefined || event.path.endsWith('/pairing/delegation.json'))) this.renewalDue.add(peer.handle);
+              // A peer renewing or replacing its delegation to us writes this marker (a path-less event may be it):
+              // read the marker and check the peer's authority now, not at the next scheduled check.
+              if (event && (event.path === undefined || event.path.endsWith('/pairing/delegation.json'))) {
+                this.renewalDue.add(peer.handle);
+                this.authorityDue.add(peer.handle);
+              }
               void this.sync(peer, 'hook');
             },
           });
@@ -1437,7 +1579,10 @@ export class Watcher {
           await sleep(this.opts.pollMs, signal);
           if (signal.aborted) break;
           await this.deps.beforePoll?.();
-          await this.checkAuthority();
+          if (this.now() - authorityAt >= AUTHORITY_CHECK_MS) {
+            authorityAt = this.now();
+            await this.checkAuthority();
+          }
           reconcile();
           // Healthy hooks deliver at once, so the full listing is only the fallback for an event they missed.
           if (!this.hooksHealthy(supervisors.keys()) || this.now() - fullAt >= HEALTHY_RECONCILE_MS) {

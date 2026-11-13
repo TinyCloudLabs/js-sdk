@@ -119,7 +119,7 @@ function world({ handles = ['bob', 'carol'], authority = () => {}, renew = () =>
     loadPeers: () => peers.filter((peer) => eligible.has(peer.handle)),
     // The real peerKv reads the renewal marker unless told not to.
     kvFor: async (peer, again) => {
-      if (again !== false) { count('marker get'); renew(peer.handle, peerKvs.get(peer.handle)); }
+      if (again !== false) { count('marker get'); renew(peer, peerKvs.get(peer.handle)); }
       return peerKvs.get(peer.handle);
     },
     beforePoll: async () => count('owner preflight'),
@@ -167,7 +167,7 @@ async function start(w) {
   };
 }
 
-test('an idle hour with healthy hooks: full catch-up every 5 minutes, one shared pause listing, authority every minute', async (t) => {
+test('an idle hour with healthy hooks: one listing per peer every 5 minutes, one shared pause listing, authority every 5 minutes', async (t) => {
   const w = world();
   const stop = await start(w);
   try {
@@ -178,12 +178,12 @@ test('an idle hour with healthy hooks: full catch-up every 5 minutes, one shared
     for (const handle of ['bob', 'carol']) assert.equal(counts[`${handle} list threads`], 12, `${handle} is listed by the 5-minute fallback only`);
     assert.equal(counts['self list paused'], 12, 'one pause listing per catch-up, shared by both peers');
     assert.equal(counts['self list approvals'], 12);
-    assert.equal(counts['self list known'], 24);
-    assert.equal(counts['self get receipts'], 24);
-    assert.equal(counts['marker get'], 24, 'renewal markers are read once per catch-up, not every minute');
-    assert.equal(counts['authority all'], 60, 'the renewal and authority check keeps its one-minute schedule');
+    assert.equal(counts['self list known'], undefined, 'known threads are listed only for a peer pause notice');
+    assert.equal(counts['self get receipts'], undefined, 'receipts are read only for a message they are not known to cover');
+    assert.equal(counts['marker get'], 24, 'renewal markers are read once per renewal check, not every minute');
+    assert.equal(counts['authority all'], 12, 'the renewal and authority check runs every 5 minutes');
     assert.equal(counts['authority one'], undefined);
-    assert.equal(counts['owner preflight'], 60);
+    assert.equal(counts['owner preflight'], 60, 'the local owner preflight still runs every minute');
     assert.equal(counts['self put'], undefined, 'an idle hour writes nothing');
   } finally { await stop(); }
 });
@@ -208,6 +208,8 @@ test('a hook event delivers at once, lists only that peer, and reads the renewal
     await flush();
     counts = w.take();
     assert.equal(counts['marker get'], 1, 'a renewal marker event reads the marker');
+    await advance(300_000); // the full catch-up at 302 s lists bob's delivered message again
+    assert.equal(w.take()['self get receipts'], undefined, 'receipts already known to cover it are not read again');
   } finally { await stop(); }
 });
 
@@ -277,21 +279,41 @@ test('a sync that did not finish leaves its peer dirty: the next minute lists on
   } finally { await stop(); }
 });
 
-test('a refusal is final only after the renewal marker was read; a renewed delegation keeps delivering', async () => {
+test('a refusal re-reads the renewal marker and checks authority at once; it retries only under a different grant', async () => {
   const revoked = world({ handles: ['bob'] });
   revoked.peerKvs.get('bob').refuse = 403;
   revoked.write('bob');
   await revoked.watcher.sync(revoked.peers[0], 'hook');
   assert.deepEqual(revoked.refusals, ['peer:bob']);
   assert.equal(revoked.counts['marker get'], 1, 'the marker is read before the refusal is recorded');
+  assert.equal(revoked.counts['authority one'], 1, 'and the peer is checked at once');
+  assert.equal(revoked.counts['bob list threads'], 1, 'the same grant is never tried again');
   assert.equal(revoked.counts['self put'], undefined, 'nothing from a refused peer is imported');
 
-  const renewed = world({ handles: ['bob'], renew: (_handle, kv) => { kv.refuse = undefined; } });
+  // peerKv adopts a newer delegation from the marker; the retry runs under it.
+  const renewed = world({ handles: ['bob'], renew: (peer, kv) => { kv.refuse = undefined; peer.inbound = { ...peer.inbound, cid: 'cid-bob-2' }; } });
   renewed.peerKvs.get('bob').refuse = 403;
   const sent = renewed.write('bob');
   await renewed.watcher.sync(renewed.peers[0], 'hook');
   assert.deepEqual(renewed.refusals, []);
   assert.ok(renewed.delivered(sent.id));
+  assert.equal(renewed.counts['bob list threads'], 2);
+});
+
+test('a delegation marker hook event checks that peer\'s authority at once, before its listing', async () => {
+  const w = world();
+  const stop = await start(w);
+  try {
+    w.take();
+    w.hub.open.bob.push({ path: `${PREFIX}/to/alice/pairing/delegation.json` });
+    await flush();
+    const counts = w.take();
+    assert.equal(counts['authority one'], 1);
+    assert.equal(counts['marker get'], 1);
+    w.hub.open.bob.push({ path: `${PREFIX}/to/alice/threads/T/msg/M.json` });
+    await flush();
+    assert.equal(w.take()['authority one'], undefined, 'a message event does not');
+  } finally { await stop(); }
 });
 
 test('a peer whose authority is revoked is checked before an import and nothing from it is imported', async () => {

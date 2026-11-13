@@ -1,4 +1,5 @@
 import type { PermissionEntry } from '@tinycloud/node-sdk';
+import { CourierError } from './errors.js';
 
 /** Courier KV layout and the single source of agent grant authority. */
 export const PREFIX = 'xyz.tinycloud.courier';
@@ -69,6 +70,35 @@ export const k = {
   ordersPrefix: `${PREFIX}/me/orders/`,
   mePrefix: `${PREFIX}/me/`,
 };
+
+/** The keys one watcher owns. */
+export interface StateKeys {
+  watch: string;
+  paused(peer: string, threadId: string): string;
+  pausedPrefix: string;
+  wakeClaim(peer: string, threadId: string, firstId: string): string;
+  wakeClaimsPrefix: string;
+}
+
+const DID_KEY = /^did:key:(z[1-9A-HJ-NP-Za-km-z]{1,128})$/;
+
+/**
+ * Watcher state of one Courier agent, under `me/state/agents/<its did:key id>/`: agents of one owner share the space,
+ * never one watcher state or pause marker. Without an agent: the shared `me/state/` keys used before TC-2917.
+ */
+export function stateKeys(agent?: string): StateKeys {
+  if (agent === undefined) return { watch: k.watchState, paused: k.paused, pausedPrefix: k.pausedPrefix, wakeClaim: k.wakeClaim, wakeClaimsPrefix: k.wakeClaimsPrefix };
+  const id = DID_KEY.exec(agent)?.[1];
+  if (!id) throw new CourierError('bad-profile', 'The Courier agent DID is not a did:key; its watcher state has no key.');
+  const root = `${PREFIX}/me/state/agents/${id}/`;
+  return {
+    watch: `${root}watch.json`,
+    paused: (peer, threadId) => `${root}paused/${peer}/${threadId}.json`,
+    pausedPrefix: `${root}paused/`,
+    wakeClaim: (peer, threadId, firstId) => `${root}wake-claims/${peer}/${threadId}/${firstId}.json`,
+    wakeClaimsPrefix: `${root}wake-claims/`,
+  };
+}
 
 /** Peer-read capability entries for `delegateTo`, spec §3/§5 and TC-708. */
 export function peerReadPermissions(peer: string, space: string, sessionId?: string): PermissionEntry[] {
