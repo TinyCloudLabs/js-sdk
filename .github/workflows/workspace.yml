@@ -85,6 +85,9 @@ jobs:
         run: bun run build
 
       - name: Lint every workspace package
+        env:
+          # turbo lint can exceed Node's default ~2 GB heap (TC-2952).
+          NODE_OPTIONS: --max-old-space-size=6144
         run: bun run lint
 
       - name: Verify manage-key reference clients
