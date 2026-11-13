@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { REGISTRY_NOT_FOUND_BODY, verifyLocationRecordV2 } from "@tinycloud/sdk-core";
 import { privateKeyToAccount } from "viem/accounts";
-import { startBrowserLocationRegistry } from "./location-registry";
+import { startBrowserLocationRegistry } from "./browser-location-registry";
 
 test("browser fixture accounts have signed routes after owner setup", async () => {
   const registry = startBrowserLocationRegistry();

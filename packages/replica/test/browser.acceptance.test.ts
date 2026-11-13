@@ -29,7 +29,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { startBrowserLocationRegistry, type BrowserLocationRegistry } from "./browser/location-registry";
+import { startBrowserLocationRegistry, type BrowserLocationRegistry } from "../../node-sdk/src/test-support/browser-location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const STRICT = process.env.TC858_ACCEPTANCE_STRICT === "1";
