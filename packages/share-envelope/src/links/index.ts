@@ -103,3 +103,5 @@ export {
   type DiscoverResult,
   type RelayKeyPair,
 } from "./approval-client.js";
+
+export { MAX_APPROVAL_LEASE_SECONDS, type ApprovalRenewal } from "./approval-renewal.js";

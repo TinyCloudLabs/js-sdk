@@ -57,3 +57,11 @@ C5: OpenKey durably binds one original grant and at most one owner lease to requ
 C6: owner can revoke the lease through dashboard/own-revoke; sign-out and account deletion policy must explicitly cover leases. Deployment prerequisite candidate TC-2874 must be confirmed to include this stop path, or a dedicated tracked issue must be named before deployment. This proposal does not claim that prerequisite is implemented.
 
 C7: persist grant plus leaseAuthorization together with existing secure profile/key protections and transaction binding. Never log leaseAuthorization, grant payloads, or keys. ACK only after durable verified installation.
+
+## Producer integration dependencies and consumer proof
+
+Bobbie approved names plus these constraints: consumer computes originalCid from the actual returned signed delegation bytes, verifies the lease target against that CID, enforces leaseExpiresAt <= approvedAt + approvedLeaseLifetimeSeconds <= approvedAt + one year and approved <= requested maximum. approvedAt is durable server time, sanity-checked against grant/lease expiry. Metadata codec acceptance is not signed-authority verification.
+
+OpenKey currently pins node-sdk/sdk-core2.11.0 and share-envelope1.4.1-beta.1. Pin the exact reviewed published SDK and codec releases on both sides; current installs do not supply this feature. SDK owner must identify/provide the owner-signing/admission primitive targeting the exact agent grant without the agent private JWK. createRenewalLease(Date) is session-bound; substituting an OpenKey session CID is forbidden.
+
+C5 stages on the existing request record: chosen mode, immutable server approvedAt, original signed bytes/CID, lease signed bytes/CID, admission and final result progress. Crash replay reuses identical bytes, nonce, timestamps and CIDs; the short approval claim alone is insufficient. No independent journal or poller. External-wallet decline/failure at signature two returns no half-pair or silent finite result; finite requires explicit consent. C6 coverage must be assigned to an actual scoped issue before deploy, not assumed from TC-2874's title. Producer implementation follows OpenKey496/497 deployment.

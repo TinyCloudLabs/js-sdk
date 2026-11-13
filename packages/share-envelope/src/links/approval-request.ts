@@ -1,3 +1,4 @@
+import { approvalRenewalRequestSchema } from "./approval-renewal.js";
 import { p256 } from "@noble/curves/p256";
 import { z } from "zod";
 import { didKeyFromEd25519PublicKey } from "../didkey.js";
@@ -48,6 +49,7 @@ const requestSchema = z.object({
   permissions: z.array(permission), reason: z.string().optional(),
   grantLifetimeSeconds: z.number().int().positive(), resultEncryptionPublicJwk: p256Jwk,
   context: invitationContext.optional(),
+  renewal: approvalRenewalRequestSchema.optional(),
   /**
    * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
    * maximum; it has no upper bound of its own, and the approver may still choose less.
