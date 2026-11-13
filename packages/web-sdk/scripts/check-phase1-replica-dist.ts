@@ -46,7 +46,11 @@ import { validateTc2657RegistryPublicationTransition } from "./replica-size-poli
 import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
 import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
 import { validateTc2234InvitationPolicyRootTransition, validateTc2773LazyRestoreRootTransition } from "./replica-size-policy";
-import { validateTc2872RenewalRootTransition } from "./replica-size-policy";
+import {
+  validateTc2872RenewalKvWorkerTransition,
+  validateTc2872RenewalReplicaWorkerTransition,
+  validateTc2872RenewalRootTransition,
+} from "./replica-size-policy";
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
@@ -673,6 +677,20 @@ if (prBaseSha) {
   if (renewalRoot !== undefined && baseLedger.tc2872RenewalRoot === undefined &&
       (baseLedger.tc2234InvitationPolicyRoot === undefined || !hasAncestor(repoRoot, renewalRoot.sourceCommits.at(-1)!))) {
     console.error("The TC-2872 root budget requires the merged TC-2234 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2872RenewalKvWorkerTransition(baseLedger.tc2872RenewalKvWorker, ledger.tc2872RenewalKvWorker);
+  const renewalKvWorker = ledger.tc2872RenewalKvWorker;
+  if (renewalKvWorker !== undefined && baseLedger.tc2872RenewalKvWorker === undefined &&
+      (ledger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, renewalKvWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 kv-storage worker budget requires the renewal root row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2872RenewalReplicaWorkerTransition(baseLedger.tc2872RenewalReplicaWorker, ledger.tc2872RenewalReplicaWorker);
+  const renewalReplicaWorker = ledger.tc2872RenewalReplicaWorker;
+  if (renewalReplicaWorker !== undefined && baseLedger.tc2872RenewalReplicaWorker === undefined &&
+      (renewalKvWorker === undefined || !hasAncestor(repoRoot, renewalReplicaWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 replica worker budget requires the kv-storage worker row and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
