@@ -177,10 +177,10 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === undefined ? "" : `--profile ${profileName} `;
     // A local-key profile signs in again with its key. Any other profile gets
-    // the publishing scope through OpenKey device login.
+    // the publishing scope through an OpenKey approval link.
     const loginHint = localKey
       ? `\`${CLI_NAME} ${profileHint}auth login --method local\``
-      : `\`${CLI_NAME} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME} ${profileHint}enable share\`)`;
+      : `\`${CLI_NAME} ${profileHint}auth login --manifest builtin:share-publishing\` (or \`${CLI_NAME} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName === undefined ? "this session" : `profile ${profileName}'s session`;
       return new CLIError(

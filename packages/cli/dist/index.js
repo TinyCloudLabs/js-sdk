@@ -16456,6 +16456,7 @@ var init_scoped_login = __esm({
     init_caveat_refusal();
     init_refusal();
     init_named_keys();
+    init_publishing_manifest();
     CLOCK_SKEW_MS = 3e4;
     SIGNED_RECAP = "signed-recap";
     MIN_SIGNED_REMAINING_MS = 6e4;
@@ -35223,7 +35224,7 @@ function shareCliError(error, operation = "publish") {
     const profileName = "profileName" in failure ? failure.profileName : void 0;
     const localKey = "localKey" in failure && failure.localKey === true;
     const profileHint = profileName === void 0 ? "" : `--profile ${profileName} `;
-    const loginHint = localKey ? `\`${CLI_NAME12} ${profileHint}auth login --method local\`` : `\`${CLI_NAME12} ${profileHint}auth login --device --manifest builtin:share-publishing\` (or \`${CLI_NAME12} ${profileHint}enable share\`)`;
+    const loginHint = localKey ? `\`${CLI_NAME12} ${profileHint}auth login --method local\`` : `\`${CLI_NAME12} ${profileHint}auth login --manifest builtin:share-publishing\` (or \`${CLI_NAME12} ${profileHint}enable share\`)`;
     if (failure.kind === "caveated-session") {
       const holder = profileName === void 0 ? "this session" : `profile ${profileName}'s session`;
       return new CLIError(
