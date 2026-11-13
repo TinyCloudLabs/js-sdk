@@ -6,13 +6,14 @@ import { PROOF_PRIVATE_KEY } from "../../../node-sdk/src/test-support/signed-res
 export async function signedBrowserSession(
   expiresAt = new Date(Date.now() + 60 * 60_000).toISOString(),
   privateKey = PROOF_PRIVATE_KEY,
+  spaceName = "default",
 ): Promise<PersistedSessionData> {
   const signer = new PrivateKeySigner(privateKey);
   const wasm = new NodeWasmBindings();
   const manager = wasm.createSessionManager();
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
-  const spaceId = wasm.makeSpaceId(address, chainId, "default");
+  const spaceId = wasm.makeSpaceId(address, chainId, spaceName);
   const jwk = JSON.parse(manager.jwk("default")!);
   const prepared = wasm.prepareSession({
     address, chainId, spaceId, jwk, domain: "restore.test",
