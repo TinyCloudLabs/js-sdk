@@ -375,6 +375,7 @@ suite(
     // 1. /authorize-sign-prepare — real HTTP call, real response body.
     const prepRes = await harnessPost("/api/delegate/authorize-sign-prepare", {
       keyId,
+      requestOrigin: "https://example.com",
       siwe: preparation.prepared.siwe,
       jwk: publicJwk(preparation.prepared.jwk),
       host,
@@ -445,6 +446,7 @@ suite(
 
     const prepRes = await harnessPost("/api/delegate/authorize-sign-prepare", {
       keyId,
+      requestOrigin: "https://example.com",
       siwe: preparation.prepared.siwe,
       jwk: publicJwk(preparation.prepared.jwk),
       host,
