@@ -77,3 +77,20 @@ test('a task update is always shown; a corrupt or foreign cache file is ignored'
   assert.equal(rebuilt.result.entries.length, 6);
   assert.equal(rebuilt.get, 6);
 });
+
+test('a cached body is shown only for a key the current authorized listing returns, and only for the same peer identity', async () => {
+  const th = thread(4);
+  await th.read();
+  const refused = { list: async () => ({ ok: false, error: { status: 403, message: 'revoked' } }) };
+  const cache = diskThreadCache(th.threadId);
+  const revoked = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [peer], exactPeer: true, kvFor: async () => refused, cache });
+  assert.equal(revoked.entries.filter((entry) => entry.side === 'peer').length, 0, 'a refused listing shows nothing cached');
+  assert.equal(revoked.partial, true);
+
+  // The same handle re-paired to another agent: its same-named keys are fetched from it, never served from the old peer's cache.
+  const impostor = { ...peer, courierDid: 'did:key:zMallory', spaceId: 'space-mallory' };
+  const replaced = new Map([...th.theirs.rows].map(([key, body]) => [key, { ...body, parts: [{ kind: 'text', text: 'not bob' }] }]));
+  const theirs = { list: th.theirs.list, async get(key) { return { ok: true, data: { data: replaced.get(key), headers: { etag: 'e' } } }; } };
+  const other = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [impostor], exactPeer: true, kvFor: async () => theirs, cache });
+  for (const entry of other.entries.filter((e) => e.side === 'peer' && e.kind === 'msg')) assert.equal(entry.body.parts[0].text, 'not bob');
+});
