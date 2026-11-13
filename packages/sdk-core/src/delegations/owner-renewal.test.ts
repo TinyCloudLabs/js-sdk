@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { encodeDagCbor, parseSignedSiweCacao } from "./cacao";
-import { admitOwnerRenewalLease, OwnerRenewalOriginalExpiredError, type AdmitOwnerRenewalLeaseInput } from "./renewal";
+import { admitOwnerRenewalLease, OwnerRenewalOriginalExpiredError, RenewalLeaseExpiredError, RenewalAuthorityInactiveError, type AdmitOwnerRenewalLeaseInput } from "./renewal";
 import fixture from "../../test-fixtures/siwe-cacao/owner-share.json";
 
 const owner = privateKeyToAccount(`0x${fixture.ownerPrivateKey}`);
@@ -49,6 +49,11 @@ function nodeFetch(status = 200) {
 }
 
 describe("owner-direct renewal consumer API", () => {
+  test("exports distinct typed authority refusals from the lazy subpath", () => {
+    expect(new RenewalLeaseExpiredError().code).toBe("RENEWAL_LEASE_EXPIRED");
+    expect(new RenewalAuthorityInactiveError().code).toBe("RENEWAL_AUTHORITY_INACTIVE");
+    expect(new OwnerRenewalOriginalExpiredError().code).toBe("RENEWAL_LEASE_ORIGINAL_EXPIRED");
+  });
   test("exposes verified proof absence and admits/replays identical bytes with the same receipt, without keys", async () => {
     const data = await input();
     const parsed = await parseSignedSiweCacao(data.leaseAuthorization, data.leaseCid);

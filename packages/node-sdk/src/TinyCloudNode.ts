@@ -2612,6 +2612,7 @@ export class TinyCloudNode {
    * Node-reported expiry can only shorten the result; it never grants access.
    */
   async getRenewalEffectiveExpiry(leaseAuthorization: string): Promise<number> {
+    const { verifyRenewalHistory, RenewalLeaseExpiredError, RenewalAuthorityInactiveError } = await import("@tinycloud/sdk-core/delegations/renewal");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("A session is required to verify renewal authority");
     const original = await parseSignedSiweCacao(
@@ -2641,7 +2642,7 @@ export class TinyCloudNode {
     const leaseExpiresAt = Math.floor(Date.parse(lease.expiresAt) / 1000);
     const now = Math.floor(Date.now() / 1000);
     if (!Number.isSafeInteger(leaseExpiresAt) || leaseExpiresAt <= now) {
-      throw Object.assign(new Error("Renewal lease has expired"), { code: "RENEWAL_LEASE_EXPIRED" });
+      throw new RenewalLeaseExpiredError();
     }
     const statusResult = await this.getDelegationStatus(session.delegationCid);
     if (!statusResult.ok) throw statusResult.error;
@@ -2651,9 +2652,8 @@ export class TinyCloudNode {
       || status.effective_expiry === undefined || status.effective_expiry === null
       || !Number.isSafeInteger(status.effective_expiry)
     ) {
-      throw Object.assign(new Error("Node reports no active renewal authority"), { code: "RENEWAL_AUTHORITY_INACTIVE" });
+      throw new RenewalAuthorityInactiveError();
     }
-    const { verifyRenewalHistory } = await import("@tinycloud/sdk-core/delegations/renewal");
     const verified = verifyRenewalHistory({
       originalCid: session.delegationCid,
       leaseCid: lease.cid,
@@ -2689,7 +2689,8 @@ export class TinyCloudNode {
       const effectiveExpiry = await candidate.getRenewalEffectiveExpiry(leaseAuthorization);
       const effectiveExpiryDate = new Date(effectiveExpiry * 1000);
       if (!Number.isFinite(effectiveExpiryDate.getTime()) || effectiveExpiryDate.getTime() <= Date.now()) {
-        throw Object.assign(new InvalidRestoredSessionError("Node reports no live admitted renewal authority."), { code: "RENEWAL_AUTHORITY_INACTIVE" });
+        const { RenewalAuthorityInactiveError } = await import("@tinycloud/sdk-core/delegations/renewal");
+        throw new RenewalAuthorityInactiveError();
       }
       this.assertSessionEpoch(epoch, "Session renewal restore");
       await this.restoreSessionInternal(sessionData, { allowExpired: true, effectiveExpiry: effectiveExpiryDate });

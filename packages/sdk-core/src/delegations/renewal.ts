@@ -239,9 +239,11 @@ export interface OwnerRenewalLeaseFirstAdmissionReceipt {
   readonly nodeIdentity: RenewalNodeIdentity;
 }
 
+export const RENEWAL_LEASE_ORIGINAL_EXPIRED = "RENEWAL_LEASE_ORIGINAL_EXPIRED";
+
 /** The original expired before lease admission could complete. */
 export class OwnerRenewalOriginalExpiredError extends Error {
-  readonly code = "RENEWAL_LEASE_ORIGINAL_EXPIRED" as const;
+  readonly code = RENEWAL_LEASE_ORIGINAL_EXPIRED;
   constructor() {
     super("Original grant expired before renewal lease admission. Restore an already-admitted renewal if available; otherwise fresh owner approval is required.");
     this.name = "OwnerRenewalOriginalExpiredError";
@@ -321,4 +323,16 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
     leaseGeneration: 1,
     nodeIdentity: Object.freeze({ ...input.nodeIdentity }),
   });
+}
+
+/** Stable refusal codes; unavailable transport/status errors never use these. */
+export const RENEWAL_LEASE_EXPIRED = "RENEWAL_LEASE_EXPIRED";
+export const RENEWAL_AUTHORITY_INACTIVE = "RENEWAL_AUTHORITY_INACTIVE";
+export class RenewalLeaseExpiredError extends Error {
+  readonly code = RENEWAL_LEASE_EXPIRED;
+  constructor() { super("Renewal lease has expired"); this.name = "RenewalLeaseExpiredError"; }
+}
+export class RenewalAuthorityInactiveError extends Error {
+  readonly code = RENEWAL_AUTHORITY_INACTIVE;
+  constructor() { super("Node reports no active renewal authority"); this.name = "RenewalAuthorityInactiveError"; }
 }
