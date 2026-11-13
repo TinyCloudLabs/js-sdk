@@ -2548,7 +2548,7 @@ function defaultEntriesForTier(tier) {
     ...e.skipPrefix !== void 0 ? { skipPrefix: e.skipPrefix } : {}
   }));
 }
-function resolveManifest(input) {
+function resolveManifest(input, options = {}) {
   const manifest = validateManifest(input);
   const prefix = manifest.prefix !== void 0 ? manifest.prefix : manifest.app_id;
   const space = manifest.space ?? DEFAULT_MANIFEST_SPACE;
@@ -2563,9 +2563,8 @@ function resolveManifest(input) {
     ...explicitEntries,
     ...secretEntries
   ];
-  const resources = withCapabilitiesReadForSpaces(
-    allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space))
-  );
+  const entries = allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space));
+  const resources = options.includeImplicitCapabilitiesRead === false ? dedupeResources(entries) : withCapabilitiesReadForSpaces(entries);
   const additionalDelegates = manifest.did === void 0 ? [] : [
     {
       did: manifest.did,
@@ -18628,7 +18627,7 @@ var init_duration = __esm({
 });
 
 // src/lib/named-keys.ts
-import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { endToEndNodeHost, extractRecapAttenuations } from "@tinycloud/sdk-core";
 import {
   EncryptionResourceError,
   KEY_CREATE_ABILITY,
@@ -18662,7 +18661,7 @@ function keyPathInPrefix(prefix, path) {
 async function assertNodeSupportsNamedKeys(host, fetchImpl = fetch) {
   let info = null;
   try {
-    const response = await fetchImpl(`${host}/info`);
+    const response = await fetchImpl(`${endToEndNodeHost(host)}/info`, { redirect: "error" });
     if (response.ok) info = await response.json();
   } catch {
     info = null;

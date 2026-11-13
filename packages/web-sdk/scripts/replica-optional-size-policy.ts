@@ -38,6 +38,10 @@ export type OptionalLedger = {
   gatedOnlyRatchet?: GatedOnlyRatchet;
   fixRequired?: CompactFixRequired[];
   tc2481WebRouting?: OptionalWebRoutingRatchet;
+  tc2931?: OptionalTc2931Ratchet;
+};
+export type OptionalTc2931Ratchet = Pick<OptionalWebRoutingRatchet, "label" | "ruling" | "base" | "sourceCommits" | "canonicalCI" | "firstImport" | "reason"> & {
+  activation: { delta: Pick<LoadedSizes, "activation.mjs" | "activation.cjs">; ceiling: Pick<LoadedSizes, "activation.mjs" | "activation.cjs"> };
 };
 export const optionalFormats = ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const;
 export const relocationCommit = "2578c6a7624a3408b4584ed2331723694b8afb4b";
@@ -148,7 +152,7 @@ export const tc2481WebOptionalAllowance: LoadedSizes = {
   ...approvedTc2481WebRouting.firstImport.ceiling,
 };
 
-const tc2481OfflineOptionalAllowance: LoadedSizes = {
+export const tc2481OfflineOptionalAllowance: LoadedSizes = {
   ...tc2481WebOptionalAllowance,
   ...approvedTc2481OfflineReplicaTransport.firstImport.ceiling,
 };
@@ -176,13 +180,69 @@ export const approvedRelocations = [
   { commit: relocationCommit, bucket: "web-optional:first-import", "replica.mjs": 150, "replica.cjs": 170 },
 ];
 
+
+export const approvedTc2931Optional: OptionalTc2931Ratchet = {
+  "label": "first-party bootstrap scope optional admission (TC-2931)",
+  "ruling": "size-ruling: TC-2931: Naomi approves exact canonical first-import deltas up to +150 B each over the new base, and measured activation deltas. Details: TC-2931",
+  "base": "41daf1c4717e15d6f95564f7246030877221f24a",
+  "sourceCommits": [
+    "6c748d4959f46acb3ed8031fca182326fcd0e0a2"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206/job/131928463539"
+    ],
+    "before": {
+      "replica.mjs": 53125,
+      "replica.cjs": 68395,
+      "activation.mjs": 19145,
+      "activation.cjs": 20116
+    },
+    "after": {
+      "replica.mjs": 53241,
+      "replica.cjs": 68504,
+      "activation.mjs": 19146,
+      "activation.cjs": 20117
+    },
+    "delta": {
+      "replica.mjs": 116,
+      "replica.cjs": 109,
+      "activation.mjs": 1,
+      "activation.cjs": 1
+    }
+  },
+  "firstImport": {
+    "delta": {
+      "replica.mjs": 116,
+      "replica.cjs": 109
+    },
+    "ceiling": {
+      "replica.mjs": 53241,
+      "replica.cjs": 68504
+    }
+  },
+  "activation": {
+    "delta": {
+      "activation.mjs": 1,
+      "activation.cjs": 1
+    },
+    "ceiling": {
+      "activation.mjs": 23412,
+      "activation.cjs": 24981
+    }
+  },
+  "reason": "Canonical combined-head artifact bytes at the cited run. The prior TC-2936 canonical run43428324560/job131895190481 measured the recorded before values; the final checker also rebuilds the PR merge base and verifies every optional delta. Activation keeps its prior allowance. Earlier rows, mandatory direct checks and the fixed TC-2481 four-byte CJS baseline retirement remain intact. Details: TC-2931"
+};
+export const tc2931OptionalAllowance: LoadedSizes = { ...approvedTc2931Optional.firstImport.ceiling, ...approvedTc2931Optional.activation.ceiling };
+
 /** Validate the actual ledger before comparing its immutable prefix or built artifacts. */
 export function validateOptionalLedger(
-  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false, tc1432 = false, tc1475 = false, masterDrift = false, tc1789 = false, tc2043 = false, tc1888 = false, tc2096 = false, tc2096Lazy = false, tc2481Web = false, tc2481OfflineReplicaTransport?: Ledger["tc2481OfflineReplicaTransport"],
+  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false, tc1432 = false, tc1475 = false, masterDrift = false, tc1789 = false, tc2043 = false, tc1888 = false, tc2096 = false, tc2096Lazy = false, tc2481Web = false, tc2481OfflineReplicaTransport?: Ledger["tc2481OfflineReplicaTransport"], tc2931BootstrapScope?: Ledger["tc2931BootstrapScope"],
 ): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection" && key !== "gatedOnlyRatchet" && key !== "fixRequired" && key !== "tc2481WebRouting") ||
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "relocations" && key !== "measurementCorrection" && key !== "gatedOnlyRatchet" && key !== "fixRequired" && key !== "tc2481WebRouting" && key !== "tc2931") ||
       Object.keys(value.allowance).some((key) => !optionalFormats.includes(key as typeof optionalFormats[number])) ||
       optionalFormats.some((format) => !Number.isSafeInteger(value.allowance[format]) || value.allowance[format] < 0)) {
     throw new Error(`Invalid ${path} shape or allowance`);
@@ -200,10 +260,13 @@ export function validateOptionalLedger(
   const hasCompactFix = value.fixRequired !== undefined;
   const hasWebRouting = value.tc2481WebRouting !== undefined;
   const finalTransport = tc2481OfflineReplicaTransport !== undefined;
-  const ceiling = finalTransport ? tc2481OfflineOptionalAllowance : tc2481Web ? tc2481WebOptionalAllowance : tc2096Lazy ? tc2096LazyOptionalAllowance : tc2096 ? tc2096OptionalAllowance : tc1888 ? tc1888OptionalAllowance : tc2043 ? tc2043OptionalAllowance : tc1789 ? tc1789OptionalAllowance : masterDrift ? masterDriftOptionalAllowance : tc1475 ? tc1475OptionalAllowance : tc1432 ? tc1432OptionalAllowance : tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
+  const hasTc2931 = value.tc2931 !== undefined;
+  const ceiling = hasTc2931 ? tc2931OptionalAllowance : finalTransport ? tc2481OfflineOptionalAllowance : tc2481Web ? tc2481WebOptionalAllowance : tc2096Lazy ? tc2096LazyOptionalAllowance : tc2096 ? tc2096OptionalAllowance : tc1888 ? tc1888OptionalAllowance : tc2043 ? tc2043OptionalAllowance : tc1789 ? tc1789OptionalAllowance : masterDrift ? masterDriftOptionalAllowance : tc1475 ? tc1475OptionalAllowance : tc1432 ? tc1432OptionalAllowance : tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
     : ciToolchainCorrection ? ciOptionalAllowance : fixRequired ? fixRequiredOptionalAllowance
       : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
-  if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
+  if (hasTc2931 !== (tc2931BootstrapScope !== undefined) ||
+      (hasTc2931 && (!finalTransport || !tc2931BootstrapScope || JSON.stringify(value.tc2931) !== JSON.stringify(approvedTc2931Optional) || !hasTc2931OptionalEntry(value))) ||
+      optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
       (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations)) ||
       (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection))) ||
       (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired) || (hardening && !hasCompactFix) || (tc1413 && !hardening) || (tc1432 && !tc1413) || (tc1475 && !tc1432) || (masterDrift && !tc1475) || (tc1789 && !masterDrift) || (tc2043 && !tc1789) || (tc1888 && !tc2043) ||
@@ -229,6 +292,10 @@ export function validateOptionalLedger(
 export function evaluateOptionalBudget(value: OptionalLedger, root: Ledger, direct: LoadedSizes): Array<{
   format: typeof optionalFormats[number]; raw: number; effective: number; direct: number; ceiling: number; exceeded: boolean;
 }> {
+  if (root.tc2931BootstrapScope !== undefined &&
+      (JSON.stringify(value.tc2931) !== JSON.stringify(approvedTc2931Optional) || !hasTc2931OptionalEntry(value))) {
+    throw new Error("TC-2931 optional accounting requires its exact named record and measured entry.");
+  }
   const raw: LoadedSizes = { "replica.mjs": 0, "replica.cjs": 0, "activation.mjs": 0, "activation.cjs": 0 };
   for (const entry of value.entries) {
     for (const format of optionalFormats) raw[format] += entry[format];
@@ -238,10 +305,10 @@ export function evaluateOptionalBudget(value: OptionalLedger, root: Ledger, dire
   if (root.tc2481OfflineReplicaTransport !== undefined) {
     validateLedger(root);
     if (!hasTc2481OfflineOptionalEntry(value) ||
-        optionalFormats.some((format) => value.allowance[format] !== tc2481OfflineOptionalAllowance[format])) {
+        optionalFormats.some((format) => value.allowance[format] !== (root.tc2931BootstrapScope ? tc2931OptionalAllowance : tc2481OfflineOptionalAllowance)[format])) {
       throw new Error("The final TC-2481 optional cap requires its matching true accounting and exact root admission.");
     }
-    allowance = tc2481OfflineOptionalAllowance;
+    allowance = root.tc2931BootstrapScope ? tc2931OptionalAllowance : tc2481OfflineOptionalAllowance;
   }
   if (value.tc2481WebRouting !== undefined || root.tc2481WebRouting !== undefined) {
     const entries = value.entries.filter((entry) => entry.pr === "#872");
@@ -280,12 +347,13 @@ export function validateTc2481WebOptionalTransition(base?: OptionalWebRoutingRat
  * PR that introduces the row must contain the literal commit; once merged, the row resolves through
  * its squash commit instead (see landingCommit in replica-size-policy.ts).
  */
-export function optionalSourcePins(ledger: OptionalLedger): Array<{ row: "relocations" | "measurementCorrection" | "fixRequired" | "tc2481WebRouting"; pin: string }> {
-  const pins: Array<{ row: "relocations" | "measurementCorrection" | "fixRequired" | "tc2481WebRouting"; pin: string }> = [];
+export function optionalSourcePins(ledger: OptionalLedger): Array<{ row: "relocations" | "measurementCorrection" | "fixRequired" | "tc2481WebRouting" | "tc2931"; pin: string }> {
+  const pins: Array<{ row: "relocations" | "measurementCorrection" | "fixRequired" | "tc2481WebRouting" | "tc2931"; pin: string }> = [];
   if (ledger.relocations !== undefined) pins.push({ row: "relocations", pin: relocationCommit });
   if (ledger.measurementCorrection !== undefined) pins.push({ row: "measurementCorrection", pin: approvedMeasurementCorrection.commit });
   if (ledger.fixRequired !== undefined) pins.push({ row: "fixRequired", pin: approvedCompactFixRequired.integratedCommit });
   if (ledger.tc2481WebRouting !== undefined) pins.push({ row: "tc2481WebRouting", pin: ledger.tc2481WebRouting.sourceCommits.at(-1)! });
+  if (ledger.tc2931 !== undefined) pins.push({ row: "tc2931", pin: ledger.tc2931.sourceCommits.at(-1)! });
   return pins;
 }
 
@@ -312,6 +380,7 @@ export function validateIntroducedOptionalSources(base: OptionalLedger, current:
     measurementCorrection: "ce52494d measurement correction requires its approved source ancestor",
     fixRequired: "compact fix requires the integrated source commit",
     tc2481WebRouting: "TC-2481 Web routing requires its final measured source commit",
+    tc2931: "TC-2931 optional admission requires its measured source commit",
   };
   const merged = new Set(optionalSourcePins(base).map(({ row }) => row));
   for (const { row, pin } of optionalSourcePins(current)) {
@@ -342,5 +411,18 @@ export function validateOptionalEntryTransition(
       !prefixMatches || current[base.length].pr !== expectedPr ||
       optionalFormats.some((format) => current[base.length][format] !== observed[format])) {
     throw new Error("Merged optional rows must remain unchanged and must not repeat this PR; its one new row must have the requested PR number and exact observed gzip deltas.");
+  }
+}
+
+export function hasTc2931OptionalEntry(value: OptionalLedger): boolean {
+  const entries = value.entries.filter((entry) => entry.pr === "#945");
+  return entries.length === 1 && entries[0].ticket === "TC-2931" &&
+    optionalFormats.every((format) => entries[0][format] === approvedTc2931Optional.canonicalCI.delta[format]);
+}
+
+export function validateTc2931OptionalTransition(base?: OptionalTc2931Ratchet, current?: OptionalTc2931Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2931Optional) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2931 optional admission may be introduced once and cannot change later.");
   }
 }

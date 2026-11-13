@@ -77,6 +77,11 @@ jobs:
       - name: Build every workspace package
         env:
           BUILD_SETUP_ENABLED: "true"
+          # The web-sdk webpack build (ten ts-loader programs) exceeds Node's
+          # default ~2 GB old-space limit (TC-2952). ubuntu-latest on a public
+          # repo has 16 GB RAM; turbo's envMode is "loose", so this reaches
+          # every task process.
+          NODE_OPTIONS: --max-old-space-size=6144
         run: bun run build
 
       - name: Lint every workspace package

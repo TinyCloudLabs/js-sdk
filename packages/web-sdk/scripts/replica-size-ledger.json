@@ -3018,5 +3018,170 @@
       }
     },
     "reason": "Only the strict signed proof list parser and typed-code import bindings are eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
+  },
+  "tc2924NodeAliasesRoot": {
+    "label": "production node alias helper root budget (TC-2924)",
+    "ruling": "size-ruling: TC-2924: Naomi approves the exact canonical CI root measurement above tc2904OwnerDirectProofRoot, limited to +200 B per format; no headroom or worker changes.",
+    "base": "255e1c7e74cab178698e3d3fae5bae5b69f0f7c0",
+    "sourceCommits": [
+      "4d7795fa6e90acb62fcbf1626b1ff75b7a732d5a"
+    ],
+    "measuredWith": "Canonical Replica e2e CI run 43408618106, Node 22 / Bun 1.3.14; production webpack; gzip -9 -c. SQLite and Postgres root checks measured 1,522,784 ESM and 1,456,437 CJS.",
+    "root": {
+      "delta": {
+        "index.mjs": 66,
+        "index.cjs": 53
+      },
+      "ceiling": {
+        "index.mjs": 1522784,
+        "index.cjs": 1456437
+      }
+    },
+    "reason": "The shared exact two-name node alias helper adds a root export. Exact measured growth over TC-2904 is +66 ESM/+53 CJS, within the +200 B ruling. KV worker remains 780,742 B and replica worker remains 774,411 B; no general allowance changes."
+  },
+  "tc2934RequestedAccountRoot": {
+    "label": "requested-account browser restore root admission (TC-2934)",
+    "ruling": "Naomi SIZE RULING TC-2934: exact canonical final-head CI bytes; beta root caps +500 ESM/+1500 CJS; workers unchanged; no general ceiling changes. Details: TC-2934",
+    "base": "63efb0b4c8ad7fe038ae373aa4cf1aa4f67747f4",
+    "sourceCommits": [
+      "cb99ab5a209014df7b3232e21598f0f00fc7ba1d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43421891073",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43421891073/job/131873648037"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 440,
+        "index.cjs": 1396
+      },
+      "ceiling": {
+        "index.mjs": 1523224,
+        "index.cjs": 1457833
+      }
+    },
+    "reason": "The browser restore guard verifies the saved CACAO owner before node creation. Controlled module lists add only the guard and three intended web files; the CJS residual is compression/ordering variance, with no new dependency. Combined post-TC-2924 canonical Node 22/Bun 1.3.14/source-WASM CI at cb99ab5a209014df7b3232e21598f0f00fc7ba1d measures 1523224/1457833 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
+  },
+  "tc2936RestoreCommitRoot": {
+    "label": "restore commit-time expiry and sign-out fence root admission (TC-2936)",
+    "ruling": "Naomi SIZE RULING TC-2936: exact canonical CI bytes measured after rebasing onto merged #947, capped at +100 ESM/+100 CJS over that base; every other bucket unchanged; no general ceiling change. Details: TC-2936",
+    "base": "b841476426fa4796d629d751fa8b5a0cea941252",
+    "sourceCommits": [
+      "2a8edc2245aaf475f8f4292ee07c6312b744bcad"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43428324560",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43428324560/job/131895190481"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 47,
+        "index.cjs": 50
+      },
+      "ceiling": {
+        "index.mjs": 1523271,
+        "index.cjs": 1457883
+      }
+    },
+    "reason": "The node re-checks the restored session's expiry before installing it, and the web SDK re-checks the persisted sign-out marker after the node restore; both checks are required by security review. Canonical Node 22/Bun 1.3.14 CI at 2a8edc2245aaf475f8f4292ee07c6312b744bcad measures 1523271/1457883 gzip -9 bytes over master b841476426fa4796d629d751fa8b5a0cea941252 at 1523224/1457833. Optional, cumulative and worker allowances remain unchanged. Details: TC-2936"
+  },
+  "tc2931BootstrapScope": {
+    "label": "first-party bootstrap scope root and worker admission (TC-2931)",
+    "ruling": "size-ruling: TC-2931: Naomi approves exact canonical combined-head CI measurements, root delta at most +700 B per format and each worker at most +250 B over post-TC-2936. No general ceiling changes. Details: TC-2931",
+    "base": "41daf1c4717e15d6f95564f7246030877221f24a",
+    "sourceCommits": [
+      "6c748d4959f46acb3ed8031fca182326fcd0e0a2"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206/job/131928463539"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 544,
+        "index.cjs": 448
+      },
+      "ceiling": {
+        "index.mjs": 1523815,
+        "index.cjs": 1458331
+      }
+    },
+    "worker": {
+      "delta": 161,
+      "ceiling": 780903
+    },
+    "replicaWorker": {
+      "delta": 150,
+      "ceiling": 774561
+    },
+    "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
+  },
+  "tc2923EncryptionTeeOriginRoot": {
+    "label": "encryption-network TEE origin root admission (TC-2923)",
+    "ruling": "Naomi SIZE RULING TC-2923: exact canonical CI bytes, capped at +260 ESM/+200 CJS over the newest root; re-stacked on TC-2931 after #945 merged and re-measured; every other bucket unchanged; no general ceiling change. Details: TC-2923",
+    "base": "7fd34235ae6e915d78cb5a74d460bce9d4cebb01",
+    "sourceCommits": [
+      "8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968531764",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968532352"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 234,
+        "index.cjs": 186
+      },
+      "ceiling": {
+        "index.mjs": 1524049,
+        "index.cjs": 1458517
+      }
+    },
+    "reason": "Encryption-network calls for the production node use its TEE-terminated origin: the host mapping, the encryption routing and advisory-descriptor guards, and the sign-in activation mapping ship in the root bundle, with no new dependency. Canonical Node 22/Bun 1.3.14 CI at 8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6 measures 1524049/1458517 gzip -9 bytes over master 7fd34235ae6e915d78cb5a74d460bce9d4cebb01 at the TC-2931 ceiling 1523815/1458331. Optional, cumulative and worker allowances remain unchanged. Details: TC-2923"
+  },
+  "tc2949PanelChunkRecoveryRoot": {
+    "label": "panel chunk-load recovery root admission (TC-2949)",
+    "ruling": "Naomi's TC-2949 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root. Run 43456942350 measured 1524168/1458646 on base 790c8b08; current base 4ff23e8e differs only by #963's CI workflow env line, with no package input change. Details: TC-2949",
+    "base": "4ff23e8e9f2c9ccb39b5edb5dc7bdd4a97c3912d",
+    "sourceCommits": ["f9ccd5b8ffbe55a4dbef27e03562a777b08951e8"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350/job/131993450248",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350/job/131993450694"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 119, "index.cjs": 129 },
+      "ceiling": { "index.mjs": 1524168, "index.cjs": 1458646 }
+    },
+    "reason": "Chunk-load recovery logs a value-free failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI measured 1524168/1458646 gzip -9 bytes on 7af3a69c, based on 790c8b08; #963 changed only a CI workflow env line, so the measurement applies to current base 4ff23e8e. This is +119/+129 over the TC-2923 ceilings 1524049/1458517, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2949"
+  },
+  "tc2970RegistryVerdictCacheRoot": {
+    "label": "registry verdict cache option root admission (TC-2970)",
+    "ruling": "Naomi's TC-2970 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root row when it merges; re-stacked on TC-2949 after #955 merged and re-measured. Details: TC-2970",
+    "base": "efb14e603ba4a49c4bb70690a4c501295e2292cf",
+    "sourceCommits": ["e04620cbd235645a02b55cf077efcaa2e7381fdf"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794375",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794928"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 127, "index.cjs": 86 },
+      "ceiling": { "index.mjs": 1524295, "index.cjs": 1458732 }
+    },
+    "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
   }
 }

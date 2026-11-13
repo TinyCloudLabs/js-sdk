@@ -10,6 +10,7 @@
  * @packageDocumentation
  */
 
+import { assertRequestedRestoreAccount, requestedRestoreAccount, SessionAccountMismatchError } from "./restoreAccount";
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   activateValidatedRuntimeDelegation as activateValidatedRuntimeDelegationOnNode,
@@ -76,6 +77,7 @@ import {
   type RegistrySequenceStore,
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
+  isFirstPartyOrigin,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
@@ -249,7 +251,7 @@ export interface Config extends ClientConfig {
   persistSession?: boolean;
   /** Custom session storage implementation. */
   sessionStorage?: ISessionStorage;
-  /** Whether to run node-sdk's canonical first-account bootstrap after sign-in. */
+  /** Enable first-party account bootstrap. Defaults on only at approved first-party page origins; false also omits implicit account and capabilities-read grants. */
   autoBootstrapAccount?: boolean;
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
@@ -278,7 +280,7 @@ export interface Config extends ClientConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Strategy for TinyCloud root signature requests. */
   signStrategy?: SignStrategy;
-  /** Include canonical account registry read/create-update/list permissions in plain sessions and composed manifests. Default true. */
+  /** Include implicit account registry/bootstrap authority. First-party only; false or autoBootstrapAccount:false disables it. Third-party origins always omit it. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
@@ -530,6 +532,17 @@ export class TinyCloudWeb {
     this._initPromise = this._init();
   }
 
+  private bootstrapSignInPolicy() {
+    const firstParty = isFirstPartyOrigin(typeof window === "undefined" ? undefined : window.location?.origin);
+    const enabled = firstParty && this.config.autoBootstrapAccount !== false;
+    return {
+      autoBootstrapAccount: enabled,
+      includeAccountRegistryPermissions: enabled && this.config.includeAccountRegistryPermissions !== false,
+      includeImplicitCapabilitiesRead: enabled,
+      requireExistingAccount: !firstParty,
+    };
+  }
+
   /**
    * Async initialization: ensure WASM is ready, then create TinyCloudNode.
    * @internal
@@ -577,9 +590,7 @@ export class TinyCloudWeb {
       manifest: this._manifest,
       capabilityRequest: this._capabilityRequest,
       signStrategy: this.config.signStrategy,
-      includeAccountRegistryPermissions:
-        this.config.includeAccountRegistryPermissions,
-      autoBootstrapAccount: this.config.autoBootstrapAccount,
+      ...this.bootstrapSignInPolicy(),
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
@@ -873,7 +884,7 @@ export class TinyCloudWeb {
     address?: string,
     allowExpiredRenewalCandidate = false,
   ): Promise<string | undefined> {
-    if (address) return address;
+    if (address) return requestedRestoreAccount(address).address;
     if (this._node?.address) return this._node.address;
     const connected = await this.walletSigner?.getConnectedAddress();
     if (connected !== undefined) return connected;
@@ -942,6 +953,13 @@ export class TinyCloudWeb {
     address?: string,
     leaseAuthorization?: string,
   ): Promise<SessionRestoreResult> {
+    const requestedAccount = address;
+    if (address) {
+      try { address = requestedRestoreAccount(address).address; } catch (error) {
+        this._sessionRestoreStatus = "restore-failed";
+        return { status: "restore-failed", error: error as Error };
+      }
+    }
 
     const signOuts = this.signOutCount;
     // A restore may bring back a different account: a runtime permission signer set for the current one is cleared.
@@ -1004,6 +1022,7 @@ export class TinyCloudWeb {
         this._sessionRestoreStatus = "missing";
         return { status: "missing" };
       }
+      await assertRequestedRestoreAccount(requestedAccount ?? restoreAddress, loaded.data);
       const node = await this.ensureNode();
       assertNotSignedOut();
       const was = node.spaceId;
@@ -1020,6 +1039,13 @@ export class TinyCloudWeb {
       } finally {
         // Also when a later step throws after the node committed the new account. A sign-out resets itself.
         if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
+      }
+      // Another instance on this storage may have signed this session out while the node restored it.
+      if (fencing.isSignedOut?.(restoreAddress, loaded.data.signature)) {
+        await node.signOut().catch(() => undefined);
+        assertNotSignedOut();
+        this._sessionRestoreStatus = "missing";
+        return { status: "missing" };
       }
       assertNotSignedOut();
       this.resetSessionScopedCaches();
@@ -1040,6 +1066,9 @@ export class TinyCloudWeb {
     } catch (err) {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
         return refused();
+      }
+      if (err instanceof SessionAccountMismatchError) {
+        try { await this.sessionStorage.clear(restoreAddress); } catch { /* Preserve the account refusal. */ }
       }
       // Restore rejection is intentionally transactional. Persisted storage
       // is user state, and attempting best-effort cleanup here can both mask
@@ -1206,12 +1235,11 @@ export class TinyCloudWeb {
       return composeManifestRequest(
         Array.isArray(this._manifest) ? this._manifest : [this._manifest],
         {
-          includeAccountRegistryPermissions:
-            this.config.includeAccountRegistryPermissions,
+          ...this.bootstrapSignInPolicy(),
         },
       ).resources;
     }
-    if (this.config.includeAccountRegistryPermissions === false) {
+    if (!this.bootstrapSignInPolicy().includeAccountRegistryPermissions) {
       return [];
     }
     if (node.accountSpaceId === undefined) {

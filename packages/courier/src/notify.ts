@@ -8,7 +8,7 @@ import { deadlineRunner, type Runner, type WakeConfig } from './wake.js';
 
 /** Fixed status for the human. No notification path starts or messages an agent. */
 export interface Notice {
-  kind: 'paused' | 'peer-paused' | 'new-message' | 'new-approval';
+  kind: 'paused' | 'peer-paused' | 'new-message' | 'new-approval' | 'access-unverified';
   /** Machine event id, used only for deduplication, never notification prose. */
   eventId?: string;
   /** Fixed-width local count of coalesced pause transitions. */
@@ -41,6 +41,7 @@ export function noticeText(notice: Notice, _owner: string): { title: string; bod
   const total = `${pending}${pending === 999999 ? '+' : ''}`;
   if (notice.kind === 'new-message') return { title: 'Courier: needs you', body: `${total} new message(s) from ${peer}; latest thread ${thread}. Start a session, run courier inbox, then courier read and courier orders for this peer.` };
   if (notice.kind === 'new-approval') return { title: 'Courier: decision ready', body: `${total} owner decision(s) with ${peer}; latest thread ${thread}. Start a session and run courier approval with --peek; an approved PR merge uses courier run-approved. No agent was woken.` };
+  if (notice.kind === 'access-unverified') return { title: 'Courier: access not confirmed', body: `For 24 hours Courier couldn't confirm its access for ${peer}. Nothing was imported, woken or sent for it meanwhile; wakes and informs held that long were dropped. It keeps checking. Run courier status in a session you start.` };
   const count = /^[0-9]{6}$/.test(notice.repeats ?? '') ? Number(notice.repeats) : 0;
   const repeated = count ? ` Additional pauses on this thread: ${count}${count === 999999 ? '+' : ''}.` : '';
   return notice.kind === 'paused'
@@ -68,7 +69,7 @@ export function recentNotices(home: string): { kind: Notice['kind']; peer: strin
     for (const line of text.split('\n')) {
       try {
         const record = JSON.parse(line);
-        if (!['paused', 'peer-paused', 'new-message', 'new-approval'].includes(record.kind) || typeof record.peer !== 'string' || !HANDLE.test(record.peer) || typeof record.thread !== 'string' || !(ULID.test(record.thread) || /^sha256:[a-f0-9]{12}$/.test(record.thread))) continue;
+        if (!['paused', 'peer-paused', 'new-message', 'new-approval', 'access-unverified'].includes(record.kind) || typeof record.peer !== 'string' || !HANDLE.test(record.peer) || typeof record.thread !== 'string' || !(ULID.test(record.thread) || /^sha256:[a-f0-9]{12}$/.test(record.thread))) continue;
         records.push({ kind: record.kind, peer: record.peer, thread: record.thread, ...noticeText({ kind: record.kind, peer: record.peer, threadId: record.thread, count: typeof record.count === 'string' ? record.count : undefined, detail: '' }, '') });
       } catch { /* partial rotation or malformed line: no status to display */ }
     }

@@ -1,5 +1,7 @@
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
+import { createInMemoryRegistryCacheStore, createInMemoryRegistrySequenceStore, type RegistryCacheStore, type RegistrySequenceStore } from '@tinycloud/sdk-core';
 import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
@@ -10,6 +12,19 @@ import { canonicalJson } from './canonical.js';
 import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
 
+/**
+ * One registry verdict cache for every node this process creates (TC-2970): each owner is looked up once per command,
+ * and a long-running `watch`, `intake` or `outbox serve` looks again after the SDK's 60 s bound. Failed or unavailable
+ * lookups are not kept. The nodes also share one registry sequence store and one saved-settings
+ * store: the SDK serves a cached verdict only to a client whose own stores agree with it, so shared stores keep the
+ * rollback and known-owner checks the same for every node and let all of them reuse the lookup.
+ */
+const registry = {
+  registryVerdictCache: createRegistryVerdictCache(),
+  registrySequenceStore: createInMemoryRegistrySequenceStore() as RegistrySequenceStore,
+  registryCacheStore: createInMemoryRegistryCacheStore() as RegistryCacheStore,
+};
+
 export function nodeOpts(host: string) {
   return {
     host,
@@ -18,10 +33,22 @@ export function nodeOpts(host: string) {
     enablePublicSpace: false,
     autoBootstrapAccount: false,
     includeAccountRegistryPermissions: false,
+    ...registry,
   };
 }
 
-const activatedCids = new WeakMap<TinyCloudNode, Map<string, ValidatedRuntimeDelegation>>();
+/**
+ * The node each peer's reads go through, and the grant installed on it for that peer. The SDK uses the first installed
+ * grant that covers an operation (TC-2938), so a superseded grant must never sit beside its successor: the first grant
+ * of a peer is installed on the main node, and any later one on a fresh reader node that holds only it.
+ */
+const peerReaders = new WeakMap<TinyCloudNode, Map<string, { cid: string; reader: TinyCloudNode; activated: ValidatedRuntimeDelegation }>>();
+
+function readersOf(node: TinyCloudNode) {
+  let readers = peerReaders.get(node);
+  if (!readers) peerReaders.set(node, readers = new Map());
+  return readers;
+}
 
 export async function courierNode(profile: Profile, home?: string): Promise<TinyCloudNode> {
   const key = loadKey(home);
@@ -90,14 +117,13 @@ export async function currentInbound(node: TinyCloudNode, profile: Profile, peer
   }
   if (peer.interim?.latchedAt || peer.interim?.inboundRefusedAt) throw new CourierError('peer-revoked', `Sharing with ${peer.handle} was revoked. A new pairing is required.`);
   assertInboundLive(peer);
-  let cids = activatedCids.get(node);
-  if (!cids) {
-    cids = new Map<string, ValidatedRuntimeDelegation>();
-    activatedCids.set(node, cids);
-  }
-  if (!cids.has(peer.inbound.cid)) {
+  const readers = readersOf(node);
+  const known = readers.get(peer.handle);
+  if (known?.cid !== peer.inbound.cid) {
     const delegation: PortableDelegation = deserializeDelegation(peer.inbound.delegation);
-    const activated = await activateValidatedRuntimeDelegation(node, delegation, { host: profile.host });
+    // A peer whose earlier grant is installed on the main node gets a reader of its own for the new one.
+    const reader = known ? await courierNode(profile) : node;
+    const activated = await activateValidatedRuntimeDelegation(reader, delegation, { host: profile.host });
     assertPeerDelegation(activated, {
       issuer: peer.courierDid,
       audience: profile.courierDid,
@@ -108,20 +134,25 @@ export async function currentInbound(node: TinyCloudNode, profile: Profile, peer
     if (activated.cid !== peer.inbound.cid) {
       throw new CourierError('bad-delegation', `Peer delegation CID does not match the stored CID for ${peer.handle}.`);
     }
-    cids.set(peer.inbound.cid, activated);
+    readers.set(peer.handle, { cid: activated.cid, reader, activated });
   }
-  const current = cids.get(peer.inbound.cid)!;
+  const current = readers.get(peer.handle)!.activated;
   assertInboundLive(peer, current.expiry);
   return current;
 }
 
-export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer) {
+/** The node holding only this peer's current grant (after `currentInbound`). */
+function peerReader(node: TinyCloudNode, peer: StoredPeer): TinyCloudNode {
+  return readersOf(node).get(peer.handle)!.reader;
+}
+
+/** `renew: false` skips reading the peer's renewal marker; the watcher reads it on its renewal schedule instead. */
+export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer, options: { renew?: boolean } = {}) {
   const original = renewalBinding(profile, peer);
   const current = await currentInbound(node, profile, peer);
-  const cids = activatedCids.get(node)!;
-  const kv = node.kvForSpace(peer.spaceId);
+  const kv = peerReader(node, peer).kvForSpace(peer.spaceId);
   // Awaiting-C still needs the explicit pairing acknowledgement, not a renewal.
-  if (peer.status !== 'paired') return kv;
+  if (peer.status !== 'paired' || options.renew === false) return kv;
   const update = await getJson<{ delegation?: string }>(kv, k.peerDelegation(peer.theirHandleForMe!, peer.sessionId));
   assertInboundLive(peer, current.expiry);
   if (!update?.value.delegation) return kv;
@@ -130,7 +161,9 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
   if (delegation.spaceId !== peer.spaceId || delegation.ownerAddress.toLowerCase() !== peer.ownerDid.split(':').at(-1)?.toLowerCase()) {
     throw new CourierError('bad-delegation', 'Peer renewal owner or space does not match the pairing.');
   }
-  const renewed = await activateValidatedRuntimeDelegation(node, delegation, {
+  // The successor goes on a fresh reader: installed next to the current grant it would never be used.
+  const reader = await courierNode(profile);
+  const renewed = await activateValidatedRuntimeDelegation(reader, delegation, {
     host: profile.host,
     // Preserve signed caveats as well as the mailbox/session abilities.
     authorize: permissions => canonicalJson(permissions.map(entry => canonicalJson(entry)).sort()) === canonicalJson(current.effectivePermissions.map(entry => canonicalJson(entry)).sort()),
@@ -153,8 +186,8 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
     peer.inbound = inbound;
     if (profile.peers[peer.handle]) profile.peers[peer.handle].inbound = inbound;
   });
-  cids.set(renewed.cid, renewed);
-  return node.kvForSpace(peer.spaceId);
+  readersOf(node).set(peer.handle, { cid: renewed.cid, reader, activated: renewed });
+  return reader.kvForSpace(peer.spaceId);
 }
 
 

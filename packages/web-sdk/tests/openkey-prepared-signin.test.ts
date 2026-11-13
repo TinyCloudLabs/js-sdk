@@ -18,7 +18,7 @@ afterAll(() => {
 beforeEach(() => {
   priorWindow = globalThis.window;
   globalThis.window = {
-    location: { host: "example.test", hostname: "example.test", origin: "https://example.test" },
+    location: { host: "home.tinycloud.xyz", hostname: "home.tinycloud.xyz", origin: "https://home.tinycloud.xyz" },
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
     open,

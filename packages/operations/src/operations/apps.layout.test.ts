@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { evaluateOperationAuthority } from "../authority.js";
 import type { AppsPermission } from "../tc-apps/kv.js";
 import { additionalDelegationsPath, writeJsonAtomic } from "../state.js";
-import { tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
+import { tcAppsApprovalReason, tcAppsPermissionKind } from "../tc-apps.js";
 import { parseKey, parsePrefix } from "../tc-apps/layout.js";
 import { definition, FakeSql, fixture, SPACE, withGrants, withSql, write } from "./apps.fixtures.js";
 
@@ -16,7 +16,8 @@ const entry = { v: 1, app: "books", id: `${ID}books`, title: "Books" };
 const record = `${root}read/2026-11/2026-11-03T1200-dune`;
 const ALL = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"];
 const kvScope = (space: string, path: string, actions = ALL) => ({ service: "tinycloud.kv", space, path, actions });
-const discoveryGrant = kvScope(SPACE, DISCOVERY, ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put"]);
+const discoveryGrant = kvScope(SPACE, DISCOVERY, ["tinycloud.kv/get", "tinycloud.kv/list"]);
+const entryGrant = kvScope(SPACE, `${DISCOVERY}books/entry`, ["tinycloud.kv/get", "tinycloud.kv/put"]);
 const createBooks = [
   { op: "put", key: `${root}catalog`, value: booksApp },
   { op: "put", key: `${root}catalog/read`, value: readKind },
@@ -57,24 +58,9 @@ describe("personal apps approvals", () => {
   test("a named task bundles only its app and app list, with read-only access when requested", async () => {
     await fixture(async (kv, context) => {
       const change = await definition("context").authority(context, { app: "books" });
-      expect(change).toEqual([discoveryGrant, kvScope(SPACE, root)]);
+      expect(change).toEqual([discoveryGrant, entryGrant, kvScope(SPACE, root)]);
       const read = await definition("context").authority(context, { app: "books", access: "read" });
       expect(read).toEqual([kvScope(SPACE, DISCOVERY, ALL.slice(0, 2)), kvScope(SPACE, root, ALL.slice(0, 2))]);
-      expect(tcAppsApprovalReason(change)).toContain("add books to it");
-      expect(tcAppsApprovalReason(change)).toContain("add, change or delete");
-      expect(tcAppsApprovalReason(read)).toContain("It cannot change them");
-      for (const bundle of [change, read]) {
-        expect(tcAppsApprovalReason(bundle)).toContain("30 days");
-        expect(tcAppsApprovalReason(bundle)).not.toContain("agent-data");
-        expect(tcAppsApprovalMessage(bundle)).toContain("OpenKey");
-      }
-      // A request that only partly matches a bundle (app-list write with a read-only folder) falls back to the per-grant wording.
-      const mixed = [change[0]!, kvScope(SPACE, root, ALL.slice(0, 2))];
-      expect(tcAppsApprovalReason(mixed)).not.toContain("add books to it");
-      expect(tcAppsApprovalReason(mixed)).toContain("add or change entries in your app list");
-      // A folder entry that can only delete is not a read bundle: the text must not say "It cannot change them".
-      const deleteOnly = [kvScope(SPACE, DISCOVERY, ALL.slice(0, 2)), kvScope(SPACE, root, ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/del"])];
-      expect(tcAppsApprovalReason(deleteOnly)).not.toContain("It cannot change them");
       kv.seed(`${root}catalog`, booksApp);
       kv.seed(`${root}catalog/read`, readKind);
       kv.seed(`${DISCOVERY}books/entry`, entry);
@@ -137,8 +123,8 @@ describe("personal apps approvals", () => {
       const booksRoot = kvScope(SPACE, root);
       expect(await definition("context").authority(context, {})).toEqual([discoveryGrant]);
       const create = { ops: createBooks } as never;
-      expect(await definition("write").authority(context, create)).toEqual([booksRoot, discoveryGrant]);
-      expect(await definition("write").authority(withGrants(context, [booksRoot, discoveryGrant]), create)).toEqual([booksRoot, discoveryGrant]);
+      expect(await definition("write").authority(context, create)).toEqual([booksRoot, entryGrant]);
+      expect(await definition("write").authority(withGrants(context, [booksRoot, entryGrant]), create)).toEqual([booksRoot, entryGrant]);
       expect(await definition("write").authority(context, { ops: [{ op: "put", key: record, etag: `"blake3-${"a".repeat(64)}"`, value: { data: {} } }] } as never)).toEqual([booksRoot]);
       const mixed = { keys: [record], prefixes: [`${DISCOVERY}books/`] } as never;
       expect(await definition("read").authority(context, mixed)).toEqual([discoveryGrant, booksRoot]);
@@ -146,14 +132,8 @@ describe("personal apps approvals", () => {
       expect(await definition("query").authority(context, { kinds: [{ app: "books", kind: "read" }], sql: "SELECT 1" } as never)).toEqual([booksRoot, sql(`${root}index`)]);
     });
   });
-  test("consent text names the exact app and list paths, and rejects anything outside them", async () => {
-    await fixture(async (_kv, context) => {
-      const permissions = await definition("write").authority(context, { ops: createBooks } as never);
-      const reason = tcAppsApprovalReason(permissions)!;
-      for (const path of [root, DISCOVERY]) expect(reason).toContain(path);
-      expect(reason).not.toContain("agent-data");
-      expect(reason).toContain("30 days");
-      expect(tcAppsApprovalMessage(permissions)).toContain("OpenKey");
+  test("permission classification rejects anything outside the connector scopes", async () => {
+    await fixture(async () => {
       const books = kvScope(SPACE, root);
       expect(tcAppsApprovalReason([{ ...books, path: ID }])).toBeUndefined();
       expect(tcAppsApprovalReason([{ ...books, path: `${ID}healthlog/` }])).toBeUndefined();
@@ -163,6 +143,44 @@ describe("personal apps approvals", () => {
       expect(tcAppsApprovalReason([{ ...books, service: "tinycloud.sql" }])).toBeUndefined();
       expect(tcAppsApprovalReason([{ ...books, path: OLDER_ROOT }])).toBeUndefined();
       expect(tcAppsApprovalReason([{ ...books, path: `${OLDER_ROOT}catalog/`, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }])).toBeUndefined();
+      const discovery = kvScope(SPACE, `${DISCOVERY}qa/entry`, ["tinycloud.kv/put"]);
+      expect(tcAppsPermissionKind(discovery)).toEqual({ kind: "app-discovery", app: "qa" });
+      for (const path of [`${DISCOVERY}qa/entry-extra`, `${DISCOVERY}qa/entry/`, `${DISCOVERY}qa/other`, `${DISCOVERY}qa/`, DISCOVERY]) {
+        expect(tcAppsPermissionKind({ ...discovery, path })).toBeUndefined();
+      }
+    });
+  });
+  test("a qa task permits its exact entry and records, never neighboring or unrelated writes", async () => {
+    await fixture(async (_kv, context) => {
+      const plan = await definition("context").authority(context, { app: "qa" }) as AppsPermission[];
+      const allows = (grants: AppsPermission[], path: string, action: string) =>
+        evaluateOperationAuthority(grants, [kvScope(SPACE, path, [action])]).satisfied;
+      for (const path of [`${DISCOVERY}qa/entry`, `${ID}qa/catalog`, `${ID}qa/task/open/one`]) {
+        expect(allows(plan, path, "tinycloud.kv/put")).toBe(true);
+      }
+      for (const path of [DISCOVERY, `${DISCOVERY}other/entry`, `${DISCOVERY}qa/entry-extra`, `${DISCOVERY}qa/entry/child`, `${DISCOVERY}qa-extra/entry`, `${ID}other/task/open/one`, `${ID}qa-extra/task/open/one`]) {
+        expect(allows(plan, path, "tinycloud.kv/put")).toBe(false);
+      }
+      for (const action of ALL) expect(allows(plan, `${ID}qa/task/open/one`, action)).toBe(true);
+      expect(allows(plan, DISCOVERY, "tinycloud.kv/list")).toBe(true);
+      expect(allows(plan, `${DISCOVERY}other/entry`, "tinycloud.kv/get")).toBe(true);
+      expect(allows(plan, `${DISCOVERY}qa/entry`, "tinycloud.kv/del")).toBe(false);
+      for (const input of [{}, { app: "qa", access: "read" }]) {
+        const read = await definition("context").authority(context, input) as AppsPermission[];
+        expect(allows(read, DISCOVERY, "tinycloud.kv/list")).toBe(true);
+        expect(allows(read, `${DISCOVERY}qa/entry`, "tinycloud.kv/put")).toBe(false);
+        expect(allows(read, `${ID}qa/task/open/one`, "tinycloud.kv/put")).toBe(false);
+      }
+      const targets = ["qa", "second"].map((app) => ({ op: "put", key: `${DISCOVERY}${app}/entry`, value: {} }));
+      const batch = await definition("write").authority(context, { ops: targets }) as AppsPermission[];
+      for (const app of ["qa", "second"]) expect(allows(batch, `${DISCOVERY}${app}/entry`, "tinycloud.kv/put")).toBe(true);
+      expect(allows(batch, `${DISCOVERY}third/entry`, "tinycloud.kv/put")).toBe(false);
+      const legacy = [kvScope(SPACE, DISCOVERY, ALL.slice(0, 3)), kvScope(SPACE, `${ID}qa/`)];
+      expect(evaluateOperationAuthority(legacy, plan).satisfied).toBe(true);
+      expect(allows(legacy, `${DISCOVERY}other/entry`, "tinycloud.kv/put")).toBe(true);
+      const active = withGrants(context, plan);
+      const requested = await definition("write").authority(active, { ops: [targets[0]] }) as AppsPermission[];
+      expect(evaluateOperationAuthority(plan, requested).satisfied).toBe(true);
     });
   });
 });

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance, validateIntroducedOptionalSources,
-  tc2096OptionalAllowance, tc2096LazyOptionalAllowance,
+  tc2096OptionalAllowance, tc2096LazyOptionalAllowance, tc2481OfflineOptionalAllowance,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, approvedTc2096RepairBackoffRatchet, approvedTc2096LazyContentRatchet } from "./replica-size-policy";
@@ -11,6 +11,9 @@ import { evaluateOptionalBudget, validateTc2481WebOptionalTransition } from "./r
 import type { Ledger } from "./replica-size-policy";
 
 const finalShipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
+delete finalShipped.tc2931;
+finalShipped.entries = finalShipped.entries.filter((entry) => entry.pr !== "#945");
+finalShipped.allowance = { ...tc2481OfflineOptionalAllowance };
 // Keep earlier admissions in their original context; final3e0 controls use the live ledger below.
 const shipped = structuredClone(finalShipped);
 shipped.entries = shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#873"));
@@ -509,6 +512,10 @@ describe("TC-2096 lazy content fetch optional allowance", () => {
 
 describe("TC-2481 Web routing exact optional admission", () => {
   const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+    delete root.tc2931BootstrapScope;
+    delete root.tc2923EncryptionTeeOriginRoot;
+    delete root.tc2949PanelChunkRecoveryRoot;
+    delete root.tc2970RegistryVerdictCacheRoot;
   delete root.tc2481OfflineReplicaTransport;
   root.entries = root.entries.filter((entry) => entry.pr !== "#873");
   root.allowance["index.mjs"] = 388;
@@ -678,6 +685,10 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
   const observed = { "replica.mjs": 53129, "replica.cjs": 68401, "activation.mjs": 19143, "activation.cjs": 20115 };
   const fixture = () => {
     const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+    delete root.tc2931BootstrapScope;
+    delete root.tc2923EncryptionTeeOriginRoot;
+    delete root.tc2949PanelChunkRecoveryRoot;
+    delete root.tc2970RegistryVerdictCacheRoot;
     root.allowance = { "index.mjs": 391, "index.cjs": 861 };
     root.entries = root.entries.slice(0, root.entries.findIndex((entry) => entry.pr === "#873"));
     root.entries.push({

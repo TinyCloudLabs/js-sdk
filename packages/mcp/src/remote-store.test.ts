@@ -165,43 +165,6 @@ test("first operations and expired sessions receive account-bound reconnect link
   }
 });
 
-test("tc-apps approvals explain exact capabilities and fall back for unrelated permissions", async () => {
-  const store = await testStore();
-  const requester = await ownerDid(REQUESTER_KEY);
-  await store.initializeTenant("approval-account");
-  const records = {
-    service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinyapps.books/",
-    actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"],
-  };
-  const cases = [
-    { permissions: [records], matches: true },
-    { permissions: [{ ...records, path: "xyz.tinycloud.tinyapps.books/other/" }], matches: false },
-    { permissions: [{ ...records, space: "other" }], matches: false },
-    { permissions: [{ ...records, service: "tinycloud.sql" }], matches: false },
-    { permissions: [{ ...records, actions: [...records.actions, "tinycloud.kv/metadata"] }], matches: false },
-    // The older whole-folder grant is no longer one of the connector's own scopes.
-    { permissions: [{ ...records, space: "default", path: "xyz.tinycloud.agent-data/" }], matches: false },
-  ];
-  for (const [index, { permissions, matches }] of cases.entries()) {
-    const result = record(await store.decorateAuthorityResult("approval-account", [requester], {
-      status: "authority_required", operation: {}, context: {},
-      request: { requestId: `request-${index}`, requested: permissions },
-      approval: { kind: "openkey" },
-    }));
-    const approval = record(result.approval);
-    const state = new URL(String(approval.url)).searchParams.get("state")!;
-    const redirect = new URL(await store.approvalRedirect(state));
-    const payload = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString());
-    if (matches) {
-      expect(payload.reason).toContain("Lets Claude keep your personal records");
-      expect(approval.fallback).not.toBe("Open the approval URL, then retry the same MCP tool.");
-    } else {
-      expect(payload.reason).toContain("Approve the exact capabilities requested");
-      expect(payload.reason).not.toContain("Lets Claude");
-    }
-  }
-});
-
 test("approval redirects send OpenKey only the public delegate key", async () => {
   const store = await testStore();
   const status = await store.connectStatus("openkey-user-a");

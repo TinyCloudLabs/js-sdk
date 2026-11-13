@@ -1,4 +1,4 @@
-import { createRuntimeNode, recordAuthorityRefusal, watchPeerEligible, watchPreflight } from './interim-runtime.js';
+import { createRuntimeNode, maintainPeerSet, recordAuthorityRefusal, watchOwnerPreflight, watchPeerEligible } from './interim-runtime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
+import { fileWatchCache } from './watch-cache.js';
 import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
 import { startsAgentCli } from './guard/policy.js';
 import { guardArgv } from './guard/command.js';
@@ -235,20 +236,29 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const log = jsonLineLog();
   const node = await createRuntimeNode();
   const watcher = new Watcher({
-    beforePoll: () => watchPreflight(node),
+    beforePoll: () => watchOwnerPreflight(node),
+    // One peer, before acting for it: a strict verdict (inbound grant probed too; anything but positive throws, so the
+    // action fails closed). Every peer: the 300 s housekeeping.
+    checkAuthority: (handle) => handle === undefined ? maintainPeerSet(node) : maintainPeerSet(node, handle, true, true),
     onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
     selfKv: node.kv,
+    // The DID the restored node session signs as: captured after the reload, so a key rotated meanwhile cannot split
+    // this watcher from the identity its node acts as.
+    agent: node.credentialHolderDid,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,
     peerHooks: (peer) => peerHooks(node, loadProfile(), peer),
     loadPeers: () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer)),
-    kvFor: (peer) => peerKv(node, loadProfile(), peer),
+    peerHandles: () => Object.keys(loadProfile().peers),
+    kvFor: (peer, renew) => peerKv(node, loadProfile(), peer, { renew }),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
     holder: { profileId: watcherProfileId() },
+    // Only eligible peers' facts are kept: a refused, latched or removed peer's facts go with the next save.
+    localCache: fileWatchCache(node.credentialHolderDid, profile.spaceId!, () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer))),
     log,
   }, opts);
 
