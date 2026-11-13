@@ -27,8 +27,12 @@ interface Entry {
  * `\` or whitespace is refused: the parser would key it as another spelling while the lookup fetches a different path.
  */
 function registryKey(registryUrl: string): string {
-  if (/[?#@\\\s]/.test(registryUrl)) {
-    throw new TypeError(`A registry URL used with a verdict cache must not contain ?, #, @, \\ or whitespace: ${JSON.stringify(registryUrl)}`);
+  const found = [["?", "query"], ["#", "fragment"], ["@", "credentials"], ["\\", "backslash"]]
+    .filter(([character]) => registryUrl.includes(character!)).map(([, name]) => name);
+  if (/\s/.test(registryUrl)) found.push("whitespace");
+  // The URL itself is never echoed: it may carry credentials.
+  if (found.length) {
+    throw new TypeError(`A registry URL used with a verdict cache must not contain a query, fragment, credentials, backslash or whitespace (found: ${found.join(", ")})`);
   }
   try {
     const url = new URL(registryUrl);

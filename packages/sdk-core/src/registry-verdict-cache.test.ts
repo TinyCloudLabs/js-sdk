@@ -549,6 +549,21 @@ describe("registry verdict cache bounds and keys (TC-2970 review F2-F4)", () => 
     expect(r.requests).toHaveLength(0);
   });
 
+  it("a refused registry URL is named by what it contains, never echoed", async () => {
+    const verdictCache = createRegistryVerdictCache();
+    const message = async (url: string) => String(((await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: url, verdictCache }).catch((error: unknown) => error)) as Error).message);
+    const credentials = await message("https://u:secret@registry.test");
+    expect(credentials).toContain("found: credentials");
+    expect(credentials).not.toContain("secret");
+    expect(credentials).not.toContain("u:");
+    expect(credentials).not.toContain("registry.test");
+    expect(await message("https://registry.test/?token=abc")).not.toContain("abc");
+    expect(await message("https://registry.test/?token=abc")).toContain("found: query");
+    expect(await message("https://registry.test#x")).toContain("found: fragment");
+    expect(await message("https://registry.test\\")).toContain("found: backslash");
+    expect(await message("https://registry.test/ ")).toContain("found: whitespace");
+  });
+
   it("keys are structured: no registry URL and subject pair stands for another", async () => {
     const verdictCache = createRegistryVerdictCache();
     let lookups = 0;
