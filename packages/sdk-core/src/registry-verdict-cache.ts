@@ -21,11 +21,16 @@ interface Entry {
   expiresAt: number;
 }
 
-/** `https://Registry.test:443//` and `https://registry.test` are one registry. */
+/**
+ * The registry base the lookup fetches (`registry-policy` drops one trailing slash), with the host's case and a default
+ * port normalised: `https://Registry.test:443/` and `https://registry.test` are one registry. A URL with a query,
+ * fragment or credentials is keyed exactly as given.
+ */
 function registryKey(registryUrl: string): string {
   try {
     const url = new URL(registryUrl);
-    return url.origin + url.pathname.replace(/\/+$/, "");
+    if (url.search || url.hash || url.username || url.password) return registryUrl;
+    return url.origin + url.pathname.replace(/\/$/, "");
   } catch {
     return registryUrl;
   }
@@ -33,21 +38,25 @@ function registryKey(registryUrl: string): string {
 
 /**
  * Whether the reading client's own stores allow a verdict another lookup
- * produced: a registered record no older than the sequence this client
- * remembers and present in its saved settings, or an absence for an owner this
- * client has no registration evidence for. Otherwise the client looks up itself,
- * so its own rollback and known-owner checks decide, and its settings are saved.
+ * produced, without changing anything the client would decide itself:
+ * - a registered record only when the client already holds that exact
+ *   sequence (in its sequence store and its saved settings, for each it has);
+ * - an absence only when the client has no registration evidence for the owner
+ *   (no sequence marker, no saved settings, no known-owner revision).
+ * Otherwise the client looks up itself, so its own rollback and known-owner
+ * checks decide, and the lookup raises its floor and saves its settings.
  */
 async function usableFor(scope: RegistryVerdictScope, verdict: RegistryVerdict): Promise<boolean> {
   try {
     const ownerKey = registryOwnerKeyV2(scope.subject);
     const evidence = await registration(scope.sequenceStore, ownerKey);
+    const saved = await scope.cacheStore?.get(ownerKey);
     if (verdict.status === "unregistered") {
-      return evidence === undefined && !(scope.cacheStore && await scope.cacheStore.getRevision(ownerKey) > 0);
+      return evidence === undefined && saved === undefined && !(scope.cacheStore && await scope.cacheStore.getRevision(ownerKey) > 0);
     }
     if (verdict.status !== "registered") return false;
-    if (evidence && evidence.kind !== "legacy-v1" && verdict.sequence < evidence.sequence) return false;
-    return !scope.cacheStore || ((await scope.cacheStore.get(ownerKey))?.sequence ?? Infinity) <= verdict.sequence;
+    if (scope.sequenceStore && !(evidence && evidence.kind !== "legacy-v1" && evidence.sequence === verdict.sequence)) return false;
+    return !scope.cacheStore || saved?.sequence === verdict.sequence;
   } catch {
     return false;
   }
@@ -82,8 +91,13 @@ export function createRegistryVerdictCache(options: { now?: () => number } = {})
     async get(scope, lookup) {
       const key = keyOf(scope.registryUrl, scope.subject);
       const known = entries.get(key);
-      if (known && now() < known.expiresAt && (!known.settled || await usableFor(scope, known.settled))) return known.verdict;
-      if (entries.get(key) === known) entries.delete(key);
+      if (known && now() < known.expiresAt) {
+        // Kept or still in flight: either way the reader's own checks run on the result. A failure (thrown or
+        // unavailable) fails closed for every caller, so it is shared as it is.
+        const verdict = await known.verdict;
+        if (verdict.status === "unavailable" || await usableFor(scope, verdict)) return verdict;
+        if (entries.get(key) === known) entries.delete(key);
+      }
       // In flight: shared until it settles. Registered first, so it settles the entry before any caller resumes.
       const entry: Entry = { verdict: lookup(), expiresAt: Number.POSITIVE_INFINITY };
       insert(key, entry);
