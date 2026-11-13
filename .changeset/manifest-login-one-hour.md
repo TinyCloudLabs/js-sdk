@@ -6,6 +6,6 @@
 
 What changes for existing users: a manifest login that omits `--expiry` now ends after an hour; re-running it on a profile whose live session lasts longer refuses with `SESSION_IN_USE` unless `--replace-session` is given.
 
-The guide, skill and error hints now show the approval link (`auth login --manifest builtin:share-publishing`, which needs no code pasted back) instead of `--device --expiry 7d` or `--paste --expiry 30d`.
+The guide, skill and error hints now show the approval link (`auth login --manifest builtin:share-publishing`, which needs no code to paste back) instead of `--device --expiry 7d` or `--paste --expiry 30d`.
 
 Details: TC-2997

@@ -20,11 +20,12 @@ The command blocks until the owner approves, so as an agent start it in the back
 ```bash
 tinycloud --profile publisher auth login --manifest builtin:share-publishing --no-popup > login.json 2> login.err &
 LOGIN_PID=$!
-sleep 3; grep -A1 'Approve this request in OpenKey' login.err   # send this link to the owner
+while ! grep -q 'Approve this request in OpenKey' login.err && kill -0 "$LOGIN_PID" 2>/dev/null; do sleep 1; done
+grep -A1 'Approve this request in OpenKey' login.err   # send this link to the owner
 wait "$LOGIN_PID"; cat login.json
 ```
 
-`--no-popup` only skips opening a browser on this machine; leave it out where the owner sits at this machine's browser. Without `--expiry`, a manifest login lasts 1 hour, except `builtin:share-publishing`, which lasts 7 days: every Share link it publishes ends when that session ends, and a link's own default is 7 days. An explicit `--expiry` decides over both; pass one only when the owner wants a different lifetime.
+`--no-popup` only skips opening a browser on this machine; leave it out where the owner sits at this machine's browser. Without `--expiry`, a manifest login lasts 1 hour, except `builtin:share-publishing`, which lasts 7 days: every Share link it publishes ends when that session ends, and a link's own default is 7 days. An explicit `--expiry` overrides both; pass one only when the owner wants a different lifetime.
 
 ## Device login (only when asked)
 
