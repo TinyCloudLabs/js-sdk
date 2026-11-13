@@ -468,6 +468,7 @@ export type Ledger = {
   tc2872RenewalKvWorker?: Tc2872RenewalKvWorkerRatchet;
   tc2872RenewalReplicaWorker?: Tc2872RenewalReplicaWorkerRatchet;
   tc2904OwnerDirectProofRoot?: Tc2872RenewalRootBudget;
+  tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1090,6 +1091,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2872RenewalKvWorker !== undefined) pins.push({ row: "tc2872RenewalKvWorker", pin: root.tc2872RenewalKvWorker.sourceCommits.at(-1)! });
   if (root.tc2872RenewalReplicaWorker !== undefined) pins.push({ row: "tc2872RenewalReplicaWorker", pin: root.tc2872RenewalReplicaWorker.sourceCommits.at(-1)! });
   if (root.tc2904OwnerDirectProofRoot !== undefined) pins.push({ row: "tc2904OwnerDirectProofRoot", pin: root.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)! });
+  if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1182,6 +1184,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
     ["tc2872RenewalRoot", root.tc2872RenewalRoot?.root.ceiling],
     ["tc2904OwnerDirectProofRoot", root.tc2904OwnerDirectProofRoot?.root.ceiling],
+    ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3202,6 +3205,32 @@ export function validateGatedOnlyRatchet(row?: GatedOnlyRatchet, base?: GatedOnl
 const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 
 /** Every ledger row, except allowance and entries, with its approved constant. A row commit wires its constant here once. */
+export const approvedTc2934RequestedAccountRoot: LogoutRatchet = {
+  "label": "requested-account browser restore root admission (TC-2934)",
+  "ruling": "Naomi SIZE RULING TC-2934: exact canonical final-head CI bytes; beta root caps +500 ESM/+1500 CJS; workers unchanged; no general ceiling changes. Details: TC-2934",
+  "base": "255e1c7e74cab178698e3d3fae5bae5b69f0f7c0",
+  "sourceCommits": [
+    "4969966540daef0a5ab90f2560f954550c26384c"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418177712",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418177712/job/131861228972"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 438,
+      "index.cjs": 1389
+    },
+    "ceiling": {
+      "index.mjs": 1523156,
+      "index.cjs": 1457773
+    }
+  },
+  "reason": "The browser restore guard verifies the saved CACAO owner before node creation. Controlled module lists add only the guard and three intended web files; the CJS residual is compression/ordering variance, with no new dependency. Canonical Node 22/Bun 1.3.14/source-WASM CI at 4969966540daef0a5ab90f2560f954550c26384c measures 1523156/1457773 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3291,6 +3320,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2872RenewalKvWorker: approvedTc2872RenewalKvWorker,
   tc2872RenewalReplicaWorker: approvedTc2872RenewalReplicaWorker,
   tc2904OwnerDirectProofRoot: approvedTc2904OwnerDirectProofRoot,
+  tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3698,6 +3728,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2904OwnerDirectProofRoot !== undefined &&
       (!value.tc2872RenewalRoot || JSON.stringify(value.tc2904OwnerDirectProofRoot) !== JSON.stringify(approvedTc2904OwnerDirectProofRoot))) {
     throw new Error("Only Naomi's exact TC-2904 root budget admission is approved.");
+  }
+  if (value.tc2934RequestedAccountRoot !== undefined &&
+      (!value.tc2904OwnerDirectProofRoot || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
+    throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
   }
 }
 
@@ -4489,5 +4523,12 @@ export function validateTc2904OwnerDirectProofRootTransition(base?: Tc2872Renewa
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2904OwnerDirectProofRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2904 root budget admission may be introduced once and cannot change later.");
+  }
+}
+
+export function validateTc2934RequestedAccountRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2934RequestedAccountRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2934 root admission may be introduced once and cannot change later.");
   }
 }
