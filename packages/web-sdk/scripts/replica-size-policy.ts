@@ -470,6 +470,7 @@ export type Ledger = {
   tc2904OwnerDirectProofRoot?: Tc2872RenewalRootBudget;
   tc2924NodeAliasesRoot?: Tc2872RenewalRootBudget;
   tc2934RequestedAccountRoot?: LogoutRatchet;
+  tc2936RestoreCommitRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1094,6 +1095,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2904OwnerDirectProofRoot !== undefined) pins.push({ row: "tc2904OwnerDirectProofRoot", pin: root.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)! });
   if (root.tc2924NodeAliasesRoot !== undefined) pins.push({ row: "tc2924NodeAliasesRoot", pin: root.tc2924NodeAliasesRoot.sourceCommits.at(-1)! });
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
+  if (root.tc2936RestoreCommitRoot !== undefined) pins.push({ row: "tc2936RestoreCommitRoot", pin: root.tc2936RestoreCommitRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1188,6 +1190,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2904OwnerDirectProofRoot", root.tc2904OwnerDirectProofRoot?.root.ceiling],
     ["tc2924NodeAliasesRoot", root.tc2924NodeAliasesRoot?.root.ceiling],
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
+    ["tc2936RestoreCommitRoot", root.tc2936RestoreCommitRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3255,6 +3258,32 @@ export const approvedTc2934RequestedAccountRoot: LogoutRatchet = {
   "reason": "The browser restore guard verifies the saved CACAO owner before node creation. Controlled module lists add only the guard and three intended web files; the CJS residual is compression/ordering variance, with no new dependency. Combined post-TC-2924 canonical Node 22/Bun 1.3.14/source-WASM CI at cb99ab5a209014df7b3232e21598f0f00fc7ba1d measures 1523224/1457833 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
 };
 
+export const approvedTc2936RestoreCommitRoot: LogoutRatchet = {
+  "label": "restore commit-time expiry and sign-out fence root admission (TC-2936)",
+  "ruling": "Naomi SIZE RULING TC-2936: exact canonical CI bytes measured after rebasing onto merged #947, capped at +100 ESM/+100 CJS over that base; every other bucket unchanged; no general ceiling change. Details: TC-2936",
+  "base": "b841476426fa4796d629d751fa8b5a0cea941252",
+  "sourceCommits": [
+    "2a8edc2245aaf475f8f4292ee07c6312b744bcad"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43428324560",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43428324560/job/131895190481"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 47,
+      "index.cjs": 50
+    },
+    "ceiling": {
+      "index.mjs": 1523271,
+      "index.cjs": 1457883
+    }
+  },
+  "reason": "The node re-checks the restored session's expiry before installing it, and the web SDK re-checks the persisted sign-out marker after the node restore; both checks are required by security review. Canonical Node 22/Bun 1.3.14 CI at 2a8edc2245aaf475f8f4292ee07c6312b744bcad measures 1523271/1457883 gzip -9 bytes over master b841476426fa4796d629d751fa8b5a0cea941252 at 1523224/1457833. Optional, cumulative and worker allowances remain unchanged. Details: TC-2936"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3346,6 +3375,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2904OwnerDirectProofRoot: approvedTc2904OwnerDirectProofRoot,
   tc2924NodeAliasesRoot: approvedTc2924NodeAliasesRoot,
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
+  tc2936RestoreCommitRoot: approvedTc2936RestoreCommitRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3761,6 +3791,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2934RequestedAccountRoot !== undefined &&
       (!value.tc2924NodeAliasesRoot || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
     throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
+  }
+  if (value.tc2936RestoreCommitRoot !== undefined &&
+      (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
+    throw new Error("Only Naomi's exact TC-2936 root admission is approved.");
   }
 }
 
@@ -4567,5 +4601,13 @@ export function validateTc2934RequestedAccountRootTransition(base?: LogoutRatche
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2934RequestedAccountRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2934 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2936 restore-check root admission is introduced once and immutable. */
+export function validateTc2936RestoreCommitRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2936RestoreCommitRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2936 root admission may be introduced once and cannot change later.");
   }
 }

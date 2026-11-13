@@ -3063,5 +3063,30 @@
       }
     },
     "reason": "The browser restore guard verifies the saved CACAO owner before node creation. Controlled module lists add only the guard and three intended web files; the CJS residual is compression/ordering variance, with no new dependency. Combined post-TC-2924 canonical Node 22/Bun 1.3.14/source-WASM CI at cb99ab5a209014df7b3232e21598f0f00fc7ba1d measures 1523224/1457833 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
+  },
+  "tc2936RestoreCommitRoot": {
+    "label": "restore commit-time expiry and sign-out fence root admission (TC-2936)",
+    "ruling": "Naomi SIZE RULING TC-2936: exact canonical CI bytes measured after rebasing onto merged #947, capped at +100 ESM/+100 CJS over that base; every other bucket unchanged; no general ceiling change. Details: TC-2936",
+    "base": "b841476426fa4796d629d751fa8b5a0cea941252",
+    "sourceCommits": [
+      "2a8edc2245aaf475f8f4292ee07c6312b744bcad"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43428324560",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43428324560/job/131895190481"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 47,
+        "index.cjs": 50
+      },
+      "ceiling": {
+        "index.mjs": 1523271,
+        "index.cjs": 1457883
+      }
+    },
+    "reason": "The node re-checks the restored session's expiry before installing it, and the web SDK re-checks the persisted sign-out marker after the node restore; both checks are required by security review. Canonical Node 22/Bun 1.3.14 CI at 2a8edc2245aaf475f8f4292ee07c6312b744bcad measures 1523271/1457883 gzip -9 bytes over master b841476426fa4796d629d751fa8b5a0cea941252 at 1523224/1457833. Optional, cumulative and worker allowances remain unchanged. Details: TC-2936"
   }
 }
