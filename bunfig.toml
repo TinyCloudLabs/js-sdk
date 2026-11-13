@@ -1,3 +1,7 @@
+# Armed only under test (TC_TEST_PRODUCTION_GUARD, set by the test bootstrap): refuses the production links API in a `bun`
+# child started from this directory. Bun ignores NODE_OPTIONS=--import; see packages/operations/test-support/production-origin-guard.mjs.
+preload = ["./packages/operations/test-support/production-origin-guard-bun-preload.mjs"]
+
 [install.lockfile]
 print = "bun"
 
