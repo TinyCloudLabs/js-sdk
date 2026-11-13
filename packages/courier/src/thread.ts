@@ -77,6 +77,8 @@ export async function collectThread(input: {
   exactPeer?: boolean;
   kvFor(peer: StoredPeer): Promise<KV>;
   cache?: ThreadCache;
+  /** This agent's courier DID and space: cached own entries belong to them, so a re-init or a new key starts empty. */
+  self?: { courierDid: string; spaceId: string };
 }): Promise<{ entries: ThreadEntry[]; errors: PeerReadError[]; partial: boolean }> {
   const { threadId, selfKv } = input;
   const entries: ThreadEntry[] = [];
@@ -98,8 +100,8 @@ export async function collectThread(input: {
     if (known.length) peers = known;
   }
 
-  /** `source`: whose space the keys are in. A cached body is used only for a key the current, authorized listing returned. */
-  async function append(kv: KV, keys: string[], peer: string, side: 'me' | 'peer', source: string) {
+  /** `source`: whose space the keys are in (none: not cached). A cached body is used only for a key the current, authorized listing returned. */
+  async function append(kv: KV, keys: string[], peer: string, side: 'me' | 'peer', source: string | undefined) {
     const root = side === 'me' ? k.threadRoot(peer, threadId) : undefined;
     for (const key of keys) {
       if (root && !key.startsWith(`${root}/`)) continue;
@@ -107,7 +109,7 @@ export async function collectThread(input: {
         : /\/msg\/[^/]+\.json$/.test(key) ? 'msg'
         : /\/task\/[^/]+\.json$/.test(key) ? 'task' : undefined;
       if (!kind) continue;
-      const cacheId = kind === 'task' ? undefined : `${source}:${key}`;
+      const cacheId = kind === 'task' || !source ? undefined : `${source}:${key}`;
       const cached = cacheId === undefined ? undefined : input.cache?.get(cacheId);
       const got = cached !== undefined ? { value: cached } : await getJson(kv, key);
       if (!got) continue;
@@ -121,14 +123,15 @@ export async function collectThread(input: {
 
   for (const peer of peers) {
     const mine = local.get(peer.handle) ?? await listAll(selfKv, `${k.threadRoot(peer.handle, threadId)}/`);
-    await append(selfKv, mine, peer.handle, 'me', 'self');
+    await append(selfKv, mine, peer.handle, 'me', input.self && `self:${input.self.courierDid}:${input.self.spaceId}`);
     if (!peer.inbound || !peer.theirHandleForMe) continue;
     try {
       const kv = await input.kvFor(peer);
       const prefix = `${k.threadRoot(peer.theirHandleForMe, threadId)}/`;
       const keys = (await listAll(kv, prefix)).filter(key => key.startsWith(prefix));
-      // Bound to the peer's identity and space, not its local handle: a handle re-paired to someone else starts empty.
-      await append(kv, keys, peer.handle, 'peer', `peer:${peer.courierDid}:${peer.spaceId}`);
+      // Bound to the peer's identity, space and session, not its local handle: a handle re-paired to someone else, or a
+      // new session, starts empty.
+      await append(kv, keys, peer.handle, 'peer', `peer:${peer.courierDid}:${peer.spaceId}:${peer.sessionId ?? ''}`);
     } catch {
       errors.push(peerReadError(peer.handle));
     }

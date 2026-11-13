@@ -692,6 +692,7 @@ export async function cmdRead(args: ParsedArgs) {
     exactPeer: Boolean(args.get('peer')),
     kvFor: (peer) => peerKv(node, profile, peer),
     cache,
+    self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
   });
   cache.save();
   if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);

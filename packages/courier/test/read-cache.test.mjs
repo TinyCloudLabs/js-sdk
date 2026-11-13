@@ -40,14 +40,15 @@ function thread(entries) {
   };
   for (let i = 0; i < entries / 2; i++) { add(mine, k.threadRoot('bob', threadId)); add(theirs, `${PREFIX}/to/alice/threads/${threadId}`); }
   theirs.rows.set(`${PREFIX}/to/alice/threads/${threadId}/task/K1.json`, buildTask({ taskId: 'K1', threadId, state: 'TASK_STATE_WORKING' }));
-  const read = async () => {
+  const self = { courierDid: 'did:key:zAlice', spaceId: 'space-alice' };
+  const read = async ({ me = self, them = peer } = {}) => {
     const cache = diskThreadCache(threadId);
     const before = { ...calls };
-    const result = await collectThread({ threadId, selfKv: mine, peers: [peer], exactPeer: true, kvFor: async () => theirs, cache });
+    const result = await collectThread({ threadId, selfKv: mine, peers: [them], exactPeer: true, kvFor: async () => theirs, cache, self: me });
     cache.save();
     return { result, list: calls.list - before.list, get: calls.get - before.get };
   };
-  return { threadId, mine, theirs, read, add };
+  return { threadId, mine, theirs, read, add, self };
 }
 
 test('an unchanged 260-entry thread is read again with its two listings and its one task, no message GETs', async (t) => {
@@ -83,7 +84,7 @@ test('a cached body is shown only for a key the current authorized listing retur
   await th.read();
   const refused = { list: async () => ({ ok: false, error: { status: 403, message: 'revoked' } }) };
   const cache = diskThreadCache(th.threadId);
-  const revoked = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [peer], exactPeer: true, kvFor: async () => refused, cache });
+  const revoked = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [peer], exactPeer: true, kvFor: async () => refused, cache, self: th.self });
   assert.equal(revoked.entries.filter((entry) => entry.side === 'peer').length, 0, 'a refused listing shows nothing cached');
   assert.equal(revoked.partial, true);
 
@@ -91,6 +92,18 @@ test('a cached body is shown only for a key the current authorized listing retur
   const impostor = { ...peer, courierDid: 'did:key:zMallory', spaceId: 'space-mallory' };
   const replaced = new Map([...th.theirs.rows].map(([key, body]) => [key, { ...body, parts: [{ kind: 'text', text: 'not bob' }] }]));
   const theirs = { list: th.theirs.list, async get(key) { return { ok: true, data: { data: replaced.get(key), headers: { etag: 'e' } } }; } };
-  const other = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [impostor], exactPeer: true, kvFor: async () => theirs, cache });
-  for (const entry of other.entries.filter((e) => e.side === 'peer' && e.kind === 'msg')) assert.equal(entry.body.parts[0].text, 'not bob');
+  const other = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [impostor], exactPeer: true, kvFor: async () => theirs, cache, self: th.self });
+  const otherMessages = other.entries.filter((e) => e.side === 'peer' && e.kind === 'msg');
+  assert.equal(otherMessages.length, 2);
+  for (const entry of otherMessages) assert.equal(entry.body.parts[0].text, 'not bob');
+});
+
+test('a re-init (new agent key or new space) and a peer session change start their entries empty', async () => {
+  const th = thread(4); // 2 own, 2 peer messages, own meta, peer task
+  await th.read();
+  assert.equal((await th.read()).get, 1, 'warm: only the task');
+  assert.equal((await th.read({ me: { ...th.self, courierDid: 'did:key:zAliceRotated' } })).get, 4, 'a new agent key refetches own meta and messages');
+  assert.equal((await th.read({ me: { ...th.self, spaceId: 'space-alice-reinit' } })).get, 4, 'a new own space refetches them too');
+  assert.equal((await th.read({ them: { ...peer, sessionId: th.threadId } })).get, 3, 'a peer session change refetches its messages');
+  assert.equal((await th.read({ them: { ...peer, courierDid: 'did:key:zBobRotated' } })).get, 3, 'so does a peer key change');
 });
