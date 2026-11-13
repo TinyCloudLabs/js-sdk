@@ -79,6 +79,7 @@ import {
   type RegistrySequenceStore,
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
+  isFirstPartyOrigin,
   composeManifestRequest,
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
@@ -252,7 +253,7 @@ export interface Config extends ClientConfig {
   persistSession?: boolean;
   /** Custom session storage implementation. */
   sessionStorage?: ISessionStorage;
-  /** Whether to run node-sdk's canonical first-account bootstrap after sign-in. */
+  /** Enable first-party account bootstrap. Defaults on only at approved first-party page origins; false also omits implicit account and capabilities-read grants. */
   autoBootstrapAccount?: boolean;
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
@@ -281,7 +282,7 @@ export interface Config extends ClientConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Strategy for TinyCloud root signature requests. */
   signStrategy?: SignStrategy;
-  /** Include canonical account registry read/create-update/list permissions in plain sessions and composed manifests. Default true. */
+  /** Include implicit account registry/bootstrap authority. First-party only; false or autoBootstrapAccount:false disables it. Third-party origins always omit it. */
   includeAccountRegistryPermissions?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
@@ -533,6 +534,17 @@ export class TinyCloudWeb {
     this._initPromise = this._init();
   }
 
+  private bootstrapSignInPolicy() {
+    const firstParty = isFirstPartyOrigin(typeof window === "undefined" ? undefined : window.location?.origin);
+    const enabled = firstParty && this.config.autoBootstrapAccount !== false;
+    return {
+      autoBootstrapAccount: enabled,
+      includeAccountRegistryPermissions: enabled && this.config.includeAccountRegistryPermissions !== false,
+      includeImplicitCapabilitiesRead: enabled,
+      requireExistingAccount: !firstParty,
+    };
+  }
+
   /**
    * Async initialization: ensure WASM is ready, then create TinyCloudNode.
    * @internal
@@ -580,9 +592,7 @@ export class TinyCloudWeb {
       manifest: this._manifest,
       capabilityRequest: this._capabilityRequest,
       signStrategy: this.config.signStrategy,
-      includeAccountRegistryPermissions:
-        this.config.includeAccountRegistryPermissions,
-      autoBootstrapAccount: this.config.autoBootstrapAccount,
+      ...this.bootstrapSignInPolicy(),
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
@@ -1227,12 +1237,11 @@ export class TinyCloudWeb {
       return composeManifestRequest(
         Array.isArray(this._manifest) ? this._manifest : [this._manifest],
         {
-          includeAccountRegistryPermissions:
-            this.config.includeAccountRegistryPermissions,
+          ...this.bootstrapSignInPolicy(),
         },
       ).resources;
     }
-    if (this.config.includeAccountRegistryPermissions === false) {
+    if (!this.bootstrapSignInPolicy().includeAccountRegistryPermissions) {
       return [];
     }
     if (node.accountSpaceId === undefined) {

@@ -471,6 +471,7 @@ export type Ledger = {
   tc2924NodeAliasesRoot?: Tc2872RenewalRootBudget;
   tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2936RestoreCommitRoot?: LogoutRatchet;
+  tc2931BootstrapScope?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1096,6 +1097,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2924NodeAliasesRoot !== undefined) pins.push({ row: "tc2924NodeAliasesRoot", pin: root.tc2924NodeAliasesRoot.sourceCommits.at(-1)! });
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (root.tc2936RestoreCommitRoot !== undefined) pins.push({ row: "tc2936RestoreCommitRoot", pin: root.tc2936RestoreCommitRoot.sourceCommits.at(-1)! });
+  if (root.tc2931BootstrapScope !== undefined) pins.push({ row: "tc2931BootstrapScope", pin: root.tc2931BootstrapScope.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1191,6 +1193,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2924NodeAliasesRoot", root.tc2924NodeAliasesRoot?.root.ceiling],
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
     ["tc2936RestoreCommitRoot", root.tc2936RestoreCommitRoot?.root.ceiling],
+    ["tc2931BootstrapScope", root.tc2931BootstrapScope?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3284,6 +3287,40 @@ export const approvedTc2936RestoreCommitRoot: LogoutRatchet = {
   "reason": "The node re-checks the restored session's expiry before installing it, and the web SDK re-checks the persisted sign-out marker after the node restore; both checks are required by security review. Canonical Node 22/Bun 1.3.14 CI at 2a8edc2245aaf475f8f4292ee07c6312b744bcad measures 1523271/1457883 gzip -9 bytes over master b841476426fa4796d629d751fa8b5a0cea941252 at 1523224/1457833. Optional, cumulative and worker allowances remain unchanged. Details: TC-2936"
 };
 
+export const approvedTc2931BootstrapScope: NonNullable<Ledger["tc2931BootstrapScope"]> = {
+  "label": "first-party bootstrap scope root and worker admission (TC-2931)",
+  "ruling": "size-ruling: TC-2931: Naomi approves exact canonical combined-head CI measurements, root delta at most +700 B per format and each worker at most +250 B over post-TC-2936. No general ceiling changes. Details: TC-2931",
+  "base": "41daf1c4717e15d6f95564f7246030877221f24a",
+  "sourceCommits": [
+    "6c748d4959f46acb3ed8031fca182326fcd0e0a2"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206/job/131928463539"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 544,
+      "index.cjs": 448
+    },
+    "ceiling": {
+      "index.mjs": 1523815,
+      "index.cjs": 1458331
+    }
+  },
+  "worker": {
+    "delta": 161,
+    "ceiling": 780903
+  },
+  "replicaWorker": {
+    "delta": 150,
+    "ceiling": 774561
+  },
+  "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3376,6 +3413,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2924NodeAliasesRoot: approvedTc2924NodeAliasesRoot,
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
   tc2936RestoreCommitRoot: approvedTc2936RestoreCommitRoot,
+  tc2931BootstrapScope: approvedTc2931BootstrapScope,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3791,6 +3829,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2934RequestedAccountRoot !== undefined &&
       (!value.tc2924NodeAliasesRoot || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
     throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
+  }
+  if (value.tc2931BootstrapScope !== undefined &&
+      (!value.tc2936RestoreCommitRoot || !value.tc2872RenewalKvWorker || !value.tc2872RenewalReplicaWorker ||
+        JSON.stringify(value.tc2931BootstrapScope) !== JSON.stringify(approvedTc2931BootstrapScope))) {
+    throw new Error("Only the exact TC-2931 root and worker admission with its predecessors is approved.");
   }
   if (value.tc2936RestoreCommitRoot !== undefined &&
       (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
@@ -4609,5 +4652,12 @@ export function validateTc2936RestoreCommitRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2936RestoreCommitRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2936 root admission may be introduced once and cannot change later.");
+  }
+}
+
+export function validateTc2931BootstrapScopeTransition(base?: Ledger["tc2931BootstrapScope"], current?: Ledger["tc2931BootstrapScope"]): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2931BootstrapScope) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2931 admission may be introduced once and cannot change later.");
   }
 }

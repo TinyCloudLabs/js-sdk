@@ -3088,5 +3088,38 @@
       }
     },
     "reason": "The node re-checks the restored session's expiry before installing it, and the web SDK re-checks the persisted sign-out marker after the node restore; both checks are required by security review. Canonical Node 22/Bun 1.3.14 CI at 2a8edc2245aaf475f8f4292ee07c6312b744bcad measures 1523271/1457883 gzip -9 bytes over master b841476426fa4796d629d751fa8b5a0cea941252 at 1523224/1457833. Optional, cumulative and worker allowances remain unchanged. Details: TC-2936"
+  },
+  "tc2931BootstrapScope": {
+    "label": "first-party bootstrap scope root and worker admission (TC-2931)",
+    "ruling": "size-ruling: TC-2931: Naomi approves exact canonical combined-head CI measurements, root delta at most +700 B per format and each worker at most +250 B over post-TC-2936. No general ceiling changes. Details: TC-2931",
+    "base": "41daf1c4717e15d6f95564f7246030877221f24a",
+    "sourceCommits": [
+      "6c748d4959f46acb3ed8031fca182326fcd0e0a2"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206/job/131928463539"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 544,
+        "index.cjs": 448
+      },
+      "ceiling": {
+        "index.mjs": 1523815,
+        "index.cjs": 1458331
+      }
+    },
+    "worker": {
+      "delta": 161,
+      "ceiling": 780903
+    },
+    "replicaWorker": {
+      "delta": 150,
+      "ceiling": 774561
+    },
+    "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
   }
 }

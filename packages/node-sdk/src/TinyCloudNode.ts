@@ -999,10 +999,12 @@ export interface TinyCloudNodeConfig {
   manifest?: Manifest | Manifest[];
   /** Pre-composed manifest request. Takes precedence over `manifest`. */
   capabilityRequest?: ComposedManifestRequest;
-  /** Include account bootstrap support in plain sessions and implicit manifest permissions. Default true. */
+  /** Include implicit account bootstrap authority. Default true; autoBootstrapAccount:false always disables it. */
   includeAccountRegistryPermissions?: boolean;
-  /** Run canonical first-account bootstrap when fresh account state is detected. Default true. */
+  /** Run canonical account bootstrap. Default true; false also omits implicit account and space capabilities-read grants. */
   autoBootstrapAccount?: boolean;
+  /** @internal Browser apps outside first-party origins must finish account setup first. */
+  requireExistingAccount?: boolean;
   /** Default-off service telemetry. */
   telemetry?: TelemetryConfig;
   /** Retry of node busy/timeout answers; `{ maxAttempts: 1 }` disables it. See {@link RetryPolicy}. */
@@ -2223,9 +2225,11 @@ export class TinyCloudNode {
           ? BOOTSTRAP_DEFAULT_ONLY_SESSION_REQUEST
           : BOOTSTRAP_SESSION_REQUESTS.default
         : config.capabilityRequest,
-      includeAccountRegistryPermissions: useBootstrapSignInRequest
+      includeAccountRegistryPermissions: useBootstrapSignInRequest || config.autoBootstrapAccount === false
         ? false
         : config.includeAccountRegistryPermissions,
+      includeImplicitCapabilitiesRead: config.autoBootstrapAccount !== false,
+      requireExistingAccount: config.requireExistingAccount,
       // Sign-in needs only the entry inputs (prefixes + secrets opt-in);
       // storage and scheduling never leave TinyCloudNode.
       replication: config.replication?.enabled === true
