@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.6.6
+
+### Patch Changes
+
+- Without `--runner`, `tinycloud feed watch` now prints each new owner response as one JSON line. Add `--once` to exit after it prints the first responses, so an agent's runtime can wake when the command finishes. A long-running `feed watch` no longer stops on its own after about a minute with no responses.
+  Each line includes what the owner wrote. Treat this output as private and keep it out of shared logs. `--runner` works as before.
+
+  [PR #936](https://github.com/TinyCloudLabs/js-sdk/pull/936)
+
+  Details: TC-2205
+
+- Updated dependencies
+  - @tinycloud/sdk-services@3.11.1
+
 ## 1.6.5
 
 ### Patch Changes

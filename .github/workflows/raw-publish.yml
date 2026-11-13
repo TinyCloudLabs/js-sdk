@@ -4,23 +4,65 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'npm dist-tag override (leave empty to auto-detect from version)'
+        description: 'Must be latest for this stable hotfix'
         type: string
-        default: ''
-        required: false
+        default: latest
+        required: true
       dry_run:
-        description: 'Dry run (pack + list, do not publish)'
+        description: 'Pack and validate without publishing'
         type: boolean
-        default: false
+        default: true
+      source_sha:
+        description: 'Full reviewed hotfix commit SHA'
+        type: string
+        required: true
+      package:
+        description: 'Allowlisted release selection; single packages are recovery only'
+        type: choice
+        options: [both, sdk-services, cli]
+        default: both
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   publish:
     name: Raw Publish
     runs-on: ubuntu-latest
+    env:
+      RELEASE_SHA: ${{ inputs.source_sha }}
+      PACKAGE: ${{ inputs.package }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - name: Validate dispatch before installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" == latest ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_SHA" == "$GITHUB_SHA" ]]
+          [[ "$GITHUB_REF" == refs/heads/feat/tc-2205-cli-1.6.6-hotfix ]]
+          case "$PACKAGE" in both|sdk-services|cli) ;; *) exit 1 ;; esac
+          case "$DRY_RUN" in true|false) ;; *) exit 1 ;; esac
+
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert reviewed checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+          [[ "$RELEASE_SHA" == "$GITHUB_SHA" ]]
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -31,129 +73,253 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install dependencies
-        run: bun install
+      - name: Setup Node for packing and publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.20.0'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install committed dependencies
+        run: bun install --frozen-lockfile
 
       - name: Build all packages
         run: bun run build
         env:
           BUILD_SETUP_ENABLED: true
 
-      - name: Resolve workspace:* versions
+      - name: Prepare fail-closed validation and evidence
+        shell: bash
         run: |
-          # Rewrite workspace:* deps to actual version numbers so npm publish works
-          node -e '
-            const fs = require("fs");
-            const glob = require("child_process").execSync("find packages -name package.json -not -path */node_modules/*", {encoding:"utf8"}).trim().split("\n");
-            const versions = {};
-            for (const f of glob) {
-              const pkg = JSON.parse(fs.readFileSync(f, "utf8"));
-              if (pkg.name) versions[pkg.name] = pkg.version;
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hotfix-pack"
+          cat > "$RUNNER_TEMP/hotfix-check.cjs" <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const assert = require('node:assert/strict');
+          const { execFileSync } = require('node:child_process');
+          const { createHash } = require('node:crypto');
+          const base = 'dcee98981f6d16b9edd02cecc25b16923edf08f4';
+          const out = path.join(process.env.RUNNER_TEMP, 'hotfix-pack');
+          const sha = process.env.RELEASE_SHA;
+          const selection = process.env.PACKAGE;
+          const packages = ['bootstrap', 'cli', 'courier', 'mcp', 'node-sdk', 'operations',
+            'replica', 'sdk-core', 'sdk-services', 'server', 'share-envelope', 'share-sdk',
+            'vfs', 'web-sdk', 'node-sdk-wasm', 'web-sdk-wasm'];
+          const targets = {
+            'sdk-services': { version: '3.11.1', previous: '3.11.0' },
+            cli: { version: '1.6.6', previous: '1.6.5' },
+          };
+          const selected = name => selection === 'both' || selection === name;
+          const json = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const save = (name, value) => fs.writeFileSync(path.join(out, name), JSON.stringify(value, null, 2) + '\n');
+          const manifest = name => json(`packages/${name}/package.json`);
+          const original = name => JSON.parse(git('show', `${base}:packages/${name}/package.json`));
+          function manifests() {
+            assert(!fs.existsSync('.changeset/pre.json'), 'prerelease mode is forbidden');
+            const files = git('ls-tree', '-r', '--name-only', base).split('\n')
+              .filter(file => file.startsWith('packages/') && file.endsWith('/package.json'));
+            for (const file of files) {
+              const before = JSON.parse(git('show', `${base}:${file}`));
+              const current = json(file);
+              const name = Object.keys(targets).find(name => file === `packages/${name}/package.json`);
+              if (name) {
+                before.version = targets[name].version;
+                if (name === 'cli') before.dependencies['@tinycloud/sdk-services'] = '3.11.1';
+              }
+              assert.deepEqual(current, before, `unexpected manifest change: ${file}`);
             }
-            for (const f of glob) {
-              const raw = fs.readFileSync(f, "utf8");
-              const pkg = JSON.parse(raw);
-              let changed = false;
-              for (const depType of ["dependencies","devDependencies","peerDependencies"]) {
-                if (!pkg[depType]) continue;
-                for (const [name, ver] of Object.entries(pkg[depType])) {
-                  if (typeof ver === "string" && ver.startsWith("workspace:") && versions[name]) {
-                    pkg[depType][name] = versions[name];
-                    changed = true;
-                  }
+            for (const name of Object.keys(targets)) {
+              const pkg = manifest(name);
+              assert.equal(pkg.name, `@tinycloud/${name}`);
+              assert.equal(pkg.version, targets[name].version);
+              assert(!pkg.private, 'target must be public');
+              for (const kind of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+                for (const spec of Object.values(pkg[kind] || {})) {
+                  assert(typeof spec === 'string' && !/workspace:|\d+\.\d+\.\d+-/.test(spec),
+                    `workspace or prerelease runtime spec: ${spec}`);
                 }
               }
-              if (changed) fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n");
             }
-          '
+            assert.equal(manifest('cli').dependencies['@tinycloud/sdk-services'], '3.11.1');
+            assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'tracked build/install edits');
+          }
+          async function document(name, phase) {
+            const response = await fetch(`https://registry.npmjs.org/@tinycloud%2f${name}`, {
+              headers: { 'Cache-Control': 'no-cache' }, cache: 'no-store',
+              signal: AbortSignal.timeout(30000),
+            });
+            assert.equal(response.status, 200, `registry HTTP status: ${name}`);
+            const doc = await response.json();
+            assert.equal(doc.name, `@tinycloud/${name}`);
+            assert(doc.versions && typeof doc.versions === 'object' && !Array.isArray(doc.versions));
+            assert(doc['dist-tags'] && typeof doc['dist-tags'] === 'object' && !Array.isArray(doc['dist-tags']));
+            for (const [tag, version] of Object.entries(doc['dist-tags'])) {
+              assert.equal(typeof version, 'string');
+              assert(doc.versions[version], `unresolved tag: ${name}/${tag}`);
+            }
+            save(`${phase}-${name}.json`, doc);
+            return doc;
+          }
+          async function snapshot(phase) {
+            const tags = {};
+            for (const name of packages) tags[name] = (await document(name, phase))['dist-tags'];
+            save(`${phase}-tags.json`, tags);
+            return tags;
+          }
+          async function preflight() {
+            manifests();
+            await snapshot('before');
+            for (const name of Object.keys(targets)) {
+              if (!selected(name)) continue;
+              const doc = json(path.join(out, `before-${name}.json`));
+              assert(!Object.hasOwn(doc.versions, targets[name].version), `${name} target already exists; inspect publication evidence`);
+              assert.equal(doc['dist-tags'].latest, targets[name].previous, `${name} latest moved`);
+            }
+          }
+          function unpack(tarball, directory) {
+            fs.mkdirSync(directory, { recursive: true });
+            const entries = execFileSync('tar', ['-tzf', tarball], { encoding: 'utf8' }).trim().split('\n');
+            assert(entries.every(file => file.startsWith('package/') && !file.split('/').includes('..')));
+            execFileSync('tar', ['-xzf', tarball, '-C', directory, '--no-same-owner']);
+            return entries.filter(file => !file.endsWith('/'));
+          }
+          async function pack(name) {
+            assert(Object.hasOwn(targets, name));
+            const cwd = `packages/${name}`;
+            const result = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', out],
+              { cwd, encoding: 'utf8' }));
+            save(`${name}-pack.json`, result);
+            assert.equal(result.length, 1);
+            const info = result[0];
+            assert.equal(info.name, `@tinycloud/${name}`);
+            assert.equal(info.version, targets[name].version);
+            const tarball = path.join(out, info.filename);
+            const integrity = 'sha512-' + createHash('sha512').update(fs.readFileSync(tarball)).digest('base64');
+            assert.equal(info.integrity, integrity);
+            const directory = path.join(out, `${name}-unpacked`);
+            const files = unpack(tarball, directory).map(file => file.slice('package/'.length));
+            save(`${name}-files.json`, files);
+            assert.deepEqual(json(path.join(directory, 'package/package.json')), manifest(name));
+            for (const file of files) {
+              assert(/^(dist\/|bin\/|skills\/|package\.json$|README(?:\.md)?$|LICENSE(?:\.[^/]+)?$)/i.test(file), `unexpected packed file: ${file}`);
+              assert(!/(^|\/)(\.npmrc|\.env[^/]*|profiles?|credentials?)(\/|$)|\.(sqlite|db)(-|$)|\.tsx?$/.test(file.replace(/\.d\.(ts|cts)$/, '.types')), `sensitive/source file: ${file}`);
+            }
+            assert(files.some(file => /^LICENSE(?:\.|$)/i.test(file)));
+            assert(files.some(file => /^README(?:\.|$)/i.test(file)));
+            // Preserve every file shipped in the published stable package.
+            const baseline = json(path.join(out, `before-${name}.json`)).versions[targets[name].previous];
+            assert(baseline?.dist?.tarball?.startsWith('https://registry.npmjs.org/'));
+            const response = await fetch(baseline.dist.tarball, { headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(30000) });
+            assert.equal(response.status, 200);
+            const bytes = Buffer.from(await response.arrayBuffer());
+            assert.equal(createHash('sha1').update(bytes).digest('hex'), baseline.dist.shasum);
+            const oldTarball = path.join(out, `${name}-baseline.tgz`);
+            fs.writeFileSync(oldTarball, bytes);
+            const oldFiles = unpack(oldTarball, path.join(out, `${name}-baseline`));
+            for (const file of oldFiles) assert(files.includes(file.slice('package/'.length)), `missing stable file: ${file}`);
+            const packed = file => fs.readFileSync(path.join(directory, 'package', file), 'utf8');
+            if (name === 'cli') {
+              assert(files.includes('bin/tinycloud'));
+              assert(files.some(file => file.startsWith('skills/')));
+              const bundle = files.filter(file => /^dist\/.*\.(js|cjs)$/.test(file)).map(packed).join('\n');
+              assert(bundle.includes('JSON.stringify(response)') && bundle.includes('process.stdout.write'));
+              assert(bundle.includes('setInterval(') && bundle.includes('clearInterval(alive)'));
+            } else {
+              for (const extension of ['js', 'cjs', 'd.ts', 'd.cts']) {
+                assert(files.includes(`dist/feed/index.${extension}`));
+                assert(/\bonce\b/.test(packed(`dist/feed/index.${extension}`)));
+              }
+              function exportsExist(value) {
+                if (typeof value === 'string') assert(files.includes(value.replace(/^\.\//, '')));
+                else for (const entry of Object.values(value)) exportsExist(entry);
+              }
+              exportsExist(manifest(name).exports['./feed']);
+              assert(/once[\s\S]*break|once[\s\S]*return/.test(packed('dist/feed/index.js')));
+            }
+          }
+          async function verify(name) {
+            assert(Object.hasOwn(targets, name));
+            const doc = await document(name, `verified-${name}`);
+            const published = doc.versions[targets[name].version];
+            assert(published, `${name} publication not visible; inspect accepted write, do not republish`);
+            assert.equal(published.version, targets[name].version);
+            assert.equal(published.gitHead, sha);
+            assert.equal(published.dist.integrity, json(path.join(out, `${name}-pack.json`))[0].integrity);
+            for (const kind of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+              assert.deepEqual(published[kind] || {}, manifest(name)[kind] || {});
+            }
+            assert.equal(doc['dist-tags'].latest, targets[name].version);
+          }
+          async function after() {
+            const tags = await snapshot('after');
+            const expected = json(path.join(out, 'before-tags.json'));
+            for (const name of Object.keys(targets)) {
+              if (selected(name)) expected[name].latest = targets[name].version;
+            }
+            assert.deepEqual(tags, expected, 'unexpected dist-tag change');
+          }
+          async function main() {
+            const [mode, name] = process.argv.slice(2);
+            if (mode === 'preflight') await preflight();
+            else if (mode === 'pack') await pack(name);
+            else if (mode === 'verify') await verify(name);
+            else if (mode === 'after') await after();
+            else throw new Error('unknown validation mode');
+          }
+          main().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
+          node "$RUNNER_TEMP/hotfix-check.cjs" preflight
 
-      - name: List publishable packages
-        id: list
+      - name: Pack and validate before any write
+        shell: bash
         run: |
-          echo "Packages that would be published:"
-          for dir in packages/*/; do
-            if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
-              name=$(node -p "require('./$dir/package.json').name")
-              version=$(node -p "require('./$dir/package.json').version")
+          set -euo pipefail
+          # Always retain a services pack so CLI-only recovery can verify its bytes.
+          node "$RUNNER_TEMP/hotfix-check.cjs" pack sdk-services
+          if [ "$PACKAGE" = both ] || [ "$PACKAGE" = cli ]; then
+            node "$RUNNER_TEMP/hotfix-check.cjs" pack cli
+          fi
+          if [ "$PACKAGE" = cli ]; then
+            node "$RUNNER_TEMP/hotfix-check.cjs" verify sdk-services
+          fi
+          git diff --exit-code
+          git diff --cached --exit-code
 
-              # Skip if this version is already published
-              if npm view "$name@$version" version >/dev/null 2>&1; then
-                echo "  - $name@$version (SKIP — already published)"
-                continue
-              fi
-
-              # Auto-detect tag from version, or use override
-              if [ -n "${{ inputs.tag }}" ]; then
-                tag="${{ inputs.tag }}"
-              else
-                prerelease=$(echo "$version" | sed -n 's/.*-\([a-zA-Z]*\)\..*/\1/p')
-                if [ -n "$prerelease" ]; then
-                  tag="$prerelease"
-                else
-                  tag="latest"
-                fi
-              fi
-
-              echo "  - $name@$version (tag: $tag)"
-            fi
-          done
-
-      - name: Setup Node for npm publish
-        if: ${{ !inputs.dry_run }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Publish to npm
-        if: ${{ !inputs.dry_run }}
-        run: |
-          for dir in packages/*/; do
-            if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
-              name=$(node -p "require('./$dir/package.json').name")
-              version=$(node -p "require('./$dir/package.json').version")
-
-              # Skip if this version is already published
-              if npm view "$name@$version" version >/dev/null 2>&1; then
-                echo "Skipping $name@$version — already published"
-                continue
-              fi
-
-              # Auto-detect tag from version, or use override
-              if [ -n "${{ inputs.tag }}" ]; then
-                tag="${{ inputs.tag }}"
-              else
-                # Parse prerelease identifier from version (e.g. "2.0.3-beta.3" -> "beta")
-                prerelease=$(echo "$version" | sed -n 's/.*-\([a-zA-Z]*\)\..*/\1/p')
-                if [ -n "$prerelease" ]; then
-                  tag="$prerelease"
-                else
-                  tag="latest"
-                fi
-              fi
-
-              echo "Publishing $name@$version with tag $tag..."
-              (cd "$dir" && npm publish --access public --tag "$tag")
-            fi
-          done
+      - name: Publish only selected hotfix packages
+        shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Dry run pack
-        if: ${{ inputs.dry_run }}
         run: |
-          for dir in packages/*/; do
-            if [ -f "$dir/package.json" ] && ! grep -q '"private": true' "$dir/package.json"; then
-              name=$(node -p "require('./$dir/package.json').name")
-              version=$(node -p "require('./$dir/package.json').version")
-
-              # Skip if this version is already published
-              if npm view "$name@$version" version >/dev/null 2>&1; then
-                echo "=== $dir (SKIP — $name@$version already published) ==="
-                continue
-              fi
-
-              echo "=== $dir (would publish $name@$version) ==="
-              (cd "$dir" && npm pack --dry-run)
+          set -euo pipefail
+          if [ "$DRY_RUN" != true ]; then
+            if [ "$PACKAGE" = both ] || [ "$PACKAGE" = sdk-services ]; then
+              (cd packages/sdk-services && npm publish --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org)
+              curl --fail --silent --show-error -H 'Cache-Control: no-cache' \
+                'https://registry.npmjs.org/@tinycloud%2fsdk-services/3.11.1' \
+                | jq -e --arg sha "$RELEASE_SHA" '.version == "3.11.1" and .gitHead == $sha'
+              node "$RUNNER_TEMP/hotfix-check.cjs" verify sdk-services
             fi
-          done
+            if [ "$PACKAGE" = both ] || [ "$PACKAGE" = cli ]; then
+              node "$RUNNER_TEMP/hotfix-check.cjs" verify sdk-services
+              (cd packages/cli && npm publish --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org)
+              node "$RUNNER_TEMP/hotfix-check.cjs" verify cli
+            fi
+          fi
+
+      - name: Verify final tag maps after attempted writes
+        if: ${{ always() && !cancelled() && !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/hotfix-pack/before-tags.json" ]; then
+            node "$RUNNER_TEMP/hotfix-check.cjs" after
+          fi
+
+      - name: Retain registry and pack evidence on success or failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-1.6.6-hotfix-evidence
+          path: ${{ runner.temp }}/hotfix-pack/
+          if-no-files-found: warn

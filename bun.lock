@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.6.5",
+      "version": "1.6.6",
       "bin": {
         "tc": "./bin/tinycloud",
         "tinycloud": "./bin/tinycloud",
@@ -206,7 +206,7 @@
         "@tinycloud/node-sdk-wasm": "1.7.8",
         "@tinycloud/operations": "0.8.1",
         "@tinycloud/sdk-core": "3.11.2",
-        "@tinycloud/sdk-services": "3.11.0",
+        "@tinycloud/sdk-services": "3.11.1",
         "@tinycloud/share-envelope": "1.5.0",
         "@tinycloud/share-sdk": "1.4.4",
         "chalk": "^5.3.0",
@@ -374,7 +374,7 @@
     },
     "packages/sdk-services": {
       "name": "@tinycloud/sdk-services",
-      "version": "3.11.0",
+      "version": "3.11.1",
       "dependencies": {
         "@tinycloud/bootstrap": "2.8.0",
         "zod": "^3.23.0",
@@ -5928,7 +5928,15 @@
 
     "@testing-library/dom/pretty-format": ["pretty-format@27.5.1", "", { "dependencies": { "ansi-regex": "^5.0.1", "ansi-styles": "^5.0.0", "react-is": "^17.0.1" } }, "sha512-Qb1gy5OrP5+zDf2Bvnzdl3jsTf1qXVMazbvCoKhtKqVs4/YK4ozX4gKQJJVyNe+cajNPn0KoC0MC3FUmaHWEmQ=="],
 
+    "@tinycloud/node-sdk/@tinycloud/sdk-services": ["@tinycloud/sdk-services@3.11.0", "", { "dependencies": { "@tinycloud/bootstrap": "2.8.0", "zod": "^3.23.0" } }, "sha512-r15hplAeZ6+HkztGpfblQ7yVzSQiJe3epVSMw75KJ4GTD+xxuaCY0ZVaeVCmcnIliGUr/wubk/16Sbr7pi9zyQ=="],
+
     "@tinycloud/node-sdk-tests/ethers": ["ethers@6.16.0", "", { "dependencies": { "@adraffy/ens-normalize": "1.10.1", "@noble/curves": "1.2.0", "@noble/hashes": "1.3.2", "@types/node": "22.7.5", "aes-js": "4.0.0-beta.5", "tslib": "2.7.0", "ws": "8.17.1" } }, "sha512-U1wulmetNymijEhpSEQ7Ct/P/Jw9/e7R1j5XIbPRydgV2DjLVMsULDlNksq3RQnFgKoLlZf88ijYtWEXcPa07A=="],
+
+    "@tinycloud/operations/@tinycloud/sdk-services": ["@tinycloud/sdk-services@3.11.0", "", { "dependencies": { "@tinycloud/bootstrap": "2.8.0", "zod": "^3.23.0" } }, "sha512-r15hplAeZ6+HkztGpfblQ7yVzSQiJe3epVSMw75KJ4GTD+xxuaCY0ZVaeVCmcnIliGUr/wubk/16Sbr7pi9zyQ=="],
+
+    "@tinycloud/replica/@tinycloud/sdk-services": ["@tinycloud/sdk-services@3.11.0", "", { "dependencies": { "@tinycloud/bootstrap": "2.8.0", "zod": "^3.23.0" } }, "sha512-r15hplAeZ6+HkztGpfblQ7yVzSQiJe3epVSMw75KJ4GTD+xxuaCY0ZVaeVCmcnIliGUr/wubk/16Sbr7pi9zyQ=="],
+
+    "@tinycloud/sdk-core/@tinycloud/sdk-services": ["@tinycloud/sdk-services@3.11.0", "", { "dependencies": { "@tinycloud/bootstrap": "2.8.0", "zod": "^3.23.0" } }, "sha512-r15hplAeZ6+HkztGpfblQ7yVzSQiJe3epVSMw75KJ4GTD+xxuaCY0ZVaeVCmcnIliGUr/wubk/16Sbr7pi9zyQ=="],
 
     "@tinycloud/web-sdk/@types/node": ["@types/node@18.19.130", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-GRaXQx6jGfL8sKfaIDD6OupbIHBr9jv7Jnaml9tB7l4v068PAOXqfcujMMo5PhbIs6ggR1XODELqahT2R8v0fg=="],
 

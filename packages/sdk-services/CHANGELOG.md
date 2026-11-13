@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-services
 
+## 3.11.1
+
+### Patch Changes
+
+- The feed listener's `once` option stops after the first delivered batch.
+
+  Details: TC-2205
+
 ## 3.11.0
 
 ### Patch Changes
