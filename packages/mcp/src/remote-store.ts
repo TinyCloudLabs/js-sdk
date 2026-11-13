@@ -1026,6 +1026,7 @@ export class RemoteTenantStore {
     } else if (
       typeof profile.host === "string" &&
       PRODUCTION_NODE_HOSTS.has(profile.host.replace(/\/+$/, "")) &&
+      PRODUCTION_NODE_HOSTS.has(this.#config.nodeHost.replace(/\/+$/, "")) &&
       profile.host.replace(/\/+$/, "") !== this.#config.nodeHost.replace(/\/+$/, "")
     ) {
       // The runtime already talks to TC_HOST, but `tinycloud.auth.import`
@@ -1252,7 +1253,7 @@ export class RemoteTenantStore {
       typeof delegation.spaceId !== "string" ||
       typeof delegation.ownerAddress !== "string" ||
       !Number.isSafeInteger(delegation.chainId) ||
-      typeof delegation.host !== "string" || !sameTinyCloudNode(delegation.host, this.#config.nodeHost) ||
+      typeof delegation.host !== "string" || !sameNodeHost(delegation.host, this.#config.nodeHost) ||
       !(delegation.expiry instanceof Date) || !Number.isFinite(delegation.expiry.getTime())) {
       throw new NativeGrantValidationError("native_grant_rejected");
     }
@@ -1435,6 +1436,23 @@ function samePrincipal(left: string | undefined, right: string): boolean {
 
 function normalizeDid(value: string): string {
   return value.split("#", 1)[0]!;
+}
+
+function sameNodeHost(left: string, right: string): boolean {
+  if (PRODUCTION_NODE_HOSTS.has(left) && sameTinyCloudNode(left, right)) return true;
+  try {
+    const normalize = (value: string): string => {
+      const url = new URL(value);
+      if (url.username !== "" || url.password !== "") return "";
+      url.hash = "";
+      url.search = "";
+      url.pathname = url.pathname.replace(/\/+$/, "");
+      return url.toString().replace(/\/+$/, "");
+    };
+    return normalize(left) !== "" && normalize(left) === normalize(right);
+  } catch {
+    return false;
+  }
 }
 
 function isPermissionEntry(value: unknown): value is PermissionEntry {

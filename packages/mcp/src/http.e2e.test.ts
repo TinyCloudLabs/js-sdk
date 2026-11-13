@@ -1518,7 +1518,7 @@ test("a refused delegation approval names its stage, code and reason, and never 
 
 for (const storedHost of ["https://node.tinycloud.xyz", "https://tee.node.tinycloud.xyz"]) {
 test(`a tenant created on production name ${storedHost} is moved to TC_HOST, so its authority approval imports`, async () => {
-  const outcome = await approveWithStoredHost(storedHost);
+  const outcome = await approveWithStoredHost(storedHost, storedHost === "https://node.tinycloud.xyz" ? "https://tee.node.tinycloud.xyz" : "https://node.tinycloud.xyz");
   expect(outcome.callback).toEqual({ status: 200, body: { success: true } });
   expect(outcome.storedHost).toBe(outcome.nodeHost);
   expect(outcome.diagnostics).toEqual([
@@ -1547,6 +1547,19 @@ test(`a tenant pinned to ${storedHost} still refuses its authority approval with
   ]);
 }, 60_000);
 
+}
+
+for (const storedHost of ["https://node.tinycloud.xyz", "https://tee.node.tinycloud.xyz"]) {
+  for (const configuredHost of ["https://evil.example", "http://127.0.0.1:4444"]) {
+    test(`production tenant ${storedHost} cannot migrate to unrelated TC_HOST ${configuredHost}`, async () => {
+      const outcome = await approveWithStoredHost(storedHost, configuredHost);
+      expect(outcome.callback).toEqual({ status: 400, body: {
+        error: "auth_import", code: "DELEGATION_HOST_MISMATCH", message: "TinyCloud could not accept this delegation.",
+      } });
+      expect(outcome.storedHost).toBe(storedHost);
+      expect(outcome.diagnostics.some(line => line.includes("tenant node host migrated"))).toBe(false);
+    }, 60_000);
+  }
 }
 
 for (const [nodeHost, grantHost] of [
@@ -1612,7 +1625,7 @@ for (const [nodeHost, grantHost] of [
  * profile on the state volume was created with `storedHost`. Runs bootstrap,
  * a KV authority request and its signed approval callback.
  */
-async function approveWithStoredHost(storedHost: string): Promise<{
+async function approveWithStoredHost(storedHost: string, configuredHost?: string): Promise<{
   nodeHost: string;
   client: Client;
   kvGet: Record<string, string>;
@@ -1627,14 +1640,26 @@ async function approveWithStoredHost(storedHost: string): Promise<{
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
+  const nodeHost = configuredHost ?? hermetic.host;
+  const fixtureFetch = globalThis.fetch;
+  const routeFetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === nodeHost) {
+      const target = hermetic.host + url.pathname + url.search;
+      return fixtureFetch(input instanceof Request ? new Request(target, input) : target, init);
+    }
+    return fixtureFetch(input, init);
+  }, { preconnect: fixtureFetch.preconnect });
+  const routed = spyOn(globalThis, "fetch").mockImplementation(routeFetch);
+  resources.push(async () => routed.mockRestore());
   const previousHost = process.env.TC_HOST;
-  process.env.TC_HOST = hermetic.host;
+  process.env.TC_HOST = nodeHost;
   resources.push(async () => {
     if (previousHost === undefined) delete process.env.TC_HOST;
     else process.env.TC_HOST = previousHost;
   });
   const { app, client, stateDir } = await startHostedMcp({
-    nodeHost: hermetic.host,
+    nodeHost,
     ownerDids: [hermetic.ownerDid],
   });
   const connect = await client.callTool({ name: "tinycloud_connect", arguments: {} });
@@ -1671,7 +1696,7 @@ async function approveWithStoredHost(storedHost: string): Promise<{
   const callback = await postCallback(app, delegationUrl, approval);
   stderr.mockRestore();
   return {
-    nodeHost: hermetic.host,
+    nodeHost,
     client,
     kvGet,
     callback,
