@@ -22,6 +22,7 @@ export default defineConfig({
     "@modelcontextprotocol/server/validators/ajv",
     "@modelcontextprotocol/node",
     "@tinycloud/node-sdk",
+    "@tinycloud/sdk-core",
     "@tinycloud/node-sdk-wasm",
     "@tinycloud/operations",
     "@tinycloud/operations/operations.json",
