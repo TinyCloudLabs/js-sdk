@@ -17,6 +17,7 @@ import {
   type NamedKeyClientConfig,
 } from "@tinycloud/sdk-services/encryption/named-keys";
 import type { EncryptionCrypto } from "@tinycloud/sdk-services";
+import { endToEndNodeHost } from "@tinycloud/sdk-core";
 import type { TinyCloudNode } from "./TinyCloudNode";
 
 export {
@@ -76,14 +77,18 @@ export function createNamedKeyClient(
     }
   }
   const signer = internals as NodeSigningInternals;
-  const host = node.hosts[0];
-  if (host === undefined) throw new Error("TinyCloud node host has not been resolved");
+  const resolvedHost = node.hosts[0];
+  if (resolvedHost === undefined) throw new Error("TinyCloud node host has not been resolved");
+  // Key calls carry public keys and key admin, so they use the node's
+  // TEE-terminated origin and never follow a redirect elsewhere (TC-2923).
+  const host = endToEndNodeHost(resolvedHost);
+  const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const config: NamedKeyClientConfig = {
     keyWrapV2: options.keyWrapV2 ?? signer.config?.keyWrapV2 ?? false,
     requireKeyWrapV2: options.requireKeyWrapV2 ?? signer.config?.requireKeyWrapV2 ?? false,
     host,
     crypto: signer.createEncryptionCrypto(),
-    fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
+    fetch: (input, init) => baseFetch(input, { ...init, redirect: "error" }),
     defaultNetworkId: () => options.networkId ?? node.getDefaultEncryptionNetworkId(),
     signInvocation: (input) =>
       signer.signRawNetworkAuthorization({

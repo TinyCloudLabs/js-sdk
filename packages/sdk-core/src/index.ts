@@ -1227,4 +1227,4 @@ export {
   type UnsignedPolicyStatus,
 } from "./policy";
 
-export { sameTinyCloudNode } from "./tinycloud-node";
+export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";

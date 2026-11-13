@@ -233,6 +233,7 @@ import {
   err,
   serviceError,
   type Result,
+  endToEndNodeHost,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -2283,6 +2284,17 @@ export class TinyCloudNode {
   }
 
   private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+    const destinations = await this.registryDestinations(resource, access, noEntryHosts);
+    // Encryption-network traffic carries key material and public keys, so it
+    // only uses the origin whose TLS terminates inside the node (TC-2923). The
+    // identity check that follows runs against that origin; nothing retries on
+    // the proxied name.
+    return access === "encryption"
+      ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) }))
+      : destinations;
+  }
+
+  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
         (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
