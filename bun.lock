@@ -23,7 +23,7 @@
     },
     "apps/manage-key-reference-clients": {
       "name": "@tinycloud/manage-key-reference-clients",
-      "version": "0.0.21-beta.24",
+      "version": "0.0.21-beta.25",
       "dependencies": {
         "@tinycloud/node-sdk": "workspace:*",
         "@tinycloud/sdk-core": "workspace:*",
@@ -52,7 +52,7 @@
     },
     "apps/openkey-example": {
       "name": "tinycloud-openkey-example-app",
-      "version": "0.0.49-beta.24",
+      "version": "0.0.49-beta.25",
       "dependencies": {
         "@openkey/sdk": "^0.9.0",
         "@radix-ui/react-accordion": "^1.2.3",
@@ -102,7 +102,7 @@
     },
     "apps/openkey-vite": {
       "name": "openkey-vite",
-      "version": "0.0.47-beta.24",
+      "version": "0.0.47-beta.25",
       "dependencies": {
         "@openkey/sdk": "0.9.0",
         "@radix-ui/react-accordion": "^1.2.3",
@@ -217,7 +217,7 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
-        "@tinycloud/courier": "0.6.0-beta.29",
+        "@tinycloud/courier": "0.6.0-beta.30",
         "@tinycloud/replica": "0.4.5-beta.6",
         "@types/node": "^20",
         "tsup": "^8.0.0",
@@ -226,7 +226,7 @@
     },
     "packages/courier": {
       "name": "@tinycloud/courier",
-      "version": "0.6.0-beta.29",
+      "version": "0.6.0-beta.30",
       "bin": {
         "courier": "./dist/cli.js",
       },
@@ -453,7 +453,7 @@
     },
     "packages/web-sdk": {
       "name": "@tinycloud/web-sdk",
-      "version": "3.12.0-beta.24",
+      "version": "3.12.0-beta.25",
       "dependencies": {
         "@multiformats/multiaddr": "^13.0.1",
         "@multiformats/multiaddr-to-uri": "^12.0.0",

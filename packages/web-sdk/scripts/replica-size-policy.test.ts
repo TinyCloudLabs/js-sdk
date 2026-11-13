@@ -61,7 +61,7 @@ import {
   validateTc2872RenewalReplicaWorkerTransition,
   validateTc2872RenewalRootTransition,
 } from "./replica-size-policy";
-import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
+import { activeRootCeiling, approvedLedgerRows as shippedApprovedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 import { validateTc2481WebRoutingTransition, validateTc2481WebRootEntry } from "./replica-size-policy";
@@ -77,7 +77,11 @@ import { approvedTc2234InvitationPolicyRoot, validateTc2234InvitationPolicyRootT
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 
+const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot"));
+
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+// This file retains the pre-TC-2934 historical snapshots; its new row is tested separately.
+delete shipped.tc2934RequestedAccountRoot;
 // Historical cases keep the earlier root-only admission and its original cumulative budget.
 // Current-PR controls below exercise the final shipped record and its true accounting.
 const current = structuredClone(shipped);

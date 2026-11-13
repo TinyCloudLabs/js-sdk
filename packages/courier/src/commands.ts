@@ -30,7 +30,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
-import { collectThread, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
+import { clearReadCache, collectThread, diskThreadCache, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
@@ -564,6 +564,7 @@ export async function cmdRevoke(args: ParsedArgs) {
     await revokePeer(node, profile, handle, save);
     delete profile.peers[handle];
     save();
+    clearReadCache();
     try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
     console.log(`Revoked ${shown} (${peer.courierDid}). Files you already shared with ${shown} stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).`);
   });
@@ -684,13 +685,17 @@ export type { ThreadEntry } from './thread.js';
 export async function cmdRead(args: ParsedArgs) {
   const { profile, node } = await ctx(true, args.get('peer'));
   const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
+  const cache = diskThreadCache(profile.courierDid, threadId);
   const result = await collectThread({
     threadId,
     selfKv: node.kv,
     peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
     exactPeer: Boolean(args.get('peer')),
     kvFor: (peer) => peerKv(node, profile, peer),
+    cache,
+    self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
   });
+  cache.save();
   if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
   if (args.has('json')) {
     await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');

@@ -9,7 +9,7 @@ describe("TC-2904 exact proof-parser allowance", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
       const row = ledger.tc2904OwnerDirectProofRoot;
       expect(row.root.ceiling[format] - ledger.tc2872RenewalRoot.root.ceiling[format]).toBe(row.root.delta[format]);
-      expect(rootCeilingFor({ ...ledger, tc2924NodeAliasesRoot: undefined }, format)).toMatchObject({ row: "tc2904OwnerDirectProofRoot", ceiling: row.root.ceiling[format] });
+      expect(rootCeilingFor({ ...ledger, tc2924NodeAliasesRoot: undefined, tc2934RequestedAccountRoot: undefined }, format)).toMatchObject({ row: "tc2904OwnerDirectProofRoot", ceiling: row.root.ceiling[format] });
     }
   });
   test("refuses changed, removed, or unstacked allowances", () => {

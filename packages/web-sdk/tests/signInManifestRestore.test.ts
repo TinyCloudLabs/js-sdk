@@ -1,3 +1,4 @@
+import { signedBrowserSession } from "./fixtures/signed-browser-session";
 import { describe, expect, mock, test } from "bun:test";
 import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { ledgerFor } from "../../replica/src/kv-storage/ledger";
@@ -16,6 +17,8 @@ import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/
 import type { Config } from "../src/modules/tcw";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
+const SIGNED_PERSISTED = await signedBrowserSession(undefined, "1".padStart(64, "0"));
+const SIGNED_OTHER = await signedBrowserSession(undefined, "2".padStart(64, "0"));
 const TEST_REGISTRY_URL = "https://registry.test";
 
 function registryNoEntryResponse(): Response {
@@ -170,19 +173,19 @@ test("the browser replica plugin and its registered loaders are immutable", () =
 });
 
 test("passes persisted additional spaces and expiry through browser restore data", () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const expiresAt = "2099-01-01T00:00:00.000Z";
   const spaces = { public: `tinycloud:pkh:eip155:1:${address}:public` };
 
   const restored = restoreDataFromPersisted({
     address,
     chainId: 1,
-    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-    siwe: "siwe",
-    signature: "signature",
+    sessionKey: SIGNED_PERSISTED.sessionKey,
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
     tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer persisted" },
-      delegationCid: "bafy-persisted",
+      delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+      delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
       spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
       spaces,
       verificationMethod: "did:key:zPersisted#zPersisted",
@@ -262,18 +265,18 @@ test("SIWE uri is not defaulted to the page origin when the caller sets domain (
 });
 
 test("accountAuthorizationCid returns the delegation CID of a restored walletless session", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-restored-account",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         verificationMethod: "did:key:default",
       },
@@ -300,14 +303,14 @@ test("accountAuthorizationCid returns the delegation CID of a restored walletles
     const result = await tcw.restoreSession(address);
     expect(result.error).toBeUndefined();
     expect(result.status).toBe("restored");
-    expect(tcw.accountAuthorizationCid()).toBe("bafy-restored-account");
+    expect(tcw.accountAuthorizationCid()).toBe(SIGNED_PERSISTED.tinycloudSession!.delegationCid);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
 test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const signedMessages: string[] = [];
   const provider = {
     request: async ({ method, params }: { method: string; params?: unknown[] }) => {
@@ -352,18 +355,18 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
 });
 
 test("keeps a valid persisted session when the loaded binding cannot restore its signer", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         verificationMethod: "did:key:zPersisted#zPersisted",
       },
@@ -393,18 +396,18 @@ test("keeps a valid persisted session when the loaded binding cannot restore its
 });
 
 test("keeps persisted storage and reports the original rejection when cleanup would fail", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         spaces: { public: `tinycloud:pkh:eip155:1:${address}:public` },
         verificationMethod: "did:key:zPersisted#zPersisted",
@@ -431,7 +434,7 @@ test("keeps persisted storage and reports the original rejection when cleanup wo
 });
 
 test("reports storage load exceptions as restore failures without clearing persisted state", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const persisted = { marker: "leave-me-intact" };
   const storage = {
     save: mock(async () => undefined),
@@ -451,7 +454,7 @@ test("reports storage load exceptions as restore failures without clearing persi
 });
 
 test("reports browser getItem exceptions as restore failures without attempting storage cleanup", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const removeItem = mock(() => undefined);
   const backend = {
     get length() { return 1; },
@@ -492,8 +495,8 @@ test("signIn refreshes a restored session that does not cover the configured man
   });
 
   const restoredSession = {
-    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
-    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    address: SIGNED_PERSISTED.address,
+    walletAddress: SIGNED_PERSISTED.address,
     chainId: 1,
     sessionKey: {} as any,
     siwe: "old-siwe",
@@ -556,7 +559,7 @@ test("a manifest refresh cannot change restore status after signOut()", async ()
     },
   });
   await (tcw as any)._initPromise;
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const cleared = Promise.withResolvers<void>();
   const releaseClear = Promise.withResolvers<void>();
   (tcw as any)._node = {
@@ -587,8 +590,8 @@ test("a manifest refresh cannot change restore status after signOut()", async ()
 test("plain restored sessions require all canonical account permissions", async () => {
   const tcw = new TinyCloudWeb();
   const restoredSession = {
-    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
-    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    address: SIGNED_PERSISTED.address,
+    walletAddress: SIGNED_PERSISTED.address,
     chainId: 1,
     sessionKey: {} as any,
     siwe: "canonical-siwe",
@@ -596,7 +599,7 @@ test("plain restored sessions require all canonical account permissions", async 
   };
   const hasRuntimePermissions = mock(() => true);
   const node = {
-    accountSpaceId: "tinycloud:pkh:eip155:1:0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1:account",
+    accountSpaceId: `tinycloud:pkh:eip155:1:${SIGNED_PERSISTED.address}:account`,
     hasRuntimePermissions,
     signIn: mock(async () => undefined),
     session: restoredSession,
@@ -1225,7 +1228,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
 
 test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale authority", async () => {
   const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
-  const otherAddress = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const otherAddress = SIGNED_PERSISTED.address;
   const entries = new Map<string, string>();
   const blockedKey = `tinycloud:session:${address.toLowerCase()}`;
   const backend = {
@@ -1453,18 +1456,18 @@ test("signOut during real browser gate restore and awaited storage clear cannot 
 });
 
 test("a restore waiting for SDK initialisation is cancelled by signOut() before the node exists", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "x", d: "d" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         verificationMethod: "did:key:zPersisted#zPersisted",
       },
@@ -1526,18 +1529,19 @@ describe("TinyCloudWeb offline restore host hints. Details: TC-2481", () => {
 
   async function restore(options: { explicitHosts?: string[]; persistedHosts?: string[] }) {
     const address = await owner.getAddress();
+    const signed = await signedBrowserSession();
     const storage = {
       save: mock(async () => undefined),
       load: mock(async () => ({
         address,
         chainId: 1,
-        sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-        siwe: "siwe",
-        signature: "signature",
+        sessionKey: signed.sessionKey,
+        siwe: signed.siwe,
+        signature: signed.signature,
         ...(options.persistedHosts === undefined ? {} : { tinycloudHosts: options.persistedHosts }),
         tinycloudSession: {
-          delegationHeader: { Authorization: "Bearer persisted" },
-          delegationCid: "bafy-restored-account",
+          delegationHeader: { Authorization: signed.tinycloudSession!.delegationHeader.Authorization },
+          delegationCid: signed.tinycloudSession!.delegationCid,
           spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
           verificationMethod: "did:key:default",
         },
@@ -1592,14 +1596,14 @@ describe("TinyCloudWeb offline restore host hints. Details: TC-2481", () => {
 // The panel keeps per-account state (read cache, open dialogs, receipts). A session that replaces a
 // live one with a different principal must reset it; the same principal signing in again must not.
 describe("panel reset when the principal changes over a live session", () => {
-  const ACCOUNT_A = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
-  const ACCOUNT_B = "0x1111111111111111111111111111111111111111";
+  const ACCOUNT_A = SIGNED_PERSISTED.address;
+  const ACCOUNT_B = SIGNED_OTHER.address;
   const principal = (address: string, chainId = 1) => ({
     address,
     chainId,
     sessionKey: {} as any,
-    siwe: "siwe",
-    signature: "signature",
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
   });
 
   /** A TinyCloudWeb with a fake node. `live` is the session already on the node; `next` is what signIn/restore leaves behind. */
@@ -1609,15 +1613,16 @@ describe("panel reset when the principal changes over a live session", () => {
     // `failAfterCommit`: the node commits `next`, then a later step throws, as establishSignIn can. `stale`: restored permissions are not enough.
     opts: { failAfterCommit?: Error; stale?: boolean } = {},
   ) {
+    const signed = next.address === ACCOUNT_B ? SIGNED_OTHER : SIGNED_PERSISTED;
     const persisted = {
       address: next.address,
       chainId: next.chainId,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: signed.sessionKey,
+      siwe: signed.siwe,
+      signature: signed.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: signed.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: signed.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:default`,
         verificationMethod: "did:key:zPersisted#zPersisted",
       },
@@ -1764,8 +1769,8 @@ describe("signIn refuses caveated manifests (TC-1855)", () => {
   // same ESM instance the source throws, hence the static import at the top.
   type Caveats = Array<Record<string, unknown>> | undefined;
   const restoredSession = {
-    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
-    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    address: SIGNED_PERSISTED.address,
+    walletAddress: SIGNED_PERSISTED.address,
     chainId: 1,
     sessionKey: {},
     siwe: "persisted-siwe",
@@ -1883,16 +1888,16 @@ describe("signIn refuses caveated manifests (TC-1855)", () => {
 });
 
 describe("space hosting on restore (TC-2380)", () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const persisted = {
     address,
     chainId: 1,
-    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-    siwe: "siwe",
-    signature: "signature",
+    sessionKey: SIGNED_PERSISTED.sessionKey,
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
     tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer persisted" },
-      delegationCid: "bafy-persisted",
+      delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+      delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
       spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
       verificationMethod: "did:key:zPersisted#zPersisted",
     },
@@ -2050,7 +2055,7 @@ describe("space hosting on restore (TC-2380)", () => {
       n.spaceHosting = "not-hosted";
       return "not-hosted";
     });
-    const restoredSession = { address, walletAddress: address, chainId: 1, sessionKey: {}, siwe: "siwe", signature: "signature" };
+    const restoredSession = { address, walletAddress: address, chainId: 1, sessionKey: {}, siwe: SIGNED_PERSISTED.siwe, signature: "signature" };
     tcw.restoreSession = mock(async () => ({ status: "restored", session: restoredSession }));
     node.spaceHosting = "not-hosted";
 

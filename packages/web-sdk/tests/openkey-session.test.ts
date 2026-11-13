@@ -1,3 +1,4 @@
+import { signedBrowserSession } from "./fixtures/signed-browser-session";
 import { afterAll, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
 import { Wallet } from "ethers";
@@ -126,6 +127,7 @@ const WRONG_OPENKEY_WALLET = new Wallet(
   "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
 );
 const ADDRESS = OPENKEY_WALLET.address;
+const SIGNED_PERSISTED = await signedBrowserSession(undefined, OPENKEY_WALLET.privateKey, "applications");
 const KEY_ID = "key_personal_1";
 const TOKEN = "ok_provider_once_fixture";
 const ENDPOINT = "https://openkey.example.test/api/delegate/sign";
@@ -238,31 +240,15 @@ class MemoryStorage implements Storage {
 function persistedSession(
   overrides: Partial<PersistedSessionData> = {},
 ): PersistedSessionData {
-  const now = new Date();
   return {
+    ...structuredClone(SIGNED_PERSISTED),
     address: ADDRESS,
-    chainId: 1,
-    sessionKey: JSON.stringify({
-      kty: "OKP",
-      crv: "Ed25519",
-      x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-      d: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-    }),
-    siwe: "persisted CoordinationOS SIWE",
-    signature: "0xpersisted-signature",
     tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer persisted-delegation" },
-      delegationCid: "bafy-persisted-coordinationos",
-      spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
-      spaces: {
-        applications: `tinycloud:pkh:eip155:1:${ADDRESS}:applications`,
-      },
+      ...SIGNED_PERSISTED.tinycloudSession!,
+      spaces: { applications: `tinycloud:pkh:eip155:1:${ADDRESS}:applications` },
       verificationMethod: "did:key:default",
     },
-    expiresAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
-    createdAt: now.toISOString(),
     tinycloudHosts: ["https://tinycloud.example.test"],
-    version: "1.0",
     ...overrides,
   };
 }

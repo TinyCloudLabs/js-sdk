@@ -570,6 +570,9 @@ export async function initFromNow(input: InitInput, force: boolean): Promise<Map
   return marked;
 }
 
+/** An idle intake (nothing new queued) doubles its sleep up to this, or the explicit `--interval` if longer. */
+const IDLE_MAX_MS = 300_000;
+
 function intervalSeconds(raw: string | undefined): number {
   if (raw === undefined) return 60;
   const n = /^\d+$/.test(raw) ? Number(raw) : NaN;
@@ -631,6 +634,7 @@ export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = default
     const state = readState(path.join(stateDir, STATE_FILE));
     let peers = loadPeers(peersFile, peersOwner);
     log('intake-start', { once, intervalSeconds: intervalMs / 1000 });
+    let sleepMs = intervalMs;
     for (;;) {
       try {
         const profile = deps.loadProfile();
@@ -649,12 +653,15 @@ export async function cmdIntake(args: ParsedArgs, deps: IntakeLoopDeps = default
           log,
         });
         log('intake-cycle', { queued });
+        // New activity polls at the interval again; an idle or failing cycle backs off.
+        sleepMs = queued > 0 ? intervalMs : Math.min(sleepMs * 2, Math.max(IDLE_MAX_MS, intervalMs));
       } catch (error) {
         log('intake-error', { code: errInfo(error).code ?? 'error' });
+        sleepMs = Math.min(sleepMs * 2, Math.max(IDLE_MAX_MS, intervalMs));
         if (once) throw error;
       }
       if (once) return;
-      await deps.sleep(intervalMs);
+      await deps.sleep(sleepMs);
     }
   } finally {
     release();
