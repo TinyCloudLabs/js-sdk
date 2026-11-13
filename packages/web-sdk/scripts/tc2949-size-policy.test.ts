@@ -14,11 +14,14 @@ test("TC-2949 records the exact canonical CI root bytes within its 150-byte caps
   const predecessor = ledger.tc2936RestoreCommitRoot;
   expect(row).toEqual(approvedTc2949PanelChunkRecoveryRoot);
   expect(row.canonicalCI).toEqual({
-    run: "43431216924",
-    jobs: ["131904909994", "131904909601"],
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438863338",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438863338/job/131930920263",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438863338/job/131930919213"
+    ],
   });
-  expect(row.base).toBe("c85d10f17dfce15fddb1a7ad8544487467dbb2db");
-  expect(row.sourceCommits).toEqual(["810d13f02e104b9cc50affa64faed9870e36b876"]);
+  expect(row.base).toBe("41daf1c4717e15d6f95564f7246030877221f24a");
+  expect(row.sourceCommits).toEqual(["67650ae0b382703744b51a513befa715b64c2570"]);
 
   for (const format of ["index.mjs", "index.cjs"] as const) {
     const delta = row.root.delta[format];
