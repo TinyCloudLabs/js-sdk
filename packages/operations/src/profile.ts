@@ -174,6 +174,60 @@ export function ownerSessionLacksProof(
     (typeof session.siwe !== "string" || typeof session.signature !== "string");
 }
 
+/** The owner renewal lease a stored session was saved with at sign-in, if any, and its signed end. */
+export function storedLease(session: object): { authorization: string; expiresAt: string } | undefined {
+  const renewal = "renewal" in session ? session.renewal : undefined;
+  const receipt = typeof renewal === "object" && renewal !== null && "receipt" in renewal ? renewal.receipt : undefined;
+  if (typeof receipt !== "object" || receipt === null || !("leaseAuthorization" in receipt) || !("leaseExpiresAt" in receipt)) return undefined;
+  const { leaseAuthorization, leaseExpiresAt } = receipt;
+  return typeof leaseAuthorization === "string" && leaseAuthorization.length > 0 &&
+    typeof leaseExpiresAt === "string" && Number.isFinite(Date.parse(leaseExpiresAt))
+    ? { authorization: leaseAuthorization, expiresAt: leaseExpiresAt }
+    : undefined;
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+/** node-sdk's refusals for a lease that ended or was stopped; an unreachable node is none of these. */
+const RENEWAL_ENDED: Record<string, true> = {
+  RENEWAL_LEASE_EXPIRED: true,
+  RENEWAL_AUTHORITY_INACTIVE: true,
+  RENEWAL_LEASE_ORIGINAL_EXPIRED: true,
+};
+
+/**
+ * Restore a stored session. One saved with an owner renewal lease restores as usual while its original
+ * grant is live, and after that only through node-sdk's renewal restore, which checks the lease, the
+ * node's live status and its admitted renewal history. A lease that has ended or was stopped is
+ * reported as `AUTH_EXPIRED`, like an expired session: only a new approval fixes it. Any other
+ * failure, such as the node not answering, is passed on unchanged.
+ */
+export async function restoreStoredSession<S>(
+  node: { restoreSession(data: S): Promise<void>; restoreSessionWithRenewal(data: S, leaseAuthorization: string): Promise<void> },
+  sessionData: S,
+  stored: object,
+): Promise<void> {
+  const lease = storedLease(stored)?.authorization;
+  if (lease === undefined) return node.restoreSession(sessionData);
+  try {
+    await node.restoreSession(sessionData);
+    return;
+  } catch (error) {
+    if (errorCode(error) !== "AUTH_EXPIRED") throw error;
+  }
+  try {
+    await node.restoreSessionWithRenewal(sessionData, lease);
+  } catch (error) {
+    const code = errorCode(error);
+    if (typeof code === "string" && RENEWAL_ENDED[code]) {
+      throw Object.assign(new Error("The session's renewal has ended or was stopped."), { code: "AUTH_EXPIRED", cause: error });
+    }
+    throw error;
+  }
+}
+
 function profileNotFound(profile: string): Extract<InvocationContextResolution, { ok: false }> {
   return {
     ok: false,

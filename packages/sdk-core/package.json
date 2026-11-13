@@ -48,6 +48,11 @@
       "import": "./dist/delegations/renewal.js",
       "require": "./dist/delegations/renewal.cjs"
     },
+    "./delegations/renewal-receipt": {
+      "types": "./dist/delegations/renewal-receipt.d.ts",
+      "import": "./dist/delegations/renewal-receipt.js",
+      "require": "./dist/delegations/renewal-receipt.cjs"
+    },
     "./held-credentials": {
       "types": "./dist/held-credentials/index.d.ts",
       "import": "./dist/held-credentials/index.js",

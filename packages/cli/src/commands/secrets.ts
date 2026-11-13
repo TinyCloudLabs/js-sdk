@@ -10,7 +10,7 @@ import {
 } from "@tinycloud/node-sdk";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, ownerSessionLacksProof, storedLease } from "@tinycloud/operations/profile";
 import {
   buildSecretManagerUrl,
   buildSecretRequestUrl,
@@ -1074,12 +1074,14 @@ async function readDelegatedSecretValue(params: {
   return parseDecryptedSecretPayload(decrypted.data, params.secretPath);
 }
 
+/** Past its original grant; a session saved with an owner renewal lease counts as live until the lease's signed end. */
 function isStoredSessionExpired(session: object): boolean {
   const record = session as Record<string, unknown>;
   const direct = parseDate(record.expiresAt ?? record.expiry ?? record.expirationTime);
-  if (direct) return direct.getTime() <= Date.now();
-  const signedOrSiweExpiry = sessionExpiresAt(record);
-  return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
+  const signedOrSiweExpiry = direct ? direct.toISOString() : sessionExpiresAt(record);
+  if (signedOrSiweExpiry === null || Date.parse(signedOrSiweExpiry) > Date.now()) return false;
+  const lease = storedLease(record);
+  return lease === undefined || Date.parse(lease.expiresAt) <= Date.now();
 }
 
 function parseDate(value: unknown): Date | null {

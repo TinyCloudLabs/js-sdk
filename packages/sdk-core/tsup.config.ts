@@ -38,6 +38,7 @@ export default defineConfig({
     "src/delegations/index.ts",
     "src/delegations/issued.ts",
     "src/delegations/renewal.ts",
+    "src/delegations/renewal-receipt.ts",
     "src/held-credentials/index.ts",
     "src/kv-list-matching/index.ts",
     "src/registry-publication.ts",

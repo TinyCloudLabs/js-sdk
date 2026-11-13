@@ -1,4 +1,5 @@
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
+import { RENEWAL_ADMISSION_LEAD_MS } from '@tinycloud/sdk-core/delegations/renewal-receipt';
 import { CourierError } from './errors.js';
 
 /** Only the SDK's verified restore can complete a late, already-admitted installation. */
@@ -16,8 +17,6 @@ export async function recoverAdmittedRenewal(node: Pick<TinyCloudNode, 'restoreS
   }
 }
 
-/** Three production scheduler intervals; never admit a new lease too close to original expiry. */
-export const RENEWAL_ADMISSION_LEAD_MS = 15 * 60_000;
 export function assertRenewalAdmissionLeadTime(expiresAt: Date, now = Date.now()): void {
   if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() - now < RENEWAL_ADMISSION_LEAD_MS) {
     throw new CourierError('renewal-approval-required', 'The original grant is too close to expiry for renewal admission. Fresh owner approval is required.');
