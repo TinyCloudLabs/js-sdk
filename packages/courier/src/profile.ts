@@ -1,3 +1,4 @@
+import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -17,6 +18,7 @@ export interface AgentKey {
 }
 
 export interface OwnerGrant {
+  renewal?: ApprovalRenewal;
   v: 1;
   delegationHeader: { Authorization: string };
   delegationCid: string;

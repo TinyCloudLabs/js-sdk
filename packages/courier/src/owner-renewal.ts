@@ -1,4 +1,4 @@
-import { parseSignedSiweCacao, principalDidEquals } from '@tinycloud/sdk-core';
+import { parseSignedSiweCacao, principalDidEquals, assertRenewalNodeIdentity, type RenewalNodeIdentity } from '@tinycloud/sdk-core';
 import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { CourierError } from './errors.js';
 import type { GrantPayload } from './grant.js';
@@ -20,5 +20,15 @@ export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string
     || !original.expiresAt || Date.parse(renewal.approvedAt) >= Date.parse(original.expiresAt)
     || Date.parse(receipt.leaseExpiresAt) <= Date.now()) {
     throw new CourierError('bad-grant', 'The renewal lease does not match the signed owner grant.');
+  }
+}
+
+export function assertOwnerRenewalIdentity(renewal: ApprovalRenewal, live: RenewalNodeIdentity): void {
+  assertRenewalNodeIdentity(live);
+  assertRenewalNodeIdentity(renewal.receipt.nodeIdentity);
+  const expected = renewal.receipt.nodeIdentity;
+  if (live.nodeDid !== expected.nodeDid || live.renewerDid !== expected.renewerDid
+    || live.renewerPublicKey !== expected.renewerPublicKey || live.renewerEpoch !== expected.renewerEpoch) {
+    throw new CourierError('bad-grant', 'The renewal node identity does not match the verified host.');
   }
 }

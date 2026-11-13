@@ -1,3 +1,4 @@
+import { courierNode } from './node.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadGrant, loadKey, loadProfile, profileDir, withProfileTransaction, writeSecure } from './profile.js';
@@ -68,6 +69,11 @@ export async function preflightOwner(options: { request?: boolean } = {}): Promi
     const identity = { ownerGrantCid: grant.delegationCid, expiresAt: grant.expiresAt, courierDid: profile.courierDid };
     const same = old && old.ownerGrantCid === identity.ownerGrantCid && old.expiresAt === identity.expiresAt && old.courierDid === identity.courierDid;
     if (old && !same && old.phase !== 'complete') writeSecure(episodeFile(), { ...old, phase: 'complete' });
+    if (grant.renewal) {
+      if (Date.parse(grant.renewal.receipt.leaseExpiresAt) <= Date.now()) return { state: 'approval-required' };
+      try { await courierNode(profile); return { state: 'live' }; }
+      catch { return { state: 'approval-unavailable' }; }
+    }
     // Lapsed startup never makes a network request, including on supervisor restart.
     if (!end || !Number.isFinite(savedEnd) || Math.min(end, savedEnd) <= Date.now()) {
       return { state: 'approval-required', ...(same && old ? { approvalUrl: pendingForEpisode(old, profile) } : {}) };

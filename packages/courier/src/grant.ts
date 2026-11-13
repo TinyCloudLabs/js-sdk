@@ -1,3 +1,4 @@
+import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
@@ -312,6 +313,12 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     expiresAt: expiresAt.toISOString(),
     tinycloudHosts: [profile.host],
   });
+  if (payload.renewal) {
+    await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
+    const identity = await node.renewalNodeIdentity();
+    assertOwnerRenewalIdentity(payload.renewal, identity);
+    await node.getRenewalEffectiveExpiry(payload.renewal.receipt.leaseAuthorization);
+  }
   assertAgentGrant(node.getVerifiedSessionCapabilities(), times);
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
@@ -367,6 +374,7 @@ export function noSpaceError(profile: Profile): CourierError {
 function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
   return {
     v: 1,
+    ...(payload.renewal ? { renewal: payload.renewal } : {}),
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -383,6 +391,7 @@ function ownerGrant(payload: GrantPayload, expiresAt: Date): OwnerGrant {
 
 function grantPayload(grant: OwnerGrant): GrantPayload {
   return {
+    ...(grant.renewal ? { renewal: grant.renewal } : {}),
     delegationHeader: grant.delegationHeader,
     delegationCid: grant.delegationCid,
     spaceId: grant.spaceId,
