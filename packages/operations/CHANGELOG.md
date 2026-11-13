@@ -1,5 +1,17 @@
 # @tinycloud/operations
 
+## 0.9.0-beta.28
+
+### Patch Changes
+
+- 56df81d: Treat both production node names as one node for delegation validation while preserving configured hosts.
+
+  Details: TC-2923, TC-2924
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+
 ## 0.9.0-beta.27
 
 ### Patch Changes
