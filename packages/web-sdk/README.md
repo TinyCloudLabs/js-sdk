@@ -559,3 +559,13 @@ Join the TinyCloud community:
 
 - [Twitter](https://twitter.com/TinyCloudLabs)
 - [Telegram](https://t.me/+pplkv1XbbU01MDVh)
+
+### Account setup and sign-in options
+
+The web SDK includes implicit account bootstrap permissions only at the approved first-party page origins. Other origins, including generic localhost and server-rendered contexts, request the application's manifest rows without implicit account or capabilities-read rows. Explicit manifest permissions are preserved.
+
+`autoBootstrapAccount: false` disables account bootstrap and its implicit sign-in permissions, including in the node SDK. `includeAccountRegistryPermissions: false` omits the implicit account registry bundle. Setting either option to `true` does not enable first-party bootstrap at another origin. The policy uses the actual page origin, independently of a configured SIWE domain.
+
+A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://home.tinycloud.xyz/"` before signing. Complete setup there and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
+
+Details: TC-2931
