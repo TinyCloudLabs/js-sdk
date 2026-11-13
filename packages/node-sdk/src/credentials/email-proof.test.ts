@@ -586,7 +586,7 @@ test("a credential issued to a holder other than the one that opened the request
     .rejects.toMatchObject({ step: "credential", code: "CREDENTIAL_INVALID" });
 });
 
-test("the pinned issuer key table matches the published issuer identity", async () => {
+test("the staged issuer key table matches the staged issuer identity", async () => {
   const identity = await Bun.file(new URL("./test-support/issuer-did.json", import.meta.url)).json() as { id: string; verificationMethod: { id: string; publicKeyJwk: { x: string } }[] };
   const method = identity.verificationMethod[0]!;
   expect(EMAIL_PROOF_PINS).toMatchObject({ issuerDid: identity.id, issuerKid: method.id, issuerX: method.publicKeyJwk.x });
