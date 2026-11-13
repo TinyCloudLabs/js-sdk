@@ -471,6 +471,7 @@ export type Ledger = {
   tc2924NodeAliasesRoot?: Tc2872RenewalRootBudget;
   tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2936RestoreCommitRoot?: LogoutRatchet;
+  tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1096,6 +1097,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2924NodeAliasesRoot !== undefined) pins.push({ row: "tc2924NodeAliasesRoot", pin: root.tc2924NodeAliasesRoot.sourceCommits.at(-1)! });
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (root.tc2936RestoreCommitRoot !== undefined) pins.push({ row: "tc2936RestoreCommitRoot", pin: root.tc2936RestoreCommitRoot.sourceCommits.at(-1)! });
+  if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1191,6 +1193,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2924NodeAliasesRoot", root.tc2924NodeAliasesRoot?.root.ceiling],
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
     ["tc2936RestoreCommitRoot", root.tc2936RestoreCommitRoot?.root.ceiling],
+    ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3284,6 +3287,33 @@ export const approvedTc2936RestoreCommitRoot: LogoutRatchet = {
   "reason": "The node re-checks the restored session's expiry before installing it, and the web SDK re-checks the persisted sign-out marker after the node restore; both checks are required by security review. Canonical Node 22/Bun 1.3.14 CI at 2a8edc2245aaf475f8f4292ee07c6312b744bcad measures 1523271/1457883 gzip -9 bytes over master b841476426fa4796d629d751fa8b5a0cea941252 at 1523224/1457833. Optional, cumulative and worker allowances remain unchanged. Details: TC-2936"
 };
 
+export const approvedTc2923EncryptionTeeOriginRoot: LogoutRatchet = {
+  "label": "encryption-network TEE origin root admission (TC-2923)",
+  "ruling": "Naomi SIZE RULING TC-2923: exact canonical CI bytes measured over master b84f23d0, capped at +260 ESM/+200 CJS over the TC-2936 root; stacked on the newest root; every other bucket unchanged; no general ceiling change. Details: TC-2923",
+  "base": "b84f23d039b1989240dd6327ea7f8f93e075dbc7",
+  "sourceCommits": [
+    "55cce2c6dd7817709c8db2a9533c8062b2da5452"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43437559668",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43437559668/job/131926483001",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43437559668/job/131926483491"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 228,
+      "index.cjs": 159
+    },
+    "ceiling": {
+      "index.mjs": 1523499,
+      "index.cjs": 1458042
+    }
+  },
+  "reason": "Encryption-network calls for the production node use its TEE-terminated origin: the host mapping, the encryption routing and advisory-descriptor guards, and the sign-in activation mapping ship in the root bundle, with no new dependency. Canonical Node 22/Bun 1.3.14 CI at 55cce2c6dd7817709c8db2a9533c8062b2da5452 measures 1523499/1458042 gzip -9 bytes over master b84f23d039b1989240dd6327ea7f8f93e075dbc7 at the TC-2936 ceiling 1523271/1457883. Optional, cumulative and worker allowances remain unchanged. Details: TC-2923"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3376,6 +3406,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2924NodeAliasesRoot: approvedTc2924NodeAliasesRoot,
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
   tc2936RestoreCommitRoot: approvedTc2936RestoreCommitRoot,
+  tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3795,6 +3826,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2936RestoreCommitRoot !== undefined &&
       (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
     throw new Error("Only Naomi's exact TC-2936 root admission is approved.");
+  }
+  if (value.tc2923EncryptionTeeOriginRoot !== undefined &&
+      (!value.tc2936RestoreCommitRoot || JSON.stringify(value.tc2923EncryptionTeeOriginRoot) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot))) {
+    throw new Error("Only Naomi's exact TC-2923 root admission is approved.");
   }
 }
 
@@ -4609,5 +4644,13 @@ export function validateTc2936RestoreCommitRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2936RestoreCommitRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2936 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2923 encryption-network TEE origin root admission is introduced once and immutable. */
+export function validateTc2923EncryptionTeeOriginRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2923 root admission may be introduced once and cannot change later.");
   }
 }

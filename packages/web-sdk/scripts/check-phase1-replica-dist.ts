@@ -1,5 +1,6 @@
 import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
+import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
@@ -222,6 +223,7 @@ if (prBaseSha) {
   validateLedger(baseLedger, true);
   validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
   validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
+  validateTc2923EncryptionTeeOriginRootTransition(baseLedger.tc2923EncryptionTeeOriginRoot, ledger.tc2923EncryptionTeeOriginRoot);
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
   validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
