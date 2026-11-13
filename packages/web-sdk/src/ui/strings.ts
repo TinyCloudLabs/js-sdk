@@ -13,6 +13,7 @@ export const STRINGS = {
   "view.loading": "Loading…",
   "view.error": "This didn't load.",
   "view.retry": "Try again",
+  "view.reloadPage": "Reload page",
   "view.permission": "This session can't show this yet.",
   "nodes.kind.hosted": "Hosted",
   "nodes.status.down": "Down",
