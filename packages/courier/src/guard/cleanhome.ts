@@ -34,6 +34,8 @@ export interface CleanHome {
   configDir: string;
   /** What was put there, relative to the clean HOME (for the log line). */
   exposed: string[];
+  /** Symbolic links the agent had planted in the clean HOME since the last wake; each was removed (the link, never its target). */
+  removedLinks: string[];
 }
 
 const GIT_KEYS = ['user.name', 'user.email'];
@@ -128,7 +130,7 @@ function copyFile(from: string, to: string, mode: number): boolean {
     if (!fs.statSync(from).isFile()) return false;
     fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
     fs.rmSync(to, { force: true });
-    fs.copyFileSync(from, to);
+    fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
     fs.chmodSync(to, mode);
     return true;
   } catch {
@@ -137,12 +139,39 @@ function copyFile(from: string, to: string, mode: number): boolean {
 }
 
 /**
- * Read one `--home-file` source without following a link: the path must resolve to exactly itself inside the real HOME
- * (no link on the file or on any directory above it), it is opened with O_NOFOLLOW, and it must still be the same inode
- * afterwards. Returns the bytes, or throws with the reason.
+ * `rel` (a relative path with `/` separators) inside the clean HOME, ready to be made, removed or written. The agent controls
+ * the clean HOME between wakes and may have planted a link there, so every component that exists is checked with lstat
+ * (never followed): a link is removed (the link only, never its target) and recorded in `removed`, and the caller then
+ * recreates a real directory or file. Anything below a removed link is out of view, so nothing deeper needs checking.
  */
-function readHomeFile(realHome: string, rel: string): Buffer {
-  const name = `--home-file ${JSON.stringify(rel)}`;
+function ownedPath(home: string, rel: string, removed: string[]): string {
+  let current = home;
+  for (const part of rel.split('/').filter(Boolean)) {
+    current = path.join(current, part);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch {
+      break;
+    }
+    if (stat.isSymbolicLink()) {
+      fs.unlinkSync(current);
+      removed.push(path.relative(home, current));
+      break;
+    }
+  }
+  return path.join(home, rel);
+}
+
+/** A source that is, or sits behind, a symbolic link: refused, never followed. */
+class LinkRefused extends Error {}
+
+/**
+ * Read one file of the owner's HOME without following a link: the path must resolve to exactly itself inside the real HOME
+ * (no link on the file or on any directory above it), it is opened with O_NOFOLLOW, and it must still be the same inode
+ * afterwards. Returns the bytes, or throws with the reason (`LinkRefused` for a link). `name` says what is being copied.
+ */
+function readHomeFile(realHome: string, rel: string, name = `--home-file ${JSON.stringify(rel)}`): Buffer {
   const from = path.join(realHome, rel);
   let expected: string;
   let resolved: string;
@@ -152,7 +181,7 @@ function readHomeFile(realHome: string, rel: string): Buffer {
   } catch {
     throw new Error(`${name} is not a readable file in ${realHome}`);
   }
-  if (resolved !== expected) throw new Error(`${name} is a symbolic link or sits behind one and is never followed; name the real file inside ${realHome}`);
+  if (resolved !== expected) throw new LinkRefused(`${name} is a symbolic link or sits behind one and is never followed; name the real file inside ${realHome}`);
   let fd: number | undefined;
   try {
     fd = fs.openSync(from, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
@@ -175,35 +204,55 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
   if (home === realHome || realHome.startsWith(`${home}${path.sep}`) || home.startsWith(`${realHome}${path.sep}.`)) {
     throw new Error(`the clean HOME ${home} must be a directory of its own, not the real HOME or a dot-directory inside it`);
   }
+  // The clean HOME itself must not be a link: a swapped-in link would send every write below somewhere else.
+  try {
+    if (fs.lstatSync(home).isSymbolicLink()) throw new Error(`the clean HOME ${home} is a symbolic link; remove it so Courier can make a directory of its own`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   fs.chmodSync(home, 0o700);
   const exposed: string[] = [];
+  const removedLinks: string[] = [];
 
   for (const rel of SHELL_STARTUP_FILES) {
-    const target = inside(home, rel);
-    if (target) fs.rmSync(target, { recursive: true, force: true });
+    if (inside(home, rel)) fs.rmSync(ownedPath(home, rel.split(path.sep).join('/'), removedLinks), { recursive: true, force: true });
   }
 
-  const claudeDir = path.join(home, '.claude');
+  const claudeDir = ownedPath(home, '.claude', removedLinks);
   fs.mkdirSync(claudeDir, { recursive: true, mode: 0o700 });
-  const credential = path.join(claudeDir, '.credentials.json');
+  const credential = ownedPath(home, '.claude/.credentials.json', removedLinks);
   fs.rmSync(credential, { force: true });
-  if (options.claude !== false && copyFile(path.join(realHome, '.claude', '.credentials.json'), credential, 0o600)) exposed.push('.claude/.credentials.json');
+  if (options.claude !== false) {
+    // The owner's Claude login, read like a --home-file: a link on the file or above it is refused (the wake fails closed);
+    // a missing or unreadable file is skipped as before, and the agent then has no Claude login.
+    let login: Buffer | undefined;
+    try {
+      login = readHomeFile(realHome, '.claude/.credentials.json', 'the Claude login ".claude/.credentials.json"');
+    } catch (error) {
+      if (error instanceof LinkRefused) throw error;
+    }
+    if (login) {
+      fs.writeFileSync(credential, login, { mode: 0o600, flag: 'wx' });
+      fs.chmodSync(credential, 0o600);
+      exposed.push('.claude/.credentials.json');
+    }
+  }
   // Never reuse user settings, MCP config, shell files or credential tool directories from a previous wake.
-  for (const rel of SCRUBBED) fs.rmSync(path.join(home, rel), { recursive: true, force: true });
-  for (const rel of ['.config', '.local/share', '.cache', '.local/state', '.runtime']) fs.mkdirSync(path.join(home, rel), { recursive: true, mode: 0o700 });
+  for (const rel of SCRUBBED) fs.rmSync(ownedPath(home, rel, removedLinks), { recursive: true, force: true });
+  for (const rel of ['.config', '.local/share', '.cache', '.local/state', '.runtime']) fs.mkdirSync(ownedPath(home, rel, removedLinks), { recursive: true, mode: 0o700 });
 
   const git = gitIdentity(realHome);
-  const gitconfig = path.join(home, '.gitconfig');
+  const gitconfig = ownedPath(home, '.gitconfig', removedLinks);
   fs.rmSync(gitconfig, { force: true });
   if (git) {
-    fs.writeFileSync(gitconfig, git, { mode: 0o600 });
+    fs.writeFileSync(gitconfig, git, { mode: 0o600, flag: 'wx' });
     exposed.push('.gitconfig (user.name, user.email)');
   }
 
   for (const rel of options.files ?? []) {
     const refusal = homeFileRefusal(rel, { adapter: options.claude === false ? 'exec' : 'claude', agentCli: options.agentCli });
-    const to = inside(home, rel);
+    const to = inside(home, rel) ? ownedPath(home, rel.split(path.sep).join('/'), removedLinks) : undefined;
     if (refusal || !inside(realHome, rel) || !to) throw new Error(refusal ?? `--home-file ${JSON.stringify(rel)} must be a path inside the home directory`);
     const bytes = readHomeFile(realHome, rel);
     fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
@@ -212,19 +261,23 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
     fs.chmodSync(to, 0o600);
     exposed.push(rel);
   }
-  return { home, configDir: claudeDir, exposed };
+  return { home, configDir: claudeDir, exposed, removedLinks };
 }
 
-/** Copy only the Courier identity, never broker state or a pointer to its directory. */
-export function prepareAgentProfile(courierHome: string): void {
+/** Copy only the Courier identity, never broker state or a pointer to its directory. Returns the planted links it removed. */
+export function prepareAgentProfile(courierHome: string): string[] {
   const home = agentHome(courierHome);
-  const dir = path.join(home, '.courier');
+  const removed: string[] = [];
+  const dir = ownedPath(home, '.courier', removed);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700);
   for (const name of ['profile.json', 'key.json', 'grant.json']) {
     const from = path.join(courierHome, name);
-    if (fs.existsSync(from) && !copyFile(from, path.join(dir, name), 0o600)) throw new Error('Cannot prepare agent Courier identity');
+    if (fs.existsSync(from) && !copyFile(from, ownedPath(home, `.courier/${name}`, removed), 0o600)) throw new Error('Cannot prepare agent Courier identity');
   }
-  fs.writeFileSync(path.join(home, '.courier-agent.json'), JSON.stringify({ v: 1, profileId: profileId(courierHome) }), { mode: 0o600 });
-  for (const name of ['tmp', 'no-owner-profile']) fs.mkdirSync(path.join(home, name), { recursive: true, mode: 0o700 });
+  const marker = ownedPath(home, '.courier-agent.json', removed);
+  fs.rmSync(marker, { force: true });
+  fs.writeFileSync(marker, JSON.stringify({ v: 1, profileId: profileId(courierHome) }), { mode: 0o600, flag: 'wx' });
+  for (const name of ['tmp', 'no-owner-profile']) fs.mkdirSync(ownedPath(home, name, removed), { recursive: true, mode: 0o700 });
+  return removed;
 }
