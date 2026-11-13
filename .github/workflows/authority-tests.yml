@@ -169,6 +169,10 @@ jobs:
             js-sdk/target
           key: cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('js-sdk/Cargo.lock') }}
 
+      - name: Build OpenKey capability-review input
+        working-directory: openkey
+        run: bun run --cwd packages/capability-review build
+
       - name: Run cross-repo Hono contract test
         working-directory: js-sdk
         env:
