@@ -30,6 +30,7 @@
   },
   "changesets": [
     "chatgpt-consent-catalog-scope",
+    "cli-courier-clean-home-links",
     "cli-courier-wake-agent-cli",
     "courier-clean-home-links",
     "courier-collect-peer-renewal",
