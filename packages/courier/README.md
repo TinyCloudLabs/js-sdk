@@ -256,7 +256,9 @@ so two agents of one owner can share the space and run their watchers at the
 same time. On an agent's first start with this version, the watcher copies the
 old shared `me/state/` records that concern its own peers into its keys
 (create-only, so the copy is safe to repeat) and leaves the shared records in
-place.
+place. `courier pause` and `courier resume` also read a thread's shared pause
+marker and copy it the same way, so a thread paused before the upgrade stays
+paused until a human resumes it; `courier resume` deletes both markers.
 
 Wake claims keep a second watcher from waking what the first is waking. Before
 an adapter runs, the watcher takes a create-only claim

@@ -59,6 +59,18 @@ export async function writePauseMarker(kv: KV, marker: PauseMarker, key = k.paus
   }
 }
 
+/**
+ * A pause from before TC-2917 is at the shared `me/state/paused/` key. `pause` and `resume` copy it (create-only, so a
+ * repeat is harmless) to this agent's key before reading that, so a thread paused before the upgrade stays paused
+ * until a human resumes it. The watcher copies them on its first start. Returns the shared key if it holds a marker.
+ */
+async function adoptLegacyPause(kv: KV, peer: string, threadId: string, markerKey: string): Promise<string | undefined> {
+  const legacyKey = k.paused(peer, threadId);
+  const legacy = await getJson<PauseMarker>(kv, legacyKey);
+  if (!legacy) return undefined;
+  await writePauseMarker(kv, legacy.value, markerKey);
+  return legacyKey;
+}
 function target(args: ParsedArgs, usage: string): { peer: string; threadId: string } {
   const [peer, threadId] = args.positional;
   if (!peer || !threadId) throw new CourierError('usage', usage);
@@ -79,6 +91,7 @@ export async function cmdPause(args: ParsedArgs, deps: { profile?: typeof loadPr
   let exists = await getJson(node.kv, k.threadMeta(peer, threadId)) ?? await getJson(node.kv, k.mirrorMeta(peer, threadId));
   if (!exists && paired.inbound && paired.theirHandleForMe) exists = await getJson(await peerKv(node, profile, paired), `${PREFIX}/to/${paired.theirHandleForMe}/threads/${threadId}/meta.json`);
   if (!exists) throw new CourierError('not-found', `Thread ${threadId} with ${peer} does not exist.`);
+  await adoptLegacyPause(node.kv, peer, threadId, markerKey);
   const reason = args.has('reason') && args.get('reason') !== 'true' ? args.get('reason')! : 'paused by its owner';
   const marker: PauseMarker = { v: 1, peer, threadId, by: 'human', at: new Date().toISOString(), reason, informId: await nextNoticeId(node.kv, peer, threadId), informSent: false };
   const wrote = await writePauseMarker(node.kv, marker, markerKey);
@@ -108,6 +121,7 @@ export async function cmdResume(args: ParsedArgs, deps: { profile?: typeof loadP
   getPeer(profile, peer);
   const node = await (deps.node ?? courierNode)(profile);
   const markerKey = stateKeys(profile.courierDid).paused(peer, threadId);
+  const legacyKey = await adoptLegacyPause(node.kv, peer, threadId, markerKey);
   const stored = await getJson<PauseMarker>(node.kv, markerKey);
   if (!stored) {
     console.log(`Thread ${threadId} with ${peer} is not paused.`);
@@ -117,6 +131,8 @@ export async function cmdResume(args: ParsedArgs, deps: { profile?: typeof loadP
   if (!stored.value.resumeInformId) await putMatch(node.kv, markerKey, { ...stored.value, resumeInformId }, stored.etag!);
   // Persist the id before posting: a retry cannot produce another resume transition.
   await postPausedInform(node.kv, profile, peer, threadId, 'Thread resumed by its owner.', resumeInformId, true);
+  // The shared copy goes first: a retry after a crash here still finds this agent's marker and its resume inform id.
+  if (legacyKey) await del(node.kv, legacyKey);
   await del(node.kv, markerKey);
   console.log(`Resumed thread ${threadId} with ${peer}. A running watcher picks this up with the next message it sees.`);
 }
