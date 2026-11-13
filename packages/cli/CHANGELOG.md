@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.49
+
+### Patch Changes
+
+- 1525804: `tinycloud courier watch` now carries the two flags added to `@tinycloud/courier`: `--agent-cli`, which with `--wake exec --unguarded` lets the watcher start an agent CLI that has no guarded adapter, and `--home-file <path>`, which copies one file of the owner's HOME into the woken agent's clean HOME. Defaults are unchanged: without `--agent-cli` such a command is still refused, and `claude` and `paseo` are still refused under `exec`.
+
+  Details: TC-712
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/sdk-services@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+  - @tinycloud/operations@0.9.0-beta.35
+
 ## 1.7.0-beta.48
 
 ### Minor Changes
