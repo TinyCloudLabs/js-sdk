@@ -72,15 +72,15 @@ function prune(dir: string, limits: CacheLimits): void {
  * `courier read`'s private cache of one thread, per agent (`<COURIER_HOME>/read-cache/<did:key id>/<thread>.json`,
  * owner-only): messages and meta are create-only, so a repeated read fetches only entries it has not read yet. Tasks
  * change and are always fetched. A missing, foreign, expired (7 days) or corrupt file is an empty cache; the agent's
- * files stay within 64 MiB together, oldest dropped first.
+ * files stay within 64 MiB together, oldest dropped first. `full` starts empty: everything is fetched again and kept.
  */
 export function diskThreadCache(agent: string, threadId: string,
-  limits: CacheLimits = { now: Date.now(), maxBytes: CACHE_MAX_BYTES, maxAgeMs: CACHE_MAX_AGE_MS }): ThreadCache & { save(): void } {
+  limits: CacheLimits = { now: Date.now(), maxBytes: CACHE_MAX_BYTES, maxAgeMs: CACHE_MAX_AGE_MS }, full = false): ThreadCache & { save(): void } {
   prepareCacheRoot();
   const dir = path.join(cacheRoot(), agentId(agent));
   const file = path.join(dir, `${threadId}.json`);
   let entries: Record<string, unknown> = {};
-  if (SAFE_ID.test(threadId) && fresh(file, limits)) {
+  if (!full && SAFE_ID.test(threadId) && fresh(file, limits)) {
     try {
       const parsed: unknown = JSON.parse(readRegularFile(file) ?? '{}');
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries = parsed as Record<string, unknown>;

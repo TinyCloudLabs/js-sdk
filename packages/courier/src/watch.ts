@@ -148,6 +148,22 @@ export interface WatchState {
   noticeLog: Record<string, number[]>;
 }
 
+/**
+ * What a watcher already knows and need not ask the node again, kept on this machine across runs: a `--once` loop
+ * starts fresh each time. Losing it only costs the calls it saves.
+ */
+export interface LocalWatchCache {
+  v: 1;
+  /** When wake claims were last pruned (hourly). */
+  claimsPrunedAt?: number;
+  /** When each peer's renewal marker was last read. */
+  markerReadAt: Record<string, number>;
+  /** Peer `meta.json` keys already mirrored (create-only). */
+  metaMirrored: string[];
+  /** Per peer, `thread/message` ids its receipts already list (receipts only grow). */
+  receipted: Record<string, string[]>;
+}
+
 /** `tries`: notification dispatch attempts (max 3), or failed inform attempts (max 8). */
 export type OutboxItem =
   | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; pauseId?: string; tries?: number; nextAttemptAt?: number }
@@ -219,6 +235,8 @@ export interface WatchDeps {
   notificationHome?: string;
   /** D mode mirrors and receipts, then notifies without invoking a wake adapter. */
   notifyOnly?: boolean;
+  /** This machine's copy of what the watcher already knows (see `LocalWatchCache`). Default: none, kept in memory. */
+  localCache?: { load(): LocalWatchCache | undefined; save(cache: LocalWatchCache): void };
   /**
    * Who this watcher is, for wake claims. `profileId` is stable for this profile on this machine (a restart keeps it,
    * a second profile or machine differs); `pid` and `isAlive` tell a restarted watcher its predecessor is dead.
@@ -287,7 +305,6 @@ export class Watcher {
   private readonly profileId: string;
   private readonly pid: number;
   private readonly isAlive: (pid: number) => boolean;
-  private lastClaimPrune = 0;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
   /** Set once `run` is told to stop: nothing new is woken after that. */
@@ -296,7 +313,11 @@ export class Watcher {
   /** Etag of this agent's watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
-  private readonly metaMirrored = new Set<string>();
+  private readonly metaMirrored: Set<string>;
+  private readonly markerReadAt: Map<string, number>;
+  private claimsPrunedAt: number;
+  /** The local cache changed since it was last saved. */
+  private localDirty = false;
   private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean }>();
   /** Peers whose last sync did not finish: a cycle between full catch-ups lists only these again. */
   private readonly dirtyPeers = new Set<string>();
@@ -308,7 +329,7 @@ export class Watcher {
   /** Open hook streams by subscription id; absent while one is failed, ended or not yet opened. */
   private readonly hookStreams = new Map<string, { openedAt: number; proven: boolean }>();
   /** Message keys each peer's receipts already list; receipts only grow, so a listing within this set has nothing new. */
-  private readonly receipted = new Map<string, Set<string>>();
+  private readonly receipted: Map<string, Set<string>>;
   private stateQueue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly keys: StateKeys;
@@ -319,6 +340,24 @@ export class Watcher {
     this.pid = deps.holder?.pid ?? process.pid;
     this.isAlive = deps.holder?.isAlive ?? pidAlive;
     this.keys = stateKeys(deps.agent);
+    const cached = deps.localCache?.load();
+    this.metaMirrored = new Set(cached?.metaMirrored ?? []);
+    this.markerReadAt = new Map(Object.entries(cached?.markerReadAt ?? {}));
+    this.receipted = new Map(Object.entries(cached?.receipted ?? {}).map(([peer, ids]) => [peer, new Set(ids)]));
+    this.claimsPrunedAt = cached?.claimsPrunedAt ?? 0;
+  }
+
+  private saveLocal(): void {
+    if (!this.localDirty || !this.deps.localCache) return;
+    this.localDirty = false;
+    try {
+      this.deps.localCache.save({
+        v: 1, claimsPrunedAt: this.claimsPrunedAt, markerReadAt: Object.fromEntries(this.markerReadAt),
+        metaMirrored: [...this.metaMirrored], receipted: Object.fromEntries([...this.receipted].map(([peer, ids]) => [peer, [...ids]])),
+      });
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'local-cache', ...errInfo(error) });
+    }
   }
 
   /**
@@ -327,9 +366,12 @@ export class Watcher {
    * marks the move done. Every write is create-only, so a crash or a second process repeats it harmlessly; the shared
    * keys are left in place.
    */
-  private async migrateLegacyState(): Promise<void> {
+  private async migrateLegacyState(): Promise<{ value: WatchState; etag: string | null } | undefined> {
     const { selfKv, log } = this.deps;
-    if (!this.deps.agent || await getJson(selfKv, this.keys.watch)) return;
+    if (!this.deps.agent) return undefined;
+    // Already moved: this read is also the state load.
+    const own = await getJson<WatchState>(selfKv, this.keys.watch);
+    if (own) return own;
     const mine = new Set(this.deps.peerHandles?.() ?? this.deps.loadPeers().map(peer => peer.handle));
     const ownKey = (key: string) => mine.has(key.split('/')[0]);
     let markers = 0;
@@ -354,12 +396,14 @@ export class Watcher {
     };
     await this.mirrorCreate(this.keys.watch, copy);
     log('state-migrated', { pending: Object.keys(copy.pending).length, paused: markers });
+    return undefined;
   }
 
   // ---------- state ----------
 
-  async loadState(): Promise<void> {
-    const got = await getJson<WatchState>(this.deps.selfKv, this.keys.watch);
+  /** `preloaded`: this agent's watch.json as just read (saves reading it twice at startup). */
+  async loadState(preloaded?: { value: WatchState; etag: string | null }): Promise<void> {
+    const got = preloaded ?? await getJson<WatchState>(this.deps.selfKv, this.keys.watch);
     const value = got?.value;
     this.stateEtag = got?.etag ?? null;
     this.state = isRecord(value) && value.v === 1
@@ -522,17 +566,22 @@ export class Watcher {
     }
   }
 
-  /** Claim markers are only needed while a double wake is possible; drop those older than two days. */
-  private async pruneClaims(): Promise<void> {
+  /** Claim markers are only needed while a double wake is possible; once an hour, drop those older than two days. */
+  private async pruneClaimsIfDue(): Promise<void> {
+    const at = this.now();
+    if (at - this.claimsPrunedAt <= 3600_000) return;
     try {
       for (const key of await listAll(this.deps.selfKv, this.keys.wakeClaimsPrefix)) {
         const id = /\/([^/]+)\.json$/.exec(key)?.[1];
         const sentAt = id ? Date.parse(sentAtOf(id)) : NaN;
-        if (Number.isFinite(sentAt) && this.now() - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
+        if (Number.isFinite(sentAt) && at - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
       }
     } catch (error) {
       this.deps.log('sync-error', { source: 'claims', ...errInfo(error) });
+      return;
     }
+    this.claimsPrunedAt = at;
+    this.localDirty = true;
   }
 
   // ---------- catch-up and delivery ----------
@@ -621,7 +670,11 @@ export class Watcher {
   /** The scheduled renewal and authority check for every peer; each peer's next sync also reads its renewal marker. */
   private async checkAuthority(): Promise<void> {
     await this.deps.checkAuthority?.();
-    for (const peer of this.deps.loadPeers()) this.renewalDue.add(peer.handle);
+    // The renewal marker is read on the same schedule, across runs: a `--once` loop does not read it every run.
+    const at = this.now();
+    for (const peer of this.deps.loadPeers()) {
+      if (at - (this.markerReadAt.get(peer.handle) ?? -Infinity) >= AUTHORITY_CHECK_MS) this.renewalDue.add(peer.handle);
+    }
   }
 
   private async syncPeer(peer: StoredPeer, via: Via, listPaused: boolean, renew: boolean): Promise<void> {
@@ -629,7 +682,11 @@ export class Watcher {
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer, renew);
-    if (renew) this.renewalDue.delete(peer.handle);
+    if (renew) {
+      this.renewalDue.delete(peer.handle);
+      this.markerReadAt.set(peer.handle, this.now());
+      this.localDirty = true;
+    }
     let allowed: Promise<boolean> | undefined;
     if (this.authorityDue.delete(peer.handle)) {
       // The marker changed: check now, even with nothing to import; the verdict also serves this sync's imports.
@@ -650,6 +707,7 @@ export class Watcher {
       receipts.threads ??= {};
       for (const [threadId, thread] of Object.entries(receipts.threads)) for (const id of thread.delivered ?? []) seen.add(`${threadId}/${id}`);
       this.receipted.set(peer.handle, seen);
+      this.localDirty = true;
     }
 
     const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
@@ -738,6 +796,7 @@ export class Watcher {
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
     for (const item of delivered) seen.add(`${item.threadId}/${item.messageId}`);
+    if (delivered.length) this.localDirty = true;
     await this.mirrorThreads(peer, peerKv, keys, authorized);
   }
 
@@ -790,6 +849,7 @@ export class Watcher {
       if (!(await authorized())) return;
       await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
       this.metaMirrored.add(key);
+      this.localDirty = true;
       return;
     }
     const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
@@ -1555,11 +1615,9 @@ export class Watcher {
       await this.deps.beforePoll?.();
       await this.checkAuthority();
       let authorityAt = this.now();
-      await this.migrateLegacyState();
-      await this.loadState();
+      await this.loadState(await this.migrateLegacyState());
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
-      await this.pruneClaims();
-      this.lastClaimPrune = this.now();
+      await this.pruneClaimsIfDue();
       const reconcile = () => {
         const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
         for (const peer of this.deps.loadPeers()) {
@@ -1627,10 +1685,8 @@ export class Watcher {
           } else {
             await this.syncDirty();
           }
-          if (this.now() - this.lastClaimPrune > 3600_000) {
-            this.lastClaimPrune = this.now();
-            await this.pruneClaims();
-          }
+          await this.pruneClaimsIfDue();
+          this.saveLocal();
         }
       }
     } catch (error) {
@@ -1641,6 +1697,7 @@ export class Watcher {
       for (const controller of supervisors.values()) controller.abort();
       external.removeEventListener('abort', onExternalAbort);
       this.onFatal = undefined;
+      this.saveLocal();
       log('stop');
     }
     if (this.fatalError) throw this.fatalError;

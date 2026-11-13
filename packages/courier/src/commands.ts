@@ -682,16 +682,27 @@ export async function cmdInbox(args: ParsedArgs) {
 
 export type { ThreadEntry } from './thread.js';
 
+/** How long `courier read` trusts a peer's renewal marker it read (the watcher's renewal schedule). */
+const MARKER_READ_MS = 300_000;
+
 export async function cmdRead(args: ParsedArgs) {
   const { profile, node } = await ctx(true, args.get('peer'));
-  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
-  const cache = diskThreadCache(profile.courierDid, threadId);
+  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json] [--full]')}`);
+  const full = args.has('full');
+  const cache = diskThreadCache(profile.courierDid, threadId, undefined, full);
   const result = await collectThread({
     threadId,
     selfKv: node.kv,
     peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
     exactPeer: Boolean(args.get('peer')),
-    kvFor: (peer) => peerKv(node, profile, peer),
+    // The peer's renewal marker is read at most every 5 minutes per thread (always with --full).
+    kvFor: (peer) => {
+      const markerId = `marker:${peer.courierDid}:${peer.spaceId}`;
+      const readAt = cache.get(markerId);
+      const renew = full || !(typeof readAt === 'number' && Date.now() - readAt < MARKER_READ_MS);
+      if (renew) cache.set(markerId, Date.now());
+      return peerKv(node, profile, peer, { renew });
+    },
     cache,
     self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
   });
