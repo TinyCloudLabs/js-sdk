@@ -3231,6 +3231,7 @@ export class TinyCloudNode {
   /** Prepare the OpenKey request before the approval click. */
   async prepareOpenKeySignIn(
     options?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[0],
+    identity?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[1],
   ): Promise<PreparedOpenKeyAuthorization> {
     if (!this.signer || !this.tc || !this.auth) {
       throw new Error("Cannot prepare OpenKey sign-in in session-only mode. Provide a signer in config.");
@@ -3238,7 +3239,14 @@ export class TinyCloudNode {
     await this.signOutInFlight;
     await this.accountRegistryTail;
     await this.wasmBindings.ensureInitialized?.();
-    return this.auth.prepareOpenKeySignIn(options);
+    return this.auth.prepareOpenKeySignIn(options, identity);
+  }
+
+  verifyPreparedOpenKeySignIn(
+    ...args: Parameters<NodeUserAuthorization["verifyPreparedOpenKeySignIn"]>
+  ): Promise<void> {
+    if (!this.auth) throw new Error("OpenKey authorization unavailable");
+    return this.auth.verifyPreparedOpenKeySignIn(...args);
   }
 
   /** Start OpenKey authorization synchronously, then complete normal session setup. */
@@ -3264,10 +3272,10 @@ export class TinyCloudNode {
         throw new Error("OpenKey account changed after sign-in preparation");
       }
       return this.auth!.completeOpenKeySignIn(pending, authorization);
-    });
+    }, pending.identity);
   }
 
-  private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
+  private async signInWith(performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     // Refuse a caveated manifest before any signer, registry or host call.
     refuseCaveated(this.auth?.capabilityRequest?.manifests);
     // Read synchronously: a sign-out called after this sign-in started wins,
@@ -3276,7 +3284,7 @@ export class TinyCloudNode {
     const attempt = ++this.latestSessionAttempt;
     await this.signOutInFlight;
     try {
-      await this.establishSignIn(epoch, performSignIn);
+      await this.establishSignIn(epoch, performSignIn, identity);
     } catch (error) {
       // A sign-out during sign-in wins: end whatever this sign-in established,
       // unless a newer sign-in or restore has started since.
@@ -3287,7 +3295,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>): Promise<void> {
+  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     if (!this.signer || !this.tc) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -3301,8 +3309,8 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
     this.assertSessionEpoch(epoch, "Sign-in");
     const nextPrincipal = pkhDid(address, chainId);
     const priorPrincipal = this.replicaSessionPrincipal

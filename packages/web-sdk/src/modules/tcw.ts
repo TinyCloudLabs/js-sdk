@@ -521,7 +521,7 @@ export class TinyCloudWeb {
     }
 
     // Set up browser wallet signer if provider given
-    const providerDriver = config.provider ?? config.providers?.web3?.driver;
+    const providerDriver = config.provider ?? config.providers?.web3?.driver ?? config.openkey?.client.getContinuationProvider?.();
     if (providerDriver) {
       this.walletSigner = new BrowserWalletSigner(providerDriver);
       this.provider = this.walletSigner.getProvider();
@@ -1310,13 +1310,42 @@ export class TinyCloudWeb {
 
   signIn = (options?: SignInOptions): Promise<ClientSession> => {
     if (!this.config.openkey) return this.performSignIn(options);
+    const client = this.config.openkey.client;
+    const state: {
+      handle?: ReturnType<NonNullable<OpenKeyAuthorizeTinyCloud["beginTinyCloudSignIn"]>>;
+      pending?: PreparedOpenKeyAuthorization;
+      node?: TinyCloudNode;
+    } = {};
+    if (!options && !this.preparedSignIn && (this.config.openkey.mode ?? "popup") === "popup" &&
+        client.beginTinyCloudSignIn && client.supportsTinyCloudSignIn) {
+      refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
+      state.handle = client.beginTinyCloudSignIn({
+        chainId: () => this.walletSigner?.getChainId() ?? Promise.resolve(1),
+        verify: async ({ result, identity, request, origin }) => {
+          const pending = state.pending;
+          const pinned = pending?.identity;
+          if (!pending || !pinned || !state.node || request.siwe !== pending.request.siwe ||
+              identity.address.toLowerCase() !== pinned.address.toLowerCase() || identity.chainId !== pinned.chainId ||
+              identity.keyId !== pinned.keyId || identity.keyType !== pinned.keyType || identity.requestId !== pinned.requestId ||
+              ["kty", "crv", "x"].some(field => request.jwk?.[field] !== pending.request.jwk[field]) ||
+              origin !== globalThis.location?.origin) throw new Error("OpenKey sign-in context changed");
+          await state.node.verifyPreparedOpenKeySignIn(pending, result, origin);
+          return true;
+        },
+      });
+    }
     this.openkeySignInInFlight++;
-    return this.performSignIn(options).finally(() => {
+    return this.performSignIn(options, state).finally(async () => {
       this.openkeySignInInFlight--;
+      await state.handle?.cancel();
     });
   };
 
-  private performSignIn = async (options?: SignInOptions): Promise<ClientSession> => {
+  private performSignIn = async (options?: SignInOptions, continuation?: {
+    handle?: ReturnType<NonNullable<OpenKeyAuthorizeTinyCloud["beginTinyCloudSignIn"]>>;
+    pending?: PreparedOpenKeyAuthorization;
+    node?: TinyCloudNode;
+  }): Promise<ClientSession> => {
     // Refuse a caveated manifest before any restore, signer or network call.
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
@@ -1331,6 +1360,11 @@ export class TinyCloudWeb {
     if (this.config.openkey && options) {
       throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
     }
+    if (continuation?.handle && !await this.config.openkey!.client.supportsTinyCloudSignIn!()) {
+      await continuation.handle.cancel();
+      continuation.handle = undefined;
+    }
+    assertNotSignedOut();
     const pending = this.preparedSignIn;
     this.invalidatePreparedSignIn();
     if (pending) {
@@ -1368,7 +1402,19 @@ export class TinyCloudWeb {
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
     try {
-      if (pending) {
+      if (continuation?.handle) {
+        continuation.node = node;
+        const result = await continuation.handle.authorize(async identity => {
+          assertNotSignedOut();
+          const prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
+          assertNotSignedOut();
+          continuation.pending = prepared;
+          return prepared.request;
+        });
+        assertNotSignedOut();
+        if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
+        await node.signInWithPreparedOpenKey(continuation.pending, async () => result);
+      } else if (pending) {
         await node.signInWithPreparedOpenKey(
           pending.request,
           wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
