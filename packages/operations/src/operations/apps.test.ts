@@ -1,20 +1,25 @@
+import { Database } from "bun:sqlite";
+import type { SqlValue } from "@tinycloud/node-sdk";
 import { describe, expect, test } from "bun:test";
 import type { RuntimeOperationContext } from "../contract.js";
 import { additionalDelegationsPath, writeJsonAtomic } from "../state.js";
-import { copyKey } from "../tc-apps/layout.js";
+import { copyKey, recordPrefix, staleKey as copyStaleKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT } from "../tc-apps/layout.js";
 import { appsNow, appsTimezone, withLocalOffset } from "../tc-apps/state.js";
-import { checkCopyKinds, copyRowChunks, COPY_INSERT, COPY_DELETE, COPY_REQUEST_LIMIT, syncCopyRows, type AppsDatabase, type CopyRow } from "../tc-apps/copy.js";
+import { checkCopyKinds, copyRowChunks, COPY_INSERT, COPY_DELETE, COPY_REQUEST_LIMIT, queryCopy, syncCopyRows, type AppsDatabase } from "../tc-apps/copy.js";
 import { copyFailure } from "../tc-apps/copy.js";
-import { app, definition, FakeSql, FITNESS, FITNESS_GRANT, fixture, itemKind, key, kind, SPACE, withGrants, withSql, write } from "./apps.fixtures.js";
+import { markAppsKindStale } from "../tc-apps/kv.js";
+import { app, definition, FakeKv, FakeSql, FITNESS, FITNESS_GRANT, fixture, itemKind, key, kind, SPACE, withGrants, withSql, write } from "./apps.fixtures.js";
+
+const DISCOVERY_GRANT = { service: "tinycloud.kv", space: SPACE, path: TC_APPS_DISCOVERY_ROOT, actions: ["tinycloud.kv/get", "tinycloud.kv/list"] };
 
 describe("personal apps records", () => {
   test("context returns records rules, persists a tenant-local timezone, and lists apps from their discovery entries with the copy state", async () => {
     await fixture(async (_kv, context) => {
-      const readable = withGrants(context, [FITNESS_GRANT]);
+      const readable = withGrants(context, [FITNESS_GRANT, DISCOVERY_GRANT]);
       const first = await definition("context").execute(readable, {});
       expect(first.output.timezone).toBeNull();
       expect(first.output.now).toMatch(/\+00:00$/);
-      expect(first.output.apps).toEqual([{ app: "fitness", title: "Fitness", copy: "none" }]);
+      expect(first.output.apps).toEqual([{ app: "fitness", title: "Fitness", layout: "new", copy: "none" }]);
       const zoned = await definition("context").execute(readable, { timezone: "America/New_York" });
       expect(zoned.output.timezone).toBe("America/New_York");
       expect(await appsTimezone("apps")).toBe("America/New_York");
@@ -65,7 +70,7 @@ describe("personal apps records", () => {
       expect(kv.reads).toEqual([]);
     });
   });
-  test("writes app, kind and first record sequentially as CLI-identical bytes, defaults metadata and marks the kind stale", async () => {
+  test("creates app, kind and first record sequentially, preserves attribution and marks the kind stale", async () => {
     await fixture(async (kv, context) => {
       kv.values.clear();
       const result = await write(context, [
@@ -76,11 +81,7 @@ describe("personal apps records", () => {
       expect(result.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok", "ok"]);
       const stored = result.output.ops[2].value;
       expect(stored).toEqual({ by: "tinycloud-mcp", v: 1, at: "2026-10-14T12:30+02:00", data: { kg: 70 } });
-      expect(kv.writes[2]!.bytes).toBeInstanceOf(Uint8Array);
-      expect(new TextDecoder().decode(kv.writes[2]!.bytes)).toBe(JSON.stringify(stored));
       expect(kv.values.has(`${FITNESS}index-stale/weight`)).toBe(true);
-      const marker = JSON.parse(kv.values.get(`${FITNESS}index-stale/weight`)!.text);
-      expect(marker).toEqual({ since: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), by: "tinycloud-mcp" });
       expect(kv.reads.flat()).not.toContain(key);
     });
   });
@@ -217,15 +218,168 @@ describe("personal apps records", () => {
       kv.seed(key, { v: 1, at: "2026-10-14", data: { kg: 70 } });
       kv.omitReadEtag = true;
       expect((await definition("read").execute(context, { keys: [key] })).error.code).toBe("NODE_ERROR");
-      expect((await definition("context").execute(withGrants(context, [FITNESS_GRANT]), {})).error.code).toBe("NODE_ERROR");
+      expect((await definition("context").execute(withGrants(context, [FITNESS_GRANT, DISCOVERY_GRANT]), {})).error.code).toBe("NODE_ERROR");
     });
   });
 });
 
 const weightKind = { app: "fitness", kind: "weight" };
 const staleKey = `${FITNESS}index-stale/weight`;
+const LEGACY_SPACE = SPACE.replace(/:applications$/, ":default");
+const legacyKey = `${TC_APPS_LEGACY_ROOT}fitness/weight/2026-10/2026-10-14`;
+const legacyStaleKey = `${TC_APPS_LEGACY_ROOT}index-stale/fitness/weight`;
+const copyGrants = {
+  legacy: { service: "tinycloud.sql", space: LEGACY_SPACE, path: TC_APPS_LEGACY_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] },
+  new: { service: "tinycloud.sql", space: SPACE, path: `${FITNESS}index`, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] },
+};
+
+/** Run the actual copy statements and entries views, adapting only the SDK result envelope. */
+class SqliteCopy {
+  readonly database = new Database(":memory:");
+  handle(): AppsDatabase { return this as unknown as AppsDatabase; }
+  async execute(sql: string, params: SqlValue[] = []) {
+    try {
+      const result = this.database.query(sql).run(...params);
+      return { ok: true as const, data: { changes: result.changes, lastInsertRowId: Number(result.lastInsertRowid) } };
+    } catch (error) {
+      return { ok: false as const, error: { code: "SQL_ERROR", message: (error as Error).message } };
+    }
+  }
+  async query(sql: string, params: SqlValue[] = []) {
+    try {
+      const statement = this.database.query(sql);
+      const rows = statement.values(...params);
+      return { ok: true as const, data: { columns: statement.columnNames, rows, rowCount: rows.length } };
+    } catch (error) {
+      return { ok: false as const, error: { code: "SQL_ERROR", message: (error as Error).message } };
+    }
+  }
+}
+
+function withLayoutCopies(context: RuntimeOperationContext, currentKv: FakeKv, legacyKv: FakeKv, currentSql: AppsDatabase, legacySql: AppsDatabase): RuntimeOperationContext {
+  return { ...context, runtime: { ...context.runtime,
+    granted: [copyGrants.new, copyGrants.legacy],
+    node: {
+      kvForSpace: (space: string) => {
+        if (space === SPACE) return currentKv;
+        if (space === LEGACY_SPACE) return legacyKv;
+        throw new Error(`Unexpected KV space ${space}`);
+      },
+      sqlForSpace: (space: string) => ({ db: (database: string) => {
+        if (space === SPACE && database === `${FITNESS}index`) return currentSql;
+        if (space === LEGACY_SPACE && database === TC_APPS_LEGACY_DATABASE) return legacySql;
+        throw new Error(`Unexpected SQL copy ${space}/${database}`);
+      } }),
+    },
+  } };
+}
 
 describe("personal apps fast copy", () => {
+  test("legacy queries refresh stale full keys, filter the shared entries view by app and kind, and preserve other copies", async () => {
+    await fixture(async (kv, context) => {
+      const legacyKv = new FakeKv();
+      const legacySql = new SqliteCopy();
+      const currentSql = new SqliteCopy();
+      try {
+        for (const sql of [legacySql, currentSql]) sql.database.exec("CREATE TABLE records (key TEXT PRIMARY KEY, rec TEXT NOT NULL)");
+        const value = { v: 1, at: "2026-10-14", by: "cli", data: { kg: 72 } };
+        legacyKv.seed(legacyKey, value);
+        legacyKv.seed(legacyStaleKey, { since: "2026-10-13" });
+        const liftKey = `${TC_APPS_LEGACY_ROOT}fitness/lift/2026-10/2026-10-14`;
+        const otherAppKey = `${TC_APPS_LEGACY_ROOT}other/weight/2026-10/2026-10-14`;
+        const liftMarker = `${TC_APPS_LEGACY_ROOT}index-stale/fitness/lift`;
+        legacyKv.seed(liftMarker, { since: "2026-10-12" });
+        // These kinds were not requested. Their SQL rows survive even if absent from this KV snapshot.
+        await syncCopyRows(legacySql.handle(), [
+          { k: legacyKey, r: { ...value, data: { kg: 60 } } },
+          { k: liftKey, r: { data: { kg: 110 } } },
+          { k: otherAppKey, r: { data: { kg: 80 } } },
+        ]);
+        kv.seed(key, { data: { kg: 99 } });
+        kv.seed(staleKey, { since: "2026-10-13" });
+        await syncCopyRows(currentSql.handle(), [{ k: copyKey("fitness", key), r: { data: { kg: 88 } } }]);
+        const active = withLayoutCopies(context, kv, legacyKv, currentSql.handle(), legacySql.handle());
+        const result = await definition("query").execute(active, {
+          layout: "legacy", kinds: [weightKind],
+          sql: "SELECT key, app, kind, folder, id, day, v, at, \"by\", json_extract(data, '$.kg') AS kg FROM entries WHERE app = ? AND kind = ?",
+          params: ["fitness", "weight"],
+        });
+        expect(result.output).toEqual({
+          kinds: [{ ...weightKind, records: 1 }],
+          columns: ["key", "app", "kind", "folder", "id", "day", "v", "at", "by", "kg"],
+          rows: [[legacyKey, "fitness", "weight", "2026-10", "2026-10-14", "2026-10-14", 1, "2026-10-14", "cli", 72]], rowCount: 1,
+        });
+        expect(legacySql.database.query("SELECT app, kind, json_extract(data, '$.kg') FROM entries ORDER BY app, kind").values()).toEqual([
+          ["fitness", "lift", 110], ["fitness", "weight", 72], ["other", "weight", 80],
+        ]);
+        expect(legacyKv.values.has(legacyStaleKey)).toBe(false);
+        expect(JSON.parse(legacyKv.values.get(liftMarker)!.text)).toEqual({ since: "2026-10-12" });
+        expect(JSON.parse(legacyKv.values.get(legacyKey)!.text)).toEqual(value);
+        expect(currentSql.database.query("SELECT key, json_extract(rec, '$.data.kg') FROM records").values()).toEqual([[copyKey("fitness", key), 88]]);
+        expect(kv.values.has(staleKey)).toBe(true);
+        const current = await definition("query").execute(active, {
+          kinds: [weightKind], sql: "SELECT key, kind, json_extract(data, '$.kg') AS kg FROM entries WHERE kind = ?", params: ["weight"],
+        });
+        expect(current.output).toEqual({
+          kinds: [{ ...weightKind, records: 1 }], columns: ["key", "kind", "kg"],
+          rows: [[copyKey("fitness", key), "weight", 99]], rowCount: 1,
+        });
+        expect(kv.values.has(staleKey)).toBe(false);
+        expect(legacySql.database.query("SELECT key, json_extract(data, '$.kg') FROM entries WHERE app = 'fitness' AND kind = 'weight'").values()).toEqual([[legacyKey, 72]]);
+      } finally {
+        legacySql.database.close();
+        currentSql.database.close();
+      }
+    });
+  });
+  test("a missing legacy copy builds the shared schema and reads every page in bounded batches", async () => {
+    const kv = new FakeKv();
+    const sql = new SqliteCopy();
+    try {
+      kv.pageSize = 73;
+      for (let i = 0; i < 205; i++) kv.seed(`${legacyKey}-${i}`, { data: { kg: i } });
+      expect(await checkCopyKinds(kv, sql.handle(), [weightKind], () => 0, "legacy")).toEqual({ kinds: [{ ...weightKind, records: 205 }] });
+      expect(await queryCopy(sql.handle(), "SELECT count(*) AS n, sum(json_extract(data, '$.kg')) AS total FROM entries WHERE app = ? AND kind = ?", ["fitness", "weight"], "legacy")).toEqual({
+        columns: ["n", "total"], rows: [[205, 20910]], rowCount: 1,
+      });
+      expect(kv.reads.every((batch) => batch.length <= 100)).toBe(true);
+      expect(kv.values.has(legacyStaleKey)).toBe(false);
+    } finally { sql.database.close(); }
+  });
+  test("copy grants stay layout-specific and missing approval never erases committed record outcomes", async () => {
+    for (const approved of ["legacy", "new", "none"] as const) await fixture(async (kv, context) => {
+      const legacyKv = new FakeKv();
+      legacyKv.seed(`${TC_APPS_LEGACY_ROOT}catalog/fitness`, app);
+      legacyKv.seed(`${TC_APPS_LEGACY_ROOT}catalog/fitness/weight`, kind);
+      const currentSql = new FakeSql();
+      const legacySql = new FakeSql();
+      const active = withGrants(withLayoutCopies(context, kv, legacyKv, currentSql.handle(), legacySql.handle()), approved === "none" ? [] : [copyGrants[approved]]);
+      const result = await write(active, [
+        { op: "put", key: legacyKey, value: { data: { kg: 70 } } },
+        { op: "put", key, value: { data: { kg: 80 } } },
+      ]);
+      expect(result.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok"]);
+      expect(result.output.ops.map((op) => op.value?.by)).toEqual(["tinycloud-mcp", "tinycloud-mcp"]);
+      expect(JSON.parse(legacyKv.values.get(legacyKey)!.text)).toEqual(result.output.ops[0]!.value);
+      expect(JSON.parse(kv.values.get(key)!.text)).toEqual(result.output.ops[1]!.value);
+      if (approved === "legacy") expect(legacySql.rows.get(legacyKey)).toEqual(result.output.ops[0]!.value);
+      else expect(legacySql.calls).toEqual([]);
+      if (approved === "new") expect(currentSql.rows.get(copyKey("fitness", key))).toEqual(result.output.ops[1]!.value);
+      else expect(currentSql.calls).toEqual([]);
+      expect(legacyKv.values.has(legacyStaleKey)).toBe(approved !== "legacy");
+      expect(kv.values.has(staleKey)).toBe(approved !== "new");
+    });
+  });
+  test("authorization refusals are not mistaken for a missing legacy schema", async () => {
+    for (const [code, status, expected] of [["AUTH_UNAUTHORIZED", 401, "AUTH_REQUIRED"], ["AUTH_FORBIDDEN", 403, "PERMISSION_DENIED"]] as const) {
+      const sql = new FakeSql();
+      sql.table = false;
+      sql.failures.push({ code, message: "no such table: entries", meta: { status } });
+      await expect(queryCopy(sql.handle(), "SELECT app FROM entries", [], "legacy")).rejects.toMatchObject({ operationError: { code: expected } });
+      expect(sql.calls).toHaveLength(1);
+      expect(sql.table).toBe(false);
+    }
+  });
   test("row encoding preserves objects, unicode and escaping; deletion removes only absent rows", async () => {
     const sql = new FakeSql();
     sql.rows.set("gone", { old: true });
@@ -343,13 +497,22 @@ describe("personal apps fast copy", () => {
       expect(kv.values.has(staleKey)).toBe(false);
     });
   });
-  test("rebuild failures and concurrent stale marks never remove the stale marker", async () => {
-    await fixture(async (kv) => {
-      kv.seed(key, { data: {} });
+  test("same-day concurrent changes retain their stale marker with content-derived ETags in either layout", async () => {
+    for (const layout of ["legacy", "new"] as const) await fixture(async (kv) => {
+      const record = `${recordPrefix("fitness", "weight", layout)}2026-10/2026-10-14`;
+      const marker = copyStaleKey("fitness", "weight", layout);
+      kv.seed(record, { data: { kg: 72 } });
       const sql = new FakeSql();
-      sql.afterInsert = () => { kv.seed(staleKey, { since: "2026-10-15" }); };
-      await expect(checkCopyKinds(kv, sql.handle(), [weightKind])).rejects.toThrow();
-      expect(JSON.parse(kv.values.get(staleKey)!.text)).toEqual({ since: "2026-10-15" });
+      let concurrentEtag: string | undefined;
+      sql.afterInsert = async () => {
+        kv.seed(record, { data: { kg: 73 } });
+        await markAppsKindStale(kv, "fitness", "weight", new Date().toISOString(), layout);
+        concurrentEtag = kv.values.get(marker)!.etag;
+      };
+      await expect(checkCopyKinds(kv, sql.handle(), [weightKind], () => 0, layout)).rejects.toThrow();
+      expect(kv.values.get(marker)?.etag).toBe(concurrentEtag);
+      expect(sql.rows.get(copyKey("fitness", record, layout))).toEqual({ data: { kg: 72 } });
+      expect(JSON.parse(kv.values.get(record)!.text)).toEqual({ data: { kg: 73 } });
     });
   });
   test("an omitted or malformed listed value cannot produce a complete rebuild", async () => {
@@ -383,18 +546,18 @@ describe("personal apps fast copy", () => {
       expect(kv.writes).toEqual([]);
     });
   });
-  test("finishes a started kind after sixty seconds but marks all unstarted kinds stale", async () => {
-    await fixture(async (kv) => {
-      kv.seed(key, { data: {} });
+  test("finishes a started kind after sixty seconds but marks all unstarted kinds stale in the same layout", async () => {
+    for (const layout of ["legacy", "new"] as const) await fixture(async (kv) => {
+      const record = `${recordPrefix("fitness", "weight", layout)}2026-10/2026-10-14`;
+      kv.seed(record, { data: {} });
       const sql = new FakeSql();
       let now = 0;
       sql.afterInsert = () => { now = 60_000; };
       const remaining = [{ app: "fitness", kind: "lift" }, { app: "fitness", kind: "goal" }];
-      expect(await checkCopyKinds(kv, sql.handle(), [weightKind, ...remaining], () => now)).toEqual({ outcome: "COPY_PARTIAL", remaining });
-      expect(sql.rows.has(copyKey("fitness", key))).toBe(true);
-      expect(kv.values.has(staleKey)).toBe(false);
-      for (const kind of remaining) expect(kv.values.has(`${FITNESS}index-stale/${kind.kind}`)).toBe(true);
-      expect(sql.calls.filter((call) => call.sql.startsWith("SELECT count(*)")).map((call) => call.params[0])).toEqual(["weight/", "weight/"]);
+      expect(await checkCopyKinds(kv, sql.handle(), [weightKind, ...remaining], () => now, layout)).toEqual({ outcome: "COPY_PARTIAL", remaining });
+      expect(sql.rows.has(copyKey("fitness", record, layout))).toBe(true);
+      expect(kv.values.has(copyStaleKey("fitness", "weight", layout))).toBe(false);
+      for (const kind of remaining) expect(kv.values.has(copyStaleKey(kind.app, kind.kind, layout))).toBe(true);
     });
   });
   test("rejects writes and multiple statements before touching storage; WITH reads are accepted", async () => {
@@ -427,10 +590,9 @@ describe("personal apps fast copy", () => {
 });
 
 describe("fast-copy request-size mapping", () => {
-  test("maps request-side 413 to a short request-size message and keeps response-side 413 as result-limit", () => {
+  test("maps request-side 413 to invalid input and response-side 413 to a result limit", () => {
     expect(copyFailure({ code: "SQL_REQUEST_TOO_LARGE" }).operationError).toMatchObject({
       code: "INPUT_INVALID",
-      message: "Fast-copy request too large.",
     });
     expect(copyFailure({ code: "SQL_RESPONSE_TOO_LARGE" }).operationError).toMatchObject({
       code: "SQL_RESULT_LIMIT_EXCEEDED",
