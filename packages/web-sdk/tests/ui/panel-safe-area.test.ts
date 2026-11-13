@@ -147,13 +147,14 @@ describe("the loading stand-in", () => {
     expect(HOST_CSS.match(/\.pending \.pclose\{[^}]*\}/)?.[0]).toContain("width:44px");
     expect(HOST_CSS.match(/\.pending button\{[^}]*\}/)?.[0]).toContain("min-height:44px");
   });
-  test("a failed panel load offers a page reload instead of retrying the same chunk", () => {
+  test("a failed panel load warns about reload and offers recovery instead of retrying the same chunk", () => {
     let reloads = 0;
     const pending = createPendingPanel(() => {});
     page.document.body.append(pending.el);
 
     pending.showError(() => void (reloads += 1));
 
+    expect(pending.el.textContent).toContain("This didn't load. Reloading the page may fix it, but could discard unsaved changes.");
     const button = [...pending.el.querySelectorAll("button")].find((candidate) => candidate.textContent === "Reload page");
     expect(button).toBeDefined();
     button?.click();
