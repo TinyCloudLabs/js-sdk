@@ -30,6 +30,7 @@
   },
   "changesets": [
     "courier-collect-peer-renewal",
+    "courier-idle-polling",
     "courier-unknown-flags",
     "feed-watch-lines-once",
     "hide-courier-invite",
