@@ -169,7 +169,7 @@ test('peer reads collect a newer signed grant without a receiving pair renew; pr
     return { ok: true, data: { data: { delegation: artifact.delegation } } };
   } };
   node.kvForSpace = () => kv;
-  assert.equal(await peerKv(node, profile, peer), kv);
+  const renewedKv = await peerKv(node, profile, peer); assert.notEqual(renewedKv, kv, 'the renewed grant is read through a reader that holds only it');
   assert.equal(reads, 1);
   assert.equal(peer.inbound.cid, JSON.parse(artifact.delegation).cid);
   assert.notEqual(peer.inbound.cid, before.inbound.cid);
