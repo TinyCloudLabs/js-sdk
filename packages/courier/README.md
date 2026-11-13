@@ -321,7 +321,9 @@ Each entry is still checked on its own. When one value in a batch is over its ca
 Courier reads that batch's keys once more one by one, with the same cap. That key is then reported by id, never its
 content (`entry-too-large` in `courier read`, `message-too-large` in `courier inbox`, `ignored` with reason `too-large`
 once per watcher process for a message, thread meta or task, an `intake-error` in intake), and every other entry is read
-as usual. A cache directory that can't be made owner-only is not used: everything is fetched.
+as usual. A cache directory that can't be made owner-only is not used: everything is fetched. `courier inbox` skips a
+message whose thread or message id in the peer's key isn't a safe id (letters, digits, `-` and `_`, at most 64): it is
+not fetched, listed or receipted, and is reported as `bad-message` with the id escaped, as the watcher already skips it.
 Your own side comes from a local owner-space record of the writes made under
 your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
 session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
