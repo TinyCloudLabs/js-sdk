@@ -3130,9 +3130,9 @@ export const approvedTc2872RenewalReplicaWorker: Tc2872RenewalReplicaWorkerRatch
 export const approvedTc2904OwnerDirectProofRoot: Tc2872RenewalRootBudget = {
   "label": "strict owner-direct proof parsing root budget (TC-2904)",
   "ruling": "size-ruling: TC-2904: Naomi allows the measured root residual +1007 B ESM / +883 B CJS (gzip -9) for strict proof parsing and typed-code bindings in the root parser; error classes/messages remain lazy, stacked on tc2872RenewalRoot; admission remains lazy. No general ceiling change.",
-  "base": "b8dc6c5e00757f8c676ae29dc98c53e8adf82f84",
+  "base": "d5bff1005ea4ea791e614b830af921001d5a5a0c",
   "sourceCommits": [
-    "0388f921deb41398e34f0e65b5b814df57b83900"
+    "a5a369bac357f28b88e83348d4c48a7dfeb27052"
   ],
   "measuredWith": "Bun 1.4.4; production web-sdk build; reused TC-2872 WASM; gzip -9 -c",
   "root": {
