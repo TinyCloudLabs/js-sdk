@@ -1,3 +1,4 @@
+import { validateTc2927ShareApprovalRootTransition } from "./replica-size-policy";
 import { approvedTc2931Optional, tc2931OptionalAllowance, validateTc2931OptionalTransition } from "./replica-optional-size-policy";
 import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
 import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
@@ -235,6 +236,12 @@ if (prBaseSha) {
   if (ledger.tc2923EncryptionTeeOriginRoot !== undefined && baseLedger.tc2923EncryptionTeeOriginRoot === undefined &&
       (baseLedger.tc2931BootstrapScope === undefined || !hasAncestor(repoRoot, ledger.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)!))) {
     console.error("The TC-2923 admission requires the merged TC-2931 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2927ShareApprovalRootTransition(baseLedger.tc2927ShareApprovalRoot, ledger.tc2927ShareApprovalRoot);
+  if (ledger.tc2927ShareApprovalRoot !== undefined && baseLedger.tc2927ShareApprovalRoot === undefined &&
+      (baseLedger.tc2970RegistryVerdictCacheRoot === undefined || !hasAncestor(repoRoot, ledger.tc2927ShareApprovalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2927 admission requires the merged TC-2970 row and its measured source ancestor.");
     failed = true;
   }
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);

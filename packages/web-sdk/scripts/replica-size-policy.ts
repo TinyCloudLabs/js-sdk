@@ -475,6 +475,7 @@ export type Ledger = {
   tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
   tc2949PanelChunkRecoveryRoot?: LogoutRatchet;
   tc2970RegistryVerdictCacheRoot?: LogoutRatchet;
+  tc2927ShareApprovalRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1104,6 +1105,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
   if (root.tc2949PanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949PanelChunkRecoveryRoot", pin: root.tc2949PanelChunkRecoveryRoot.sourceCommits.at(-1)! });
   if (root.tc2970RegistryVerdictCacheRoot !== undefined) pins.push({ row: "tc2970RegistryVerdictCacheRoot", pin: root.tc2970RegistryVerdictCacheRoot.sourceCommits.at(-1)! });
+  if (root.tc2927ShareApprovalRoot !== undefined) pins.push({ row: "tc2927ShareApprovalRoot", pin: root.tc2927ShareApprovalRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1203,6 +1205,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
     ["tc2949PanelChunkRecoveryRoot", root.tc2949PanelChunkRecoveryRoot?.root.ceiling],
     ["tc2970RegistryVerdictCacheRoot", root.tc2970RegistryVerdictCacheRoot?.root.ceiling],
+    ["tc2927ShareApprovalRoot", root.tc2927ShareApprovalRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3397,6 +3400,26 @@ export const approvedTc2970RegistryVerdictCacheRoot: LogoutRatchet = {
   "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
 };
 
+/** Naomi's exact TC-2927 new-share approval root allowance from canonical CI. */
+export const approvedTc2927ShareApprovalRoot: LogoutRatchet = {
+  "label": "new-share approval root admission (TC-2927)",
+  "ruling": "Naomi's TC-2927 size ruling: exact canonical CI root bytes, capped at +1900 B per format over the newest root row when it merges; re-stacked on TC-2970 after #962 merged and re-measured. Immutable named row; no general, optional or worker allowance change. Details: TC-2927",
+  "base": "c8e53a9aad80758dd3492c1714e40e6bd348c61b",
+  "sourceCommits": ["238981e648c853c599f064bfb162d3b5153cc04b"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486972520",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486972520/job/132097885469",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486972520/job/132097885414"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 1723, "index.cjs": 1682 },
+    "ceiling": { "index.mjs": 1526018, "index.cjs": 1460414 }
+  },
+  "reason": "The exact Share registration permission, the signed new-share approval verifier and the Web approveNewShare consumer ship in the root bundle. Canonical Node 22/Bun 1.3.14/source-WASM CI measured 1526018/1460414 gzip -9 bytes on 238981e6, based on master c8e53a9a; both Replica jobs agree. This is +1723/+1682 over the TC-2970 ceilings 1524295/1458732, within Naomi's +1900-byte per-format cap. Other ceilings are unchanged. Details: TC-2927"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3493,6 +3516,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
   tc2949PanelChunkRecoveryRoot: approvedTc2949PanelChunkRecoveryRoot,
   tc2970RegistryVerdictCacheRoot: approvedTc2970RegistryVerdictCacheRoot,
+  tc2927ShareApprovalRoot: approvedTc2927ShareApprovalRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3931,6 +3955,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2949PanelChunkRecoveryRoot ||
         JSON.stringify(value.tc2970RegistryVerdictCacheRoot) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot))) {
     throw new Error("Only Naomi's exact TC-2970 root admission is approved.");
+  }
+  if (value.tc2927ShareApprovalRoot !== undefined &&
+      (!value.tc2970RegistryVerdictCacheRoot ||
+        JSON.stringify(value.tc2927ShareApprovalRoot) !== JSON.stringify(approvedTc2927ShareApprovalRoot))) {
+    throw new Error("Only Naomi's exact TC-2927 root admission is approved.");
   }
 }
 
@@ -4776,5 +4805,13 @@ export function validateTc2970RegistryVerdictCacheRootTransition(base?: LogoutRa
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2970 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2927 new-share approval root admission is introduced once and immutable. */
+export function validateTc2927ShareApprovalRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2927ShareApprovalRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2927 root admission may be introduced once and cannot change later.");
   }
 }
