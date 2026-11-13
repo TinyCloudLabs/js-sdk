@@ -19,6 +19,6 @@ describe("TC-2904 exact proof-parser allowance", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2904OwnerDirectProofRootTransition(undefined, changed)).toThrow("TC-2904");
     expect(() => validateTc2904OwnerDirectProofRootTransition(row, undefined)).toThrow("TC-2904");
-    expect(() => validateLedger({ ...ledger, tc2872RenewalRoot: undefined })).toThrow("TC-2904");
+    expect(() => validateLedger({ ...ledger, tc2872RenewalRoot: undefined, tc2872RenewalKvWorker: undefined, tc2872RenewalReplicaWorker: undefined })).toThrow("TC-2904");
   });
 });

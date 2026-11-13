@@ -3001,20 +3001,20 @@
   },
   "tc2904OwnerDirectProofRoot": {
     "label": "strict owner-direct proof parsing root budget (TC-2904)",
-    "ruling": "size-ruling: TC-2904: Naomi allows the measured root residual +1007 B ESM / +883 B CJS (gzip -9) for strict proof parsing and typed-code bindings in the root parser; error classes/messages remain lazy, stacked on tc2872RenewalRoot; admission remains lazy. No general ceiling change.",
-    "base": "d5bff1005ea4ea791e614b830af921001d5a5a0c",
+    "ruling": "size-ruling: TC-2904: Naomi approves the exact canonical CI measurement over tc2872RenewalRoot, limited to +1100 ESM/+1000 CJS gzip (-9); workers unchanged. Supersedes local reused-WASM rulings.",
+    "base": "cd34e10f2efe302d422f56bf7de82d70bf6a6785",
     "sourceCommits": [
-      "a5a369bac357f28b88e83348d4c48a7dfeb27052"
+      "80ccc21b2596e938eb0f085ecc4bb8d05c152d12"
     ],
-    "measuredWith": "Bun 1.4.4; production web-sdk build; reused TC-2872 WASM; gzip -9 -c",
+    "measuredWith": "Canonical CI Node 22 / Bun 1.3.14 / rustc 1.99.0; production webpack; gzip -9 -c. Prior TC-2904 run 43387903289; rebased-head confirmation pending.",
     "root": {
       "delta": {
-        "index.mjs": 1007,
-        "index.cjs": 883
+        "index.mjs": 1009,
+        "index.cjs": 852
       },
       "ceiling": {
-        "index.mjs": 1518077,
-        "index.cjs": 1451892
+        "index.mjs": 1522718,
+        "index.cjs": 1456384
       }
     },
     "reason": "Only the strict signed proof list parser and typed-code import bindings are eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."

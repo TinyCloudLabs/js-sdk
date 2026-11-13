@@ -692,6 +692,7 @@ if (prBaseSha) {
   if (renewalReplicaWorker !== undefined && baseLedger.tc2872RenewalReplicaWorker === undefined &&
       (renewalKvWorker === undefined || !hasAncestor(repoRoot, renewalReplicaWorker.sourceCommits.at(-1)!))) {
     console.error("The TC-2872 replica worker budget requires the kv-storage worker row and its measured source commit.");
+    failed = true;
   }
   validateTc2904OwnerDirectProofRootTransition(baseLedger.tc2904OwnerDirectProofRoot, ledger.tc2904OwnerDirectProofRoot);
   if (ledger.tc2904OwnerDirectProofRoot !== undefined && baseLedger.tc2904OwnerDirectProofRoot === undefined &&
