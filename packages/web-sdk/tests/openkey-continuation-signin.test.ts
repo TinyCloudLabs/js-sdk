@@ -1,20 +1,25 @@
 import "./support/browserGlobalsShim";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
-import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
+import { AccountSetupRequiredError, extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 import { privateKeyToAccount } from "viem/accounts";
-import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+import { startBrowserLocationRegistry, type BrowserLocationRegistry } from "../../node-sdk/src/test-support/browser-location-registry";
 
-const owner = privateKeyToAccount(`0x${"1".padStart(64, "0")}`);
+const ownerKey = `0x${"1".padStart(64, "0")}` as const;
+const owner = privateKeyToAccount(ownerKey);
+const nodeDid = "did:key:z6MktLHQwkV2x8WKZhmyB8qEShgvcMHfJbNjb2k21pVJQvfB";
 const identity = { address: owner.address, chainId: 1, keyId: "selected", keyType: "MANAGED", requestId: "request" };
 const manifest = { app_id: "xyz.tinycloud.tc2913", name: "Continuation app", defaults: false,
   permissions: [{ service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tc2913/", actions: ["get", "list"] }] };
-let registry: UnregisteredLocationRegistry;
+let registry: BrowserLocationRegistry;
 let oldWindow: typeof window | undefined;
 let oldLocation: typeof location | undefined;
 let oldFetch: typeof fetch;
 let activations = 0;
 let activeWeb: { signOut(): Promise<void> } | undefined;
-beforeAll(() => { registry = startUnregisteredLocationRegistry(); });
+beforeAll(async () => {
+  registry = startBrowserLocationRegistry();
+  await registry.register(ownerKey, "https://node.example.test", nodeDid);
+});
 afterAll(() => { registry.stop(true); });
 beforeEach(() => {
   oldWindow = globalThis.window;
@@ -27,7 +32,8 @@ beforeEach(() => {
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url.startsWith(`${registry.url.origin}/`)) return oldFetch(input, init);
-    if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (url.endsWith("/info")) return Response.json({ nodeId: nodeDid, protocol: 1, version: "1.0.0", features: [] });
+    if (url.endsWith("/.well-known/tinycloud/node-keys")) return Response.json({ nodeDid });
     if (url.endsWith("/delegate") && init?.method === "POST") { activations++; return Response.json({ activated: ["space"], skipped: [] }); }
     throw new Error(`Unexpected fetch: ${url}`);
   };
@@ -125,10 +131,7 @@ test("an app-supplied verifier cannot override TinyCloud verification", async ()
 test("a typed account setup refusal cancels the continuation without fallback or activation", async () => {
   const { web, calls } = await setup(true);
   // TC-2931 owns the registry policy; inject its typed refusal at the preparation boundary.
-  const refusal = Object.assign(new Error("Account setup required"), {
-    name: "AccountSetupRequiredError", code: "ACCOUNT_SETUP_REQUIRED",
-    setupUrl: "https://home.tinycloud.xyz/",
-  });
+  const refusal = new AccountSetupRequiredError();
   const node = await web.ensureNode();
   node.prepareOpenKeySignIn = async () => { throw refusal; };
   await expect(web.signIn()).rejects.toBe(refusal);

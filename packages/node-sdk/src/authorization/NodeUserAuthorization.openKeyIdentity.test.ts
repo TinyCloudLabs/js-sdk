@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { diffImmutableSiweFields, extractImmutableSiweFields, extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
+import { AccountSetupRequiredError, diffImmutableSiweFields, extractImmutableSiweFields, extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
@@ -23,24 +23,41 @@ beforeEach(() => {
 });
 afterEach(() => { globalThis.fetch = previousFetch; });
 
-async function fixture() {
+async function authorization(requireExistingAccount = false) {
   let accountReads = 0;
+  const wasm = new NodeWasmBindings();
   const auth = new NodeUserAuthorization({
     signer: {
       getAddress: async () => { accountReads++; throw new Error("Unexpected reconnect"); },
       getChainId: async () => { accountReads++; throw new Error("Unexpected chain re-read"); },
       signMessage: message => owner.signMessage(message),
     },
-    wasmBindings: new NodeWasmBindings(), sessionStorage: new MemorySessionStorage(),
+    wasmBindings: wasm, sessionStorage: new MemorySessionStorage(), requireExistingAccount,
     tinycloudRegistryUrl: registry, tinycloudHosts: ["https://tinycloud.test"],
     domain: "example.com", uri: "https://example.com", signStrategy: { type: "auto-sign" },
     defaultActions: { kv: { "notes/": ["tinycloud.kv/get"] } },
   });
   const identity = { address: await owner.getAddress(), chainId: 1, keyId: "server-selected-key",
     keyType: "MANAGED" as const, requestId: "request" };
-  const pending = await auth.prepareOpenKeySignIn(undefined, identity);
-  return { auth, pending, reads: () => accountReads };
+  return { auth, identity, wasm, reads: () => accountReads };
 }
+
+async function fixture() {
+  const context = await authorization();
+  const pending = await context.auth.prepareOpenKeySignIn(undefined, context.identity);
+  return { ...context, pending };
+}
+
+test("an unregistered pinned owner is refused before preparation without reconnecting", async () => {
+  const { auth, identity, wasm, reads } = await authorization(true);
+  let prepared = 0;
+  const original = wasm.prepareSession;
+  wasm.prepareSession = (...args) => { prepared++; return original(...args); };
+  await expect(auth.prepareSessionForSigning(identity)).rejects.toBeInstanceOf(AccountSetupRequiredError);
+  expect(prepared).toBe(0);
+  expect(reads()).toBe(0);
+  expect(auth.tinyCloudSession).toBeUndefined();
+});
 
 async function signedResult(siwe: string, signer = owner) {
   const selectedActionKeys: string[] = [];
