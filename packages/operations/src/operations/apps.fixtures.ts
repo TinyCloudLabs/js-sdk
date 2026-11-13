@@ -1,4 +1,5 @@
 import { expect } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import { COPY_DELETE, COPY_INSERT, type AppsDatabase, type CopyRow } from "../tc
 import { appsOperationDefinitions, type ContextOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
 
 export const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications";
+export const DEFAULT_SPACE = SPACE.replace(/:applications$/, ":default");
 export const FITNESS = appRoot("fitness");
 export const app = { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" };
 export const kind = { app: "fitness", kind: "weight", about: "Body weight", shape: "log", per: "day", v: 1, fields: { kg: "number" }, created: "2026-10-14" };
@@ -29,7 +31,7 @@ export function definition<N extends keyof Outputs>(name: N) {
       return {
         status: result.status,
         get output() {
-          if (result.status !== "ok") throw new Error(`Expected ok, got ${result.status}`);
+          if (result.status !== "ok") throw new Error(`Expected ok, got ${JSON.stringify(result)}`);
           return result.output;
         },
         get error() {
@@ -40,7 +42,7 @@ export function definition<N extends keyof Outputs>(name: N) {
     },
   };
 }
-export function etag(number: number): string { return `"blake3-${number.toString(16).padStart(64, "0")}"`; }
+function etag(text: string): string { return `"blake3-${createHash("sha256").update(text).digest("hex")}"`; }
 export function failure(code: string): KvResult<KvValue> { return { ok: false, error: { code } }; }
 export class FakeKv implements AppsKv {
   readonly values = new Map<string, { text: string; etag: string }>();
@@ -54,9 +56,9 @@ export class FakeKv implements AppsKv {
   listPages?: string[][];
   pageSize = 1000;
   omitReadEtag = false;
-  serial = 0;
   seed(key: string, value: unknown) {
-    const entry = { text: JSON.stringify(value), etag: etag(++this.serial) };
+    const text = JSON.stringify(value);
+    const entry = { text, etag: etag(text) };
     this.values.set(key, entry);
     return entry.etag;
   }
@@ -83,7 +85,8 @@ export class FakeKv implements AppsKv {
     if (refused) return failure(refused);
     const current = this.values.get(key);
     if ((options.ifNoneMatch && current) || (options.ifMatch && current?.etag !== options.ifMatch)) return failure("KV_PRECONDITION_FAILED");
-    const stored = { text: new TextDecoder().decode(bytes), etag: etag(++this.serial) };
+    const text = new TextDecoder().decode(bytes);
+    const stored = { text, etag: etag(text) };
     this.values.set(key, stored);
     return { ok: true, data: { data: undefined, headers: { etag: stored.etag } } };
   }
@@ -98,11 +101,12 @@ export class FakeKv implements AppsKv {
   }
 }
 /** `kv` is the owner's applications space, seeded with one app, `fitness`, and its `weight` kind. */
-export async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext) => Promise<void>, timezone: string | null = "Europe/Berlin") {
+export async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext, legacy: FakeKv) => Promise<void>, timezone: string | null = "Europe/Berlin") {
   const root = await mkdtemp(join(tmpdir(), "tc-apps-test-"));
   try {
     await withTinyCloudStateRoot(root, async () => {
       const kv = new FakeKv();
+      const legacy = new FakeKv();
       kv.seed(`${FITNESS}catalog`, app);
       kv.seed(`${FITNESS}catalog/weight`, kind);
       kv.seed(discoveryKey("fitness"), { v: 1, app: "fitness", id: "xyz.tinycloud.tinyapps.fitness", title: "Fitness" });
@@ -110,11 +114,12 @@ export async function fixture(run: (kv: FakeKv, context: RuntimeOperationContext
         summary: { profile: "apps", host: "https://node.example", posture: "delegate-session", space: SPACE },
         runtime: { granted: [], node: { kvForSpace: (space: string) => {
           if (space === SPACE) return kv;
+          if (space === DEFAULT_SPACE) return legacy;
           throw new Error(`Unexpected space ${space}`);
         } } },
       };
       if (timezone) await appsTimezone("apps", timezone);
-      await run(kv, context);
+      await run(kv, context, legacy);
     });
   } finally { await rm(root, { recursive: true, force: true }); }
 }
@@ -130,7 +135,7 @@ export class FakeSql {
   table = true;
   view = true;
   failures: { code: string; message?: string; meta?: { status: number } }[] = [];
-  afterInsert?: () => void;
+  afterInsert?: () => void | Promise<void>;
   // The fake implements only the query/execute surface exercised by the copy.
   readonly databases: string[] = [];
   handle(): AppsDatabase { return this as unknown as AppsDatabase; }
@@ -147,7 +152,7 @@ export class FakeSql {
         if (sql === COPY_INSERT && row.r !== undefined) this.rows.set(row.k, row.r);
         if (sql === COPY_DELETE && row.r === undefined) this.rows.delete(row.k);
       }
-      if (sql === COPY_INSERT) this.afterInsert?.();
+      if (sql === COPY_INSERT) await this.afterInsert?.();
     } else if (sql.startsWith("DELETE FROM records WHERE instr")) {
       for (const key of this.rows.keys()) if (key.startsWith(String(params[0]))) this.rows.delete(key);
     } else throw new Error(`Unexpected fake SQL: ${sql}`);

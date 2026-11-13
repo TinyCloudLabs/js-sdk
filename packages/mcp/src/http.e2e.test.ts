@@ -1413,6 +1413,87 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
 }
 }
 
+for (const resourcePath of ["/mcp", "/chatgpt/mcp"]) {
+test(`${resourcePath} keeps a persisted legacy-only connection readable and writable without new-space approval`, async () => {
+  const hermeticModule = await import(new URL(
+    "./test-support/hermetic-node.mjs", import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  const legacy = "xyz.tinycloud.agent-data/";
+  const key = `${legacy}books/note/saved/existing`;
+  const defaultSpace = await ownerSpace(hermetic.ownerPrivateKey, "default");
+  hermetic.provisionKvSpace(defaultSpace);
+  hermetic.configureKv(defaultSpace, {
+    [`${legacy}catalog/books`]: { app: "books", title: "Books", about: "Reading notes", created: "2026-11-01" },
+    [`${legacy}catalog/books/note`]: {
+      app: "books", kind: "note", about: "Saved reading notes", shape: "item", states: ["saved"],
+      v: 1, fields: { text: "string" }, created: "2026-11-01",
+    },
+    [key]: { v: 1, at: "2026-11-01T12:00+00:00", by: "existing-agent", data: { text: "Original note" } },
+  });
+  const { app, client, stateDir } = await startHostedMcp({
+    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath,
+  });
+  const first = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  const tenantsDir = join(stateDir, ...(resourcePath === "/chatgpt/mcp" ? ["chatgpt"] : []), "tenants");
+  const [tenantId] = await readdir(tenantsDir);
+  const tenantStateRoot = join(tenantsDir, tenantId!);
+  const bootstrapUrl = String(first.approvalUrl);
+  const bootstrap = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, bootstrapUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await postCallback(app, bootstrapUrl, bootstrap)).toEqual({ status: 200, body: { success: true } });
+
+  // Model a connection saved before the cutoff, not a fresh grant in the new layout.
+  const sessionPath = join(tenantStateRoot, ".tinycloud/profiles/agent/session.json");
+  const stored = JSON.parse(await readFile(sessionPath, "utf8")) as Record<string, unknown>;
+  const legacySession = await openKeyCallbackBody({
+    tenantStateRoot, privateKey: hermetic.ownerPrivateKey, space: "default",
+    abilities: { kv: { [legacy]: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] } },
+  });
+  await activateOnNode(hermetic.host, legacySession);
+  await writeFile(sessionPath, JSON.stringify({ ...stored, ...legacySession }));
+
+  expect((await client.callTool({
+    name: "tinycloud_apps_context", arguments: { timezone: "UTC", access: "read" },
+  })).structuredContent).toMatchObject({
+    status: "ok", output: { apps: [{ app: "books", layout: "legacy", title: "Books" }] },
+  });
+  expect((await client.callTool({
+    name: "tinycloud_apps_context", arguments: { app: "books", access: "read" },
+  })).structuredContent).toMatchObject({ status: "ok" });
+  const before = record((await client.callTool({
+    name: "tinycloud_apps_read", arguments: { prefixes: [`${legacy}catalog/`], keys: [key] },
+  })).structuredContent);
+  expect(before).toMatchObject({
+    status: "ok", output: {
+      lists: [{ prefix: `${legacy}catalog/`, keys: expect.arrayContaining([`${legacy}catalog/books`, `${legacy}catalog/books/note`]) }],
+      records: [{ key, value: { data: { text: "Original note" }, by: "existing-agent" } }],
+    },
+  });
+  const addedKey = `${legacy}books/note/saved/recovered`;
+  const update = { op: "put", key: addedKey, value: { v: 1, data: { text: "Written in the existing app" } } };
+  expect((await client.callTool({
+    name: "tinycloud_apps_write", arguments: { ops: [update] },
+  })).structuredContent).toMatchObject({
+    status: "ok", output: { ops: [{ key: addedKey, outcome: "ok", value: { data: { text: "Written in the existing app" }, by: "tinycloud-mcp" } }] },
+  });
+  expect((await client.callTool({
+    name: "tinycloud_apps_read", arguments: { keys: [addedKey, key] },
+  })).structuredContent).toMatchObject({
+    status: "ok", output: { records: [
+      { key: addedKey, value: { data: { text: "Written in the existing app" } } },
+      { key, value: { data: { text: "Original note" } } },
+    ] },
+  });
+  expect((await client.callTool({
+    name: "tinycloud_apps_read", arguments: { keys: ["xyz.tinycloud.secrets/private-key"] },
+  })).structuredContent).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
+}, 60_000);
+}
+
 test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
   // The loopback node is outside this package's build graph, as above.
   const hermeticModule = await import(new URL(
