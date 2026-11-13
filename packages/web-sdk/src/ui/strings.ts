@@ -11,7 +11,7 @@ export const STRINGS = {
   "panel.back": "Back to",
   "section.placeholder": "Not available yet.",
   "view.loading": "Loading…",
-  "view.error": "This didn't load. Reloading the page may fix it, but could discard unsaved changes.",
+  "view.error": "This didn't load. Reloading the page can fix it. Save anything you're working on first.",
   "view.retry": "Try again",
   "view.reloadPage": "Reload page",
   "view.permission": "This session can't show this yet.",
