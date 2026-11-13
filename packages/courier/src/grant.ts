@@ -317,7 +317,13 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
     const identity = await node.renewalNodeIdentity();
     assertOwnerRenewalIdentity(payload.renewal, identity);
-    await node.getRenewalEffectiveExpiry(payload.renewal.receipt.leaseAuthorization);
+    // Admission is replayable before the first renewal stamp exists.
+    const { admitOwnerRenewalLease } = await import('@tinycloud/sdk-core/delegations/renewal');
+    await admitOwnerRenewalLease({ host: profile.host, originalAuthorization: payload.delegationHeader.Authorization,
+      originalCid: payload.delegationCid, ownerDid: `did:pkh:eip155:${payload.chainId}:${payload.address}`,
+      agentDid: profile.courierDid, spaceId: payload.spaceId, nodeIdentity: identity,
+      leaseAuthorization: payload.renewal.receipt.leaseAuthorization, leaseCid: payload.renewal.receipt.leaseCid,
+      leaseExpiresAt: payload.renewal.receipt.leaseExpiresAt });
   }
   assertAgentGrant(node.getVerifiedSessionCapabilities(), times);
   if (node.credentialHolderDid !== profile.courierDid) {

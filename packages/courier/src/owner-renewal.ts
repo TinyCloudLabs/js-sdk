@@ -8,9 +8,16 @@ export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string
   const original = await parseSignedSiweCacao(payload.delegationHeader.Authorization.replace(/^Bearer\s+/i, ''), payload.delegationCid);
   const { receipt } = renewal;
   const lease = await parseSignedSiweCacao(receipt.leaseAuthorization.replace(/^Bearer\s+/i, ''), receipt.leaseCid);
+  const now = Date.now();
+  const approved = Date.parse(renewal.approvedAt);
+  const originalStart = Date.parse(original.notBefore ?? original.issuedAt);
+  const leaseStart = Date.parse(lease.notBefore ?? lease.issuedAt);
   const resource = lease.attenuation[`urn:cid:${original.cid}`];
   const caveats = resource?.['tinycloud.delegation/renew'];
-  if (receipt.originalCid !== original.cid || !principalDidEquals(original.issuer, ownerDid)
+  if (original.proofs.length !== 0 || lease.proofs.length !== 0
+    || !Number.isFinite(originalStart) || !Number.isFinite(leaseStart)
+    || originalStart > approved + 60_000 || leaseStart > now + 60_000
+    || receipt.originalCid !== original.cid || !principalDidEquals(original.issuer, ownerDid)
     || !principalDidEquals(lease.issuer, ownerDid) || original.audience !== payload.verificationMethod.split('#', 1)[0]
     || lease.audience !== receipt.nodeIdentity.renewerDid
     || Object.keys(lease.attenuation).length !== 1 || !resource || Object.keys(resource).length !== 1

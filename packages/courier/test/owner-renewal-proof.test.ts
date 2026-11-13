@@ -12,12 +12,12 @@ const owner = privateKeyToAccount(`0x${fixture.ownerPrivateKey}`);
 const payload = { delegationHeader: { Authorization: fixture.delegation.authorization }, delegationCid: fixture.delegation.cid,
   verificationMethod: fixture.delegation.audience } as GrantPayload;
 const renewer = 'did:key:z6MkhMmQGm6uMGggZWsMwcXkXFxQFVB4xafKFaQ3eLUPgDLD';
-async function receipt(target = fixture.delegation.cid, action = 'renew', audience = renewer, caveat = {}) {
+async function receipt(target = fixture.delegation.cid, action = 'renew', audience = renewer, caveat = {}, proofs: string[] = []) {
   const expiresAt = new Date(Date.now() + 86400000).toISOString();
   const resource = `urn:cid:${target}`;
   const statement = `I further authorize the stated URI to perform the following actions on my behalf: (1) 'tinycloud.delegation': '${action}' for '${resource}'.`;
   const issuedAt = new Date().toISOString();
-  const resources = [`urn:recap:${Buffer.from(JSON.stringify({ att: { [resource]: { [`tinycloud.delegation/${action}`]: [caveat] } }, prf: [] })).toString('base64url')}`];
+  const resources = [`urn:recap:${Buffer.from(JSON.stringify({ att: { [resource]: { [`tinycloud.delegation/${action}`]: [caveat] } }, prf: proofs })).toString('base64url')}`];
   const message = new SiweMessage({ domain: 'localhost', address: owner.address, uri: audience, version: '1', chainId: 1,
     nonce: '12345678', issuedAt, expirationTime: expiresAt, statement, resources }).prepareMessage();
   const signature = await owner.signMessage({ message });
@@ -48,4 +48,8 @@ test('rejects mismatched receipt CID, signed expiry and original signed bytes CI
     await expect(verifyOwnerRenewal(payload, fixture.ownerDid, bad)).rejects.toThrow();
   }
   await expect(verifyOwnerRenewal({ ...payload, delegationCid: 'request-body-cid' }, fixture.ownerDid, good)).rejects.toThrow();
+});
+
+test('rejects a correctly signed lease carrying a proof chain', async () => {
+  await expect(verifyOwnerRenewal(payload, fixture.ownerDid, await receipt(undefined, undefined, undefined, undefined, [fixture.delegation.cid]))).rejects.toThrow();
 });

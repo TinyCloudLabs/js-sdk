@@ -61,7 +61,8 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
   };
   if (grant.renewal) {
     await verifyOwnerRenewal(grant, grant.ownerDid, grant.renewal);
-    await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
+    if (Date.now() < expiry) await node.restoreSession(sessionData);
+    else await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
     assertOwnerRenewalIdentity(grant.renewal, await node.renewalNodeIdentity());
   } else {
     await node.restoreSession(sessionData);
