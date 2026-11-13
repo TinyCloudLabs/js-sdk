@@ -13,6 +13,7 @@ let oldWindow: typeof window | undefined;
 let oldLocation: typeof location | undefined;
 let oldFetch: typeof fetch;
 let activations = 0;
+let activeWeb: { signOut(): Promise<void> } | undefined;
 beforeAll(() => { registry = startUnregisteredLocationRegistry(); });
 afterAll(() => { registry.stop(true); });
 beforeEach(() => {
@@ -31,7 +32,9 @@ beforeEach(() => {
     throw new Error(`Unexpected fetch: ${url}`);
   };
 });
-afterEach(() => {
+afterEach(async () => {
+  await activeWeb?.signOut();
+  activeWeb = undefined;
   if (oldWindow === undefined) delete (globalThis as any).window; else globalThis.window = oldWindow;
   if (oldLocation === undefined) delete (globalThis as any).location; else globalThis.location = oldLocation;
   globalThis.fetch = oldFetch;
@@ -86,6 +89,7 @@ async function setup(enabled: boolean, appVerifier?: () => Promise<boolean>) {
     tinycloudRegistryUrl: registry.url.origin, autoDiscoverLocalNode: false,
     persistSession: false, autoCreateSpace: false, autoBootstrapAccount: false, ui: false,
   });
+  activeWeb = web;
   return { web, calls };
 }
 

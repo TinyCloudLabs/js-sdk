@@ -2585,26 +2585,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     let parsedSignedSiwe: SiweMessage;
     try {
       parsedSignedSiwe = new SiweMessage(result.signedMessage);
-      if (new SiweMessage(parsedSignedSiwe).prepareMessage() !== result.signedMessage) {
-        throw new Error("Noncanonical SIWE");
-      }
     } catch {
+      throw new Error("OpenKey signedMessage is not a parseable SIWE");
+    }
+    if (new SiweMessage(parsedSignedSiwe).prepareMessage() !== result.signedMessage) {
       throw new Error("OpenKey signedMessage is not a canonical SIWE");
     }
     if (canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress) {
       throw new Error("OpenKey signedMessage owner does not match the expected signer");
     }
-    const now = Date.now();
-    const clockSkew = 30_000;
-    const issuedAt = Date.parse(parsedSignedSiwe.issuedAt);
-    const expiresAt = Date.parse(parsedSignedSiwe.expirationTime ?? "");
-    const notBefore = parsedSignedSiwe.notBefore === undefined ? undefined : Date.parse(parsedSignedSiwe.notBefore);
-    if (!Number.isFinite(issuedAt) || issuedAt > now + clockSkew ||
-        !Number.isFinite(expiresAt) || expiresAt <= now || issuedAt >= expiresAt ||
-        (notBefore !== undefined && (!Number.isFinite(notBefore) || notBefore > now + clockSkew || notBefore >= expiresAt))) {
-      throw new Error("OpenKey signedMessage is outside its valid time range");
-    }
-
     // The expiry this code goes on to read (persisted `expiresAt`, the immutable-field comparison, the changed-expiry
     // check) comes from the message's `Expiration Time` LINES. The parsed message must have an expiry of its own, and it
     // must be the same instant as that line, so text inside the (ReCap-bearing, uncompared) statement can never stand in
@@ -2617,6 +2606,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const parsedExpiryMs = Date.parse(parsedExpiry);
     if (!Number.isFinite(parsedExpiryMs) || parsedExpiryMs !== Date.parse(lineExpiry)) {
       throw new Error("OpenKey signedMessage Expiration Time line does not match the message's own expiry");
+    }
+
+    const now = Date.now();
+    const clockSkew = 30_000;
+    const issuedAt = Date.parse(parsedSignedSiwe.issuedAt ?? "");
+    const expiresAt = Date.parse(parsedSignedSiwe.expirationTime ?? "");
+    const notBefore = parsedSignedSiwe.notBefore === undefined ? undefined : Date.parse(parsedSignedSiwe.notBefore);
+    if (!Number.isFinite(issuedAt) || issuedAt > now + clockSkew ||
+        !Number.isFinite(expiresAt) || expiresAt <= now || issuedAt >= expiresAt ||
+        (notBefore !== undefined && (!Number.isFinite(notBefore) || notBefore > now + clockSkew || notBefore >= expiresAt))) {
+      throw new Error("OpenKey signedMessage is outside its valid time range");
     }
 
     // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
