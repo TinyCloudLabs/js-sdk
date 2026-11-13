@@ -6,6 +6,6 @@
 "@tinycloud/web-sdk-wasm": patch
 ---
 
-Delegation status checks now use a proofless invocation signed by the session key.
+Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
 
 Details: TC-2872

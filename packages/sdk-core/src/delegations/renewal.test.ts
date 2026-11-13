@@ -7,7 +7,11 @@ import { create as createDigest } from "multiformats/hashes/digest";
 
 import { DelegationStatusSchema } from "./types.schema";
 import { encodeDagCbor } from "./cacao";
-import { verifyRenewalHistory, type RenewalStampHistoryEntry } from "./renewal";
+import {
+  MAX_RENEWAL_HISTORY_STAMPS,
+  verifyRenewalHistory,
+  type RenewalStampHistoryEntry,
+} from "./renewal";
 
 const originalCid = "bafkreigh2akiscaildcw7v5h2q7v7m2k4p5g7v2b6n2m7w4x6r4h3a2b6e";
 const leaseCid = "bafkreigh2akiscaildcw7v5h2q7v7m2k4p5g7v2b6n2m7w4x6r4h3a2b6f";
@@ -24,6 +28,7 @@ function makeStamp(input: {
   original?: string;
   lease?: string;
   signer?: Uint8Array;
+  version?: number;
 }): RenewalStampHistoryEntry {
   const end = new Date(input.newEnd * 1000).toISOString().replace(".000Z", "Z");
   const signedBytes = encodeDagCbor({
@@ -32,7 +37,7 @@ function makeStamp(input: {
       type: "TinyCloudRenewalStamp",
       newEnd: end,
       nodeDid,
-      version: 1,
+      version: input.version ?? 1,
       leaseCid: input.lease ?? leaseCid,
       originalCid: input.original ?? originalCid,
       renewerEpoch: 1,
@@ -79,13 +84,13 @@ describe("verifyRenewalHistory", () => {
 
   test("refuses a changed signature, a gap, or a stamp for another delegation", () => {
     const first = makeStamp({ generation: 1, previousStampCid: leaseCid, newEnd: 1_710_000_000 });
-    const second = makeStamp({ generation: 1, previousStampCid: first.cid, newEnd: 1_750_000_000 });
+    const second = makeStamp({ generation: 2, previousStampCid: first.cid, newEnd: 1_750_000_000 });
     expect(() => verify([{ ...first, signature: Buffer.alloc(64).toString("base64url") }])).toThrow();
     expect(() => verify([{ ...second, generation: 1, previous_stamp_cid: leaseCid }])).toThrow();
     const wrongOriginal = makeStamp({ generation: 1, previousStampCid: leaseCid, newEnd: 1_750_000_000, original: "bafkreigh2akiscaildcw7v5h2q7v7m2k4p5g7v2b6n2m7w4x6r4h3a2b60" });
     expect(() => verify([wrongOriginal])).toThrow();
     expect(verify([second, first])).toEqual({ effectiveExpiry: 1_750_000_000, latestStampCid: second.cid });
-    const fork = makeStamp({ generation: 1, previousStampCid: first.cid, newEnd: 1_740_000_000 });
+    const fork = makeStamp({ generation: 2, previousStampCid: first.cid, newEnd: 1_740_000_000 });
     expect(() => verify([first, second, fork])).toThrow();
   });
   test("binds history to the discovered node identity and current epoch", () => {
@@ -127,6 +132,59 @@ describe("verifyRenewalHistory", () => {
     expect(() => verify([beyondLease])).toThrow();
     expect(() => verify([afterNow])).toThrow();
   });
+  test("accepts valid 128- and 129-stamp histories within the lease policy limit", () => {
+    for (const length of [128, 129]) {
+      const history: RenewalStampHistoryEntry[] = [];
+      let previousStampCid = leaseCid;
+      for (let generation = 1; generation <= length; generation++) {
+        const stamp = makeStamp({
+          generation,
+          previousStampCid,
+          newEnd: 1_700_000_000 + generation,
+        });
+        history.push(stamp);
+        previousStampCid = stamp.cid;
+      }
+
+      expect(verify(history)).toEqual({
+        effectiveExpiry: 1_700_000_000 + length,
+        latestStampCid: previousStampCid,
+      });
+    }
+  });
+
+  test("bounds a valid lease history to the node's one-year, whole-second issuance policy", () => {
+    expect(MAX_RENEWAL_HISTORY_STAMPS).toBe(365 * 24 * 60 * 60 + 1);
+  });
+
+  test("refuses a signed chain whose renewal expiry decreases", () => {
+    const first = makeStamp({ generation: 1, previousStampCid: leaseCid, newEnd: 1_750_000_000 });
+    const second = makeStamp({ generation: 2, previousStampCid: first.cid, newEnd: 1_740_000_000 });
+    expect(() => verify([first, second])).toThrow();
+  });
+
+  test("refuses an unknown signed stamp version", () => {
+    const unknownVersion = makeStamp({
+      generation: 1,
+      previousStampCid: leaseCid,
+      newEnd: 1_750_000_000,
+      version: 2,
+    });
+    expect(() => verify([unknownVersion])).toThrow();
+  });
+
+  test("refuses restoration at the exact lease-expiry boundary", () => {
+    const stamp = makeStamp({ generation: 1, previousStampCid: leaseCid, newEnd: 1_750_000_000 });
+    expect(() => verifyRenewalHistory({
+      originalCid,
+      leaseCid,
+      leaseExpiresAt: 1_800_000_000,
+      nodeIdentity: identity,
+      history: [stamp],
+      now: 1_800_000_000,
+    })).toThrow();
+  });
+
 });
 describe("DelegationStatusSchema renewal fields", () => {
   test("keeps pre-renewal node responses compatible and parses signed history without treating it as authority", () => {

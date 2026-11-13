@@ -186,6 +186,15 @@ export class BrowserSessionStorage implements ISessionStorage {
     return address;
   }
 
+  /**
+   * Returns the saved address for a renewal restore without discarding an expired candidate.
+   * The session and renewal authority still require full verification before restore.
+   */
+  activeAddressForRenewal(): string | undefined {
+    const address = this.storage?.getItem(this.activeAddressKey());
+    return address || undefined;
+  }
+
   load(address: string): Promise<PersistedSessionData | null> {
     return this.loadWithStatus(address).then((result) =>
       result.status === "loaded" ? result.data : null,

@@ -869,15 +869,23 @@ export class TinyCloudWeb {
   // Auth Methods (delegate to TinyCloudNode)
   // ===========================================================================
 
-  private async resolveRestoreAddress(address?: string): Promise<string | undefined> {
+  private async resolveRestoreAddress(
+    address?: string,
+    allowExpiredRenewalCandidate = false,
+  ): Promise<string | undefined> {
     if (address) return address;
     if (this._node?.address) return this._node.address;
     const connected = await this.walletSigner?.getConnectedAddress();
     if (connected !== undefined) return connected;
     const storage = this.sessionStorage as
-      | (ISessionStorage & { activeAddress?: () => string | undefined })
+      | (ISessionStorage & {
+        activeAddress?: () => string | undefined;
+        activeAddressForRenewal?: () => string | undefined;
+      })
       | undefined;
-    return storage?.activeAddress?.();
+    return allowExpiredRenewalCandidate
+      ? storage?.activeAddressForRenewal?.()
+      : storage?.activeAddress?.();
   }
 
   private async loadPersistedSession(
@@ -952,7 +960,7 @@ export class TinyCloudWeb {
     if (this.persistedRestoreBlocked) {
       if (this.signOutCleanupFailed) return refused();
       try {
-        const restoreAddress = await this.resolveRestoreAddress(address);
+        const restoreAddress = await this.resolveRestoreAddress(address, leaseAuthorization !== undefined);
         if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
         if (!restoreAddress || (await this.loadPersistedSession(restoreAddress)).status === "missing") {
           if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
@@ -966,7 +974,7 @@ export class TinyCloudWeb {
     // Sign-out must see it even when storage has no activeAddress() hook.
     if (address) this.trackRestoreAddress(address);
 
-    const restoreAddress = await this.resolveRestoreAddress(address);
+    const restoreAddress = await this.resolveRestoreAddress(address, leaseAuthorization !== undefined);
     if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
       if (address) this.untrackRestoreAddress(address);
       return refused();

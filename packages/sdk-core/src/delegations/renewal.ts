@@ -8,7 +8,10 @@ import { decodeBase64Url } from "../credentials/digest";
 import { decodeCanonicalDagCbor } from "./cacao";
 
 const STAMP_DOMAIN = "tinycloud/node/renewal-stamp/v1";
-const MAX_HISTORY_STAMPS = 128;
+// A lease is at most one year; node timestamps have whole-second precision and
+// an issuance must advance the effective end, so at most one stamp fits per second.
+const MAX_LEASE_SECONDS = 365 * 24 * 60 * 60;
+export const MAX_RENEWAL_HISTORY_STAMPS = MAX_LEASE_SECONDS + 1;
 
 export interface RenewalStampHistoryEntry {
   readonly cid: string;
@@ -137,23 +140,31 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
   }
   assertRenewalNodeIdentity(nodeIdentity);
   const publicKey = renewalPublicKey(nodeIdentity);
-  const remaining = history.filter((entry) => entry.lease_cid === leaseCid);
-  if (remaining.length === 0 || remaining.length > MAX_HISTORY_STAMPS) {
-    throw new Error("Renewal history is missing or too large");
+  const stampsByPrevious = new Map<string, RenewalStampHistoryEntry>();
+  for (const entry of history) {
+    if (entry.lease_cid !== leaseCid) continue;
+    if (stampsByPrevious.size >= MAX_RENEWAL_HISTORY_STAMPS) {
+      throw new Error("Renewal history is missing or too large");
+    }
+    if (stampsByPrevious.has(entry.previous_stamp_cid)) {
+      throw new Error("Renewal history chain is invalid");
+    }
+    stampsByPrevious.set(entry.previous_stamp_cid, entry);
   }
+  if (stampsByPrevious.size === 0) throw new Error("Renewal history is missing or too large");
 
   let previousStampCid = leaseCid;
   let previousGeneration = 0;
+  let previousEnd: number | undefined;
   let latest: RenewalStampHistoryEntry | undefined;
-  while (remaining.length > 0) {
-    const matching = remaining
-      .map((entry, index) => ({ entry, index }))
-      .filter(({ entry }) => entry.previous_stamp_cid === previousStampCid);
-    if (matching.length !== 1) throw new Error("Renewal history chain is invalid");
-    const [{ entry, index }] = matching;
+  while (stampsByPrevious.size > 0) {
+    const entry = stampsByPrevious.get(previousStampCid);
+    if (!entry) throw new Error("Renewal history chain is invalid");
+    stampsByPrevious.delete(previousStampCid);
     if (
-      !entry.cid || !Number.isSafeInteger(entry.generation) || entry.generation <= 0
-      || entry.generation < previousGeneration || !isSafeUnixSeconds(entry.new_end)
+      !entry.cid || !Number.isSafeInteger(entry.generation) || entry.generation <= previousGeneration
+      || !isSafeUnixSeconds(entry.new_end)
+      || (previousEnd !== undefined && entry.new_end <= previousEnd)
       || entry.new_end > leaseExpiresAt
       || (ancestorEffectiveExpiry !== undefined && entry.new_end > ancestorEffectiveExpiry)
     ) {
@@ -183,9 +194,9 @@ export function verifyRenewalHistory(input: VerifyRenewalHistoryInput): Verified
       throw new Error("Renewal stamp binding is invalid");
     }
     previousGeneration = entry.generation;
+    previousEnd = entry.new_end;
     previousStampCid = entry.cid;
     latest = entry;
-    remaining.splice(index, 1);
   }
 
   if (!latest || latest.new_end <= now) throw new Error("Renewal authority has expired");

@@ -835,6 +835,58 @@ async function persistedRealSession(host: string) {
   };
   return { node, wasm, persisted, address: proof.address, signer };
 }
+test("provider-free renewal restore discovers an expired active session before clearing its address", async () => {
+  const host = "https://renewal-restore.test";
+  const { persisted, address } = await persistedRealSession(host);
+  const expired = {
+    ...persisted,
+    expiresAt: new Date(Date.now() - 1_000).toISOString(),
+  };
+  const entries = new Map<string, string>([
+    [`tinycloud:session:${address.toLowerCase()}`, JSON.stringify(expired)],
+    ["tinycloud:session:active-address", address.toLowerCase()],
+  ]);
+  const backend = {
+    get length() { return entries.size; },
+    clear: () => entries.clear(),
+    getItem: (key: string) => entries.get(key) ?? null,
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    removeItem: (key: string) => entries.delete(key),
+    setItem: (key: string, value: string) => entries.set(key, String(value)),
+  } satisfies Storage;
+  const sessionStorage = new BrowserSessionStorage({ storage: backend });
+  const web = new TinyCloudWeb({
+    sessionStorage,
+    tinycloudHosts: [host],
+    includeAccountRegistryPermissions: false,
+    autoBootstrapAccount: false,
+  });
+  await (web as any)._initPromise;
+  const node = {
+    spaceId: undefined as string | undefined,
+    hosts: [host],
+    restorableSession: undefined as { address: string; chainId: number; spaceId: string } | undefined,
+    spaceHosting: "unknown",
+    restoreSessionWithRenewal: mock(async () => {
+      node.spaceId = expired.tinycloudSession.spaceId;
+      node.restorableSession = {
+        address,
+        chainId: expired.chainId,
+        spaceId: expired.tinycloudSession.spaceId,
+      };
+    }),
+    checkSpaceHosting: mock(async () => "unknown"),
+  };
+  (web as any)._node = node;
+
+  const restored = await web.restoreSessionWithRenewal("owner-signed lease authorization");
+
+  expect(restored.status).toBe("restored");
+  expect(node.restoreSessionWithRenewal).toHaveBeenCalledTimes(1);
+  expect(entries.get("tinycloud:session:active-address")).toBe(address.toLowerCase());
+  await web.restoredNetworkWork?.hosting;
+});
+
 test("implicit signIn ignores persisted wallet A after the connected provider switches to B", async () => {
   const { persisted, address: walletA } = await persistedRealSession("https://wallet-switch.test");
   const walletB = "0x1111111111111111111111111111111111111111";
