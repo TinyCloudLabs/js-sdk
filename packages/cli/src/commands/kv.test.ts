@@ -23,11 +23,19 @@ const recorded = {
   stdoutWrites: [] as Uint8Array[],
   fileWrites: [] as Array<{ path: string; data: Uint8Array }>,
   lists: [] as Array<Record<string, unknown>>,
+  tables: [] as Array<{ headers: string[]; rows: string[][] }>,
 };
 
 // One list page per cursor; the first request has no cursor ("").
-type ListPage = { keys: string[]; truncated?: boolean; nextCursor?: string };
+type ListPage = {
+  keys: string[];
+  entries?: Array<{ key: string; size?: number; updatedAt?: string }>;
+  truncated?: boolean;
+  nextCursor?: string;
+};
 let listPages: Record<string, ListPage> = {};
+// Whether the command prints JSON (the default here) or a table.
+let jsonOutput = true;
 
 function resetState(): void {
   recorded.outputs = [];
@@ -40,7 +48,9 @@ function resetState(): void {
   recorded.stdoutWrites = [];
   recorded.fileWrites = [];
   recorded.lists = [];
+  recorded.tables = [];
   listPages = { "": { keys: [] } };
+  jsonOutput = true;
 }
 
 function toBytes(chunk: unknown): Uint8Array {
@@ -130,10 +140,13 @@ mock.module("../output/formatter.js", () => ({
     recorded.outputs.push(payload);
   },
   withSpinner: async (_message: string, fn: () => unknown) => await fn(),
-  shouldOutputJson: () => true,
-  formatTable: () => "",
+  shouldOutputJson: () => jsonOutput,
+  formatTable: (headers: string[], rows: string[][]) => {
+    recorded.tables.push({ headers, rows });
+    return "";
+  },
   formatBytes: (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`,
-  formatTimeAgo: () => "",
+  formatTimeAgo: (date: string) => `ago(${date})`,
 }));
 
 mock.module("../output/theme.js", () => ({
@@ -489,5 +502,37 @@ describe("CLI kv list paging (TC-982)", () => {
       expect.objectContaining({ code: "USAGE_ERROR" }),
     ]);
     expect(recorded.lists).toEqual([]);
+  });
+});
+
+describe("CLI kv list table shows size and modified time (TC-2492)", () => {
+  beforeEach(resetState);
+
+  test("the table asks for entries and shows each key's size and modified time", async () => {
+    jsonOutput = false;
+    listPages = {
+      "": {
+        keys: ["a", "b"],
+        entries: [{ key: "a", size: 28, updatedAt: "2026-11-13T15:00:00Z" }, { key: "b" }],
+      },
+    };
+
+    await runKv(["list"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.lists).toEqual([{ entries: true }]);
+    expect(recorded.tables).toEqual([{
+      headers: ["Key", "Size", "Updated"],
+      rows: [["a", "28 B", "ago(2026-11-13T15:00:00Z)"], ["b", "—", "—"]],
+    }]);
+  });
+
+  test("JSON output lists keys without asking for entries", async () => {
+    listPages = { "": { keys: ["a"], entries: [{ key: "a", size: 28 }] } };
+
+    await runKv(["list"]);
+
+    expect(recorded.lists).toEqual([{}]);
+    expect(recorded.outputs).toEqual([{ keys: ["a"], count: 1, prefix: null, truncated: null, nextCursor: null }]);
   });
 });
