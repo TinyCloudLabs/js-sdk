@@ -6310,8 +6310,13 @@ export class TinyCloudNode {
       wellKnown: {
         fetchWellKnown: async (principal, discoveryKey) => {
           graph.assertActive();
-          const destination = await this.encryptionDestination(this.getDefaultEncryptionNetworkId());
-          if (this.auth?.registryRecordPresent) return null;
+          const networkId = this.getDefaultEncryptionNetworkId();
+          // The advisory record is only for an owner with no registry record:
+          // a registered owner's descriptor is authoritative at its node. A
+          // session-only restore has no auth object, so ask the router.
+          const routed = await this.routingDestinations(networkId, "encryption");
+          if (this.auth?.registryRecordPresent || routed.some(({ nodeDid }) => nodeDid !== undefined)) return null;
+          const destination = await this.encryptionDestination(networkId);
           if (!address || !didPrincipalMatches(principal, did)) {
             return null;
           }
@@ -6319,7 +6324,7 @@ export class TinyCloudNode {
           const encodedKey = discoveryKey.split("/").map(encodeURIComponent).join("/");
           const response = await graph.fetch(
             `${destination.url}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
-            { method: "GET" },
+            { method: "GET", redirect: "error" },
           );
           graph.assertActive();
           if (!response.ok) {

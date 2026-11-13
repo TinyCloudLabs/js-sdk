@@ -43,6 +43,8 @@ interface NodeSigningInternals {
     facts: object;
   }): Promise<{ authorization: string; invocationCid: string }>;
   createEncryptionCrypto(): EncryptionCrypto;
+  /** Registry route for the network, mapped to the TEE origin and identity-checked there. */
+  encryptionDestination(networkId: string): Promise<{ url: string; nodeDid: string }>;
 }
 
 export interface CreateNamedKeyClientOptions {
@@ -68,7 +70,7 @@ export function createNamedKeyClient(
   options: CreateNamedKeyClientOptions = {},
 ): NamedKeyClient {
   const internals = node as unknown as Partial<NodeSigningInternals>;
-  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto"] as const) {
+  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto", "encryptionDestination"] as const) {
     if (typeof internals[hook] !== "function") {
       throw new NamedKeyError(
         "NODE_HOOK_MISSING",
@@ -79,14 +81,19 @@ export function createNamedKeyClient(
   const signer = internals as NodeSigningInternals;
   const resolvedHost = node.hosts[0];
   if (resolvedHost === undefined) throw new Error("TinyCloud node host has not been resolved");
-  // Key calls carry public keys and key admin, so they use the node's
-  // TEE-terminated origin and never follow a redirect elsewhere (TC-2923).
-  const host = endToEndNodeHost(resolvedHost);
+  // Key calls carry public keys and key admin, so each network's calls go to
+  // its own registry route on the node's TEE-terminated origin, after the
+  // same identity check as other encryption calls, and never follow a
+  // redirect elsewhere (TC-2923).
   const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const config: NamedKeyClientConfig = {
     keyWrapV2: options.keyWrapV2 ?? signer.config?.keyWrapV2 ?? false,
     requireKeyWrapV2: options.requireKeyWrapV2 ?? signer.config?.requireKeyWrapV2 ?? false,
-    host,
+    host: endToEndNodeHost(resolvedHost),
+    resolveNode: async (networkId) => {
+      const { url, nodeDid } = await signer.encryptionDestination(networkId);
+      return { url, nodeDid };
+    },
     crypto: signer.createEncryptionCrypto(),
     fetch: (input, init) => baseFetch(input, { ...init, redirect: "error" }),
     defaultNetworkId: () => options.networkId ?? node.getDefaultEncryptionNetworkId(),

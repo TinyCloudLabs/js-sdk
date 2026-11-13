@@ -30,7 +30,7 @@ afterEach(() => {
 
 type Attempt = { url: string; method: string; redirect: RequestRedirect | undefined };
 
-async function fixture(options: { routedUrl?: string; teeDown?: "status" | "network"; unregistered?: boolean } = {}) {
+async function fixture(options: { routedUrl?: string; teeDown?: "status" | "network"; unregistered?: boolean; descriptorStatus?: 404 | 500; sessionOnly?: boolean } = {}) {
   const routedUrl = options.routedUrl ?? PROXIED;
   const proof = await signedRestorableSession({ abilities: { kv: { "": ["tinycloud.kv/get"] } } });
   const payload: LocationRecordV2Payload = {
@@ -55,16 +55,40 @@ async function fixture(options: { routedUrl?: string; teeDown?: "status" | "netw
     if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     if (url.pathname.startsWith("/encryption/networks/")) {
       if (url.pathname.includes("/keys/")) return Response.json({ error: "key_not_found" }, { status: 404 });
+      if (options.descriptorStatus) return new Response("network not found", { status: options.descriptorStatus });
       return Response.json({ descriptor: { networkId: decodeURIComponent(url.pathname.split("/")[3]!), publicEncryptionKey: url.origin } });
     }
+    // The advisory well-known record: any request for it is a failure of these tests.
+    if (url.pathname.startsWith("/public/")) return Response.json({ descriptor: { publicEncryptionKey: "advisory" } });
     throw new Error(`Unexpected fixture request ${url.href}`);
   }) as typeof fetch;
-  const node = new TinyCloudNode({ signer: owner, wasmBindings: new NodeWasmBindings(), tinycloudRegistryUrl: REGISTRY, autoDiscoverLocalNode: false });
+  // Without a signer a restore is session-only: there is no authorization object.
+  const node = new TinyCloudNode({ ...(options.sessionOnly ? {} : { signer: owner }), wasmBindings: new NodeWasmBindings(), tinycloudRegistryUrl: REGISTRY, autoDiscoverLocalNode: false });
   await node.restoreSession({ ...proof, tinycloudHosts: [routedUrl] });
-  return { node, attempts };
+  return { node, attempts, networkId: `urn:tinycloud:encryption:${pkhDid(proof.address, 1)}:default` };
 }
 
 const nodeOrigins = (attempts: Attempt[]) => attempts.map((attempt) => new URL(attempt.url).origin).filter((origin) => origin !== REGISTRY);
+
+for (const [label, setup] of [
+  ["a registered session-only owner whose node has no network", { descriptorStatus: 404, sessionOnly: true }],
+  ["a node answering HTTP 500", { descriptorStatus: 500, unregistered: true }],
+] as const) {
+  test(`${label} never consults the advisory descriptor`, async () => {
+    const { node, attempts, networkId } = await fixture(setup);
+    const discovered = await node.encryption.discoverNetwork(networkId);
+    expect(discovered.ok).toBe(false);
+    expect(attempts.some((attempt) => new URL(attempt.url).pathname.startsWith("/public/"))).toBe(false);
+    expect(nodeOrigins(attempts)).not.toContain(PROXIED);
+  });
+}
+
+test("an unregistered owner's advisory descriptor read, after the node reports no network, uses the TEE origin and refuses redirects", async () => {
+  const { node, attempts, networkId } = await fixture({ unregistered: true, descriptorStatus: 404 });
+  await node.encryption.discoverNetwork(networkId);
+  const advisory = attempts.filter((attempt) => new URL(attempt.url).pathname.startsWith("/public/"));
+  expect(advisory.map((attempt) => [new URL(attempt.url).origin, attempt.redirect])).toEqual([[TEE, "error"]]);
+});
 
 test("encryption calls for the proxied production name use only the TEE origin, identity-checked there first", async () => {
   const { node, attempts } = await fixture();
@@ -90,9 +114,12 @@ test("a session restored on the proxied name reads keys through the TEE origin o
 
   const keys = createNamedKeyClient(node);
   await expect(keys.getPublicKey("apps/demo/key")).rejects.toThrow();
-  const keyCalls = attempts.slice(attempts.indexOf(descriptorReads[1]!) + 1);
-  expect(keyCalls.map((attempt) => new URL(attempt.url).origin)).toEqual([TEE, TEE]);
-  expect(keyCalls.map((attempt) => new URL(attempt.url).pathname)).toEqual(["/info", expect.stringContaining("/keys/apps/demo/key")]);
+  const keyCalls = attempts.slice(attempts.indexOf(descriptorReads[1]!) + 1).filter((attempt) => new URL(attempt.url).origin !== REGISTRY);
+  expect(new Set(keyCalls.map((attempt) => new URL(attempt.url).origin))).toEqual(new Set([TEE]));
+  const paths = keyCalls.map((attempt) => new URL(attempt.url).pathname);
+  // The client's own /info read follows the registry identity check at the TEE origin.
+  expect(paths.indexOf("/.well-known/tinycloud/node-keys")).toBeLessThan(paths.lastIndexOf("/info"));
+  expect(paths.at(-1)).toContain("/keys/apps/demo/key");
   expect(keyCalls.every((attempt) => attempt.redirect === "error")).toBe(true);
   expect(nodeOrigins(attempts)).not.toContain(PROXIED);
 });
