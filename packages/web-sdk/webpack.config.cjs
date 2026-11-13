@@ -258,6 +258,10 @@ const issuedDelegationsExternal = (type, ext) => (data, callback) => {
   callback();
 };
 const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
+  if (request === "../registry-verdict-cache-entry" && context === path.resolve(__dirname, "src/modules")) {
+    callback(null, `${type} ./registry-verdict-cache.${ext}`);
+    return;
+  }
   if (request === "./encryption-keys.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
     callback(null, `${type} ./encryption-keys.${ext}`);
     return;
@@ -315,6 +319,7 @@ const lazyEntries = {
   modals: "./src/notifications/modals-entry.ts",
   "encryption-keys": "./src/encryption-keys-entry.ts",
   "space-hosting": "./src/space-hosting-entry.ts",
+  "registry-verdict-cache": "./src/registry-verdict-cache-entry.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
   "delegations-renewal": "./src/delegations-renewal-entry.ts",
 };

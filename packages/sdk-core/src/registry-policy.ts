@@ -751,10 +751,13 @@ export interface LookupOwnerRegistryVerdictOptions {
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Opt-in reuse of fresh verdicts; without it every call asks the registry. */
   verdictCache?: RegistryVerdictCache;
+  /** A signed data read whose result answers only that read: the absent-reads cache serves nothing else. */
+  dataRead?: boolean;
 }
 
 /** The owner a cached verdict is for, and the reading client's own fail-closed stores. */
 export interface RegistryVerdictScope {
+  dataRead?: boolean;
   registryUrl: string;
   subject: string;
   sequenceStore?: RegistrySequenceStore;
@@ -829,7 +832,7 @@ export async function resolveRegistryResource(
   access: "read" | "write" | "host" | "encryption",
   options: LookupOwnerRegistryVerdictOptions,
 ): Promise<{ verdict: RegistryVerdict; hosts: RegistryHost[] }> {
-  const verdict = await lookupOwnerRegistryVerdict(subject, options);
+  const verdict = await lookupOwnerRegistryVerdict(subject, { ...options, dataRead: access === "read" && options.dataRead });
   if (verdict.status === "unregistered") return { verdict, hosts: [] };
   if (verdict.status === "unavailable") throw new RegistryUnavailableError(subject, verdict);
   const record = verdict.record;

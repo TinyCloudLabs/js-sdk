@@ -10,7 +10,7 @@ test("TC-2923 admits only its exact canonical root bytes over TC-2931, within th
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - ledger.tc2931BootstrapScope.root.ceiling[format]).toBe(row.root.delta[format]);
     expect(row.root.delta[format]).toBeLessThanOrEqual(cap[format]);
-    expect(rootCeilingFor({ ...ledger, tc2949PanelChunkRecoveryRoot: undefined, tc2970RegistryVerdictCacheRoot: undefined, tc2913OpenKeyContinuationRoot: undefined }, format)).toEqual({ row: "tc2923EncryptionTeeOriginRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2949PanelChunkRecoveryRoot: undefined, tc2970RegistryVerdictCacheRoot: undefined, tc2913OpenKeyContinuationRoot: undefined, tc2987RegistryAbsentReadsRoot: undefined }, format)).toEqual({ row: "tc2923EncryptionTeeOriginRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({ row: "tc2923EncryptionTeeOriginRoot", pin: row.sourceCommits[0] });
   expect(Object.keys(row).sort()).toEqual(["base", "canonicalCI", "label", "reason", "root", "ruling", "sourceCommits"]);
