@@ -764,7 +764,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /** Current registry routing; mutable restored hosts never supply no-entry authority. */
-  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts): Promise<ResourceDestination[]> {
+  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts, dataRead?: boolean): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid
       : parseSpaceUri(resource)?.owner ?? (() => {
@@ -781,6 +781,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           sequenceStore: this.registrySequenceStore,
           cacheStore: this.registryCacheStore,
           verdictCache: this.registryVerdictCache,
+          dataRead,
           onRegistryFallback: this.onRegistryFallback,
         });
         this.registryVerdict = resolved.verdict;

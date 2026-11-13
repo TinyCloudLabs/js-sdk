@@ -187,16 +187,20 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
-- Personal apps have one layout, the one the skill's `layout.sh` calls new
-  (`src/tc-apps/layout.ts`): space `applications`, keys under
-  `xyz.tinycloud.tinyapps.<app>/`, discovery entry
-  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, one SQL copy per app at
-  `<root>index`. The older `default` space folder `xyz.tinycloud.agent-data/`
-  (the skill's legacy layout) is deliberately not read or written (no
-  compatibility path, TC-2416); do not reintroduce a layout parameter or an
-  older-catalog check. Approvals are per app: a KV path prefix matches only on a
-  `/` boundary, so no single grant covers every app, and every grant is in the
-  `applications` space.
+- Personal apps retain their existing layout (`src/tc-apps/layout.ts`). New apps
+  use space `applications`, keys `xyz.tinycloud.tinyapps.<app>/`, discovery entry
+  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, and SQL copy `<root>index`.
+  Existing legacy apps remain readable and writable in space `default` under
+  `xyz.tinycloud.agent-data/`; context reuses their existing grants without
+  requiring new-space approval. This restores access after the TC-2416 cutoff;
+  never silently migrate records or create a new-layout replacement for a known
+  legacy app. A readable new discovery entry selects that layout over its legacy
+  namesake. Query accepts `layout: "legacy"` for the shared
+  `xyz.tinycloud.agent-data.index` copy; omission still selects the new layout.
+  Legacy SQL keys are full KV keys and `entries` includes `app`; new copies use
+  app-relative keys. The migration tool stays removed. New-layout approvals
+  retain their per-app boundaries in `applications`; legacy permissions retain
+  the original legacy-root scope.
 - The rules generator adapts the CLI examples to MCP write inputs: keep the
   vendored CLI attribution intact. MCP put/move values omit top-level `by`,
   including edits of read-back records and catalogs. Keep this restriction

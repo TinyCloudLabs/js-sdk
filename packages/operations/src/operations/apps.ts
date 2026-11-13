@@ -9,23 +9,27 @@ import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { appsDatabase, checkCopyKinds, copyPermission, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
 import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
 import { appDiscoveryPermission, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, jsonBytes, listAppsKeys, markAppsKindStale, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
-import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, type KeyParts } from "../tc-apps/layout.js";
+import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, legacyApp, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type KeyParts, type Layout } from "../tc-apps/layout.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
 
+const LayoutSchema = z.enum(["legacy", "new"]);
 const CopyStateSchema = z.enum(["present", "expired", "none"]);
 const ContextInputSchema = z.object({
   timezone: z.string().refine(validTimezone, "An IANA timezone is required.").optional(),
-  app: z.string().refine((app) => Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, app) || newApp(app), "A valid app id is required.").optional().describe("Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."),
+  app: z.string().refine(legacyApp, "A valid app id is required.").optional().describe("Pass one existing personal app id or catalog slug (healthlog or recipes) to request its task access together."),
   access: z.enum(["read", "change"]).default("change").describe("Use read for a question that changes nothing; change requests the app's supported write access too."),
 }).strict();
 const ReadInputSchema = z.object({ prefixes: z.array(PrefixSchema).optional(), keys: z.array(KeySchema).max(100).optional() }).strict();
 const RecordSchema = z.object({ key: z.string(), value: ObjectSchema, etag: z.string().min(1) }).strict();
 const ReadRecordSchema = z.union([RecordSchema, z.object({ key: z.string(), outcome: z.enum(["NOT_FOUND", "MALFORMED"]) }).strict()]);
-const AppSchema = z.object({ app: z.string(), title: z.string().optional(), copy: CopyStateSchema }).strict();
+const AppSchema = z.object({ app: z.string(), layout: LayoutSchema, title: z.string().optional(), copy: CopyStateSchema }).strict();
 const ContextOutputSchema = z.object({
   rules: z.string(), now: z.string(), utc: z.string().describe("The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."), timezone: z.string().nullable(),
   apps: z.array(AppSchema),
+  legacy: z.enum(["listed", "not_approved"]),
+  discovery: z.enum(["listed", "not_approved"]),
+  catalog: z.object({ keys: z.array(z.string()), records: z.array(ReadRecordSchema) }).strict(),
 }).strict();
 const ReadOutputSchema = z.object({ lists: z.array(z.object({ prefix: z.string(), keys: z.array(z.string()) }).strict()), records: z.array(ReadRecordSchema) }).strict();
 const OpOutcomeSchema = z.object({
@@ -35,17 +39,18 @@ const OpOutcomeSchema = z.object({
 const WriteOutputSchema = z.object({ ops: z.array(OpOutcomeSchema) }).strict();
 const CopyKindSchema = z.object({ app: z.string().regex(/^[a-z0-9-]+$/).refine((app) => app !== "catalog" && app !== "index-stale"), kind: z.string().regex(/^[a-z0-9-]+$/) }).strict();
 const QueryInputSchema = z.object({
+  layout: LayoutSchema.default("new").describe("Use the app's layout from context; omitted means new."),
   kinds: z.array(CopyKindSchema).min(1), sql: z.string().min(1).max(64 * 1024).refine(isSingleReadQuery, "SQL must be one SELECT or WITH query."), params: SqlParamsSchema.optional(),
 }).strict().superRefine((input, context) => {
   if (input.kinds.some((kind) => kind.app !== input.kinds[0]!.app)) context.addIssue({ code: "custom", path: ["kinds"], message: "One query covers one app; query each app separately." });
-  if (!newApp(input.kinds[0]!.app)) context.addIssue({ code: "custom", path: ["kinds", 0, "app"], message: "That app name is reserved or invalid." });
-  if (input.kinds.some((kind) => kind.kind === "catalog" || kind.kind === "index-stale")) context.addIssue({ code: "custom", path: ["kinds"], message: "catalog and index-stale are not kinds." });
+  if (input.layout === "new" && !newApp(input.kinds[0]!.app)) context.addIssue({ code: "custom", path: ["kinds", 0, "app"], message: "That app name is reserved or invalid." });
+  if (input.layout === "new" && input.kinds.some((kind) => kind.kind === "catalog" || kind.kind === "index-stale")) context.addIssue({ code: "custom", path: ["kinds"], message: "catalog and index-stale are not kinds." });
 });
 const QueryOutputSchema = z.union([
   z.object({ kinds: z.array(CopyKindSchema.extend({ records: z.number().int().nonnegative() })), columns: z.array(z.string()), rows: z.array(z.array(SqlOutputValueSchema)), rowCount: z.number().int().nonnegative() }).strict(),
   z.object({ outcome: z.literal("COPY_PARTIAL"), remaining: z.array(CopyKindSchema) }).strict(),
 ]);
-type QueryInput = z.infer<typeof QueryInputSchema>;
+type QueryInput = z.input<typeof QueryInputSchema>;
 export type QueryOutput = z.infer<typeof QueryOutputSchema>;
 type ContextInput = z.input<typeof ContextInputSchema>;
 export type ContextOutput = z.infer<typeof ContextOutputSchema>;
@@ -70,6 +75,11 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
       add(forWrite ? appDiscoveryPermission(context, parts.app) : discoveryPermission(context));
       if (forWrite) add(appRecordsPermission(context, parts.app));
     }
+    else if (parts?.layout === "legacy" || prefix?.layout === "legacy") {
+      add(!forWrite && target.startsWith(`${TC_APPS_LEGACY_ROOT}catalog/`)
+        ? discoveryPermission(context, "legacy")
+        : appRecordsPermission(context, parts?.app ?? prefix?.app ?? "", undefined, "legacy"));
+    }
     else if (prefix?.discovery) add(discoveryPermission(context));
     else if (parts !== undefined || prefix?.app !== undefined) add(appRecordsPermission(context, (parts?.app ?? prefix!.app)!));
   }
@@ -81,13 +91,18 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
   });
 }
 const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => {
-  if (input.app === undefined) return [discoveryPermission(context)];
+  const layouts = (["new", "legacy"] as const).filter((layout) => hasDiscoveryAccess(context, layout, true));
+  const discovery = layouts.length ? layouts.map((layout) => discoveryPermission(context, layout)) : [discoveryPermission(context)];
+  if (input.app === undefined) return discovery;
   if (Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, input.app)) {
     const catalog = TC_APPS_CATALOG_PERMISSIONS[input.app]!;
     return [discoveryPermission(context), {
       ...catalog, space: appsSpace(context),
       actions: catalog.actions.filter((action) => input.access !== "read" || action !== "tinycloud.sql/write"),
     }];
+  }
+  if (await existingLayout(context, input.app) === "legacy") {
+    return [...discovery, appRecordsPermission(context, input.app, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined, "legacy")];
   }
   return [discoveryPermission(context),
     ...(input.access === "read" ? [] : [appDiscoveryPermission(context, input.app)]),
@@ -104,14 +119,30 @@ const writeAuthority = async (context: RuntimeOperationContext, input: WriteInpu
 );
 const queryAuthority = async (context: RuntimeOperationContext, input: QueryInput) => {
   const app = input.kinds[0]!.app;
-  return [appRecordsPermission(context, app), copyPermission(context, app)];
+  return [appRecordsPermission(context, app, undefined, input.layout), copyPermission(context, app, input.layout)];
 };
+
+/** A readable discovery entry takes precedence, just as in the CLI; otherwise retain an existing legacy catalog. */
+async function existingLayout(context: OperationContext, app: string): Promise<Layout | undefined> {
+  if (newApp(app)) {
+    const permission = { ...appDiscoveryPermission(context, app), actions: ["tinycloud.kv/get"] };
+    if (evaluateOperationAuthority(context.runtime!.granted as unknown as readonly PermissionEntry[], [permission], operationSpaceResolver(context.runtime!.node, context.summary.space)).satisfied) {
+      const entry = (await readAppsRecords(appsKv(context), [discoveryKey(app)]))[0]!;
+      if ("value" in entry || entry.outcome === "MALFORMED") return "new";
+    }
+  }
+  if (hasDiscoveryAccess(context, "legacy")) {
+    const entry = (await readAppsRecords(appsKv(context, "legacy"), [catalogKey(app, undefined, "legacy")]))[0]!;
+    if ("value" in entry || entry.outcome === "MALFORMED") return "legacy";
+  }
+  return undefined;
+}
 
 const contextDefinition: OperationDefinition<ContextInput, ContextOutput> = {
   id: "tinycloud.apps.context", version: 1, title: "Personal apps context",
   description: "Read the connected user's list of personal apps, local time and record-handling rules. Call first when the user requests a personal-record task. Supplying an IANA timezone saves or replaces their timezone setting for later calls. Do not use personal records to store credentials, payment-card data, government identifiers or protected health information.",
   input: ContextInputSchema, output: ContextOutputSchema, effects: ["read", "local_write"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
-  sensitivity: { input: ["/timezone"], output: ["/apps", "/timezone", "/now"] }, authority: contextAuthority, execute: executeContext,
+  sensitivity: { input: ["/timezone"], output: ["/apps", "/catalog", "/timezone", "/now"] }, authority: contextAuthority, execute: executeContext,
 };
 const readDefinition: OperationDefinition<ReadInput, ReadOutput> = {
   id: "tinycloud.apps.read", version: 1, title: "Read personal records", description: "List personal-record prefixes in full and read up to 100 records with their ETags. Read fresh before answering or editing.",
@@ -136,11 +167,25 @@ async function executeContext(context: OperationContext, input: ContextInput): P
   if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Provide a valid app id, access mode and IANA timezone.") };
   try {
     const timezone = await appsTimezone(context.summary.profile, parsed.data.timezone);
-    const discovered = await discoveredApps(appsKv(context));
-    const listed = await Promise.all([...discovered].sort(([a], [b]) => a.localeCompare(b)).map(async ([app, title]) => ({
-      app, ...(title === undefined ? {} : { title }), copy: await appsCopyState(context.summary.profile, app, appsSpace(context)),
+    const legacy = hasDiscoveryAccess(context, "legacy", true);
+    const discovery = hasDiscoveryAccess(context, "new", true);
+    const keys = legacy ? (await listAppsKeys(appsKv(context, "legacy"), `${TC_APPS_LEGACY_ROOT}catalog/`)).filter((key) => parseKey(key)?.area === "catalog") : [];
+    const records: ReadRecord[] = [];
+    for (let offset = 0; offset < keys.length; offset += 100) records.push(...await readAppsRecords(appsKv(context, "legacy"), keys.slice(offset, offset + 100)));
+    const apps = new Map<string, { layout: Layout; title?: string }>();
+    for (const record of records) {
+      const parts = keyParts(record.key);
+      if (parts.area !== "catalog" || parts.kind !== undefined) continue;
+      const title = "value" in record ? record.value.title : undefined;
+      apps.set(parts.app, { layout: "legacy", ...(typeof title === "string" ? { title } : {}) });
+    }
+    if (discovery) for (const [app, title] of await discoveredApps(appsKv(context))) {
+      apps.set(app, { layout: "new", ...(title === undefined ? {} : { title }) });
+    }
+    const listed = await Promise.all([...apps].sort(([a], [b]) => a.localeCompare(b)).map(async ([app, entry]) => ({
+      app, ...entry, copy: await appsCopyState(context.summary.profile, app, appsSpace(context, entry.layout), entry.layout),
     })));
-    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), utc: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), timezone, apps: listed } };
+    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), utc: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), timezone, apps: listed, legacy: legacy ? "listed" : "not_approved", discovery: discovery ? "listed" : "not_approved", catalog: { keys, records } } };
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
 /** Every app with a discovery entry, with its title when the entry is well formed. */
@@ -159,12 +204,14 @@ async function executeRead(context: OperationContext, input: ReadInput): Promise
   const parsed = ReadInputSchema.safeParse(input);
   if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Personal-record keys or prefixes are invalid; read at most 100 keys.") };
   try {
-    const kv = appsKv(context);
     const lists = [];
-    for (const prefix of parsed.data.prefixes ?? []) lists.push({ prefix, keys: await listAppsKeys(kv, prefix) });
+    for (const prefix of parsed.data.prefixes ?? []) lists.push({ prefix, keys: await listAppsKeys(appsKv(context, parsePrefix(prefix)!.layout), prefix) });
     const requested = parsed.data.keys ?? [];
     const found = new Map<string, ReadRecord>();
-    for (const record of await readAppsRecords(kv, requested)) found.set(record.key, record);
+    for (const layout of ["legacy", "new"] as const) {
+      const keys = requested.filter((key) => keyParts(key).layout === layout);
+      if (keys.length) for (const record of await readAppsRecords(appsKv(context, layout), keys)) found.set(record.key, record);
+    }
     return { status: "ok", output: { lists, records: requested.map((key) => found.get(key)!) } };
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
@@ -174,23 +221,23 @@ async function executeQuery(context: OperationContext, input: QueryInput): Promi
   if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Name one app and its kinds and supply one read-only SELECT or WITH query with bound parameters.") };
   try {
     const app = parsed.data.kinds[0]!.app;
-    const db = appsDatabase(context, app);
+    const { layout } = parsed.data;
+    const db = appsDatabase(context, app, layout);
     const unique = [...new Map(parsed.data.kinds.map((kind) => [`${kind.app}/${kind.kind}`, kind])).values()];
-    const checked = await checkCopyKinds(appsKv(context), db, unique);
+    const checked = await checkCopyKinds(appsKv(context, layout), db, unique, Date.now, layout);
     if ("outcome" in checked) return { status: "ok", output: checked };
-    const result = await queryCopy(db, parsed.data.sql, (parsed.data.params ?? []).map(decodeSqlInputValue));
+    const result = await queryCopy(db, parsed.data.sql, (parsed.data.params ?? []).map(decodeSqlInputValue), layout);
     return { status: "ok", output: { ...checked, ...result, columns: [...result.columns], rows: result.rows.map((row) => [...row]) } };
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
 
-interface Touched { app: string; kind: string; owners: OpOutcome[] }
-interface CopyBatch { app: string; rows: Map<string, CopyRow> }
+interface Touched { layout: Layout; app: string; kind: string; owners: OpOutcome[] }
+interface CopyBatch { layout: Layout; app: string; rows: Map<string, CopyRow> }
 
 async function executeWrite(context: OperationContext, input: WriteInput): Promise<OperationExecutionOutcome<WriteOutput>> {
   // Validate the entire batch before obtaining a handle or executing its first op.
   const parsed = WriteInputSchema.safeParse(input);
   if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Every op must have a valid personal-record key and JSON record, catalog or discovery value.", { details: { issues: parsed.error.issues.map(({ path, message }) => ({ path, message })) } }) };
-  const kv = appsKv(context);
   // Without read access to the app list the entry check is skipped rather than asking for another approval.
   const listReadable = hasDiscoveryAccess(context);
   let timezone: string | null;
@@ -199,27 +246,34 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
   const ops: OpOutcome[] = [];
   const touched = new Map<string, Touched>();
   const batches = new Map<string, CopyBatch>();
-  const refresh: { app: string; key: string }[] = [];
+  const refresh: { layout: Layout; app: string; key: string }[] = [];
   for (const op of parsed.data.ops) {
     const key = op.op === "move" ? op.to : op.key;
     const parts = keyParts(key);
     let outcome: OpOutcome;
-    try { outcome = await writeOne(kv, op, timezone, listReadable); }
+    try {
+      const createsNewApp = parts.layout === "new" && op.op === "put" && op.etag === undefined &&
+        (parts.area === "discovery" || (parts.area === "catalog" && parts.kind === undefined));
+      outcome = createsNewApp && await existingLayout(context, parts.app) === "legacy"
+        ? { key, outcome: "INVALID", warnings: ["This app already exists in the legacy layout; keep its existing keys."] }
+        : await writeOne(appsKv(context, parts.layout), op, timezone, listReadable);
+    }
     catch (error) { outcome = { key, outcome: appsFailure(error).code }; }
     ops.push(outcome);
     if (parts.area === "discovery" || !(outcome.outcome === "ok" || outcome.steps?.includes("written"))) continue;
     const changedKeys = op.op === "move" ? [outcome.key, op.from] : [outcome.key];
-    if (op.op === "move" && !outcome.steps?.includes("deleted")) refresh.push({ app: parts.app, key: op.from });
+    if (op.op === "move" && !outcome.steps?.includes("deleted")) refresh.push({ layout: parts.layout, app: parts.app, key: op.from });
     for (const changed of changedKeys) {
       const changedParts = keyParts(changed);
       if (changedParts.area === "record") {
-        const batch = batches.get(changedParts.app) ?? { app: changedParts.app, rows: new Map() };
-        batch.rows.set(changed, { k: copyKey(changedParts.app, changed), ...(changed === outcome.key && op.op !== "delete" && outcome.value ? { r: outcome.value } : {}) });
-        batches.set(changedParts.app, batch);
+        const name = `${changedParts.layout}/${changedParts.app}`;
+        const batch = batches.get(name) ?? { layout: changedParts.layout, app: changedParts.app, rows: new Map() };
+        batch.rows.set(changed, { k: copyKey(changedParts.app, changed, changedParts.layout), ...(changed === outcome.key && op.op !== "delete" && outcome.value ? { r: outcome.value } : {}) });
+        batches.set(name, batch);
       }
       if (changedParts.area === "stale" || changedParts.area === "discovery" || changedParts.kind === undefined) continue;
-      const marker = `${changedParts.app}/${changedParts.kind}`;
-      const entry = touched.get(marker) ?? { app: changedParts.app, kind: changedParts.kind, owners: [] };
+      const marker = `${changedParts.layout}/${changedParts.app}/${changedParts.kind}`;
+      const entry = touched.get(marker) ?? { layout: changedParts.layout, app: changedParts.app, kind: changedParts.kind, owners: [] };
       if (!entry.owners.includes(outcome)) entry.owners.push(outcome);
       touched.set(marker, entry);
     }
@@ -228,17 +282,18 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
   const synced = new Set<string>();
   let upkeepWarning: string | undefined;
   try {
-    for (const [app, batch] of batches) {
-      if (!hasCopyAuthority(context, app)) continue;
-      const sources = refresh.filter((entry) => entry.app === app).map((entry) => entry.key);
-      for (const record of await readAppsRecords(kv, sources)) {
-        const k = copyKey(app, record.key);
+    for (const [name, batch] of batches) {
+      const { app, layout } = batch;
+      if (!hasCopyAuthority(context, app, layout)) continue;
+      const sources = refresh.filter((entry) => entry.app === app && entry.layout === layout).map((entry) => entry.key);
+      for (const record of await readAppsRecords(appsKv(context, layout), sources)) {
+        const k = copyKey(app, record.key, layout);
         if ("value" in record) batch.rows.set(record.key, { k, r: record.value });
         else if (record.outcome === "NOT_FOUND") batch.rows.set(record.key, { k });
         else throw new Error("A move source is malformed.");
       }
-      await syncCopyRows(appsDatabase(context, app), [...batch.rows.values()]);
-      synced.add(app);
+      await syncCopyRows(appsDatabase(context, app, layout), [...batch.rows.values()]);
+      synced.add(name);
     }
   } catch (error) {
     const failure = appsFailure(error);
@@ -246,10 +301,10 @@ async function executeWrite(context: OperationContext, input: WriteInput): Promi
       ? "The record changed, but the fast copy needs the node team. Answer from records; do not retry or ask for another approval."
       : `The record changed, but fast-copy upkeep failed (${failure.code}); its kind is marked stale.`;
   }
-  for (const { app, kind, owners } of touched.values()) {
+  for (const { layout, app, kind, owners } of touched.values()) {
     if (upkeepWarning) for (const owner of owners) (owner.warnings ??= []).push(upkeepWarning);
-    if (synced.has(app) && batches.get(app)!.rows.size > 0) continue;
-    try { await markAppsKindStale(kv, app, kind, appsNow(timezone)); }
+    if (synced.has(`${layout}/${app}`) && batches.get(`${layout}/${app}`)!.rows.size > 0) continue;
+    try { await markAppsKindStale(appsKv(context, layout), app, kind, appsNow(timezone), layout); }
     catch (error) {
       const code = appsFailure(error).code;
       for (const owner of owners) (owner.warnings ??= []).push(`The record changed, but its fast-copy stale mark failed (${code}); rebuild this kind before relying on the copy.`);
@@ -272,11 +327,11 @@ async function writeOne(kv: AppsKv, op: WriteOp, timezone: string | null, listRe
   if (parts.area === "record") {
     // Every change to a record (create, replace, move, delete) needs the app's own catalog record, so a folder that holds
     // another app's files can never be edited as a generic app.
-    if (!("value" in (await readAppsRecords(kv, [catalogKey(parts.app)]))[0]!)) {
+    if (!("value" in (await readAppsRecords(kv, [catalogKey(parts.app, undefined, parts.layout)]))[0]!)) {
       return { key, outcome: "INVALID", warnings: ["Records can only be changed in an app that has a catalog record."] };
     }
     // An app is switched on by its discovery entry: a record written before it would be missing from the app list and from the CLI's view of the app.
-    if (op.op === "put" && op.etag === undefined && listReadable && !("value" in (await readAppsRecords(kv, [discoveryKey(parts.app)]))[0]!)) {
+    if (parts.layout === "new" && op.op === "put" && op.etag === undefined && listReadable && !("value" in (await readAppsRecords(kv, [discoveryKey(parts.app)]))[0]!)) {
       return { key, outcome: "INVALID", warnings: [`${parts.app} has no discovery entry yet: write its entry (after its first kind) before its first record.`] };
     }
   }
@@ -291,9 +346,9 @@ async function writeOne(kv: AppsKv, op: WriteOp, timezone: string | null, listRe
   let kind: JsonObject | undefined;
   if (catalog) {
     if (catalog.kind !== undefined) {
-      const app = (await readAppsRecords(kv, [catalogKey(parts.app)]))[0]!;
+      const app = (await readAppsRecords(kv, [catalogKey(parts.app, undefined, parts.layout)]))[0]!;
       if (!("value" in app)) return { key, outcome: "INVALID", warnings: ["A kind requires its app's catalog record."] };
-    } else if (op.op === "put" && op.etag === undefined) {
+    } else if (parts.layout === "new" && op.op === "put" && op.etag === undefined) {
       const manifest = (await readAppsRecords(kv, [`${appRoot(parts.app)}manifest.json`]))[0]!;
       if ("value" in manifest || manifest.outcome !== "NOT_FOUND") {
         return { key, outcome: "INVALID", warnings: [`${appRoot(parts.app)} already holds another app's own files (manifest.json). Use a different app name.`] };
@@ -307,7 +362,7 @@ async function writeOne(kv: AppsKv, op: WriteOp, timezone: string | null, listRe
     }
   } else {
     const record = recordParts(key);
-    const records = await readAppsRecords(kv, [catalogKey(record.app), catalogKey(record.app, record.kind)]);
+    const records = await readAppsRecords(kv, [catalogKey(record.app, undefined, record.layout), catalogKey(record.app, record.kind, record.layout)]);
     const app = records[0]!;
     const kindRecord = records[1]!;
     if ("value" in kindRecord) kind = kindRecord.value;

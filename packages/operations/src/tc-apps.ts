@@ -1,7 +1,7 @@
-import { appRoot, newApp, parseKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_ID_PREFIX } from "./tc-apps/layout.js";
+import { appRoot, newApp, parseKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_ID_PREFIX, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT } from "./tc-apps/layout.js";
 import { HEALTHLOG_DATABASE } from "./tc-apps/preamble.js";
 
-export { TC_APPS_DISCOVERY_ROOT } from "./tc-apps/layout.js";
+export { TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT, type Layout } from "./tc-apps/layout.js";
 export const TC_APPS_RECORDS_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] as const;
 export const TC_APPS_DISCOVERY_ENTRY_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/put"] as const;
 export const TC_APPS_CATALOG_READ_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list"] as const;
@@ -15,6 +15,10 @@ export const TC_APPS_CATALOG_PERMISSIONS: Readonly<Record<string, { service: str
 
 /** What one stored or requested permission entry is, when it is one of the connector's own. */
 export type TcAppsPermissionKind =
+  | { kind: "legacy-records" }
+  | { kind: "legacy-read" }
+  | { kind: "legacy-catalog-read" }
+  | { kind: "legacy-copy" }
   | { kind: "app-records"; app: string }
   | { kind: "discovery" }
   | { kind: "app-discovery"; app: string }
@@ -31,6 +35,13 @@ export function tcAppsPermissionKind(permission: unknown): TcAppsPermissionKind 
   const inApplications = entry.space === "applications" || SPACE_ID.test(entry.space);
   const inside = (allowed: readonly string[]) => (entry.actions as unknown[]).every((action: unknown) => typeof action === "string" && allowed.includes(action));
   const path = entry.path;
+  const inDefault = entry.space === "default" || /^tinycloud:[^\s*]+:default$/.test(entry.space);
+  if (inDefault && entry.service === "tinycloud.kv") {
+    if (path === TC_APPS_LEGACY_ROOT && inside(TC_APPS_CATALOG_READ_ACTIONS)) return { kind: "legacy-read" };
+    if (path === TC_APPS_LEGACY_ROOT && inside(TC_APPS_RECORDS_ACTIONS)) return { kind: "legacy-records" };
+    if (path === `${TC_APPS_LEGACY_ROOT}catalog/` && inside(TC_APPS_CATALOG_READ_ACTIONS)) return { kind: "legacy-catalog-read" };
+  }
+  if (inDefault && entry.service === "tinycloud.sql" && path === TC_APPS_LEGACY_DATABASE && inside(TC_APPS_COPY_ACTIONS)) return { kind: "legacy-copy" };
   if (!inApplications) return undefined;
   for (const [app, catalog] of Object.entries(TC_APPS_CATALOG_PERMISSIONS)) {
     if (entry.service === catalog.service && path === catalog.path && inside(catalog.actions)) {
@@ -75,13 +86,16 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
     if (actions.has("tinycloud.kv/del")) authority.push("delete");
     if (actions.has("tinycloud.sql/write")) authority.push("add, change or delete");
     if (actions.has("tinycloud.sql/schema")) authority.push("change the database schema for");
-    const target = kind.kind === "discovery" ? "your app list"
+    const target = kind.kind === "legacy-copy" ? "the searchable copy of your personal records"
+      : kind.kind === "legacy-catalog-read" ? "your existing app catalog"
+      : kind.kind === "legacy-records" || kind.kind === "legacy-read" ? "your personal records"
+      : kind.kind === "discovery" ? "your app list"
       : kind.kind === "app-discovery" ? `the app-list entry for ${kind.app}`
       : kind.kind === "app-records" ? `your personal records for ${kind.app}`
       : kind.kind === "app-copy" ? `the searchable copy of your records for ${kind.app}`
       : kind.app === "healthlog" ? "your whole Health Log database"
       : "your Recipes app's notes";
-    return `Lets the TinyCloud connector ${authority.join(", ")} ${target} (${path}) in your TinyCloud applications space, for 30 days.`;
+    return `Lets the TinyCloud connector ${authority.join(", ")} ${target} (${path}) in your TinyCloud ${kind.kind.startsWith("legacy-") ? "default" : "applications"} space, for 30 days.`;
   }).join(" ");
 }
 

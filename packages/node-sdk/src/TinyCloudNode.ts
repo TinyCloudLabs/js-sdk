@@ -2277,7 +2277,7 @@ export class TinyCloudNode {
         }
       },
       {
-        resolveResource: (resource, access) => this.routingDestinations(resource, access),
+        resolveResource: (resource, access, dataRead) => this.routingDestinations(resource, access, undefined, dataRead),
         bindAudience: (authorization, nodeDid) => this.bindRoutedAudience(authorization, nodeDid, session),
         verifyDestination: (target) => verifyResourceDestination(target, globalThis.fetch.bind(globalThis)),
       },
@@ -2294,8 +2294,8 @@ export class TinyCloudNode {
     );
   }
 
-  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
-    const destinations = await this.registryDestinations(resource, access, noEntryHosts);
+  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
+    const destinations = await this.registryDestinations(resource, access, noEntryHosts, dataRead);
     // Encryption-network traffic carries key material and public keys, so it
     // only uses the origin whose TLS terminates inside the node (TC-2923). The
     // identity check that follows runs against that origin; nothing retries on
@@ -2305,7 +2305,7 @@ export class TinyCloudNode {
       : destinations;
   }
 
-  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
         (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
@@ -2316,7 +2316,7 @@ export class TinyCloudNode {
     if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
     // Auth receives constructor-trusted hosts separately and may accept an
     // explicit code-supplied sign-in override, never a restored host list.
-    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
+    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts, dataRead);
     const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
     const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
     const resolved = await resolveRegistryResource(subject, resource, access, {
@@ -2325,6 +2325,7 @@ export class TinyCloudNode {
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
       verdictCache: this.config.registryVerdictCache,
+      dataRead,
       onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
@@ -2374,9 +2375,9 @@ export class TinyCloudNode {
     return async (resources, send, options) => {
       graph.assertActive();
       return routeResourceRequest(resources, {
-        resolveResource: async (requestedResource, requestedAccess) => {
+        resolveResource: async (requestedResource, requestedAccess, dataRead) => {
           graph.assertActive();
-          const targets = await this.routingDestinations(requestedResource, requestedAccess);
+          const targets = await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
           graph.assertActive();
           return targets;
         },
@@ -2837,9 +2838,10 @@ export class TinyCloudNode {
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
     };
-    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one.
+    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one. Its result is
+    // discarded, so it may keep an absence for data reads.
     void (this.config.registryVerdictCache
-      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache })
+      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache, dataRead: true })
       : refreshOwnerRegistry(subject, options)).catch(() => undefined);
   }
 

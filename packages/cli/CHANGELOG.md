@@ -1,5 +1,42 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.52
+
+### Patch Changes
+
+- 56301ea: `tinycloud courier inbox` now bundles the Courier with the inbox safe-id gate: a message whose thread or message id, taken from the peer's key name, isn't a safe id is skipped (not fetched, listed or receipted) and reported as `bad-message` with the id escaped, so no control or bidi character from a peer reaches the text or `--json` output. The bundled Courier is built from the workspace, so a courier-only changeset publishes `@tinycloud/courier` but not `@tinycloud/cli`; this changeset is what ships the bundled Courier with the inbox safe-id gate in a CLI release.
+
+  Details: TC-2951
+
+## 1.7.0-beta.51
+
+### Patch Changes
+
+- Updated dependencies [09f6dbf]
+  - @tinycloud/operations@0.9.0-beta.36
+
+## 1.7.0-beta.50
+
+### Patch Changes
+
+- c45e6c1: `tinycloud courier watch` now bundles the Courier that restricts `--home-file` to the model-login file of the agent CLI it starts (refusing symbolic links), reads the Claude login without following links, and removes links an agent planted in its clean HOME before each wake. The bundled Courier is built from the workspace, so a courier-only changeset publishes `@tinycloud/courier` but not `@tinycloud/cli`; this changeset is what puts those fixes in a CLI release.
+
+  Details: TC-3014
+
+## 1.7.0-beta.49
+
+### Patch Changes
+
+- 1525804: `tinycloud courier watch` now carries the two flags added to `@tinycloud/courier`: `--agent-cli`, which with `--wake exec --unguarded` lets the watcher start an agent CLI that has no guarded adapter, and `--home-file <path>`, which copies one file of the owner's HOME into the woken agent's clean HOME. Defaults are unchanged: without `--agent-cli` such a command is still refused, and `claude` and `paseo` are still refused under `exec`.
+
+  Details: TC-712
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/sdk-services@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+  - @tinycloud/operations@0.9.0-beta.35
+
 ## 1.7.0-beta.48
 
 ### Minor Changes

@@ -2,13 +2,21 @@ import { expect, test } from "bun:test";
 import { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "./first-party-origins";
 import openkey from "../test-fixtures/openkey-first-party-origins.json";
 
-test("the SDK exports match OpenKey's pinned first-party origin contract", () => {
-  expect([...FIRST_PARTY_ORIGINS]).toEqual(openkey.origins);
+// OpenKey entries that the public package does not trust.
+const OPENKEY_ONLY_ORIGINS = ["https://lightning-node-1.gecko-snares.ts.net:8451"];
+const publicOrigins = openkey.origins.filter((origin) => !OPENKEY_ONLY_ORIGINS.includes(origin));
+
+test("the SDK exports match OpenKey's pinned first-party origin contract, less its OpenKey-only entries", () => {
+  expect([...FIRST_PARTY_ORIGINS]).toEqual(publicOrigins);
   expect(FIRST_PARTY_PAGES_SUBDOMAINS).toEqual(openkey.pagesProjects);
 });
 
-for (const origin of openkey.origins) test(`accepts exact first-party origin ${origin}`, () => {
+for (const origin of publicOrigins) test(`accepts exact first-party origin ${origin}`, () => {
   expect(isFirstPartyOrigin(origin)).toBe(true);
+});
+for (const origin of OPENKEY_ONLY_ORIGINS) test(`does not trust the OpenKey-only origin ${origin}`, () => {
+  expect(openkey.origins).toContain(origin);
+  expect(isFirstPartyOrigin(origin)).toBe(false);
 });
 for (const project of openkey.pagesProjects) test(`accepts only the owned ${project} Pages host and one preview label`, () => {
   expect(isFirstPartyOrigin(`https://${project}.pages.dev`)).toBe(true);

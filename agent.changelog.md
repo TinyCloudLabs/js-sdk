@@ -3,6 +3,20 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-13
+
+- TC-2416 recovery: restore discovery, reads, conditional writes and optional SQL
+  copies for existing `default/xyz.tinycloud.agent-data/` apps. Reuse existing
+  grants and records; do not force new-layout approval, migration or replacement
+  apps. Restore query layout selection while keeping new-layout defaults,
+  exact discovery-entry grants, and the hosted/public tool sets unchanged.
+  Existing matching legacy kinds take precedence over automatic catalog routing.
+  Explicit Health Log and Recipes requests retain their catalog behavior.
+- Real-node smoke passed on both hosted surfaces with synthetic records:
+  legacy read/write/query recovery, stale-ETag refusal, new-layout writes and sibling
+  permission refusal. Stale markers now change revision on every write so a
+  concurrent same-day update cannot be incorrectly cleared during a copy rebuild.
+
 ## 2026-11-12
 
 - Hosted MCP consent carries its public requester origin; OpenKey binds the
