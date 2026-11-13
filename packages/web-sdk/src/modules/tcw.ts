@@ -549,7 +549,13 @@ export class TinyCloudWeb {
    */
   private async _init(): Promise<void> {
     await this.wasmBindings.ensureInitialized();
-    const { createRegistryVerdictCache } = await import("@tinycloud/sdk-core/registry-verdict-cache");
+    let registryVerdictCache: TinyCloudNodeConfig["registryVerdictCache"];
+    try {
+      const { createRegistryVerdictCache } = await import("@tinycloud/sdk-core/registry-verdict-cache");
+      registryVerdictCache = createRegistryVerdictCache();
+    } catch {
+      console.warn("Registry cache unavailable; using uncached routing.");
+    }
     const loc = typeof window !== 'undefined' ? window.location : undefined;
 
     const nodeConfig: TinyCloudNodeConfig = {
@@ -564,7 +570,7 @@ export class TinyCloudWeb {
         this.config.registrySequenceStore ??
         createLocalStorageRegistrySequenceStore(),
       registryCacheStore: this.config.registryCacheStore ?? createLocalStorageRegistryCacheStore(),
-      registryVerdictCache: createRegistryVerdictCache(),
+      registryVerdictCache,
       onNodeNotFound: this.config.onNodeNotFound,
       onRegistryFallback: this.config.onRegistryFallback,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
