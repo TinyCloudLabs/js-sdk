@@ -144,19 +144,23 @@ describe("tinycloud bug-report --attach", () => {
       server.stop(true);
     }
   });
-  test("the uploaded CLI log remains valid JSONL after the attachment redaction pass", async () => {
+  test("the default attachment host is feedback and uploaded log remains valid JSONL", async () => {
     await recordPrivateDiagnostic();
     let uploaded = "";
+    let requestUrl = "";
     const program = new Command();
     registerBugReportCommand(program, {
       root,
-      attachmentUrl: "https://bugs.tinycloud.xyz/reports",
       confirm: async (_summary: string, content: string) => { uploaded = content; return true; },
-      fetchImpl: async () => Response.json({ redactions: {} }, { status: 201 }),
+      fetchImpl: async (input) => {
+        requestUrl = String(input);
+        return Response.json({ redactions: {} }, { status: 201 });
+      },
       write: () => undefined,
       handleError: async (error: unknown): Promise<never> => { throw error; },
     });
     await program.parseAsync(["node", "tinycloud", "bug-report", "--attach", REPORT_ID], { from: "node" });
+    expect(requestUrl).toBe(`https://feedback.tinycloud.xyz/reports/${REPORT_ID}/attachments`);
     const records = uploaded.trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ command: "auth login", args: ["--profile=[REDACTED]", "--token=[REDACTED]"] });
