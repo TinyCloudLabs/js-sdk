@@ -1,3 +1,4 @@
+import { assertRequestedRestoreAccount, SessionAccountMismatchError } from "../modules/restoreAccount";
 import {
   ISessionStorage,
   PersistedSessionData,
@@ -239,6 +240,7 @@ export class BrowserSessionStorage implements ISessionStorage {
         this.clearActiveAddress(address);
         return { status: "corrupt", data: null };
       }
+      assertRequestedRestoreAccount(address, result.data);
       if (this.isRetired(address, result.data.signature)) return { status: "missing", data: null };
 
       if (!result.data.tinycloudSession?.spaceId) {
@@ -269,9 +271,10 @@ export class BrowserSessionStorage implements ISessionStorage {
       }
 
       return { status: "loaded", data: result.data };
-    } catch {
+    } catch (error) {
       this.storage.removeItem(key);
       this.clearActiveAddress(address);
+      if (error instanceof SessionAccountMismatchError) throw error;
       return { status: "corrupt", data: null };
     }
   }

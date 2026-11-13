@@ -10,6 +10,7 @@
  * @packageDocumentation
  */
 
+import { assertRequestedRestoreAccount, requestedRestoreAccount, SessionAccountMismatchError } from "./restoreAccount";
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   activateValidatedRuntimeDelegation as activateValidatedRuntimeDelegationOnNode,
@@ -873,7 +874,7 @@ export class TinyCloudWeb {
     address?: string,
     allowExpiredRenewalCandidate = false,
   ): Promise<string | undefined> {
-    if (address) return address;
+    if (address) return requestedRestoreAccount(address).address;
     if (this._node?.address) return this._node.address;
     const connected = await this.walletSigner?.getConnectedAddress();
     if (connected !== undefined) return connected;
@@ -942,6 +943,13 @@ export class TinyCloudWeb {
     address?: string,
     leaseAuthorization?: string,
   ): Promise<SessionRestoreResult> {
+    const requestedAccount = address;
+    if (address) {
+      try { address = requestedRestoreAccount(address).address; } catch (error) {
+        this._sessionRestoreStatus = "restore-failed";
+        return { status: "restore-failed", error: error as Error };
+      }
+    }
 
     const signOuts = this.signOutCount;
     // A restore may bring back a different account: a runtime permission signer set for the current one is cleared.
@@ -1004,6 +1012,7 @@ export class TinyCloudWeb {
         this._sessionRestoreStatus = "missing";
         return { status: "missing" };
       }
+      assertRequestedRestoreAccount(requestedAccount ?? restoreAddress, loaded.data);
       const node = await this.ensureNode();
       assertNotSignedOut();
       const was = node.spaceId;
@@ -1040,6 +1049,9 @@ export class TinyCloudWeb {
     } catch (err) {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
         return refused();
+      }
+      if (err instanceof SessionAccountMismatchError) {
+        try { await this.sessionStorage.clear(restoreAddress); } catch { /* Preserve the account refusal. */ }
       }
       // Restore rejection is intentionally transactional. Persisted storage
       // is user state, and attempting best-effort cleanup here can both mask
