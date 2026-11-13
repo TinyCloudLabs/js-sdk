@@ -1,5 +1,29 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.32
+
+### Patch Changes
+
+- 2c9c7cc: In a browser without `crypto.getRandomValues`, the web SDK now throws when it needs random bytes (for keys and nonces) instead of falling back to a non-cryptographic source. Browsers and webviews that have WebCrypto are unaffected.
+
+  Details: TC-3007
+
+## 3.12.0-beta.31
+
+### Minor Changes
+
+- 728b25c: Use OpenKey's advertised continuation API from the public signIn click to reserve one window before asynchronous preparation. Prepare, verify and complete the session with the request-pinned identity, preserving the configured manifest and validating the signed result before activation. Older clients and servers retain the existing authorization path.
+
+  Reject noncanonical SIWE and ReCap encodings during OpenKey verification. Custom WASM bindings must provide the strict parseVerifiedRecapFromSiwe verifier for ReCap sign-in.
+
+  Details: TC-2913
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+
 ## 3.12.0-beta.30
 
 ### Patch Changes

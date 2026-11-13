@@ -10,6 +10,7 @@ import {
   tarballUrl,
   waitForTarballs,
   withLayersHidden,
+  withWaitBudget,
   withoutVersions,
 } from "./publish-in-dependency-order.mjs";
 
@@ -42,43 +43,170 @@ test("the tarball URL is the one npm install fetches", () => {
   );
 });
 
-test("waiting returns once every tarball answers 200, and names the ones that never do", async () => {
-  const answers = new Map([
-    ["https://registry.npmjs.org/@x/a/-/a-1.0.0.tgz", [404, 404, 200]],
-    ["https://registry.npmjs.org/@x/b/-/b-1.0.0.tgz", [404]],
-  ]);
-  let clock = 0;
-  const calls = [];
-  const fetchFn = async (url, init) => {
+// A fake npm registry. `packument` and `tarball` give each request's status by its 0-based poll count for that URL kind.
+function fakeRegistry({ name = "@x/a", version = "1.0.0", packument, tarball }) {
+  const events = [];
+  const seen = new Set();
+  const counts = { packument: 0, tarball: 0 };
+  const fetchFn = async (url, init = {}) => {
+    const parsed = new URL(url);
+    const cb = parsed.searchParams.get("cb");
+    assert.ok(cb && !seen.has(cb), `every request carries its own cache-busting query: ${url}`);
+    seen.add(cb);
+    if (parsed.pathname === `/${name}`) {
+      assert.equal(init.headers.accept, "application/vnd.npm.install-v1+json");
+      assert.equal(init.headers["cache-control"], "no-cache");
+      const status = packument(counts.packument++);
+      events.push(`packument ${status}`);
+      if (status === "not-json") return { status: 200, json: async () => { throw new SyntaxError("Unexpected end of JSON"); } };
+      if (status === "unlisted") return { status: 200, json: async () => ({ versions: { "0.9.0": {} } }) };
+      if (status === "listed") return { status: 200, json: async () => ({ versions: { [version]: {} } }) };
+      return { status, json: async () => ({ error: "Not found" }) };
+    }
+    assert.equal(parsed.pathname, `/${name}/-/${name.split("/")[1]}-${version}.tgz`);
     assert.equal(init.method, "HEAD");
-    calls.push(url);
-    const queue = answers.get(url);
-    return { status: queue.length > 1 ? queue.shift() : queue[0] };
+    assert.equal(init.headers["cache-control"], "no-cache");
+    const status = tarball(counts.tarball++);
+    events.push(`tarball ${status}`);
+    return { status };
   };
-  const result = await waitForTarballs(["@x/a@1.0.0", "@x/b@1.0.0"], {
-    fetchFn,
-    sleep: async (ms) => { clock += ms; },
-    now: () => clock,
-    intervalMs: 10,
-    timeoutMs: 100,
-    log: () => {},
+  return { fetchFn, events, counts };
+}
+
+function clock() {
+  const state = { time: 0, sleeps: [] };
+  return {
+    state,
+    now: () => state.time,
+    sleep: async (ms) => { state.sleeps.push(ms); state.time += ms; },
+  };
+}
+
+test("a registry that 404s, then lists the version, then serves the tarball: the tarball is asked for only after the packument lists it", async () => {
+  const { fetchFn, events } = fakeRegistry({
+    packument: (n) => (n < 3 ? 404 : n < 5 ? "unlisted" : "listed"),
+    tarball: (n) => (n < 2 ? 404 : 200),
   });
+  const time = clock();
+  const result = await waitForTarballs(["@x/a@1.0.0"], { fetchFn, sleep: time.sleep, now: time.now, log: () => {} });
   assert.deepEqual(result.served, ["@x/a@1.0.0"]);
-  assert.deepEqual(result.missing, [{ id: "@x/b@1.0.0", status: 404 }]);
-  assert.equal(calls.filter((url) => url.includes("/a/")).length, 3, "a served tarball is not asked again");
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(events, [
+    "packument 404", "packument 404", "packument 404", "packument unlisted", "packument unlisted",
+    "packument listed", "tarball 404", "tarball 404", "tarball 200",
+  ]);
+  assert.ok(time.state.time < 30 * 60_000);
 });
 
-test("a network error counts as not served and is reported", async () => {
-  let clock = 0;
-  const result = await waitForTarballs(["@x/a@1.0.0"], {
-    fetchFn: async () => { throw new Error("ECONNRESET"); },
-    sleep: async (ms) => { clock += ms; },
-    now: () => clock,
-    intervalMs: 10,
-    timeoutMs: 20,
-    log: () => {},
+test("polls back off from 15 s to 60 s", async () => {
+  const { fetchFn } = fakeRegistry({ packument: () => 404, tarball: () => 404 });
+  const time = clock();
+  await waitForTarballs(["@x/a@1.0.0"], { fetchFn, sleep: time.sleep, now: time.now, timeoutMs: 10 * 60_000, log: () => {} });
+  const { sleeps } = time.state;
+  assert.deepEqual(sleeps.slice(0, 5), [15_000, 22_500, 33_750, 50_625, 60_000]);
+  assert.ok(sleeps.every((ms) => ms <= 60_000), "no wait longer than 60 s");
+});
+
+const brief = (missing) => missing.map(({ id, status, lastModified }) => ({ id, status, ...(lastModified ? { lastModified } : {}) }));
+
+test("a version is declared missing only after the whole 45-minute budget, with a last poll at the deadline", async () => {
+  const { fetchFn, counts } = fakeRegistry({ packument: () => 404, tarball: () => 404 });
+  const time = clock();
+  const result = await waitForTarballs(["@x/a@1.0.0"], { fetchFn, sleep: time.sleep, now: time.now, log: () => {} });
+  assert.equal(time.state.time, 45 * 60_000);
+  assert.deepEqual(brief(result.missing), [{ id: "@x/a@1.0.0", status: "packument 404" }]);
+  assert.equal(result.missing[0].waitedMs, 45 * 60_000);
+  assert.equal(counts.tarball, 0, "the tarball is never asked for while the packument does not list the version");
+  assert.ok(counts.packument > 30);
+});
+
+test("a version that is listed but whose tarball never appears is reported with the tarball status", async () => {
+  const { fetchFn } = fakeRegistry({ packument: () => "listed", tarball: () => 404 });
+  const time = clock();
+  const result = await waitForTarballs(["@x/a@1.0.0"], { fetchFn, sleep: time.sleep, now: time.now, timeoutMs: 5 * 60_000, log: () => {} });
+  assert.deepEqual(brief(result.missing), [{ id: "@x/a@1.0.0", status: "tarball 404" }]);
+  assert.equal(time.state.time, 5 * 60_000);
+});
+
+test("an unreadable packument or a network error counts as not listed and is reported", async () => {
+  const time = clock();
+  const bad = fakeRegistry({ packument: () => "not-json", tarball: () => 200 });
+  assert.deepEqual(
+    brief((await waitForTarballs(["@x/a@1.0.0"], { fetchFn: bad.fetchFn, sleep: time.sleep, now: time.now, timeoutMs: 20_000, log: () => {} })).missing),
+    [{ id: "@x/a@1.0.0", status: "packument is not valid JSON" }],
+  );
+  const down = await waitForTarballs(["@x/a@1.0.0"], {
+    fetchFn: async () => { throw new Error("ECONNRESET"); }, sleep: time.sleep, now: time.now, timeoutMs: 20_000, log: () => {},
   });
-  assert.deepEqual(result.missing, [{ id: "@x/a@1.0.0", status: "error: ECONNRESET" }]);
+  assert.deepEqual(brief(down.missing), [{ id: "@x/a@1.0.0", status: "packument error: ECONNRESET" }]);
+});
+
+test("the tarball's Last-Modified and the elapsed time are logged when it is served and when it is not", async () => {
+  const lines = [];
+  const modified = "Fri, 13 Nov 2026 19:43:21 GMT";
+  const fetchFn = async (url, init = {}) => {
+    if (init.method === "HEAD") return { status: 200, headers: new Headers({ "last-modified": modified }) };
+    return { status: 200, json: async () => ({ versions: { "1.0.0": {} } }) };
+  };
+  const time = clock();
+  await waitForTarballs(["@x/a@1.0.0"], { fetchFn, sleep: time.sleep, now: time.now, log: (line) => lines.push(line) });
+  assert.ok(lines.some((line) => line.includes(`tarball Last-Modified ${modified}`) && /\(\d+ s after the wait began/.test(line)), lines.join("\n"));
+
+  const stuck = async (url, init = {}) => (init.method === "HEAD"
+    ? { status: 404, headers: new Headers({ "last-modified": modified }) }
+    : { status: 200, json: async () => ({ versions: { "1.0.0": {} } }) });
+  const progress = [];
+  const result = await waitForTarballs(["@x/a@1.0.0"], { fetchFn: stuck, sleep: time.sleep, now: time.now, timeoutMs: 12 * 60_000, log: (line) => progress.push(line) });
+  assert.deepEqual(brief(result.missing), [{ id: "@x/a@1.0.0", status: "tarball 404", lastModified: modified }]);
+  assert.ok(progress.some((line) => line.startsWith("still waiting for @x/a@1.0.0 after 5 min: tarball 404 (tarball Last-Modified")), progress.join("\n"));
+});
+
+test("the waiting budget is shared by the layers: each gets what the earlier ones left, and an empty budget still polls once", async () => {
+  let clockMs = 0;
+  const granted = [];
+  const wait = async (ids, { timeoutMs }) => {
+    granted.push(timeoutMs);
+    clockMs += [10, 30, 20][granted.length - 1] * 60_000;
+    return { served: ids, missing: [] };
+  };
+  const budgeted = withWaitBudget(45 * 60_000, wait, { now: () => clockMs });
+  await budgeted(["@x/a@1.0.0"]);
+  await budgeted(["@x/b@1.0.0"]);
+  await budgeted(["@x/c@1.0.0"]);
+  assert.deepEqual(granted, [45 * 60_000, 35 * 60_000, 5 * 60_000]);
+  await budgeted(["@x/d@1.0.0"]);
+  assert.equal(granted[3], 0);
+});
+
+test("resuming over a release npm already has publishes nothing and waits for nothing", async () => {
+  const layers = dependencyLayers([pkg("@x/courier", ["@x/sdk-core"]), pkg("@x/sdk-core")]);
+  let waits = 0;
+  const result = await publishInOrder({
+    layers,
+    log: () => {},
+    publishLayer: async () => ({ status: 0, output: "🦋  warn @x/sdk-core is not being published because version 1.0.0 is already published on npm\n🦋  warn No unpublished projects to publish\n" }),
+    waitFor: async () => { waits += 1; return { served: [], missing: [] }; },
+  });
+  assert.equal(result.status, 0);
+  assert.equal(waits, 0);
+  assert.deepEqual(result.unverified, []);
+});
+
+test("several versions are tracked independently; a served one is not asked for again", async () => {
+  const requests = [];
+  const fetchFn = async (url, init = {}) => {
+    const parsed = new URL(url);
+    requests.push(`${init.method ?? "GET"} ${parsed.pathname}`);
+    if (init.method === "HEAD") return { status: 200 };
+    const name = decodeURIComponent(parsed.pathname.slice(1));
+    const late = name === "@x/b" && requests.filter((r) => r === "GET /@x/b").length < 3;
+    return { status: 200, json: async () => ({ versions: late ? {} : { "1.0.0": {} } }) };
+  };
+  const time = clock();
+  const result = await waitForTarballs(["@x/a@1.0.0", "@x/b@1.0.0"], { fetchFn, sleep: time.sleep, now: time.now, log: () => {} });
+  assert.deepEqual(result.served, ["@x/a@1.0.0", "@x/b@1.0.0"]);
+  assert.equal(requests.filter((r) => r === "GET /@x/a").length, 1);
+  assert.equal(requests.filter((r) => r === "HEAD /@x/a/-/a-1.0.0.tgz").length, 1);
 });
 
 const accepted = (...ids) =>

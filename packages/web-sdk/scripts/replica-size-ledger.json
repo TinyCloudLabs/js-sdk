@@ -3183,5 +3183,23 @@
       "ceiling": { "index.mjs": 1524295, "index.cjs": 1458732 }
     },
     "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
+  },
+  "tc2913OpenKeyContinuationRoot": {
+    "label": "OpenKey one-window sign-in continuation root admission (TC-2913)",
+    "ruling": "Naomi's TC-2913 size ruling: exact canonical CI bytes, capped at +800 B per format over the newest root row when it merges; stacked on TC-2970 after rebasing onto c8e53a9a. Details: TC-2913",
+    "base": "c8e53a9aad80758dd3492c1714e40e6bd348c61b",
+    "sourceCommits": ["8219765ba399cbcc85630c2057cf913bb82dcb43"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245/job/132097360178",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43486822245/job/132097360229"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 765, "index.cjs": 686 },
+      "ceiling": { "index.mjs": 1525060, "index.cjs": 1459418 }
+    },
+    "reason": "TinyCloudWeb.signIn() reserves the OpenKey window in the click handler and continues the server-selected identity's sign-in and approval in that window; before activation the SDK verifies the pinned identity, the exact signed SIWE bytes, strict ReCaps, session key, origin and nonce. Canonical Node 22/Bun 1.3.14 CI measured 1525060/1459418 gzip -9 bytes on 8219765b, based on c8e53a9a. This is +765/+686 over the TC-2970 ceilings 1524295/1458732, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2913"
   }
 }

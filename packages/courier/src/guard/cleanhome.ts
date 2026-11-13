@@ -55,6 +55,20 @@ function inside(root: string, rel: string): string | undefined {
   return full === root || !full.startsWith(`${root}${path.sep}`) ? undefined : full;
 }
 
+/** Never reused from a previous wake and never copied in: user settings, MCP config and credential tool directories. */
+const SCRUBBED = ['.claude.json', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.config/gh', '.config/git', '.npmrc', '.netrc', '.ssh', '.aws'];
+
+const under = (rel: string, roots: readonly string[]) => roots.some((f) => rel === f || rel.startsWith(`${f}/`));
+
+/** Why `--home-file <rel>` is refused, before anything is read: the same rules at start-up and on every wake. */
+export function homeFileRefusal(rel: string): string | undefined {
+  const normal = path.posix.normalize(rel.split(path.sep).join('/'));
+  if (!rel || path.isAbsolute(rel) || normal === '.' || normal === '..' || normal.startsWith('../')) return `--home-file ${JSON.stringify(rel)} must be a path inside the home directory`;
+  if (under(normal, SHELL_STARTUP_FILES)) return `--home-file ${JSON.stringify(rel)} is a shell start-up file and is never copied`;
+  if (under(normal, SCRUBBED)) return `--home-file ${JSON.stringify(rel)} is tool configuration or a credential store the clean HOME never holds`;
+  return undefined;
+}
+
 function copyFile(from: string, to: string, mode: number): boolean {
   try {
     if (!fs.statSync(from).isFile()) return false;
@@ -90,7 +104,7 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
   fs.rmSync(credential, { force: true });
   if (options.claude !== false && copyFile(path.join(realHome, '.claude', '.credentials.json'), credential, 0o600)) exposed.push('.claude/.credentials.json');
   // Never reuse user settings, MCP config, shell files or credential tool directories from a previous wake.
-  for (const rel of ['.claude.json', '.claude/settings.json', '.claude/settings.local.json', '.mcp.json', '.config/gh', '.config/git', '.npmrc', '.netrc', '.ssh', '.aws']) fs.rmSync(path.join(home, rel), { recursive: true, force: true });
+  for (const rel of SCRUBBED) fs.rmSync(path.join(home, rel), { recursive: true, force: true });
   for (const rel of ['.config', '.local/share', '.cache', '.local/state', '.runtime']) fs.mkdirSync(path.join(home, rel), { recursive: true, mode: 0o700 });
 
   const git = gitIdentity(realHome);
@@ -102,10 +116,10 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
   }
 
   for (const rel of options.files ?? []) {
+    const refusal = homeFileRefusal(rel);
     const from = inside(realHome, rel);
     const to = inside(home, rel);
-    if (!from || !to) throw new Error(`--home-file ${JSON.stringify(rel)} must be a path inside the home directory`);
-    if (SHELL_STARTUP_FILES.some((f) => rel === f || rel.startsWith(`${f}/`))) throw new Error(`--home-file ${JSON.stringify(rel)} is a shell start-up file and is never copied`);
+    if (refusal || !from || !to) throw new Error(refusal ?? `--home-file ${JSON.stringify(rel)} must be a path inside the home directory`);
     if (!copyFile(from, to, 0o600)) throw new Error(`--home-file ${JSON.stringify(rel)} is not a readable file in ${realHome}`);
     exposed.push(rel);
   }

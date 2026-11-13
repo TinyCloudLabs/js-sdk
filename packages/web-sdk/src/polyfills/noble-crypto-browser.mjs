@@ -1,7 +1,7 @@
 // Browser-compatible replacement for @noble/hashes/crypto
 // This provides the crypto functionality that @noble/hashes needs in a browser environment
 
-// Use the browser's built-in crypto if available, otherwise provide a fallback
+// Use the browser's built-in crypto; there is no fallback random source
 const getWebCrypto = () => {
   if (typeof globalThis !== 'undefined' && globalThis.crypto) {
     return globalThis.crypto;
@@ -26,10 +26,8 @@ export const crypto = {
     if (webCrypto && webCrypto.getRandomValues) {
       return webCrypto.getRandomValues(array);
     }
-    // Fallback to a simple random implementation (not cryptographically secure)
-    for (let i = 0; i < array.length; i++) {
-      array[i] = Math.floor(Math.random() * 256);
-    }
-    return array;
+    // Keys and nonces come from here: refuse rather than use a non-cryptographic source. The message stays short
+    // because it ships in the root bundle.
+    throw new Error("crypto.getRandomValues is unavailable");
   }
 };

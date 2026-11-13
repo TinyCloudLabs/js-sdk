@@ -35,10 +35,12 @@
     "courier-local-read-watch",
     "courier-registry-verdict-cache",
     "courier-unknown-flags",
+    "courier-wake-agent-cli",
     "feed-watch-lines-once",
     "hide-courier-invite",
     "kv-503-not-applied-failed",
     "local-replica-restore",
+    "manifest-login-one-hour",
     "openkey-public-session-key",
     "panel-load-failure-reload",
     "restore-commit-expiry",
@@ -84,6 +86,7 @@
     "tc-2872-proofless-status",
     "tc-2904-owner-direct-renewal",
     "tc-2904-renewal-approval-codec",
+    "tc-2913-openkey-continuation",
     "tc-2923-node-defaults",
     "tc-2923-tee-e2e-host",
     "tc-2924-node-alias",
@@ -99,6 +102,7 @@
     "tc2380-q2",
     "tc2747-courier-expiry-status",
     "tidy-names-openkey-grant",
-    "vfs-bridge-timeout"
+    "vfs-bridge-timeout",
+    "web-sdk-refuse-insecure-random"
   ]
 }
