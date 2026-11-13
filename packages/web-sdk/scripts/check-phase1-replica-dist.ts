@@ -1,5 +1,6 @@
 import { approvedTc2931Optional, tc2931OptionalAllowance, validateTc2931OptionalTransition } from "./replica-optional-size-policy";
 import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
+import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
 import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -228,6 +229,12 @@ if (prBaseSha) {
   if (ledger.tc2931BootstrapScope !== undefined && baseLedger.tc2931BootstrapScope === undefined &&
       (baseLedger.tc2936RestoreCommitRoot === undefined || !hasAncestor(repoRoot, ledger.tc2931BootstrapScope.sourceCommits.at(-1)!))) {
     console.error("The TC-2931 admission requires the merged TC-2936 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2923EncryptionTeeOriginRootTransition(baseLedger.tc2923EncryptionTeeOriginRoot, ledger.tc2923EncryptionTeeOriginRoot);
+  if (ledger.tc2923EncryptionTeeOriginRoot !== undefined && baseLedger.tc2923EncryptionTeeOriginRoot === undefined &&
+      (baseLedger.tc2931BootstrapScope === undefined || !hasAncestor(repoRoot, ledger.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2923 admission requires the merged TC-2931 row and its measured source ancestor.");
     failed = true;
   }
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);

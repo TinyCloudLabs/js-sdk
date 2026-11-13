@@ -472,6 +472,7 @@ export type Ledger = {
   tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2936RestoreCommitRoot?: LogoutRatchet;
   tc2931BootstrapScope?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
+  tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1098,6 +1099,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (root.tc2936RestoreCommitRoot !== undefined) pins.push({ row: "tc2936RestoreCommitRoot", pin: root.tc2936RestoreCommitRoot.sourceCommits.at(-1)! });
   if (root.tc2931BootstrapScope !== undefined) pins.push({ row: "tc2931BootstrapScope", pin: root.tc2931BootstrapScope.sourceCommits.at(-1)! });
+  if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1194,6 +1196,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
     ["tc2936RestoreCommitRoot", root.tc2936RestoreCommitRoot?.root.ceiling],
     ["tc2931BootstrapScope", root.tc2931BootstrapScope?.root.ceiling],
+    ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3321,6 +3324,33 @@ export const approvedTc2931BootstrapScope: NonNullable<Ledger["tc2931BootstrapSc
   "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
 };
 
+export const approvedTc2923EncryptionTeeOriginRoot: LogoutRatchet = {
+  "label": "encryption-network TEE origin root admission (TC-2923)",
+  "ruling": "Naomi SIZE RULING TC-2923: exact canonical CI bytes, capped at +260 ESM/+200 CJS over the newest root; re-stacked on TC-2931 after #945 merged and re-measured; every other bucket unchanged; no general ceiling change. Details: TC-2923",
+  "base": "7fd34235ae6e915d78cb5a74d460bce9d4cebb01",
+  "sourceCommits": [
+    "8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968531764",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968532352"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 234,
+      "index.cjs": 186
+    },
+    "ceiling": {
+      "index.mjs": 1524049,
+      "index.cjs": 1458517
+    }
+  },
+  "reason": "Encryption-network calls for the production node use its TEE-terminated origin: the host mapping, the encryption routing and advisory-descriptor guards, and the sign-in activation mapping ship in the root bundle, with no new dependency. Canonical Node 22/Bun 1.3.14 CI at 8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6 measures 1524049/1458517 gzip -9 bytes over master 7fd34235ae6e915d78cb5a74d460bce9d4cebb01 at the TC-2931 ceiling 1523815/1458331. Optional, cumulative and worker allowances remain unchanged. Details: TC-2923"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3414,6 +3444,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
   tc2936RestoreCommitRoot: approvedTc2936RestoreCommitRoot,
   tc2931BootstrapScope: approvedTc2931BootstrapScope,
+  tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3834,6 +3865,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2936RestoreCommitRoot || !value.tc2872RenewalKvWorker || !value.tc2872RenewalReplicaWorker ||
         JSON.stringify(value.tc2931BootstrapScope) !== JSON.stringify(approvedTc2931BootstrapScope))) {
     throw new Error("Only the exact TC-2931 root and worker admission with its predecessors is approved.");
+  }
+  if (value.tc2923EncryptionTeeOriginRoot !== undefined &&
+      (!value.tc2931BootstrapScope || JSON.stringify(value.tc2923EncryptionTeeOriginRoot) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot))) {
+    throw new Error("Only Naomi's exact TC-2923 root admission is approved.");
   }
   if (value.tc2936RestoreCommitRoot !== undefined &&
       (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
@@ -4659,5 +4694,13 @@ export function validateTc2931BootstrapScopeTransition(base?: Ledger["tc2931Boot
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2931BootstrapScope) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2931 admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2923 encryption-network TEE origin root admission is introduced once and immutable. */
+export function validateTc2923EncryptionTeeOriginRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2923 root admission may be introduced once and cannot change later.");
   }
 }

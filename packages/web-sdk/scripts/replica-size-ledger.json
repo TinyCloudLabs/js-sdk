@@ -3121,5 +3121,31 @@
       "ceiling": 774561
     },
     "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
+  },
+  "tc2923EncryptionTeeOriginRoot": {
+    "label": "encryption-network TEE origin root admission (TC-2923)",
+    "ruling": "Naomi SIZE RULING TC-2923: exact canonical CI bytes, capped at +260 ESM/+200 CJS over the newest root; re-stacked on TC-2931 after #945 merged and re-measured; every other bucket unchanged; no general ceiling change. Details: TC-2923",
+    "base": "7fd34235ae6e915d78cb5a74d460bce9d4cebb01",
+    "sourceCommits": [
+      "8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968531764",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968532352"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 234,
+        "index.cjs": 186
+      },
+      "ceiling": {
+        "index.mjs": 1524049,
+        "index.cjs": 1458517
+      }
+    },
+    "reason": "Encryption-network calls for the production node use its TEE-terminated origin: the host mapping, the encryption routing and advisory-descriptor guards, and the sign-in activation mapping ship in the root bundle, with no new dependency. Canonical Node 22/Bun 1.3.14 CI at 8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6 measures 1524049/1458517 gzip -9 bytes over master 7fd34235ae6e915d78cb5a74d460bce9d4cebb01 at the TC-2931 ceiling 1523815/1458331. Optional, cumulative and worker allowances remain unchanged. Details: TC-2923"
   }
 }
