@@ -8,6 +8,7 @@ import { bases } from "multiformats/basics";
 import { SiweMessage } from "siwe";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
+import { admitOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal";
 import { buildShortLink, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
 import { encodeDagCbor } from "../../../sdk-core/src/delegations/cacao.js";
 
@@ -212,4 +213,16 @@ test("a node that no longer advertises the lease's renewer refuses the approval 
   await expect(acquire()).rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
   expect(admitted).toEqual([]);
   expect(await pendingCount()).toBe(0);
+});
+
+// The CLI tells a changed node identity (permanent) from other admission failures (retry) by this exact SDK message.
+// A reworded SDK error must fail here, not quietly turn the refusal back into a retry.
+test("the SDK reports a changed renewer with the exact message the CLI matches", async () => {
+  const delegation = await signedDelegation();
+  const { receipt } = await renewalFor(delegation.delegationCid);
+  advertised = { ...nodeIdentity, renewerEpoch: 1 };
+  await expect(admitOwnerRenewalLease({ host, originalAuthorization: (delegation.delegationHeader as { Authorization: string }).Authorization,
+    originalCid: delegation.delegationCid, ownerDid, agentDid: did, spaceId, nodeIdentity, leaseAuthorization: receipt.leaseAuthorization,
+    leaseCid: receipt.leaseCid, leaseExpiresAt: receipt.leaseExpiresAt })).rejects.toThrow(/^Renewal node identity changed$/);
+  expect(admitted).toEqual([]);
 });
