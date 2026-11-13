@@ -82,9 +82,10 @@ async function registration(store: RegistrySequenceStore | undefined, ownerKey: 
  * an outage fallback from saved settings and a failed lookup are dropped as
  * they settle, so the next call asks the registry again. A kept verdict is
  * served to a client only if its own stores allow it. Times use a monotonic
- * clock (`performance.now`).
+ * clock (`performance.now`). The absent-reads mode retains only confirmed absence for
+ * reads/lookups; registered results and non-read operations always perform their own lookup.
  */
-export function createRegistryVerdictCache(options: { now?: () => number } = {}): RegistryVerdictCache {
+export function createRegistryVerdictCache(options: { now?: () => number; mode?: "absent-reads" } = {}): RegistryVerdictCache {
   const now = options.now ?? (() => performance.now());
   const entries = new Map<string, Entry>();
   const keyOf = (registryUrl: string, subject: string) => JSON.stringify([registryKey(registryUrl), subject]);
@@ -97,12 +98,17 @@ export function createRegistryVerdictCache(options: { now?: () => number } = {})
   return {
     async get(scope, lookup) {
       const key = keyOf(scope.registryUrl, scope.subject);
+      if (options.mode === "absent-reads" && scope.access !== undefined && scope.access !== "read") {
+        entries.delete(key);
+        return lookup();
+      }
       const known = entries.get(key);
       if (known && now() < known.expiresAt) {
         // Kept or still in flight: either way the reader's own checks run on the result. A failure (thrown or
         // unavailable) fails closed for every caller, so it is shared as it is.
         const verdict = await known.verdict;
-        if (verdict.status === "unavailable" || await usableFor(scope, verdict)) return verdict;
+        if (verdict.status === "unavailable" ||
+            (verdict.status !== "registered" || options.mode !== "absent-reads") && await usableFor(scope, verdict)) return verdict;
         if (entries.get(key) === known) entries.delete(key);
       }
       // In flight: shared until it settles. Registered first, so it settles the entry before any caller resumes.
@@ -111,7 +117,7 @@ export function createRegistryVerdictCache(options: { now?: () => number } = {})
       entry.verdict.then((verdict) => {
         if (entries.get(key) !== entry) return;
         const ttl = verdict.status === "unavailable" || verdict.offline ? undefined
-          : verdict.status === "registered" ? REGISTRY_VERDICT_REGISTERED_TTL_MS : REGISTRY_VERDICT_UNREGISTERED_TTL_MS;
+          : verdict.status === "registered" ? (options.mode === "absent-reads" ? undefined : REGISTRY_VERDICT_REGISTERED_TTL_MS) : REGISTRY_VERDICT_UNREGISTERED_TTL_MS;
         if (ttl === undefined) entries.delete(key);
         else {
           entry.settled = verdict;

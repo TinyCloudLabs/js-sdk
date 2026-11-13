@@ -1,7 +1,8 @@
 ---
 "@tinycloud/web-sdk": patch
+"@tinycloud/sdk-core": patch
 ---
 
-Reuse confirmed browser registry routing verdicts for 60 seconds across session operations. Browser routing observes changes to registry locations within 60 seconds instead of refreshing on every operation.
+Reuse confirmed absence for browser registry reads for up to 60 seconds. Registered routes and all writes refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
 
 Details: TC-2987

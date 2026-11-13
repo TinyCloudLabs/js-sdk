@@ -258,7 +258,7 @@ const issuedDelegationsExternal = (type, ext) => (data, callback) => {
   callback();
 };
 const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
-  if (request === "@tinycloud/sdk-core/registry-verdict-cache" && context === path.resolve(__dirname, "src/modules")) {
+  if (request === "../registry-verdict-cache-entry" && context === path.resolve(__dirname, "src/modules")) {
     callback(null, `${type} ./registry-verdict-cache.${ext}`);
     return;
   }

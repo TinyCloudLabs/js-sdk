@@ -551,7 +551,7 @@ export class TinyCloudWeb {
     await this.wasmBindings.ensureInitialized();
     let registryVerdictCache: TinyCloudNodeConfig["registryVerdictCache"];
     try {
-      const { createRegistryVerdictCache } = await import("@tinycloud/sdk-core/registry-verdict-cache");
+      const { createRegistryVerdictCache } = await import("../registry-verdict-cache-entry");
       registryVerdictCache = createRegistryVerdictCache();
     } catch {
       console.warn("Registry cache unavailable; using uncached routing.");
