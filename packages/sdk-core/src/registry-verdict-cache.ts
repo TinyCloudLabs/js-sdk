@@ -23,13 +23,15 @@ interface Entry {
 
 /**
  * The registry base the lookup fetches (`registry-policy` drops one trailing slash), with the host's case and a default
- * port normalised: `https://Registry.test:443/` and `https://registry.test` are one registry. A URL with a query,
- * fragment or credentials is keyed exactly as given.
+ * port normalised: `https://Registry.test:443/` and `https://registry.test` are one registry. A URL with `?`, `#`, `@`,
+ * `\` or whitespace is refused: the parser would key it as another spelling while the lookup fetches a different path.
  */
 function registryKey(registryUrl: string): string {
+  if (/[?#@\\\s]/.test(registryUrl)) {
+    throw new TypeError(`A registry URL used with a verdict cache must not contain ?, #, @, \\ or whitespace: ${JSON.stringify(registryUrl)}`);
+  }
   try {
     const url = new URL(registryUrl);
-    if (url.search || url.hash || url.username || url.password) return registryUrl;
     return url.origin + url.pathname.replace(/\/$/, "");
   } catch {
     return registryUrl;
@@ -54,7 +56,8 @@ async function usableFor(scope: RegistryVerdictScope, verdict: RegistryVerdict):
     if (verdict.status === "unregistered") {
       return evidence === undefined && saved === undefined && !(scope.cacheStore && await scope.cacheStore.getRevision(ownerKey) > 0);
     }
-    if (verdict.status !== "registered") return false;
+    // An outage fallback built from another client's saved settings is never reused: the client's own lookup decides.
+    if (verdict.status !== "registered" || verdict.offline) return false;
     if (scope.sequenceStore && !(evidence && evidence.kind !== "legacy-v1" && evidence.sequence === verdict.sequence)) return false;
     return !scope.cacheStore || saved?.sequence === verdict.sequence;
   } catch {
@@ -116,7 +119,8 @@ export function createRegistryVerdictCache(options: { now?: () => number } = {})
       return entry.verdict;
     },
     invalidate(registryUrl, subject) {
-      entries.delete(keyOf(registryUrl, subject));
+      // A refused registry URL never has an entry.
+      if (!/[?#@\\\s]/.test(registryUrl)) entries.delete(keyOf(registryUrl, subject));
     },
   };
 }

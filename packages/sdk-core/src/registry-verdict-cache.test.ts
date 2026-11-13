@@ -301,6 +301,48 @@ describe("a shared verdict never overrides the reading client's own state (TC-29
   });
 });
 
+describe("an outage fallback and the remaining evidence rules (TC-2970 review N7, MF, MG)", () => {
+  it("a client joining another client's lookup during an outage is not served that client's saved-settings fallback", async () => {
+    const r = registry(async () => new Response(await recordBody()));
+    const verdictCache = createRegistryVerdictCache();
+    const A = clientStores();
+    await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, ...A });
+    const gate = gated(r, () => new Response("down", { status: 503 }));
+    const a = lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, ...A, verdictCache });
+    // No saved settings of its own: its own lookup during the outage refuses.
+    const joined = resolveRegistryResource(SUBJECT, SPACE, "write", { registryUrl: REGISTRY, fetch: r.fetch, verdictCache }).catch((error: unknown) => error);
+    gate.open();
+    expect(await a).toMatchObject({ status: "registered", offline: true });
+    expect(await joined).toMatchObject({ code: "registry_unavailable" });
+  });
+
+  it("a client with a sequence store but no marker for the owner does its own lookup, which sets its floor", async () => {
+    const [second, first] = [await recordBody([SPACE], 2), await recordBody([SPACE], 1)];
+    const r = registry(() => new Response(second));
+    const time = clock();
+    const verdictCache = createRegistryVerdictCache({ now: time.now });
+    await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, ...clientStores(), verdictCache });
+    const B = { sequenceStore: createInMemoryRegistrySequenceStore() };
+    expect(await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, ...B, verdictCache })).toMatchObject({ status: "registered", sequence: 2 });
+    expect(await B.sequenceStore.get(owner.address)).toBe(2);
+    time.advance(REGISTRY_VERDICT_REGISTERED_TTL_MS);
+    r.set(() => new Response(first));
+    expect(await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, ...B, verdictCache })).toMatchObject({ status: "unavailable", reason: "rollback" });
+  });
+
+  it("a known-owner revision alone (settings dropped by a route denial) blocks another client's absence", async () => {
+    const r = registry(async () => new Response(await recordBody()));
+    const verdictCache = createRegistryVerdictCache();
+    const B = { cacheStore: createInMemoryRegistryCacheStore() };
+    await expect(resolveRegistryResource(SUBJECT, `${SPACE}-other`, "write", { registryUrl: REGISTRY, fetch: r.fetch, ...B })).rejects.toMatchObject({ code: "node_not_found" });
+    expect(await B.cacheStore.get(owner.address)).toBeUndefined();
+    r.set(notFound);
+    expect((await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: REGISTRY, fetch: r.fetch, ...clientStores(), verdictCache })).status).toBe("unregistered");
+    await expect(resolveRegistryResource(SUBJECT, SPACE, "write", { registryUrl: REGISTRY, fetch: r.fetch, ...B, verdictCache }))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+  });
+});
+
 /** A registry whose answers wait until `open()`, so a second client can join the first one's lookup. */
 function gated(r: { set(next: Answer): void }, answer: Answer) {
   const gate = Promise.withResolvers<void>();
@@ -491,17 +533,27 @@ describe("registry verdict cache bounds and keys (TC-2970 review F2-F4)", () => 
   it("registry URLs that fetch somewhere else are separate entries", async () => {
     const r = registry(notFound);
     const verdictCache = createRegistryVerdictCache();
-    for (const url of ["https://registry.test", "https://registry.test//", "https://registry.test/?x=1", "https://registry.test#frag", "https://u:p@registry.test"]) {
+    for (const url of ["https://registry.test", "https://registry.test//", "https://registry.test/a", "http://registry.test", "https://registry.test:8443"]) {
       await lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: url, fetch: r.fetch, verdictCache });
     }
     expect(r.requests.filter(v2)).toHaveLength(5);
   });
 
+  it("refuses a registry URL with ?, #, @, \\ or whitespace, which could fetch a different path from its key", async () => {
+    const r = registry(notFound);
+    const verdictCache = createRegistryVerdictCache();
+    for (const url of ["https://registry.test/?", "https://registry.test/?x=1", "https://registry.test#", "https://u:p@registry.test", "https://@registry.test", "https://registry.test\\", "https://registry.test/ ", " https://registry.test"]) {
+      await expect(lookupOwnerRegistryVerdict(SUBJECT, { registryUrl: url, fetch: r.fetch, verdictCache })).rejects.toThrow("must not contain");
+      expect(() => verdictCache.invalidate(url, SUBJECT)).not.toThrow();
+    }
+    expect(r.requests).toHaveLength(0);
+  });
+
   it("keys are structured: no registry URL and subject pair stands for another", async () => {
     const verdictCache = createRegistryVerdictCache();
     let lookups = 0;
-    await verdictCache.get({ registryUrl: "a\nb", subject: "c" }, async () => { lookups++; return unregistered("c"); });
-    await verdictCache.get({ registryUrl: "a", subject: "b\nc" }, async () => { lookups++; return unregistered("b\nc"); });
+    await verdictCache.get({ registryUrl: "registry-a", subject: "|did:key:z1" }, async () => { lookups++; return unregistered("|did:key:z1"); });
+    await verdictCache.get({ registryUrl: "registry-a|", subject: "did:key:z1" }, async () => { lookups++; return unregistered("did:key:z1"); });
     expect(lookups).toBe(2);
   });
 });
