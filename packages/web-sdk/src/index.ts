@@ -459,6 +459,7 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type ApproveNewShareOptions,
 } from "@tinycloud/node-sdk/core";
 
 // Capability-chain delegation types and errors (spec: .claude/specs/capability-chain.md)

@@ -14,6 +14,20 @@ openerOrigin and completionOrigin must be https origins (openerOrigin defaults t
 
 `plan.registrationPermissions` requests only the current share's exact key. The separate `pathBoundSessionPermissions` helper returns a prefix grant for first-party static sessions; third-party apps use the exact share approval flow instead.
 
+With a TinyCloud Web client configured for OpenKey's new-share approval, start approval in the original Share click, before awaiting content or node lookups:
+
+```ts
+const approval = tcw.approveNewShare({
+  expiresAt, // Date, no later than the signed session's expiry
+  permissions: [{ service: "tinycloud.kv", space: "applications", path,
+    actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"] }],
+});
+const { shareId, encryptionNetwork } = await approval;
+const plan = planPathBoundShare({ shareId, encryptionNetwork });
+```
+
+This installs the exact runtime registration grant. Continue with encryption and publication below; do not ask for `plan.registrationPermissions` again. The ordinary storage `path` can be chosen separately from the returned share id. The new OpenKey client/server support is required; older clients do not provide this method. Consumers of the exact plan must adopt this approval flow or keep their previous working SDK graph. Do not use the static prefix helper for third-party apps.
+
 Every addressed share (a DID, an email address or an email domain) is encrypted under its own named key, `share/<shareId>` on the owner's default encryption network, and its content source registers that key and the digest of its wrapped key. The node registers and opens only that one key, never the whole network. The share-sdk owns the path, the digests and the stored bytes, so a consumer writes none of them:
 
 ```ts

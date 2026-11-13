@@ -43,3 +43,17 @@ test("an extra prefix grant is refused even when genuinely owner-signed and pinn
   const f = await fixture(true);
   await expect(verifyNewShareApproval(f.result, f.expected, f.now)).rejects.toThrow("scope");
 });
+
+test("verification retains the exact checked bytes across its signature await", async () => {
+  const f = await fixture();
+  const original = f.result.prepared.siwe;
+  const signature = f.result.signature;
+  const pending = verifyNewShareApproval(f.result, f.expected, f.now);
+  f.result.prepared.siwe = "changed while verification was pending";
+  f.result.signature = "changed";
+  f.expected.sessionDid = "did:key:changed";
+  const verified = await pending;
+  expect(verified.signedMessage).toBe(original);
+  expect(verified.signature).toBe(signature);
+  expect(verified.sessionDid).not.toBe(f.expected.sessionDid);
+});

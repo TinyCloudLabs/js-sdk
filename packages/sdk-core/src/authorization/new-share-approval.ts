@@ -35,7 +35,8 @@ export interface NewShareApprovalExpected {
 /** Verify before completing or activating the returned grant. No authority comes from result sidecars. */
 export async function verifyNewShareApproval(value: unknown, expected: NewShareApprovalExpected, now = Date.now()) {
   if (!value || typeof value !== "object") throw new Error("Invalid new-share approval");
-  const result = value as NewShareApprovalResult;
+  const result = structuredClone(value) as NewShareApprovalResult;
+  expected = structuredClone(expected);
   const pinned = expected.identity;
   const origin = new URL(expected.origin);
   const ownerAddress = canonicalizeAddress(expected.ownerAddress);

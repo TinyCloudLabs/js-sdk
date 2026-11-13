@@ -1228,3 +1228,5 @@ export {
 } from "./policy";
 
 export { sameTinyCloudNode } from "./tinycloud-node";
+export { verifyNewShareApproval, type NewShareApprovalExpected, type NewShareApprovalIdentity,
+  type NewShareApprovalResult } from "./authorization/new-share-approval";
