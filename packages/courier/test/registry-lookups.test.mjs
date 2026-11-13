@@ -1,6 +1,7 @@
-// TC-2970: one Courier process looks each owner up in the location registry once, however many node calls it makes.
-// Real signed pairings against the owned loopback fixture host; the registry is the canonical no-entry fixture (v2 404,
-// v1 404), the state of an owner with no registry record. Synthetic owner keys only.
+// TC-2970: one Courier process looks each owner up in the location registry once, however many node calls it makes, and
+// `courier read` of an N-entry thread makes a bounded number of node calls. Real signed pairings against the owned
+// loopback fixture host; the registry is the canonical no-entry fixture (v2 404, v1 404), the state of an owner with no
+// registry record. Synthetic owner keys only.
 import { issuedFixture } from './support/issued-fixture.mjs';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -12,7 +13,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
-import { AGENT_GRANT, COURIER_SPACE, PREFIX } from '../dist/keys.js';
+import { AGENT_GRANT, COURIER_SPACE, PREFIX, k } from '../dist/keys.js';
+import { buildMessage } from '../dist/a2a.js';
+import { ulid } from 'ulid';
 import { courierRegistryFixtureEnv, installCourierRegistryFixture } from './support/registry-fixture.mjs';
 import { peerKv, courierNode } from '../dist/node.js';
 import { loadProfile } from '../dist/profile.js';
@@ -24,16 +27,69 @@ const DAY = 24 * 3_600_000;
 
 const fixtureApi = issuedFixture({});
 let invokes = 0;
+/** The node's KV, by resource (`<space>/kv/<key>`): get, put, list, delete and multi-key batch get, as the node answers them. */
+const store = new Map();
+let revision = 0;
 const stub = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/invoke') {
     invokes++;
-    // The node answers a listing with a JSON array of keys; this fixture's mailboxes are empty.
     const token = String(req.headers.authorization ?? '').replace(/^Bearer /i, '');
-    const actions = Object.values(JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')).att ?? {}).flatMap(Object.keys);
-    if (actions.includes('tinycloud.kv/list')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('[]'); return; }
+    const att = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')).att ?? {};
+    const entries = Object.entries(att).filter(([resource]) => resource.includes('/kv/'));
+    if (entries.length) { void kvInvoke(req, res, entries); return; }
   }
   void fixtureApi.handle(req, res);
 });
+
+function split(resource) {
+  const at = resource.indexOf('/kv/');
+  return { space: resource.slice(0, at), path: resource.slice(at + 4) };
+}
+
+async function kvInvoke(req, res, entries) {
+  const send = (status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...headers }); res.end(body); };
+  const actions = entries.map(([, abilities]) => Object.keys(abilities)[0]);
+  if (entries.length > 1) {
+    if (actions.some((action) => action !== 'tinycloud.kv/get')) { send(400, '{}'); return; }
+    const results = entries.map(([resource]) => {
+      const row = store.get(resource);
+      const key = split(resource).path;
+      return row
+        ? { key, ok: true, headers: { 'content-type': 'application/json', etag: row.etag }, dataBase64: Buffer.from(row.body).toString('base64') }
+        : { key, ok: false, error: { code: 'KV_NOT_FOUND', message: 'Key not found' } };
+    });
+    send(200, JSON.stringify({ results }));
+    return;
+  }
+  const [resource] = entries[0];
+  const row = store.get(resource);
+  switch (actions[0]) {
+    case 'tinycloud.kv/get':
+      if (row) send(200, row.body, { etag: row.etag });
+      else send(404, JSON.stringify({ code: 'KV_NOT_FOUND' }));
+      return;
+    case 'tinycloud.kv/put': {
+      if ((req.headers['if-none-match'] === '*' && row) || (req.headers['if-match'] && row?.etag !== req.headers['if-match'])) { send(412, '{}'); return; }
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const etag = `"stub-${++revision}"`;
+      store.set(resource, { body, etag });
+      send(200, '{}', { etag });
+      return;
+    }
+    case 'tinycloud.kv/list': {
+      const { space, path: prefix } = split(resource);
+      send(200, JSON.stringify([...store.keys()].filter((key) => key.startsWith(`${space}/kv/${prefix}`)).map((key) => split(key).path)));
+      return;
+    }
+    case 'tinycloud.kv/del':
+      store.delete(resource);
+      send(200, '{}');
+      return;
+    default:
+      send(200, '{}');
+  }
+}
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const HOST = `http://127.0.0.1:${stub.address().port}`;
 test.after(() => stub.close());
@@ -140,4 +196,36 @@ test('courier watch --once: one v2 and one v1 lookup per owner for the whole pas
   const pass = await run(recipient.home, ['watch', '--once', '--wake', 'none', '--notify', 'none']);
   assert.ok(pass.invokes > 2, `the pass made several node calls (${pass.invokes})`);
   assert.deepEqual(pass.lookups, onePairEach(recipient.owner, issuer.owner));
+});
+
+test('courier read of a 344-entry thread: bounded batched node calls, one lookup pair per owner, every entry shown', async () => {
+  const started = await run(recipient.home, ['send', 'to-issuer', '--new', 'Synthetic long thread', '--text', 'Synthetic opener']);
+  const { threadId, messageId: opener } = JSON.parse(started.stdout);
+  const profile = JSON.parse(fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8'));
+  const peer = profile.peers['to-issuer'];
+  // Our side: meta, the opener and 170 more messages (172 entries); the peer's side: 172 messages. 344 in all, as Orchard's.
+  const seeded = new Map();
+  const seed = (space, key, body) => store.set(`${space}/kv/${key}`, { body: JSON.stringify(body), etag: `"seed-${++revision}"` });
+  for (let i = 0; i < 342; i++) {
+    const body = buildMessage({ threadId, text: `Synthetic ${i}`, role: 'ROLE_USER', intent: 'inform', from: { owner: 'o', agent: 'a' } });
+    body.messageId = ulid();
+    seeded.set(body.messageId, body);
+    if (i < 170) seed(profile.spaceId, k.msg('to-issuer', threadId, body.messageId), body);
+    else seed(peer.spaceId, `${PREFIX}/to/${peer.theirHandleForMe}/threads/${threadId}/msg/${body.messageId}.json`, body);
+  }
+
+  const read = await run(recipient.home, ['read', threadId, '--json']);
+  const shown = JSON.parse(read.stdout);
+  assert.equal(shown.entries.length, 344);
+  assert.deepEqual(shown.errors, []);
+  const messages = shown.entries.filter((entry) => entry.kind === 'msg');
+  assert.deepEqual(messages.map((entry) => entry.id).sort(), [opener, ...seeded.keys()].sort(), 'every message is shown once');
+  for (const entry of messages) if (entry.id !== opener) assert.deepEqual(entry.body, seeded.get(entry.id), `${entry.id} is shown as stored`);
+  assert.equal(messages.filter((entry) => entry.side === 'me').length, 171);
+  assert.equal(messages.filter((entry) => entry.side === 'peer').length, 172);
+  assert.equal(shown.entries.filter((entry) => entry.kind === 'meta').length, 1);
+  // Batches of 16 per side: ⌈172/16⌉ + ⌈172/16⌉ = 22, plus listings, the peer's renewal marker and the grant checks.
+  const bound = Math.ceil(172 / 16) * 2 + 6;
+  assert.ok(read.invokes <= bound, `read made ${read.invokes} node calls for 344 entries (bound ${bound})`);
+  assert.deepEqual(read.lookups, onePairEach(recipient.owner, issuer.owner));
 });
