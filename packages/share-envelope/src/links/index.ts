@@ -104,4 +104,4 @@ export {
   type RelayKeyPair,
 } from "./approval-client.js";
 
-export { MAX_APPROVAL_LEASE_SECONDS, type ApprovalRenewal } from "./approval-renewal.js";
+export { MAX_APPROVAL_LEASE_SECONDS, parseApprovalRenewal, type ApprovalRenewal } from "./approval-renewal.js";

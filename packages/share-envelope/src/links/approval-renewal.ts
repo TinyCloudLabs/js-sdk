@@ -1,3 +1,4 @@
+import { LinkError } from "./errors.js";
 import { z } from "zod";
 
 /** D4: a lease lasts at most one year; the original grant has its own lifetime. */
@@ -28,3 +29,10 @@ export const approvalRenewalSchema = z.object({
 });
 
 export type ApprovalRenewal = z.infer<typeof approvalRenewalSchema>;
+
+/** Revalidate persisted renewal metadata before consuming its signed proofs. */
+export function parseApprovalRenewal(value: unknown): ApprovalRenewal {
+  const parsed = approvalRenewalSchema.safeParse(value);
+  if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval renewal");
+  return parsed.data;
+}

@@ -8,8 +8,8 @@ export async function recoverAdmittedRenewal(node: Pick<TinyCloudNode, 'restoreS
     await node.restoreSessionWithRenewal(session, leaseAuthorization);
   } catch (error) {
     // These are explicit negative lifecycle results from the exact saved grant/lease restore.
-    const message = error instanceof Error ? error.message : '';
-    if (message === 'Node reports no active renewal authority' || message === 'Node reports no live admitted renewal authority.' || message === 'Renewal lease has expired') {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code === 'RENEWAL_AUTHORITY_INACTIVE' || code === 'RENEWAL_LEASE_EXPIRED') {
       throw new CourierError('renewal-approval-required', 'No live admitted renewal remains for this grant. Fresh owner approval is required.');
     }
     throw new CourierError('renewal-unavailable', 'The saved renewal could not be verified. Retry later; the saved approval is unchanged.');

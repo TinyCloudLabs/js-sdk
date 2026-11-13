@@ -8,8 +8,8 @@ test('completes only through successful verified restore of the exact saved pair
   expect(seen).toEqual([session, 'exact-saved-lease']);
 });
 test('explicit absent/revoked/expired authority requires fresh approval', async () => {
-  for (const message of ['Node reports no active renewal authority', 'Node reports no live admitted renewal authority.', 'Renewal lease has expired']) {
-    await expect(recoverAdmittedRenewal({ restoreSessionWithRenewal: async () => { throw new Error(message); } }, session, 'lease')).rejects.toMatchObject({ code: 'renewal-approval-required' });
+  for (const code of ['RENEWAL_AUTHORITY_INACTIVE', 'RENEWAL_LEASE_EXPIRED']) {
+    await expect(recoverAdmittedRenewal({ restoreSessionWithRenewal: async () => { throw Object.assign(new Error('wording may change'), { code }); } }, session, 'lease')).rejects.toMatchObject({ code: 'renewal-approval-required' });
   }
 });
 test('unknown and unavailable never count as live or request another approval', async () => {

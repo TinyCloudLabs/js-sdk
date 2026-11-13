@@ -1,10 +1,11 @@
 import { parseSignedSiweCacao, principalDidEquals, assertRenewalNodeIdentity, type RenewalNodeIdentity } from '@tinycloud/sdk-core';
-import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
+import { parseApprovalRenewal, type ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { CourierError } from './errors.js';
 import type { GrantPayload } from './grant.js';
 
 /** Verify signed material before saving a receipt; live node admission is checked separately by renewal restore. */
 export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string, renewal: ApprovalRenewal): Promise<void> {
+  renewal = parseApprovalRenewal(renewal);
   const original = await parseSignedSiweCacao(payload.delegationHeader.Authorization.replace(/^Bearer\s+/i, ''), payload.delegationCid);
   const { receipt } = renewal;
   const lease = await parseSignedSiweCacao(receipt.leaseAuthorization.replace(/^Bearer\s+/i, ''), receipt.leaseCid);
