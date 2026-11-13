@@ -12,6 +12,6 @@ Watcher state (`watch.json`, pause markers, wake claims) now lives under `me/sta
 
 `courier intake` doubles its wait after a cycle that queued nothing, up to 5 minutes or `--interval` if that is longer, and returns to `--interval` on the next queued message. `courier read` caches create-only messages and meta in `<COURIER_HOME>/read-cache/<agent>/`, so reading an unchanged thread again fetches only its listings and tasks. Messages are create-only; a later overwrite of the same key isn't shown. The cache is owner-only, bounded at 64 MiB and 7 days per agent, and deleted on `revoke`, a refusal, an owner revocation and a key rotation.
 
-Importing from a peer, waking an agent for it and informing it each take a fresh authority check first; a removed or refused peer's queued wake or inform is dropped. With `--poll` above 5 minutes, the authority check and dirty-peer retries still run every 5 minutes.
+Importing from a peer, waking an agent for it and informing it each take a fresh authority check first; a removed or refused peer's queued wake or inform is dropped, and a check that cannot confirm access (a node error, a timeout) fails closed: nothing runs and the item is retried on the next pass. With `--poll` above 5 minutes, the authority check and dirty-peer retries still run every 5 minutes.
 
 Details: TC-2917

@@ -227,7 +227,9 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   itself refuses revoked grants at once. That window is for noticing only:
   importing what a peer sent, waking an agent for it and writing an inform to
   it each take a fresh check on the node first (no cached verdict), and a
-  removed or refused peer's queued wake or inform is dropped and logged. With
+  removed or refused peer's queued wake or inform is dropped and logged. A
+  check that cannot confirm access (a node error, a timeout) does nothing:
+  the item stays queued and is retried on the next pass. With
   `--poll` above 5 minutes, this check and the retry of a peer whose sync did
   not finish still run every 5 minutes. A hook event for a
   peer's renewal marker (`pairing/delegation.json`) reads the marker and checks
