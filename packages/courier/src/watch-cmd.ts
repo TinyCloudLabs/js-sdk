@@ -236,8 +236,9 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const node = await createRuntimeNode();
   const watcher = new Watcher({
     beforePoll: () => watchOwnerPreflight(node),
-    // One peer (before acting for it): also probe the inbound grant on the node. Every peer: the 300 s housekeeping.
-    checkAuthority: (handle) => maintainPeerSet(node, handle, handle !== undefined),
+    // One peer, before acting for it: a strict verdict (inbound grant probed too; anything but positive throws, so the
+    // action fails closed). Every peer: the 300 s housekeeping.
+    checkAuthority: (handle) => handle === undefined ? maintainPeerSet(node) : maintainPeerSet(node, handle, true, true),
     onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',

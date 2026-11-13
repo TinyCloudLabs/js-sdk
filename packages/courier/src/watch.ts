@@ -985,7 +985,7 @@ export class Watcher {
     } catch (error) {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
       this.retryAt.set(key, at + WAKE_RETRY_MS);
-      this.deps.log('wake-error', { peer: pending.peer, threadId: pending.threadId, reason: 'authority-check', ...errInfo(error) });
+      this.deps.log('wake-deferred', { peer: pending.peer, threadId: pending.threadId, reason: 'authority-unverified', ...errInfo(error) });
       return;
     }
     if (!allowed) {
@@ -1362,8 +1362,20 @@ export class Watcher {
       runs.push((async () => {
         try {
           if (item.kind === 'inform') {
-            // Writing to a peer is acting for it: a fresh verdict; a removed or refused peer's inform is dropped.
-            if (!(await this.authorized(item.peer))) {
+            // Writing to a peer is acting for it: a fresh verdict. A removed or refused peer's inform is dropped; a
+            // check that could not give a verdict defers it (fails closed) without counting as a failed attempt.
+            let allowed: boolean;
+            try {
+              allowed = await this.authorized(item.peer);
+            } catch (error) {
+              this.deps.log('inform-deferred', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'authority-unverified', ...errInfo(error) });
+              await this.mutate(() => {
+                const stored = this.state.outbox.find(o => o.id === item.id);
+                if (stored) stored.nextAttemptAt = this.now() + WAKE_RETRY_MS;
+              });
+              return;
+            }
+            if (!allowed) {
               this.deps.log('inform-dropped', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'peer-not-authorized' });
               await this.mutate(() => this.finishOutbox(item));
               return;
