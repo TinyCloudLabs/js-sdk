@@ -32,6 +32,7 @@
     "chatgpt-consent-catalog-scope",
     "courier-collect-peer-renewal",
     "courier-idle-polling",
+    "courier-local-read-watch",
     "courier-unknown-flags",
     "feed-watch-lines-once",
     "hide-courier-invite",

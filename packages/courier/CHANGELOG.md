@@ -1,5 +1,19 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.34
+
+### Patch Changes
+
+- 7c1f987: `courier read` of an unchanged thread now makes one KV call, the peer's listing. Your own side of the thread comes from a local, per-entry owner-space record of the writes made under your thread roots. That record is used for an hour after a listing, then your side is listed again. A peer's renewal marker is read at most every 5 minutes per thread. `courier read --full` lists both sides and fetches everything again. The documented meaning of `authority: "self"` in `courier read` output is now "written by an agent of the same owner", because same-owner agents are one principal. The output itself is unchanged.
+
+  `courier watch` keeps what it already knows in `<COURIER_HOME>/watch-cache/<agent>.json`: receipted messages, mirrored meta, marker reads and the claim pruning time. A restart or a `--once` run doesn't fetch these again. The file is bound to this agent's DID and space. Each peer's facts carry the DID, space and session they were learned under, and are dropped, never relabelled, once that peer is a different agent, space or session. Facts are kept per peer, so two peers that use the same name for this agent never share mirrored meta or task state. It keeps only eligible peers, and is deleted with the read cache.
+
+  A wake or inform put off because the authority check gave no verdict is held for at most 24 hours, then dropped and logged. Imports keep retrying. After 24 hours without a verdict, the human gets one `access-unverified` notice for that peer, and no more until a check succeeds and access is lost again. A positive verdict restarts an inform's 24 hours even if its post then fails. `courier guard` keeps the mode of `.claude/settings.local.json` whatever the umask. The local caches are used only when `COURIER_HOME` is a real directory of yours and every directory above it is owned by root or you and not writable by others (ssh StrictModes; a sticky `/tmp` is allowed when the directory below it is yours and owner-only). Otherwise everything is fetched. Each cache directory is opened without following a symlink, made owner-only through that handle, and checked again right before every read, write or delete, including clearing. The one-time clean-up of the old cache layout deletes only `<thread ULID>.json` files.
+
+  Courier now reads entries in bounded batches: `courier read`, `courier inbox`, intake, and the watcher's import and mirroring each read up to 16 messages or meta (at most 2 MiB each) or 4 tasks (at most 8 MiB each) in one `tinycloud.kv/get` invocation, so no response exceeds 32 MiB. Before, every entry took its own call. When one value is over its cap, the node refuses that batch, and Courier reads that batch's keys once more one by one. The oversized entry is reported by id (`entry-too-large` in `read`, `message-too-large` in `inbox`, an `ignored` watcher log line once per process for a message, meta or task, an `intake-error` plus a `too-large` done marker in intake), and every other entry is read. Each entry is still checked on its own. A cache directory that can't be made owner-only is not used and everything is fetched. A first read of a 260-entry thread drops from 265 invocations to 21, and importing 130 messages takes 9 reads instead of 130.
+
+  Details: TC-2917, TC-2951
+
 ## 0.6.0-beta.33
 
 ### Patch Changes
