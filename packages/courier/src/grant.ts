@@ -1,3 +1,4 @@
+import { recoverAdmittedRenewal } from './renewal-recovery.js';
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
@@ -298,9 +299,9 @@ function ownerSpaceId(payload: GrantPayload): string {
 async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<{ node: TinyCloudNode; expiresAt: Date }> {
   const times = siweTimes(payload.siwe);
   const expiresAt = times.expiresAt;
-  if (!expiresAt || expiresAt.getTime() <= Date.now()) throw new CourierError('bad-grant', 'OpenKey grant is missing a future SIWE expiry.');
+  if (!expiresAt || (!payload.renewal && expiresAt.getTime() <= Date.now())) throw new CourierError('bad-grant', 'OpenKey grant is missing a future SIWE expiry.');
   const node = new TinyCloudNode(nodeOpts(profile.host));
-  await node.restoreSession({
+  const sessionData = {
     delegationHeader: payload.delegationHeader,
     delegationCid: payload.delegationCid,
     spaceId: payload.spaceId,
@@ -312,20 +313,25 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     signature: payload.signature,
     expiresAt: expiresAt.toISOString(),
     tinycloudHosts: [profile.host],
-  });
+  };
+  const late = expiresAt.getTime() <= Date.now();
+  if (payload.renewal && late) {
+    await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
+    await recoverAdmittedRenewal(node, sessionData, payload.renewal.receipt.leaseAuthorization);
+  } else await node.restoreSession(sessionData);
   if (payload.renewal) {
     await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
     const identity = await node.renewalNodeIdentity();
     assertOwnerRenewalIdentity(payload.renewal, identity);
     // Admission is replayable before the first renewal stamp exists.
     const { admitOwnerRenewalLease } = await import('@tinycloud/sdk-core/delegations/renewal');
-    await admitOwnerRenewalLease({ host: profile.host, originalAuthorization: payload.delegationHeader.Authorization,
+    if (!late) await admitOwnerRenewalLease({ host: profile.host, originalAuthorization: payload.delegationHeader.Authorization,
       originalCid: payload.delegationCid, ownerDid: `did:pkh:eip155:${payload.chainId}:${payload.address}`,
       agentDid: profile.courierDid, spaceId: payload.spaceId, nodeIdentity: identity,
       leaseAuthorization: payload.renewal.receipt.leaseAuthorization, leaseCid: payload.renewal.receipt.leaseCid,
       leaseExpiresAt: payload.renewal.receipt.leaseExpiresAt });
   }
-  assertAgentGrant(node.getVerifiedSessionCapabilities(), times);
+  assertAgentGrant(node.getVerifiedSessionCapabilities(), times, payload.renewal ? Math.min(Date.now(), expiresAt.getTime() - 1) : Date.now());
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }

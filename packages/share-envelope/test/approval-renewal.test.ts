@@ -43,3 +43,11 @@ test("strict nested codecs reject unknown fields, wrong versions and invalid int
     { ...renewal, receipt: { ...renewal.receipt, nodeIdentity: { ...renewal.receipt.nodeIdentity, extra: true } } },
   ]) expect(approvalRenewalSchema.safeParse(bad).success).toBe(false);
 });
+
+test('expired originals may only be staged explicitly with leased proof metadata, never finite', () => {
+  const expired = { ...result, delegationExpiresAt: new Date(now - 1000).toISOString() };
+  expect(() => checkApprovalResultBinding(expired, expected)).toThrow();
+  expect(checkApprovalResultBinding(expired, { ...expected, allowExpiredRenewal: true }).renewal).toBeDefined();
+  const { renewal: _, ...finite } = expired;
+  expect(() => checkApprovalResultBinding({ ...finite, renewalChoice: 'finite' }, { ...expected, allowExpiredRenewal: true })).toThrow();
+});

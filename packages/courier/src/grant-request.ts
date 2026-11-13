@@ -272,7 +272,7 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     const opened = await openRelayResult(resultEnvelopeOf(pending), pending.requestId, pending.relayPrivateKey);
     const claimedCid = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
     delegationCid = typeof claimedCid === 'string' && claimedCid !== '' ? claimedCid : undefined;
-    const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request });
+    const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request, allowExpiredRenewal: true });
     const payload = parseGrantPayload(checked.delegation, key);
     assertBoundToKey(checked.delegation, key);
     if (`did:pkh:eip155:${payload.chainId}:${payload.address}`.toLowerCase() !== checked.ownerDid.toLowerCase()) {

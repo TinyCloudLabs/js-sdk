@@ -368,6 +368,8 @@ export interface ApprovalResultExpectation {
   readonly request: { readonly issuer: string; readonly targetDid: string; readonly renewal?: { readonly version: 1; readonly leaseLifetimeSeconds: number } };
   /** Epoch milliseconds; default now. A result whose delegation has already expired is refused. */
   readonly now?: number;
+  /** Stage only: caller must prove live admitted renewal before installing expired originals. */
+  readonly allowExpiredRenewal?: boolean;
 }
 
 export interface CheckedApprovalResult {
@@ -417,6 +419,6 @@ export function checkApprovalResultBinding(opened: Record<string, unknown>, expe
     ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)],
   ].filter(([, matches]) => !matches).map(([field]) => field);
   if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
-  if (Date.parse(delegationExpiresAt as string) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
+  if (Date.parse(delegationExpiresAt as string) <= (expected.now ?? Date.now()) && !(expected.allowExpiredRenewal && renewal)) throw invalidResult("The approved delegation has already expired.");
   return { ownerDid: ownerDid as string, delegationExpiresAt: delegationExpiresAt as string, delegation: delegation as Record<string, unknown>, ...(expected.request.renewal ? { renewalChoice: opened.renewalChoice as "finite" | "leased", ...(renewal ? { renewal } : {}) } : {}) };
 }
