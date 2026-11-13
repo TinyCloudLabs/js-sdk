@@ -47,7 +47,10 @@ const nodeCalls: { privateKey?: string; signedIn: boolean }[] = [];
 const restoreCalls: Array<{ jwk: unknown }> = [];
 const replayCalls: Array<{ profile: string; migrate: boolean }> = [];
 
+const actualNodeSdk = { ...await import("@tinycloud/node-sdk") };
+
 mock.module("@tinycloud/node-sdk", () => ({
+  ...actualNodeSdk,
   TinyCloudNode: class {
     private _call: { privateKey?: string; signedIn: boolean };
     constructor(opts: { host: string; privateKey?: string }) {
