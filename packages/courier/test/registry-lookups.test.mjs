@@ -213,6 +213,21 @@ test('reads of an owner with no registry record share one lookup; every write lo
   assert.deepEqual(pairs(), [5, 5], 'a write drops the kept absence: the reads after it share one new lookup');
 });
 
+test('the node identity an invitation is published and delivered under is looked up afresh, never from an absence kept by reads', async () => {
+  installCourierRegistryFixture(HOST);
+  process.env.TC_TEST_MOCK_REGISTRY_LOG = LOG;
+  const inviter = await makeHome('inviter', 'inviter');
+  process.env.COURIER_HOME = inviter.home;
+  const node = await courierNode(loadProfile());
+  const pairs = () => [lookups(process.pid)[`v2 ${inviter.owner}`] ?? 0, lookups(process.pid)[`v1 ${inviter.owner}`] ?? 0];
+  for (let i = 0; i < 3; i++) await node.kv.get(`${PREFIX}/me/probe/r${i}.json`);
+  assert.deepEqual(pairs(), [1, 1], 'reads keep the absence');
+  // sendEmailInvitation resolves this identity, then publishes and delivers under it (email-invitation.ts).
+  const identity = await node.activeNodeIdentity();
+  assert.equal(identity.origin, HOST);
+  assert.deepEqual(pairs(), [2, 2], 'the identity lookup does not use the kept absence');
+});
+
 test('courier send: every write looks its owner up afresh; the peer\'s owner is looked up once for its reads and once to activate its grant', async () => {
   const first = await run(issuer.home, ['send', 'to-recipient', '--new', 'Synthetic subject', '--text', 'Synthetic message one']);
   const { threadId } = JSON.parse(first.stdout);
