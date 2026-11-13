@@ -9,14 +9,16 @@ import { privateKeyToAccount } from "viem/accounts";
 import { signLocationRecordV2, type LocationRecordV2Payload } from "./location";
 import { createInMemoryRegistryCacheStore } from "./registry-cache";
 import {
-  REGISTRY_VERDICT_REGISTERED_TTL_MS,
-  REGISTRY_VERDICT_UNREGISTERED_TTL_MS,
   createInMemoryRegistrySequenceStore,
-  createRegistryVerdictCache,
   lookupOwnerRegistryVerdict,
   registryOwnerSubjectV1,
   resolveRegistryResource,
 } from "./registry-policy";
+import {
+  REGISTRY_VERDICT_REGISTERED_TTL_MS,
+  REGISTRY_VERDICT_UNREGISTERED_TTL_MS,
+  createRegistryVerdictCache,
+} from "./registry-verdict-cache";
 import { REGISTRY_NOT_FOUND_BODY } from "./registry-verdict";
 
 const REGISTRY = "https://registry.test";

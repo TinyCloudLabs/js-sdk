@@ -1,5 +1,5 @@
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
-import { createRegistryVerdictCache } from '@tinycloud/sdk-core';
+import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
 import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
