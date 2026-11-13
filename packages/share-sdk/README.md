@@ -12,6 +12,8 @@ openerOrigin and completionOrigin must be https origins (openerOrigin defaults t
 
 ## Publishing an addressed share (path-bound content)
 
+`plan.registrationPermissions` requests only the current share's exact key. The separate `pathBoundSessionPermissions` helper returns a prefix grant for first-party static sessions; third-party apps use the exact share approval flow instead.
+
 Every addressed share (a DID, an email address or an email domain) is encrypted under its own named key, `share/<shareId>` on the owner's default encryption network, and its content source registers that key and the digest of its wrapped key. The node registers and opens only that one key, never the whole network. The share-sdk owns the path, the digests and the stored bytes, so a consumer writes none of them:
 
 ```ts
@@ -23,9 +25,8 @@ import {
 // 1. Plan, before anything is written. The network must be the owner's default network with the EIP-55 checksummed address.
 const plan = planPathBoundShare({ shareId, encryptionNetwork: defaultEncryptionNetworkForOwner(ownerDid) });
 
-// 2. Hold decrypt under `<network>/share/` (`plan.registrationPermissions`, or `pathBoundSessionPermissions({ encryptionNetwork })` in the
-//    sign-in manifest, before any share exists): the node refuses to register the share unless the owner
-//    holds it; a bare-network decrypt never covers a share key. No capability is needed to encrypt: the share's key is deterministic and
+// 2. Hold decrypt on the exact `<network>/share/<shareId>` key (`plan.registrationPermissions`):
+//    the node refuses to register the share unless the owner holds it; a bare-network decrypt never covers a share key. No capability is needed to encrypt: the share's key is deterministic and
 //    `keys.encrypt` wraps to its public key, which the node serves without authentication. The node records the key when the share policy
 //    is registered (step 5), in the same transaction. Each published share adds one key record, which counts toward the network's key limit
 //    (shared with `apps/` keys); `planPathBoundShare` refuses a bad share id or network before anything is encrypted.
