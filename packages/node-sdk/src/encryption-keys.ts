@@ -17,7 +17,6 @@ import {
   type NamedKeyClientConfig,
 } from "@tinycloud/sdk-services/encryption/named-keys";
 import type { EncryptionCrypto } from "@tinycloud/sdk-services";
-import { endToEndNodeHost } from "@tinycloud/sdk-core";
 import type { TinyCloudNode } from "./TinyCloudNode";
 
 export {
@@ -94,7 +93,9 @@ export function createNamedKeyClient(
   const config: NamedKeyClientConfig = {
     keyWrapV2: options.keyWrapV2 ?? signer.config?.keyWrapV2 ?? false,
     requireKeyWrapV2: options.requireKeyWrapV2 ?? signer.config?.requireKeyWrapV2 ?? false,
-    host: endToEndNodeHost(resolvedHost),
+    // Not used for requests: `resolveNode` supplies every call's origin. Importing the
+    // sdk-core root for a mapping here would pull it into the lazy encryption-keys chunk.
+    host: resolvedHost,
     resolveNode: async (networkId) => {
       const { url, nodeDid } = await signer.encryptionDestination(networkId);
       return { url, nodeDid };
