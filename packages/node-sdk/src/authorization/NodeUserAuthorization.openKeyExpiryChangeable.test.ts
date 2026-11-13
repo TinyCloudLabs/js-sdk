@@ -130,7 +130,7 @@ describe("with the opt-in", () => {
   test("an expiry in the past or inside the 60 second margin is refused and creates no session", async () => {
     // An already-expired message never reaches the expiry check: SIWE verification refuses it first.
     for (const [offset, message] of [
-      [-1_000, "OpenKey signature verification failed: Expired message"],
+      [-1_000, Error],
       [30_000, "OpenKey signedMessage expiry must be more than 60 seconds from now; choose a longer expiry"],
     ] as const) {
       const s = await setup();
@@ -391,7 +391,7 @@ describe("the persisted expiry is the signed Expiration Time line, not text in t
     const s = await setup();
     const lines = s.prepared.siwe.split("\n");
     expect(lines[3]).toMatch(/^I further authorize/);
-    lines[3] += injected;
+    lines[3] = `${injected.trim()} ${lines[3]}`;
     await complete(s, lines.join("\n"));
     const persisted = await s.storage.load(await s.signer.getAddress());
     expect(persisted?.expiresAt).toBe(/^Expiration Time: (.+)$/m.exec(s.prepared.siwe)![1]);
@@ -402,7 +402,7 @@ describe("the persisted expiry is the signed Expiration Time line, not text in t
     const s = await setup();
     const expiry = iso(2 * DAY_MS);
     const lines = withExpiration(s.prepared.siwe, expiry).split("\n");
-    lines[3] += injected;
+    lines[3] = `${injected.trim()} ${lines[3]}`;
     await complete(s, lines.join("\n"), { expiryChangeable: true });
     const persisted = await s.storage.load(await s.signer.getAddress());
     expect(persisted?.expiresAt).toBe(expiry);

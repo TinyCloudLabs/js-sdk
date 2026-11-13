@@ -516,6 +516,7 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc2923EncryptionTeeOriginRoot;
     delete root.tc2949PanelChunkRecoveryRoot;
     delete root.tc2970RegistryVerdictCacheRoot;
+    delete root.tc2913OpenKeyContinuationRoot;
   delete root.tc2481OfflineReplicaTransport;
   root.entries = root.entries.filter((entry) => entry.pr !== "#873");
   root.allowance["index.mjs"] = 388;
@@ -689,6 +690,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc2923EncryptionTeeOriginRoot;
     delete root.tc2949PanelChunkRecoveryRoot;
     delete root.tc2970RegistryVerdictCacheRoot;
+    delete root.tc2913OpenKeyContinuationRoot;
     root.allowance = { "index.mjs": 391, "index.cjs": 861 };
     root.entries = root.entries.slice(0, root.entries.findIndex((entry) => entry.pr === "#873"));
     root.entries.push({
