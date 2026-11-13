@@ -8,7 +8,7 @@ test("TC-2931 admits exact combined-head CI root and worker bytes within its tic
   const row = ledger.tc2931BootstrapScope;
   expect(row).toEqual(approvedTc2931BootstrapScope);
   for (const format of ["index.mjs", "index.cjs"] as const) {
-    expect(row.root.ceiling[format] - ledger.tc2934RequestedAccountRoot.root.ceiling[format]).toBe(row.root.delta[format]);
+    expect(row.root.ceiling[format] - ledger.tc2936RestoreCommitRoot.root.ceiling[format]).toBe(row.root.delta[format]);
     expect(row.root.delta[format]).toBeLessThanOrEqual(700);
     expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc2931BootstrapScope", ceiling: row.root.ceiling[format] });
   }
@@ -38,7 +38,7 @@ test("TC-2931 refuses mutation, removal and missing predecessor rows", () => {
     expect(() => validateLedger({ ...ledger, tc2931BootstrapScope: changed })).toThrow("TC-2931");
   }
   expect(() => validateTc2931BootstrapScopeTransition(row, undefined)).toThrow("TC-2931");
-  for (const predecessor of ["tc2934RequestedAccountRoot", "tc2872RenewalKvWorker", "tc2872RenewalReplicaWorker"] as const) {
+  for (const predecessor of ["tc2936RestoreCommitRoot", "tc2872RenewalKvWorker", "tc2872RenewalReplicaWorker"] as const) {
     expect(() => validateLedger({ ...ledger, [predecessor]: undefined })).toThrow();
   }
 });

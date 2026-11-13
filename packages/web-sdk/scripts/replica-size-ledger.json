@@ -3091,25 +3091,25 @@
   },
   "tc2931BootstrapScope": {
     "label": "first-party bootstrap scope root and worker admission (TC-2931)",
-    "ruling": "size-ruling: TC-2931: Naomi approves exact canonical combined-head CI measurements, root delta at most +700 B per format and each worker at most +250 B over post-TC-2934. No general ceiling changes. Details: TC-2931",
-    "base": "c9add1f0b0169edc7c9ce2705c29a87b46fe0678",
+    "ruling": "size-ruling: TC-2931: Naomi approves exact canonical combined-head CI measurements, root delta at most +700 B per format and each worker at most +250 B over post-TC-2936. No general ceiling changes. Details: TC-2931",
+    "base": "41daf1c4717e15d6f95564f7246030877221f24a",
     "sourceCommits": [
-      "a7c79b779e96562078c5782e401265def7ad5d8d"
+      "6c748d4959f46acb3ed8031fca182326fcd0e0a2"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43430771640",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43430771640/job/131903387735"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206/job/131928463539"
       ]
     },
     "root": {
       "delta": {
-        "index.mjs": 553,
-        "index.cjs": 440
+        "index.mjs": 544,
+        "index.cjs": 448
       },
       "ceiling": {
-        "index.mjs": 1523777,
-        "index.cjs": 1458273
+        "index.mjs": 1523815,
+        "index.cjs": 1458331
       }
     },
     "worker": {
@@ -3120,6 +3120,6 @@
       "delta": 150,
       "ceiling": 774561
     },
-    "reason": "Actual-page first-party origin policy, strict implicit permission composition and the pre-sign account setup check. Canonical Node22/Bun1.3.14/source-WASM production webpack, gzip -9 stdin; prior root and worker rows remain unchanged. Details: TC-2931"
+    "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
   }
 }
