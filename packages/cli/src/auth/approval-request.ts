@@ -9,7 +9,7 @@ import { buildShareInvitationApprovalSpec, checkApprovalResultBinding, createApp
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
-import { RENEWAL_ADMISSION_LEAD_MS, RENEWAL_LEASE_MISMATCH, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
+import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { ProfileManager } from "../config/profiles.js";
 import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
@@ -407,12 +407,10 @@ async function admitApprovedRenewal(host: string, entry: PendingApproval, verifi
     carryRefusedDelegation(error, delegation);
     return error;
   };
+  // The shared verifier's messages are technical; the owner sees what happened and what to do next.
   let originalExpiresAt: string;
   try { ({ originalExpiresAt } = await verifyOwnerRenewalLease(original, session.ownerDid, renewal)); }
-  catch (error) {
-    throw refused(error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_MISMATCH
-      ? error.message : "The renewal lease does not match the signed owner grant.");
-  }
+  catch { throw refused("This renewal doesn't match the permission you approved, so it wasn't turned on. Sign in again for a new approval."); }
   if (Date.parse(originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
     throw refused("The approved session ends too soon for its renewal to start. Sign in again for a new approval.");
   }
@@ -427,7 +425,11 @@ async function admitApprovedRenewal(host: string, entry: PendingApproval, verifi
     if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
       throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
     }
-    throw Object.assign(new CLIError("NETWORK_ERROR", "The TinyCloud node did not accept the session's renewal. The approval is saved: run the same command again.",
+    // admitOwnerRenewalLease raises this when the host no longer advertises the identity the lease was issued to.
+    if (error instanceof Error && error.message === "Renewal node identity changed") {
+      throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
+    }
+    throw Object.assign(new CLIError("NETWORK_ERROR", "The TinyCloud node didn't accept this session's renewal. Your approval is saved, so run the same command again.",
       ExitCode.NETWORK_ERROR), { cause: error });
   }
 }

@@ -48,9 +48,10 @@ const nodeIdentity = { nodeDid: renewerDid, renewerDid, renewerPublicKey: Buffer
 
 let admitted: string[] = [];
 let admissionStatus = 200;
+let advertised: typeof nodeIdentity = nodeIdentity;
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === "/.well-known/tinycloud/node-keys") return Response.json(nodeIdentity);
+  if (path === "/.well-known/tinycloud/node-keys") return Response.json(advertised);
   if (path === "/delegate") {
     admitted.push(request.headers.get("Authorization") ?? "");
     return admissionStatus === 200 ? Response.json({ cid: "admitted", activated: [] }) : new Response("unavailable", { status: admissionStatus });
@@ -117,7 +118,7 @@ async function stage(delegation: Record<string, unknown>, result: Record<string,
   await writeJsonDurable(join(profilePath("renewal"), "approval-pending.json"), [{ version: 1, request, requestId, bodyCid: prepared.bodyCid,
     approvalUrl: buildShortLink({ origin: "https://openkey.example", type: "openkey-approval-request", id: requestId, key: prepared.key, bodyCid: prepared.bodyCid }),
     requestExpiresAt: prepared.record.header.expiresAt, record: prepared.record, apiOrigin: server.url.origin,
-    linkApiOrigin: "https://api.tinycloud.xyz", openkeyOrigin: "https://openkey.example", signingKey: key,
+    linkApiOrigin: server.url.origin, openkeyOrigin: "https://openkey.example", signingKey: key,
     relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: ownerDid, resultRef,
     resultExpiresAt: new Date(Date.now() + 600_000).toISOString(), resultEnvelope, ackId: "synthetic-durable-ack-123456789" }]);
 }
@@ -131,8 +132,9 @@ const acquire = (askRenewal = true) => acquireApprovalRequest(did, {
 const pendingCount = async () => (await readJson<unknown[]>(join(profilePath("renewal"), "approval-pending.json")))?.length ?? 0;
 
 beforeEach(async () => {
-  Object.assign(process.env, fixtureEnvironment, { TC_LINKS_API_ORIGIN: "https://api.tinycloud.xyz" });
-  admitted = []; admissionStatus = 200;
+  // Links API is the local fixture: a case that failed to resume could never post a real approval link.
+  Object.assign(process.env, fixtureEnvironment, { TC_LINKS_API_ORIGIN: server.url.origin });
+  admitted = []; admissionStatus = 200; advertised = nodeIdentity;
   await ProfileManager.setProfile("renewal", { name: "renewal", did, sessionDid: did, ownerDid, host, tinycloudRegistryUrl: server.url.origin, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("renewal", key);
 });
@@ -201,4 +203,13 @@ test("a node that does not accept the lease keeps the approval for the same comm
   const acquired = await acquire();
   expect(approvalRenewalOf(acquired)).toEqual(renewal);
   expect(admitted).toEqual([renewal.receipt.leaseAuthorization, renewal.receipt.leaseAuthorization]);
+});
+
+test("a node that no longer advertises the lease's renewer refuses the approval for good", async () => {
+  const delegation = await signedDelegation();
+  await stage(delegation, { renewalChoice: "leased", renewal: await renewalFor(delegation.delegationCid) });
+  advertised = { ...nodeIdentity, renewerEpoch: 1 };
+  await expect(acquire()).rejects.toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+  expect(admitted).toEqual([]);
+  expect(await pendingCount()).toBe(0);
 });

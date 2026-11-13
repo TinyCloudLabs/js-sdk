@@ -1647,7 +1647,7 @@ function describeSession(state: StoredSessionState, expiresAt: string | null): s
     case "missing": return "none";
     case "expired": return `expired ${expiresAt}`;
     case "present": return `active until ${expiresAt}`;
-    case "renewed": return `renewed until ${expiresAt}`;
+    case "renewed": return `renews until ${expiresAt}`;
     case "unknown-expiry": return "active (no recorded expiry)";
     case "unverified": return "not usable (no signed OpenKey proof)";
   }
