@@ -188,3 +188,19 @@ test("registry 4xx errors refuse while canonical absence and 5xx permit the sign
     else expect(await outcome).toEqual([{ nodeDid: decoded.placement!.nodeDid, url: decoded.placement!.nodeUrl }]);
   }
 });
+
+
+test("Node receive parse and schema errors are value-free with no cause or metadata", async () => {
+  const node = new TinyCloudNode({ newUserHost: null, autoDiscoverLocalNode: false });
+  const secret = "SYNTHETIC_SHARE_PRIVATE_CANARY";
+  const encode = (text: string) => "tc1:" + Buffer.from(text).toString("base64url");
+  for (const token of ["tc1:%%%" + secret, encode('{"version":2,"private":"' + secret + '",'), encode(JSON.stringify({ version: 2, key: secret }))]) {
+    const result = await node.sharing.receive(token, { autoSubdelegate: false, useSessionKey: false });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("invalid share unexpectedly accepted");
+    expect(result.error).toEqual({ code: "INVALID_TOKEN", message: "Invalid sharing link data", service: "delegation" });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result.error).not.toHaveProperty("cause");
+    expect(result.error).not.toHaveProperty("meta");
+  }
+});

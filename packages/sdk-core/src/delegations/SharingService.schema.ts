@@ -229,9 +229,8 @@ export function validateEncodedShareData(
       ok: false,
       error: {
         code: DelegationErrorCodes.VALIDATION_ERROR,
-        message: `Invalid share data: ${result.error.message}`,
+        message: "Invalid share data",
         service: "delegation",
-        meta: { issues: result.error.issues },
       },
     };
   }

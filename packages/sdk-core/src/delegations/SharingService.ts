@@ -1649,6 +1649,9 @@ export class SharingService implements ISharingService {
    * @returns Result with decoded share data or validation error
    */
   private decodeLinkWithValidation(link: string): Result<EncodedShareData, DelegationError> {
+    const invalidLink = (message = "Invalid sharing link data"): Result<EncodedShareData, DelegationError> => ({
+      ok: false, error: { code: DelegationErrorCodes.INVALID_TOKEN, message, service: "delegation" },
+    });
     // Extract the encoded data from the link
     let encoded = link;
 
@@ -1664,25 +1667,13 @@ export class SharingService implements ISharingService {
         const url = new URL(link);
         encoded = url.searchParams.get("share") ?? encoded;
       } catch {
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.INVALID_TOKEN,
-            "Invalid URL format in sharing link"
-          ),
-        };
+        return invalidLink("Invalid URL format in sharing link");
       }
     }
 
     // Remove the schema prefix
     if (!encoded.startsWith(BASE64_PREFIX)) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`
-        ),
-      };
+      return invalidLink(`Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`);
     }
 
     const base64Data = encoded.slice(BASE64_PREFIX.length);
@@ -1690,29 +1681,15 @@ export class SharingService implements ISharingService {
     let jsonString: string;
     try {
       jsonString = base64UrlDecode(base64Data);
-    } catch (err) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Failed to decode base64 data: ${err instanceof Error ? err.message : String(err)}`,
-          err instanceof Error ? err : undefined
-        ),
-      };
+    } catch {
+      return invalidLink();
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonString);
-    } catch (err) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Failed to parse share data JSON: ${err instanceof Error ? err.message : String(err)}`,
-          err instanceof Error ? err : undefined
-        ),
-      };
+    } catch {
+      return invalidLink();
     }
 
     // Convert delegation expiry to Date before validation if it's a string
@@ -1730,21 +1707,11 @@ export class SharingService implements ISharingService {
     }
 
     if (parsed && typeof parsed === "object" && "version" in parsed && parsed.version !== 1 && parsed.version !== 2) {
-      return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "Unsupported sharing envelope version; update the receiver SDK") };
+      return invalidLink("Unsupported sharing envelope version; update the receiver SDK");
     }
     // Validate against schema
     const validationResult = validateEncodedShareData(parsed);
-    if (!validationResult.ok) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          validationResult.error.message,
-          undefined,
-          validationResult.error.meta
-        ),
-      };
-    }
+    if (!validationResult.ok) return invalidLink();
 
     return { ok: true, data: validationResult.data };
   }

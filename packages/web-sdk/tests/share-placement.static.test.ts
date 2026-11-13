@@ -4,7 +4,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { TinyCloudNode } from "@tinycloud/node-sdk";
 import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
 import { TinyCloudWeb } from "../src/modules/tcw";
-import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { SharingService, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 
 const stops: Array<() => void> = [];
 afterEach(() => { for (const stop of stops.splice(0).reverse()) stop(); });
@@ -92,5 +92,20 @@ test("activation refusals never expose an echoed parent credential or a cause", 
   if (result.ok) throw new Error("refused delegation unexpectedly accepted");
   expect(result.error.code).toBe("DELEGATION_FAILED");
   expect(JSON.stringify(result)).not.toContain(f.decoded.delegation.authHeader!);
+  expect(result.error).not.toHaveProperty("cause");
+});
+
+
+test("the Web catch redacts a secret-bearing non-placement exception", async () => {
+  const f = await fixture();
+  const secret = f.decoded.key.d!;
+  const failure = Object.assign(new Error(secret), { cause: { authorization: f.decoded.delegation.authHeader } });
+  const receive = spyOn(SharingService.prototype, "receive").mockRejectedValue(failure);
+  stops.push(() => receive.mockRestore());
+  const result = await TinyCloudWeb.receiveShare(f.share.token, path);
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("failed transport unexpectedly accepted");
+  expect(result.error).toEqual({ code: "DECODE_FAILED", message: "Could not process the sharing link.", service: "delegation" });
+  expect(JSON.stringify(result)).not.toContain(secret);
   expect(result.error).not.toHaveProperty("cause");
 });
