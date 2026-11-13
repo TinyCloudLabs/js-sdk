@@ -3232,27 +3232,27 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 export const approvedTc2934RequestedAccountRoot: LogoutRatchet = {
   "label": "requested-account browser restore root admission (TC-2934)",
   "ruling": "Naomi SIZE RULING TC-2934: exact canonical final-head CI bytes; beta root caps +500 ESM/+1500 CJS; workers unchanged; no general ceiling changes. Details: TC-2934",
-  "base": "255e1c7e74cab178698e3d3fae5bae5b69f0f7c0",
+  "base": "63efb0b4c8ad7fe038ae373aa4cf1aa4f67747f4",
   "sourceCommits": [
-    "4969966540daef0a5ab90f2560f954550c26384c"
+    "cb99ab5a209014df7b3232e21598f0f00fc7ba1d"
   ],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418177712",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43421891073",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418177712/job/131861228972"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43421891073/job/131873648037"
     ]
   },
   "root": {
     "delta": {
-      "index.mjs": 372,
-      "index.cjs": 1336
+      "index.mjs": 440,
+      "index.cjs": 1396
     },
     "ceiling": {
-      "index.mjs": 1523156,
-      "index.cjs": 1457773
+      "index.mjs": 1523224,
+      "index.cjs": 1457833
     }
   },
-  "reason": "The browser restore guard verifies the saved CACAO owner before node creation. Controlled module lists add only the guard and three intended web files; the CJS residual is compression/ordering variance, with no new dependency. Canonical Node 22/Bun 1.3.14/source-WASM CI at 4969966540daef0a5ab90f2560f954550c26384c measures 1523156/1457773 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
+  "reason": "The browser restore guard verifies the saved CACAO owner before node creation. Controlled module lists add only the guard and three intended web files; the CJS residual is compression/ordering variance, with no new dependency. Combined post-TC-2924 canonical Node 22/Bun 1.3.14/source-WASM CI at cb99ab5a209014df7b3232e21598f0f00fc7ba1d measures 1523224/1457833 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
