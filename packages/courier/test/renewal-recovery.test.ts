@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { recoverAdmittedRenewal } from '../src/renewal-recovery';
+import { assertRenewalAdmissionLeadTime, recoverAdmittedRenewal } from '../src/renewal-recovery';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 const session = { delegationCid: 'exact-saved-original' } as Parameters<TinyCloudNode['restoreSession']>[0];
 test('completes only through successful verified restore of the exact saved pair', async () => {
@@ -14,4 +14,11 @@ test('explicit absent/revoked/expired authority requires fresh approval', async 
 });
 test('unknown and unavailable never count as live or request another approval', async () => {
   await expect(recoverAdmittedRenewal({ restoreSessionWithRenewal: async () => { throw new Error('network unavailable'); } }, session, 'lease')).rejects.toMatchObject({ code: 'renewal-unavailable' });
+});
+
+test('fresh admission requires the full fifteen-minute scheduler margin', () => {
+  const now = 1_800_000_000_000;
+  expect(() => assertRenewalAdmissionLeadTime(new Date(now + 900_000), now)).not.toThrow();
+  expect(() => assertRenewalAdmissionLeadTime(new Date(now + 899_999), now)).toThrow();
+  expect(() => assertRenewalAdmissionLeadTime(new Date(now - 1), now)).toThrow();
 });

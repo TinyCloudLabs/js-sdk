@@ -15,3 +15,11 @@ export async function recoverAdmittedRenewal(node: Pick<TinyCloudNode, 'restoreS
     throw new CourierError('renewal-unavailable', 'The saved renewal could not be verified. Retry later; the saved approval is unchanged.');
   }
 }
+
+/** Three production scheduler intervals; never admit a new lease too close to original expiry. */
+export const RENEWAL_ADMISSION_LEAD_MS = 15 * 60_000;
+export function assertRenewalAdmissionLeadTime(expiresAt: Date, now = Date.now()): void {
+  if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() - now < RENEWAL_ADMISSION_LEAD_MS) {
+    throw new CourierError('renewal-approval-required', 'The original grant is too close to expiry for renewal admission. Fresh owner approval is required.');
+  }
+}

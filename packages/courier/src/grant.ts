@@ -1,4 +1,4 @@
-import { recoverAdmittedRenewal } from './renewal-recovery.js';
+import { assertRenewalAdmissionLeadTime, recoverAdmittedRenewal } from './renewal-recovery.js';
 import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
@@ -323,6 +323,8 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     await verifyOwnerRenewal(payload, `did:pkh:eip155:${payload.chainId}:${payload.address}`, payload.renewal);
     const identity = await node.renewalNodeIdentity();
     assertOwnerRenewalIdentity(payload.renewal, identity);
+    // Verified late-crash recovery already proved admission; only new admission needs scheduler headroom.
+    if (!late) assertRenewalAdmissionLeadTime(expiresAt);
     // Admission is replayable before the first renewal stamp exists.
     const { admitOwnerRenewalLease } = await import('@tinycloud/sdk-core/delegations/renewal');
     if (!late) await admitOwnerRenewalLease({ host: profile.host, originalAuthorization: payload.delegationHeader.Authorization,
