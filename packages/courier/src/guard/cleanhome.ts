@@ -136,13 +136,15 @@ function copyFile(from: string, to: string, mode: number): boolean {
   }
 }
 
+/** A source that is, or sits behind, a symbolic link: refused, never followed. */
+class LinkRefused extends Error {}
+
 /**
- * Read one `--home-file` source without following a link: the path must resolve to exactly itself inside the real HOME
+ * Read one file of the owner's HOME without following a link: the path must resolve to exactly itself inside the real HOME
  * (no link on the file or on any directory above it), it is opened with O_NOFOLLOW, and it must still be the same inode
- * afterwards. Returns the bytes, or throws with the reason.
+ * afterwards. Returns the bytes, or throws with the reason (`LinkRefused` for a link). `name` says what is being copied.
  */
-function readHomeFile(realHome: string, rel: string): Buffer {
-  const name = `--home-file ${JSON.stringify(rel)}`;
+function readHomeFile(realHome: string, rel: string, name = `--home-file ${JSON.stringify(rel)}`): Buffer {
   const from = path.join(realHome, rel);
   let expected: string;
   let resolved: string;
@@ -152,7 +154,7 @@ function readHomeFile(realHome: string, rel: string): Buffer {
   } catch {
     throw new Error(`${name} is not a readable file in ${realHome}`);
   }
-  if (resolved !== expected) throw new Error(`${name} is a symbolic link or sits behind one and is never followed; name the real file inside ${realHome}`);
+  if (resolved !== expected) throw new LinkRefused(`${name} is a symbolic link or sits behind one and is never followed; name the real file inside ${realHome}`);
   let fd: number | undefined;
   try {
     fd = fs.openSync(from, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
@@ -188,7 +190,21 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
   fs.mkdirSync(claudeDir, { recursive: true, mode: 0o700 });
   const credential = path.join(claudeDir, '.credentials.json');
   fs.rmSync(credential, { force: true });
-  if (options.claude !== false && copyFile(path.join(realHome, '.claude', '.credentials.json'), credential, 0o600)) exposed.push('.claude/.credentials.json');
+  if (options.claude !== false) {
+    // The owner's Claude login, read like a --home-file: a link on the file or above it is refused (the wake fails closed);
+    // a missing or unreadable file is skipped as before, and the agent then has no Claude login.
+    let login: Buffer | undefined;
+    try {
+      login = readHomeFile(realHome, '.claude/.credentials.json', 'the Claude login ".claude/.credentials.json"');
+    } catch (error) {
+      if (error instanceof LinkRefused) throw error;
+    }
+    if (login) {
+      fs.writeFileSync(credential, login, { mode: 0o600, flag: 'wx' });
+      fs.chmodSync(credential, 0o600);
+      exposed.push('.claude/.credentials.json');
+    }
+  }
   // Never reuse user settings, MCP config, shell files or credential tool directories from a previous wake.
   for (const rel of SCRUBBED) fs.rmSync(path.join(home, rel), { recursive: true, force: true });
   for (const rel of ['.config', '.local/share', '.cache', '.local/state', '.runtime']) fs.mkdirSync(path.join(home, rel), { recursive: true, mode: 0o700 });

@@ -147,3 +147,35 @@ test('the check runs on every wake: a login replaced by a link after start-up is
   const held = agentHome(path.join(root, 'courier-later'));
   for (const file of everyFile(held)) assert.ok(!fs.readFileSync(file, 'utf8').includes(SECRET), `${file} holds the linked file`);
 });
+
+test('the Claude login is read like a --home-file: a regular file is copied owner-only; a link on the file or above it is refused and nothing is copied; a missing file is skipped', () => {
+  const claudeClean = (name) => path.join(root, `${name}-claude-home`);
+  const prepareClaude = (home, name) => prepareCleanHome({ realHome: home, cleanHome: claudeClean(name) });
+  const copied = (name) => path.join(claudeClean(name), '.claude', '.credentials.json');
+
+  const regular = ownerHome('claude-regular');
+  fs.mkdirSync(path.join(regular, '.claude'));
+  fs.writeFileSync(path.join(regular, '.claude', '.credentials.json'), '{"login":"claude"}');
+  assert.deepEqual(prepareClaude(regular, 'claude-regular').exposed.filter((entry) => entry.startsWith('.claude')), ['.claude/.credentials.json']);
+  assert.equal(fs.readFileSync(copied('claude-regular'), 'utf8'), '{"login":"claude"}');
+  assert.equal(fs.statSync(copied('claude-regular')).mode & 0o777, 0o600);
+
+  const linkedFile = ownerHome('claude-link-file');
+  fs.mkdirSync(path.join(linkedFile, '.claude'));
+  fs.mkdirSync(path.join(linkedFile, '.ssh'));
+  fs.writeFileSync(path.join(linkedFile, '.ssh', 'id_ed25519'), SECRET);
+  fs.symlinkSync(path.join(linkedFile, '.ssh', 'id_ed25519'), path.join(linkedFile, '.claude', '.credentials.json'));
+  assert.throws(() => prepareClaude(linkedFile, 'claude-link-file'), /the Claude login .* is a symbolic link or sits behind one/);
+  assert.equal(fs.existsSync(copied('claude-link-file')), false);
+
+  const linkedDir = ownerHome('claude-link-dir');
+  fs.mkdirSync(path.join(linkedDir, '.omp', 'agent'), { recursive: true });
+  fs.writeFileSync(path.join(linkedDir, '.omp', 'agent', '.credentials.json'), SECRET);
+  fs.symlinkSync(path.join(linkedDir, '.omp', 'agent'), path.join(linkedDir, '.claude'));
+  assert.throws(() => prepareClaude(linkedDir, 'claude-link-dir'), /the Claude login .* is a symbolic link or sits behind one/);
+  for (const file of everyFile(claudeClean('claude-link-dir'))) assert.ok(!fs.readFileSync(file, 'utf8').includes(SECRET), file);
+
+  const missing = ownerHome('claude-missing');
+  assert.deepEqual(prepareClaude(missing, 'claude-missing').exposed.filter((entry) => entry.startsWith('.claude')), []);
+  assert.equal(fs.existsSync(copied('claude-missing')), false);
+});

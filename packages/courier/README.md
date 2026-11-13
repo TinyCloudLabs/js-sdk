@@ -851,7 +851,9 @@ run commands), as are shell start-up files, credential stores and owner state
 `.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`, Claude and
 MCP settings). A symbolic link is refused, whether it is the file or a
 directory above it: name the real file inside your HOME. `--wake claude` takes
-no `--home-file`; its login is copied automatically.
+no `--home-file`; its login (`.claude/.credentials.json`) is copied automatically
+and is refused the same way if it is a link or sits behind one: copy the real file
+into place.
 
 Executable allowances require an identity recorded by the guard: the resolved
 path and device/inode of the installed tool. A basename such as `gh`, `git` or
