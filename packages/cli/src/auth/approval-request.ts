@@ -378,8 +378,9 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
     let renewal: ApprovalRenewal | undefined;
     try {
       renewal = checkApprovalResultBinding(opened, { requestId: entry.requestId, bodyCid: entry.bodyCid, request: entry.request }).renewal;
-    } catch (error) {
-      throw invalid(error instanceof Error ? error.message : "The approved renewal does not match this request.");
+    } catch {
+      // share-envelope's reasons are technical; the owner sees what to do next.
+      throw invalid("The approved renewal doesn't match this request. Sign in again for a new approval.");
     }
     return { delegation, session: verified.session, ...(renewal ? { renewal } : {}) };
   } catch (error) {
