@@ -1,5 +1,6 @@
-// Test-only: refuse the production links API under test, so a test that forgot its fetch stub or its
-// origin fails fast instead of POSTing to https://api.tinycloud.xyz/v1/links.
+// Test-only: refuse the production links API, location registry, TinyCloud nodes and OpenKey under test, so a test that
+// forgot its fetch stub or its origin fails fast instead of calling production (for example POSTing to
+// https://api.tinycloud.xyz/v1/links). A test that must reach one on purpose opts in per test (see ALLOW_VARIABLE).
 //
 // Three layers, because tests reach the links API three ways:
 //  - In-process: `fetch` is wrapped and rejects any request to a production links origin. Tests that stub or
@@ -20,31 +21,65 @@
 /** The environment marker the test bootstrap sets so a Bun child's bunfig preload knows it runs under test. */
 export const GUARD_MARKER = "TC_TEST_PRODUCTION_GUARD";
 
-const PRODUCTION_LINKS_ORIGINS = new Set(["https://api.tinycloud.xyz"]);
+/** The production origins a test must not reach unless it opts in, with what each one is (named in the refusal). */
+const PRODUCTION_ORIGINS = new Map([
+  ["https://api.tinycloud.xyz", "links API"],
+  ["https://registry.tinycloud.xyz", "location registry"],
+  ["https://node.tinycloud.xyz", "TinyCloud node"],
+  ["https://tee.node.tinycloud.xyz", "TinyCloud node (TEE)"],
+  ["https://openkey.so", "OpenKey"],
+  ["https://api.openkey.so", "OpenKey API"],
+]);
 const ORIGIN_VARIABLES = ["TC_LINKS_API_ORIGIN", "COURIER_LINKS_API_ORIGIN"];
 
-export function isProductionLinksOrigin(value) {
+/**
+ * The explicit per-test opt-in: a test that must reach a production host on purpose sets this to that host name
+ * (comma-separated for several) for itself. Read at request time, so it is scoped to the test that sets it, and never
+ * honoured when CI is set.
+ */
+export const ALLOW_VARIABLE = "TC_TEST_ALLOW_PRODUCTION_HOSTS";
+
+function classify(value) {
   let url;
   try {
     url = new URL(value);
   } catch {
-    return false;
+    return undefined;
   }
-  return PRODUCTION_LINKS_ORIGINS.has(`${url.protocol}//${url.hostname.replace(/\.$/, "")}${url.port === "" ? "" : `:${url.port}`}`);
+  const host = url.hostname.replace(/\.$/, "");
+  const label = PRODUCTION_ORIGINS.get(`${url.protocol}//${host}${url.port === "" ? "" : `:${url.port}`}`);
+  return label === undefined ? undefined : { host, label };
 }
 
-const refusal = (what) => new Error(
-  `Tests must not use the production links API (${what}). Inject a fetch stub or point TC_LINKS_API_ORIGIN / ` +
-  `COURIER_LINKS_API_ORIGIN at a local fixture.`,
+/** What production service `value` names ("links API", "location registry", ...), or undefined. */
+export function productionOriginLabel(value) {
+  return classify(value)?.label;
+}
+
+export function isProductionLinksOrigin(value) {
+  return classify(value)?.label === "links API";
+}
+
+function optedIn(host, environment) {
+  const ci = environment.CI;
+  if (ci && ci !== "0" && ci !== "false") return false;
+  return (environment[ALLOW_VARIABLE] ?? "").split(",").some((entry) => entry.trim().toLowerCase().replace(/\.$/, "") === host);
+}
+
+const refusal = (what, label = "links API") => new Error(
+  `Tests must not use the production ${label} (${what}). Inject a fetch stub or ` +
+  `${label === "links API" ? "point TC_LINKS_API_ORIGIN / COURIER_LINKS_API_ORIGIN" : "point the test"} at a local fixture. ` +
+  `A test that must reach it on purpose sets ${ALLOW_VARIABLE}=<host> for itself; that is never honoured when CI is set.`,
 );
 
-/** Refuse requests to the production links API through `target.fetch`, once; leaves the origin variables alone. */
-export function armProductionFetchGuard(target = globalThis) {
+/** Refuse requests to the production hosts through `target.fetch`, once; leaves the origin variables alone. */
+export function armProductionFetchGuard(target = globalThis, environment = process.env) {
   const real = target.fetch;
   if (typeof real !== "function" || real.productionOriginGuard === true) return;
   target.fetch = Object.assign(async function guardedFetch(input, init) {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (isProductionLinksOrigin(url)) throw refusal(`${init?.method ?? input?.method ?? "GET"} ${url}`);
+    const found = classify(url);
+    if (found && !optedIn(found.host, environment)) throw refusal(`${init?.method ?? input?.method ?? "GET"} ${url}`, found.label);
     return real.call(this, input, init);
   }, real, { productionOriginGuard: true });
 }
@@ -54,7 +89,7 @@ export function armProductionOriginGuard(environment = process.env, target = glo
     const value = environment[name];
     if (value !== undefined && isProductionLinksOrigin(value)) throw refusal(`${name}=${value}`);
   }
-  armProductionFetchGuard(target);
+  armProductionFetchGuard(target, environment);
 }
 
 /** NODE_OPTIONS for a spawned Node process that should carry the same guard. */
