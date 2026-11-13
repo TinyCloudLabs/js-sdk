@@ -37,3 +37,23 @@ After approvals and JS-build clearance: one isolated real-node public CLI smoke 
 OpenKey main dc68836f: request ingress `apps/api/src/routes/approval-requests.ts:55–70`, pre-sign/admission wrappers143–167; owner managed-key signing `apps/api/src/routes/delegate.ts:1654–1674`, authenticated owner-key signer `apps/api/src/services/managed-key-signing.ts:6–20`; external-owner completion `delegate.ts:2069`, signature recovery2208–2220. Both owner paths must issue the lease or explicitly report unsupported before an approval claims renewable access. One approval interaction does not imply an external wallet can produce two owner signatures with one signing call; preserve the existing identity/signature checks and coordinate that wallet path before promising signature count.
 
 Result producer `apps/api/src/services/approval-results.ts:103–166` validates exact target/JWK/host/permissions/lifetime and encrypts the result only after grant and lease are ready. Consumer `packages/share-envelope/src/links/approval-client.ts:324–402` decrypts and validates request/result binding. The approval `bodyCid`/`requestDigest` identifies the signed request, NOT the original grant's `delegationCid`; the lease targets only the latter. OpenKey currently pins share-envelope1.4.1-beta.1: deploy compatible reviewed request/result codecs together; never send an unchecked renewal field to its existing strict parser.
+
+## Review conditions C1–C7 and proposed codec names
+
+Request optional field: `renewal: { version: 1, leaseLifetimeSeconds: number }` is a requested maximum, not authorization or a hidden selection. OpenKey refuses values above the one-year policy maximum before consent. It independently discovers the space host at its canonical TLS origin and verifies node identity and renewal capability; it accepts no requester-supplied renewer identity. Only an authenticated unsupported-capability signal BEFORE consent offers a visibly finite grant. Discovery errors do not mean unsupported.
+
+Result optional field: `renewal: { version: 1, approvedLeaseLifetimeSeconds: number, approvedAt: string, receipt: RenewalLeaseReceipt }`. The existing resultVersion/requestId/requestDigest/requesterDid/ownerDid/targetDid/delegationExpiresAt/delegation remain. For a finite owner choice, renewal is absent and the result must explicitly bind that chosen finite mode (proposed `renewalChoice: 'finite' | 'leased'` on results for requests carrying renewal). A leased choice requires renewal and a finite choice forbids it. Existing non-renewal requests need no renewalChoice. The envelope is authenticated and encrypted by the existing result protocol; final names/strict schema are for Bobbie and producer agreement before edits.
+
+C1: lease audience is the independently verified node renewerDid, never the agent. Its sole capability is tinycloud.delegation/renew on exact urn:cid:<originalCid>, with no extra actions/resources/caveats. Expiry equals approval time plus the owner's chosen lifetime, no later than the one-year bound. The original grant remains the exact agent-key grant.
+
+C2: OpenKey independently discovers and verifies the actual space host/node identity; requester fields cannot choose a renewal signer. TLS canonical origin and verified node discovery bind the receipt identity.
+
+C3: the owner sees that all listed access, including Sensitive Courier rows, continues to the lease end unless revoked. D4 choices default90d,6mo/1yr, plus shorter or finite; the returned approved lifetime is the visible chosen value, not the requester maximum. Monica owns final words. Sam's card precedes OpenKey deployment.
+
+C4: unsupported fallback occurs only before consent from authenticated capability evidence. After renewable approval, signing/admission/discovery/result failure is refusal/retry, never an implicit finite result.
+
+C5: OpenKey durably binds one original grant and at most one owner lease to requestId plus requestDigest; retries return that same pair. Persist signing/admission progress so crashes do not mint a second lease for the same approval. Completion encrypts the durable pair rather than issuing again.
+
+C6: owner can revoke the lease through dashboard/own-revoke; sign-out and account deletion policy must explicitly cover leases. Deployment prerequisite candidate TC-2874 must be confirmed to include this stop path, or a dedicated tracked issue must be named before deployment. This proposal does not claim that prerequisite is implemented.
+
+C7: persist grant plus leaseAuthorization together with existing secure profile/key protections and transaction binding. Never log leaseAuthorization, grant payloads, or keys. ACK only after durable verified installation.
