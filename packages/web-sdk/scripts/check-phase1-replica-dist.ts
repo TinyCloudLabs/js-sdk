@@ -1,3 +1,4 @@
+import { validateTc2927ShareApprovalRootTransition } from "./replica-size-policy";
 import { approvedTc2931Optional, tc2931OptionalAllowance, validateTc2931OptionalTransition } from "./replica-optional-size-policy";
 import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
 import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
@@ -225,6 +226,12 @@ if (prBaseSha) {
   validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
   validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
   validateTc2931BootstrapScopeTransition(baseLedger.tc2931BootstrapScope, ledger.tc2931BootstrapScope);
+  validateTc2927ShareApprovalRootTransition(baseLedger.tc2927ShareApprovalRoot, ledger.tc2927ShareApprovalRoot);
+  if (ledger.tc2927ShareApprovalRoot !== undefined && baseLedger.tc2927ShareApprovalRoot === undefined &&
+      (baseLedger.tc2931BootstrapScope === undefined || !hasAncestor(repoRoot, ledger.tc2927ShareApprovalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2927 admission requires the merged bootstrap-scope row and its measured source ancestor.");
+    failed = true;
+  }
   if (ledger.tc2931BootstrapScope !== undefined && baseLedger.tc2931BootstrapScope === undefined &&
       (baseLedger.tc2936RestoreCommitRoot === undefined || !hasAncestor(repoRoot, ledger.tc2931BootstrapScope.sourceCommits.at(-1)!))) {
     console.error("The TC-2931 admission requires the merged TC-2936 row and its measured source ancestor.");

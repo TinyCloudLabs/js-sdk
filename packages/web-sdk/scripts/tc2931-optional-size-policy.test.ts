@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import root from "./replica-size-ledger.json";
+import rootWithTc2927 from "./replica-size-ledger.json";
+const root = structuredClone(rootWithTc2927);
+delete root.tc2927ShareApprovalRoot;
 import optional from "./replica-optional-size-ledger.json";
 import { approvedTc2931Optional, evaluateOptionalBudget, optionalFormats, optionalSourcePins, validateOptionalEntryTransition, validateOptionalLedger, validateTc2931OptionalTransition, type OptionalLedger } from "./replica-optional-size-policy";
 

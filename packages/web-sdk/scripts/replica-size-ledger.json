@@ -3121,5 +3121,31 @@
       "ceiling": 774561
     },
     "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
+  },
+  "tc2927ShareApprovalRoot": {
+    "label": "new-share approval root admission (TC-2927)",
+    "ruling": "size-ruling: TC-2927: exact canonical CI root bytes after the merged bootstrap scope admission, at most +1900 B per format over that base. Immutable named row; no general, optional or worker allowance change. Details: TC-2927",
+    "base": "bc6584e7de9d5567a7d57b5c0fe888d2ef837365",
+    "sourceCommits": [
+      "164e60d0bdd296d6f73583469f711ecfb31de3b2"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43450792796",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43450792796/job/131972091130",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43450792796/job/131972091088"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 1733,
+        "index.cjs": 1703
+      },
+      "ceiling": {
+        "index.mjs": 1525548,
+        "index.cjs": 1460034
+      }
+    },
+    "reason": "Canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin, measured at 164e60d0 after master bc6584e7 including TC-2931. Exact root growth is +1733/+1703. The later master merge eca50422 changes only release-workflow heap settings, with no package input change. Existing general, cumulative, optional and worker allowances remain unchanged. Details: TC-2927"
   }
 }

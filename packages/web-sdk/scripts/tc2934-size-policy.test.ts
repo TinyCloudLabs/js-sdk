@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import ledger from "./replica-size-ledger.json";
+import ledgerWithTc2927 from "./replica-size-ledger.json";
+const ledger = structuredClone(ledgerWithTc2927);
+delete ledger.tc2927ShareApprovalRoot;
 import { approvedTc2934RequestedAccountRoot, ancestryPins, rootCeilingFor, validateLedger, validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 
 test("TC-2934 admits only its exact canonical root bytes with unchanged workers", () => {

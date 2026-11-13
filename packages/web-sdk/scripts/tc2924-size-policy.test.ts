@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import ledger from "./replica-size-ledger.json";
+import ledgerWithTc2927 from "./replica-size-ledger.json";
+const ledger = structuredClone(ledgerWithTc2927);
+delete ledger.tc2927ShareApprovalRoot;
 import { approvedTc2924NodeAliasesRoot, rootCeilingFor, validateLedger, validateTc2924NodeAliasesRootTransition } from "./replica-size-policy";
 
 describe("TC-2924 exact node-alias allowance", () => {

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import ledger from "./replica-size-ledger.json";
+import ledgerWithTc2927 from "./replica-size-ledger.json";
+const ledger = structuredClone(ledgerWithTc2927);
+delete ledger.tc2927ShareApprovalRoot;
 import { approvedTc2931BootstrapScope, ancestryPins, rootCeilingFor, validateLedger, validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
 import { MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 
