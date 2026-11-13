@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.11.3
+
+### Patch Changes
+
+- 0a7c900: Bind saved browser sign-ins to the requested account before restoration. DID and CAIP account requests also retain their chain selection.
+
+  Details: TC-2934
+
 ## 3.11.2
 
 ### Patch Changes
