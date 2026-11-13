@@ -175,8 +175,8 @@ export interface LocalWatchCache {
   claimsPrunedAt?: number;
   /** When each peer's renewal marker was last read. */
   markerReadAt: Record<string, number>;
-  /** Peer `meta.json` keys already mirrored (create-only). */
-  metaMirrored: string[];
+  /** Per peer, its `meta.json` keys already mirrored (create-only). Two peers may use the same name for us, so keys alone are ambiguous. */
+  metaMirrored: Record<string, string[]>;
   /** Per peer, `thread/message` ids its receipts already list (receipts only grow). */
   receipted: Record<string, string[]>;
   /** Per peer, the identity (DID, space, session) its facts above were learned under; facts without one are dropped. */
@@ -338,10 +338,11 @@ export class Watcher {
   private onFatal: (() => void) | undefined;
   /** Etag of this agent's watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
+  /** Per `<peer handle>\n<peer task key>`: two peers may use the same name for us, so a key alone is ambiguous. */
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   /** Peer keys whose value is over the batch cap: reported once and not read again by this process. */
   private readonly tooLarge = new Set<string>();
-  private readonly metaMirrored: Set<string>;
+  private readonly metaMirrored: Map<string, Set<string>>;
   private readonly markerReadAt: Map<string, number>;
   private claimsPrunedAt: number;
   /** Per peer, the identity the facts above were learned under: a peer that changed identity starts with none. */
@@ -371,7 +372,7 @@ export class Watcher {
     this.isAlive = deps.holder?.isAlive ?? pidAlive;
     this.keys = stateKeys(deps.agent);
     const cached = deps.localCache?.load();
-    this.metaMirrored = new Set(cached?.metaMirrored ?? []);
+    this.metaMirrored = new Map(Object.entries(cached?.metaMirrored ?? {}).map(([peer, keys]) => [peer, new Set(keys)]));
     this.markerReadAt = new Map(Object.entries(cached?.markerReadAt ?? {}));
     this.receipted = new Map(Object.entries(cached?.receipted ?? {}).map(([peer, ids]) => [peer, new Set(ids)]));
     this.claimsPrunedAt = cached?.claimsPrunedAt ?? 0;
@@ -387,10 +388,8 @@ export class Watcher {
     if (sameIdentity(this.factIdentity.get(peer.handle), identity)) return;
     this.receipted.delete(peer.handle);
     this.markerReadAt.delete(peer.handle);
-    if (peer.theirHandleForMe) {
-      const prefix = `${PREFIX}/to/${peer.theirHandleForMe}/`;
-      for (const key of [...this.metaMirrored]) if (key.startsWith(prefix)) this.metaMirrored.delete(key);
-    }
+    this.metaMirrored.delete(peer.handle);
+    for (const cache of [this.taskCache, this.tooLarge]) for (const key of [...cache.keys()]) if (key.startsWith(`${peer.handle}\n`)) cache.delete(key);
     this.factIdentity.set(peer.handle, identity);
     this.localDirty = true;
   }
@@ -401,7 +400,8 @@ export class Watcher {
     try {
       this.deps.localCache.save({
         v: 1, claimsPrunedAt: this.claimsPrunedAt, markerReadAt: Object.fromEntries(this.markerReadAt),
-        metaMirrored: [...this.metaMirrored], receipted: Object.fromEntries([...this.receipted].map(([peer, ids]) => [peer, [...ids]])),
+        metaMirrored: Object.fromEntries([...this.metaMirrored].map(([peer, keys]) => [peer, [...keys]])),
+        receipted: Object.fromEntries([...this.receipted].map(([peer, ids]) => [peer, [...ids]])),
         identities: Object.fromEntries(this.factIdentity),
       });
     } catch (error) {
@@ -941,12 +941,13 @@ export class Watcher {
    * message delivery and each item is isolated: a bad or unwritable peer task never blocks receipts or wakes.
    */
   private async mirrorThreads(peer: StoredPeer, peerKv: KV, keys: string[], authorized: () => Promise<boolean>): Promise<void> {
-    // Only what may need copying is read: a meta not yet mirrored, a task not yet terminal. One batch per 100 keys.
+    // Only what may need copying is read: a meta not yet mirrored, a task not yet terminal, never a key found oversized.
     const wanted = keys.filter(key => {
+      if (this.tooLarge.has(`${peer.handle}\n${key}`)) return false;
       const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
-      if (meta) return SAFE_ID.test(meta[1]) && !this.metaMirrored.has(key);
+      if (meta) return SAFE_ID.test(meta[1]) && !this.metaMirrored.get(peer.handle)?.has(key);
       const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
-      return Boolean(task && SAFE_ID.test(task[1]) && SAFE_ID.test(task[2]) && !this.taskCache.get(key)?.terminal);
+      return Boolean(task && SAFE_ID.test(task[1]) && SAFE_ID.test(task[2]) && !this.taskCache.get(`${peer.handle}\n${key}`)?.terminal);
     });
     let outcomes: Map<string, JsonReadOutcome<unknown>>;
     try {
@@ -959,6 +960,13 @@ export class Watcher {
     for (const key of wanted) {
       try {
         const outcome = outcomes.get(key)!;
+        if ('error' in outcome && isTooLarge(outcome.error)) {
+          // Over the cap: reported once and not read again by this process, like an oversized message.
+          this.tooLarge.add(`${peer.handle}\n${key}`);
+          const [, threadId, item] = /\/threads\/([^/]+)\/(meta|task\/[^/]+)\.json$/.exec(key)!;
+          this.deps.log('ignored', { peer: peer.handle, threadId, item, reason: 'too-large' });
+          continue;
+        }
         if ('error' in outcome) throw outcome.error;
         await this.mirrorThreadItem(peer, key, outcome.got, authorized);
       } catch (error) {
@@ -974,17 +982,17 @@ export class Watcher {
     if (meta) {
       if (!(await authorized())) return;
       await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
-      this.metaMirrored.add(key);
+      this.metaMirrored.set(peer.handle, (this.metaMirrored.get(peer.handle) ?? new Set()).add(key));
       this.localDirty = true;
       return;
     }
     const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key)!;
-    const cached = this.taskCache.get(key);
+    const cached = this.taskCache.get(`${peer.handle}\n${key}`);
     if (cached && got.etag && cached.etag === got.etag) return;
     if (!(await authorized())) return;
     await putOverwrite(this.deps.selfKv, k.mirrorTask(peer.handle, task[1], task[2]), got.value);
     const state = taskView(got.value).state;
-    this.taskCache.set(key, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
+    this.taskCache.set(`${peer.handle}\n${key}`, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
   }
 
   /**

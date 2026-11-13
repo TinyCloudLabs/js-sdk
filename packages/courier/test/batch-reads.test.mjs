@@ -204,6 +204,30 @@ test('one oversized value is isolated: the watcher delivers the rest, reports it
   assert.equal(s.peerKv.calls.get, gets, 'not read again');
 });
 
+test('an oversized meta or task is skipped like a message: reported once, no mirror-error, not read again', async () => {
+  const s = watcherSide();
+  await s.watcher.loadState();
+  const thread = ulid();
+  s.say(thread);
+  const base = `${PREFIX}/to/alice/threads/${thread}`;
+  s.peerKv.rows.set(`${base}/meta.json`, { threadId: thread, subject: 'S' });
+  s.peerKv.rows.set(`${base}/task/${ulid()}.json`, { id: 'big', status: { state: 'TASK_STATE_WORKING' } });
+  const small = ulid();
+  s.peerKv.rows.set(`${base}/task/${small}.json`, { id: small, status: { state: 'TASK_STATE_WORKING' } });
+  s.peerKv.huge.add(`${base}/meta.json`);
+  for (const key of s.peerKv.rows.keys()) if (key.includes('/task/') && !key.endsWith(`${small}.json`)) s.peerKv.huge.add(key);
+  await s.watcher.pollOnce('poll');
+  const tooLarge = () => s.events.filter((e) => e.event === 'ignored' && e.reason === 'too-large').map((e) => e.item).sort();
+  assert.deepEqual(tooLarge().map((item) => item.split('/')[0]), ['meta', 'task']);
+  assert.equal(s.events.filter((e) => e.event === 'mirror-error').length, 0);
+  assert.ok([...s.selfKv.rows.keys()].some((key) => key.endsWith(`/task/${small}.json`)), 'the other task is mirrored');
+  const before = { batch: s.peerKv.calls.batch, get: s.peerKv.calls.get };
+  await s.watcher.pollOnce('poll');
+  assert.equal(tooLarge().length, 2, 'reported once');
+  assert.equal(s.peerKv.calls.get, before.get, 'no single reads of the oversized keys again');
+  assert.equal(s.events.filter((e) => e.event === 'mirror-error').length, 0);
+});
+
 test('one oversized value is isolated: intake queues the rest and marks it done as too large', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tc2917-batch-intake-huge-'));
   const dirs = { queueRoot: path.join(root, 'queue'), stateDir: path.join(root, 'state'), doneRoot: path.join(root, 'done'), overflowRoot: path.join(root, 'overflow') };

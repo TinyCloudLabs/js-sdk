@@ -43,13 +43,18 @@ function safeAncestors(dir: string): boolean {
 function openDir(dir: string): { fd: number; stat: fs.Stats } | undefined {
   let fd: number;
   try { fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW); } catch { return undefined; }
-  const stat = fs.fstatSync(fd);
-  if (stat.isDirectory() && stat.uid === me()) return { fd, stat };
+  try {
+    const stat = fs.fstatSync(fd);
+    if (stat.isDirectory() && stat.uid === me()) return { fd, stat };
+  } catch { /* refused below */ }
   fs.closeSync(fd);
   return undefined;
 }
 
-/** Appends `dir` to a verified chain: opened no-follow, the chain re-checked, and only then tightened through the fd. */
+/**
+ * Appends `dir` to a verified chain: opened no-follow, the chain re-checked, and only then tightened through the fd.
+ * Any failure, a refused fchmod included, is a refusal: the caller skips the cache and fetches.
+ */
 function extend(chain: PrivateDir['chain'], dir: string): PrivateDir['chain'] | undefined {
   const opened = openDir(dir);
   if (!opened) return undefined;
@@ -58,7 +63,7 @@ function extend(chain: PrivateDir['chain'], dir: string): PrivateDir['chain'] | 
     if (!stillPrivate({ path: dir, chain: next })) return undefined;
     if ((opened.stat.mode & 0o077) !== 0) fs.fchmodSync(opened.fd, 0o700);
     return next;
-  } finally { fs.closeSync(opened.fd); }
+  } catch { return undefined; } finally { fs.closeSync(opened.fd); }
 }
 
 /** COURIER_HOME as the first link of a chain, or undefined if it or an ancestor fails the rule above. */

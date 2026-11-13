@@ -54,7 +54,7 @@ export function fileWatchCache(agent: string, space: string, peers: () => Stored
         if (!dir) return undefined;
         const file = parse(readPrivateFile(dir, name));
         if (!file || file.self.did !== agent || file.self.space !== space) return undefined;
-        const cache: LocalWatchCache = { v: 1, claimsPrunedAt: file.claimsPrunedAt, markerReadAt: {}, metaMirrored: [], receipted: {}, identities: {} };
+        const cache: LocalWatchCache = { v: 1, claimsPrunedAt: file.claimsPrunedAt, markerReadAt: {}, metaMirrored: {}, receipted: {}, identities: {} };
         for (const peer of peers()) {
           const facts = Object.hasOwn(file.peers, peer.handle) ? file.peers[peer.handle] : undefined;
           const identity = peerIdentity(peer);
@@ -63,7 +63,7 @@ export function fileWatchCache(agent: string, space: string, peers: () => Stored
           if (facts.markerReadAt !== undefined) cache.markerReadAt[peer.handle] = facts.markerReadAt;
           cache.receipted[peer.handle] = facts.receipted;
           const prefix = metaPrefix(peer);
-          if (prefix) cache.metaMirrored.push(...facts.metaMirrored.filter(key => key.startsWith(prefix)));
+          if (prefix) cache.metaMirrored[peer.handle] = facts.metaMirrored.filter(key => key.startsWith(prefix));
         }
         return cache;
       } catch { return undefined; }
@@ -81,7 +81,7 @@ export function fileWatchCache(agent: string, space: string, peers: () => Stored
           ...identity,
           ...(cache.markerReadAt[peer.handle] !== undefined ? { markerReadAt: cache.markerReadAt[peer.handle] } : {}),
           receipted: cache.receipted[peer.handle] ?? [],
-          metaMirrored: prefix ? cache.metaMirrored.filter(key => key.startsWith(prefix)) : [],
+          metaMirrored: prefix ? (cache.metaMirrored[peer.handle] ?? []).filter(key => key.startsWith(prefix)) : [],
         };
       }
       writePrivateFile(dir, name, file);

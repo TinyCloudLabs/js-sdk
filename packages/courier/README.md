@@ -255,7 +255,8 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   restart or a `watch --once` run doesn't fetch it again. It is bound to this
   agent's DID and space. Each peer's facts carry the DID, space and session they
   were learned under, and are dropped, never relabelled, once that peer is a
-  different agent, space or session. Only eligible peers' facts are kept.
+  different agent, space or session. Only eligible peers' facts are kept. Facts are kept per peer, so two peers that
+  use the same name for this agent never share them.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
@@ -319,7 +320,8 @@ exceeds 32 MiB.
 Each entry is still checked on its own. When one value in a batch is over its cap, the node refuses the batch, and
 Courier reads that batch's keys once more one by one, with the same cap. That key is then reported by id, never its
 content (`entry-too-large` in `courier read`, `message-too-large` in `courier inbox`, `ignored` with reason `too-large`
-once per watcher process, an `intake-error` in intake), and every other entry is read as usual.
+once per watcher process for a message, thread meta or task, an `intake-error` in intake), and every other entry is read
+as usual. A cache directory that can't be made owner-only is not used: everything is fetched.
 Your own side comes from a local owner-space record of the writes made under
 your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
 session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record

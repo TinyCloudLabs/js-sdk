@@ -13,7 +13,7 @@ import { fileWatchCache } from '../dist/watch-cache.js';
 import { readJsonMany } from '../dist/store.js';
 import { Watcher } from '../dist/watch.js';
 import { buildMessage } from '../dist/a2a.js';
-import { PREFIX } from '../dist/keys.js';
+import { PREFIX, k } from '../dist/keys.js';
 import { profileDir } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 import { privateDir, stillPrivate } from '../dist/private-dir.js';
@@ -111,7 +111,7 @@ const facts = (handles, identityOf = (h) => ({ did: `did:key:z${h}`, space: `spa
   v: 1, claimsPrunedAt: 5,
   markerReadAt: Object.fromEntries(handles.map((h) => [h, 7])),
   receipted: Object.fromEntries(handles.map((h) => [h, [`T/${h}`]])),
-  metaMirrored: [`${PREFIX}/to/me/threads/T/meta.json`],
+  metaMirrored: Object.fromEntries(handles.map((h) => [h, [`${PREFIX}/to/me/threads/T/meta.json`]])),
   identities: Object.fromEntries(handles.map((h) => [h, identityOf(h)])),
 });
 
@@ -128,7 +128,7 @@ test("F3: the watcher's local knowledge is bound to our DID and space and to eac
   const after = fileWatchCache(AGENT, 'space-mine', () => peers).load();
   assert.deepEqual(after.receipted, {}, 'neither keeps its receipted ids');
   assert.deepEqual(after.markerReadAt, {});
-  assert.deepEqual(after.metaMirrored, []);
+  assert.deepEqual(after.metaMirrored, {});
 });
 
 test('F3: the local knowledge is cleared with the read cache and never written through a symlinked directory', () => {
@@ -199,6 +199,55 @@ test("F3: facts learned for one peer are never saved, loaded or used under anoth
   say('from B');
   await watcher.pollOnce('poll');
   assert.equal(events.filter((e) => e.event === 'delivered').length, 2, "B's message under the same key is delivered, not skipped on A's facts");
+});
+
+test('P3-1: two peers that use the same name for us keep their own mirrored meta, live and on disk', async () => {
+  clearLocalCaches();
+  const peers = [peer('bob'), peer('carol')]; // both call us "me"
+  const kvs = { bob: memoryKv(), carol: memoryKv() };
+  const selfKv = memoryKv();
+  const cache = fileWatchCache(AGENT, 'space-mine', () => peers);
+  const thread = ulid();
+  const metaKey = `${PREFIX}/to/me/threads/${thread}/meta.json`;
+  kvs.bob.rows.set(metaKey, { value: { threadId: thread, subject: 'from bob' }, etag: 'b' });
+  const watcher = new Watcher({
+    selfKv, agent: AGENT, spaceId: 'space-mine', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => peers,
+    kvFor: async (p) => kvs[p.handle], wake: async () => {}, log: () => {}, localCache: cache,
+  }, { debounceMs: 0, pollMs: 60_000, ticketSeconds: 25, wakeBudget: 12 });
+  await watcher.loadState();
+  await watcher.pollOnce('poll');
+  assert.ok(selfKv.rows.has(k.mirrorMeta('bob', thread)));
+  // carol's thread meta under the very same key path, after bob's was mirrored, is mirrored too.
+  kvs.carol.rows.set(metaKey, { value: { threadId: thread, subject: 'from carol' }, etag: 'c' });
+  await watcher.pollOnce('poll');
+  assert.equal(selfKv.rows.get(k.mirrorMeta('carol', thread))?.value.subject, 'from carol', "carol's meta is not skipped on bob's");
+  // Saved: each peer's key only under the peer it was learned from.
+  cache.save({
+    v: 1, markerReadAt: {}, receipted: {}, metaMirrored: { bob: [metaKey] },
+    identities: { bob: { did: 'did:key:zbob', space: 'space-bob', session: null }, carol: { did: 'did:key:zcarol', space: 'space-carol', session: null } },
+  });
+  assert.deepEqual(cache.load().metaMirrored, { bob: [metaKey], carol: [] }, "bob's key is never saved under carol");
+  clearLocalCaches();
+});
+
+test('P3-2: a refused fchmod skips the cache: courier read neither throws nor uses it', () => {
+  clearLocalCaches();
+  const threadId = ulid();
+  const seed = diskThreadCache(AGENT, threadId);
+  seed.set('peer:x:key', { v: 'cached' });
+  seed.save();
+  const dir = path.join(profileDir(), 'read-cache');
+  fs.chmodSync(dir, 0o755); // needs tightening, and the fchmod is refused
+  const realFchmod = fs.fchmodSync;
+  fs.fchmodSync = () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }); };
+  try {
+    assert.equal(privateDir(['read-cache'], false), undefined, 'refused, not thrown');
+    const cache = diskThreadCache(AGENT, threadId);
+    cache.set('peer:x:key', { v: 1 });
+    assert.doesNotThrow(() => cache.save());
+  } finally { fs.fchmodSync = realFchmod; }
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o755, 'nothing chmodded by any other route');
+  clearLocalCaches();
 });
 
 test('F5: a positive verdict restarts an inform\'s 24 h clock, even when its post then fails', async () => {
