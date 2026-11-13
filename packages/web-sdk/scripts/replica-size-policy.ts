@@ -422,6 +422,7 @@ export type Ledger = {
   tc2418AbortListenerCleanup?: Tc2418AbortListenerCleanup;
   tc2691HostExpiry?: LogoutRatchet;
   tc2934RequestedAccountRoot?: LogoutRatchet;
+  tc2949StablePanelChunkRecoveryRoot?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1024,6 +1025,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
     if (root[row] !== undefined) pins.push({ row, pin: root[row].sourceCommits.at(-1)! });
   }
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
+  if (root.tc2949StablePanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949StablePanelChunkRecoveryRoot", pin: root.tc2949StablePanelChunkRecoveryRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1100,6 +1102,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2418AbortListenerCleanup", root.tc2418AbortListenerCleanup?.root.ceiling],
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
+    ["tc2949StablePanelChunkRecoveryRoot", root.tc2949StablePanelChunkRecoveryRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2709,6 +2712,26 @@ export const approvedTc2934RequestedAccountRoot: LogoutRatchet = {
   "reason": "The browser restore guard verifies the saved CACAO owner before node creation. The stable CJS bundle now includes the required signature/CID verifier; ESM already included it. Canonical Node 22/Bun 1.3.14/source-WASM CI at 97c27800f59a5445b991b467ec38f9a4f9158305 measures 1479612/1423896 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
 };
 
+/** Naomi's stable-line TC-2949 root admission from canonical CI, within the per-format 150-byte cap. */
+export const approvedTc2949StablePanelChunkRecoveryRoot: LogoutRatchet = {
+  "label": "stable panel chunk-load recovery root admission (TC-2949)",
+  "ruling": "Naomi's stable TC-2949 size ruling: exact canonical CI bytes, capped at +150 B per format over the TC-2934 stable root. Run 43467496377 measured 1479756/1424008 on base 5cd06026. Details: TC-2949",
+  "base": "5cd06026a61810cfd920054af17b577602440839",
+  "sourceCommits": ["8617af604c2ba3a23006105e2f43c49e21ad9ab8"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43467496377",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43467496377/job/132030409774",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43467496377/job/132030410128"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 144, "index.cjs": 112 },
+    "ceiling": { "index.mjs": 1479756, "index.cjs": 1424008 }
+  },
+  "reason": "Panel chunk-load recovery logs a fixed failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI at 8617af604c2ba3a23006105e2f43c49e21ad9ab8 measures 1479756/1424008 gzip -9 bytes, +144/+112 over the TC-2934 stable root 1479612/1423896, within Naomi's +150-byte per-format cap. Workers and gated bundles remain unchanged. Details: TC-2949"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -2777,6 +2800,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2418AbortListenerCleanup: approvedTc2418AbortListenerCleanup,
   tc2691HostExpiry: approvedTc2691HostExpiry,
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
+  tc2949StablePanelChunkRecoveryRoot: approvedTc2949StablePanelChunkRecoveryRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3091,6 +3115,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2934RequestedAccountRoot !== undefined &&
       (!value.tc2691HostExpiry || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
     throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
+  }
+  if (value.tc2949StablePanelChunkRecoveryRoot !== undefined &&
+      (!value.tc2934RequestedAccountRoot ||
+        JSON.stringify(value.tc2949StablePanelChunkRecoveryRoot) !== JSON.stringify(approvedTc2949StablePanelChunkRecoveryRoot))) {
+    throw new Error("Only Naomi's exact stable TC-2949 root admission is approved.");
   }
 }
 
@@ -3724,5 +3753,13 @@ export function validateTc2934RequestedAccountRootTransition(base?: LogoutRatche
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2934RequestedAccountRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2934 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact stable TC-2949 panel recovery root admission is introduced once and immutable afterwards. */
+export function validateTc2949StablePanelChunkRecoveryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2949StablePanelChunkRecoveryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The stable TC-2949 root admission may be introduced once and cannot change later.");
   }
 }

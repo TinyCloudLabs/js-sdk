@@ -1,4 +1,4 @@
-import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
+import { validateTc2934RequestedAccountRootTransition, validateTc2949StablePanelChunkRecoveryRootTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -201,6 +201,7 @@ if (prBaseSha) {
   }
   validateLedger(baseLedger, true);
   validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
+  validateTc2949StablePanelChunkRecoveryRootTransition(baseLedger.tc2949StablePanelChunkRecoveryRoot, ledger.tc2949StablePanelChunkRecoveryRoot);
   validateTc2691HostExpiryTransition(baseLedger, ledger);
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);

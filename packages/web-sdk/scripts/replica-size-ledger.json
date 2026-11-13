@@ -2615,5 +2615,23 @@
       }
     },
     "reason": "The browser restore guard verifies the saved CACAO owner before node creation. The stable CJS bundle now includes the required signature/CID verifier; ESM already included it. Canonical Node 22/Bun 1.3.14/source-WASM CI at 97c27800f59a5445b991b467ec38f9a4f9158305 measures 1479612/1423896 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
+  },
+  "tc2949StablePanelChunkRecoveryRoot": {
+    "label": "stable panel chunk-load recovery root admission (TC-2949)",
+    "ruling": "Naomi's stable TC-2949 size ruling: exact canonical CI bytes, capped at +150 B per format over the TC-2934 stable root. Run 43467496377 measured 1479756/1424008 on base 5cd06026. Details: TC-2949",
+    "base": "5cd06026a61810cfd920054af17b577602440839",
+    "sourceCommits": ["8617af604c2ba3a23006105e2f43c49e21ad9ab8"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43467496377",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43467496377/job/132030409774",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43467496377/job/132030410128"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 144, "index.cjs": 112 },
+      "ceiling": { "index.mjs": 1479756, "index.cjs": 1424008 }
+    },
+    "reason": "Panel chunk-load recovery logs a fixed failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI at 8617af604c2ba3a23006105e2f43c49e21ad9ab8 measures 1479756/1424008 gzip -9 bytes, +144/+112 over the TC-2934 stable root 1479612/1423896, within Naomi's +150-byte per-format cap. Workers and gated bundles remain unchanged. Details: TC-2949"
   }
 }

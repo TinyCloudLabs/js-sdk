@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.11.4
+
+### Patch Changes
+
+- 8b0dbff: When the panel's lazy chunk fails to load, log the failure and offer a full-page reload instead of retrying the same chunk URL.
+
+  Details: TC-2949
+
 ## 3.11.3
 
 ### Patch Changes
