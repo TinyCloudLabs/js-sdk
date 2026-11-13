@@ -21,20 +21,23 @@ function batchKv() {
   const rows = new Map();
   const calls = { list: 0, get: 0, batch: 0, batchKeys: [] };
   const fail = new Map();
+  const huge = new Set(); // values over any cap: the node refuses them with KV_RESPONSE_TOO_LARGE
+  const tooLarge = { ok: false, error: { code: 'KV_RESPONSE_TOO_LARGE', message: 'A KV batch value exceeds the requested response limit' } };
   const answer = (key) => {
     if (fail.has(key)) return { ok: false, error: { status: fail.get(key), message: 'down' } };
     const row = rows.get(key);
     return row ? { ok: true, data: { data: row, headers: { etag: 'e' } } } : { ok: false, error: { code: 'KV_NOT_FOUND', message: 'Key not found' } };
   };
   return {
-    rows, calls, fail, failBatch: false,
+    rows, calls, fail, huge, failBatch: false,
     async list({ prefix }) { calls.list++; return { ok: true, data: { keys: [...rows.keys()].filter((key) => key.startsWith(prefix)) } }; },
-    async get(key) { calls.get++; return answer(key); },
-    async batchGet(keys) {
+    async get(key, options = {}) { calls.get++; return huge.has(key) && options.maxResponseBytes ? tooLarge : answer(key); },
+    async batchGet(keys, options = {}) {
       calls.batch++;
       calls.batchKeys.push(keys.length);
       if (keys.length > 100) return { ok: false, error: { code: 'INVALID_INPUT', message: 'at most 100 keys' } };
       if (this.failBatch) return { ok: false, error: { status: 400, message: 'bad batch' } };
+      if (options.maxResponseBytes && keys.some((key) => huge.has(key))) return tooLarge;
       return { ok: true, data: { results: keys.map((key) => ({ key, result: answer(key) })), count: keys.length } };
     },
     async put(key, value) { rows.set(key, structuredClone(value)); return { ok: true, data: { data: undefined, headers: { etag: 'p' } } }; },
@@ -78,8 +81,8 @@ test("a batch read keeps getJson's per-key answers: missing is absent, any other
   const kv = batchKv();
   kv.rows.set('a', { v: 1 });
   const got = await getJsonMany(kv, ['a', 'missing']);
-  assert.deepEqual(got.get('a').value, { v: 1 });
-  assert.equal(got.get('missing'), undefined);
+  assert.deepEqual(got.values.get('a').value, { v: 1 });
+  assert.equal(got.values.get('missing'), undefined);
   kv.fail.set('a', 403);
   await assert.rejects(getJsonMany(kv, ['a', 'missing']));
 });
@@ -152,5 +155,74 @@ test('courier inbox and intake read their messages in batches', async () => {
   assert.equal(queued, 130);
   assert.equal(kv.calls.get, 0);
   assert.deepEqual(kv.calls.batchKeys, [16, 16, 16, 16, 16, 16, 16, 16, 2]);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('one oversized value is isolated: read and inbox report it and show every other entry', async () => {
+  const mine = batchKv();
+  const theirs = batchKv();
+  const threadId = ulid();
+  mine.rows.set(k.threadMeta('bob', threadId), { threadId, subject: 'S' });
+  const keys = [];
+  for (let i = 0; i < 20; i++) {
+    const their = message(threadId);
+    const key = `${PREFIX}/to/alice/threads/${threadId}/msg/${their.messageId}.json`;
+    theirs.rows.set(key, their);
+    keys.push([key, their.messageId]);
+  }
+  const [hugeKey, hugeId] = keys[3];
+  theirs.huge.add(hugeKey);
+  theirs.rows.get(hugeKey).parts[0].text = 'VALUE-BYTES-MARKER';
+  const result = await collectThread({ threadId, selfKv: mine, peers: [peer], exactPeer: true, kvFor: async () => theirs });
+  assert.equal(result.entries.filter((e) => e.side === 'peer').length, 19, 'every other peer message is shown');
+  assert.ok(result.errors.some((e) => e.code === 'entry-too-large' && e.message.includes(hugeId)), 'the oversized one is reported');
+  assert.equal(result.partial, true);
+  // Bounded: the refused chunk of 16 is read key by key exactly once; the other chunk is a plain batch.
+  assert.deepEqual(theirs.calls.batchKeys, [16, 4]);
+  assert.equal(theirs.calls.get, 16);
+  const inbox = await collectInbound({ selfKv: batchKv(), peers: [peer], kvFor: async () => theirs });
+  assert.equal(inbox.items.length, 19);
+  assert.ok(inbox.errors.some((e) => e.code === 'message-too-large' && e.message.includes(hugeId)));
+  assert.equal(theirs.calls.get, 32);
+  assert.ok(!JSON.stringify([result.errors, inbox.errors]).includes('VALUE-BYTES-MARKER'), 'reported by id, never by content');
+});
+
+test('one oversized value is isolated: the watcher delivers the rest, reports it once and does not read it again', async () => {
+  const s = watcherSide();
+  await s.watcher.loadState();
+  const thread = ulid();
+  const ids = Array.from({ length: 20 }, () => s.say(thread));
+  s.peerKv.huge.add(`${PREFIX}/to/alice/threads/${thread}/msg/${ids[5]}.json`);
+  await s.watcher.pollOnce('poll');
+  const delivered = () => s.events.filter((e) => e.event === 'delivered').map((e) => e.messageId);
+  assert.equal(delivered().length, 19);
+  assert.ok(!delivered().includes(ids[5]));
+  assert.equal(s.events.filter((e) => e.event === 'ignored' && e.reason === 'too-large').length, 1);
+  const gets = s.peerKv.calls.get;
+  await s.watcher.pollOnce('poll');
+  assert.equal(s.events.filter((e) => e.event === 'ignored' && e.reason === 'too-large').length, 1, 'reported once');
+  assert.equal(s.peerKv.calls.get, gets, 'not read again');
+});
+
+test('one oversized value is isolated: intake queues the rest and marks it done as too large', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tc2917-batch-intake-huge-'));
+  const dirs = { queueRoot: path.join(root, 'queue'), stateDir: path.join(root, 'state'), doneRoot: path.join(root, 'done'), overflowRoot: path.join(root, 'overflow') };
+  ensureRealDir(dirs.queueRoot, 0o750); ensureRealDir(dirs.stateDir, 0o700); ensureRealDir(dirs.doneRoot, 0o700); ensureRealDir(dirs.overflowRoot, 0o700);
+  const kv = batchKv();
+  const now = Date.now();
+  const thread = ulid();
+  const ids = [];
+  for (let i = 0; i < 20; i++) { const body = message(thread, now - 60_000 + i); kv.rows.set(k.mirrorMsg('bob', thread, body.messageId), body); ids.push(body.messageId); }
+  kv.huge.add(k.mirrorMsg('bob', thread, ids[2]));
+  const logs = [];
+  const queued = await intakeCycle({
+    kv, profile: { version: 3, peers: { bob: { ...peer, outbound: [] } } }, peers: { bob: { tier: 'trusted', ratePerHour: 1000 } },
+    ...dirs, state: { v: 1, peers: {} }, now: () => now, log: (event, fields) => logs.push({ event, ...fields }), batch: 20,
+  });
+  assert.equal(queued, 19);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dirs.doneRoot, 'bob', `${ids[2]}.json`), 'utf8')).outcome, 'too-large');
+  // Visible where intake errors are, by id; and read key by key once, for its chunk of 16 only.
+  assert.deepEqual(logs.filter((l) => l.event === 'intake-error'), [{ event: 'intake-error', peer: 'bob', threadId: thread, msgId: ids[2], code: 'too-large' }]);
+  assert.equal(kv.calls.get, 16);
   fs.rmSync(root, { recursive: true, force: true });
 });

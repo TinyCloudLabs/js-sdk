@@ -8,7 +8,7 @@ import { CourierError, errInfo } from '../errors.js';
 import { k } from '../keys.js';
 import { courierNode } from '../node.js';
 import { loadProfile, profileDir, type Profile, type StoredPeer } from '../profile.js';
-import { listAll, readJsonMany, type JsonReadOutcome } from '../store.js';
+import { isTooLarge, listAll, readJsonMany, type JsonReadOutcome } from '../store.js';
 import { hiddenTextProblem, textVerdict, type TextVerdict } from '../text.js';
 import { jsonLineLog, type WatchLog } from '../wake.js';
 import { FLAG_TABLE, type Flag } from './flags.js';
@@ -77,7 +77,7 @@ export interface IntakeRecord {
   };
 }
 
-type DoneOutcome = 'init' | 'mismatch' | 'bad-id' | 'overflow';
+type DoneOutcome = 'init' | 'mismatch' | 'bad-id' | 'overflow' | 'too-large';
 
 export interface CycleInput {
   kv: KV;
@@ -350,6 +350,12 @@ async function intakePeer(input: CycleInput, peer: StoredPeer): Promise<number> 
 
         const outcome = outcomes.get(c.key);
         if (!outcome) throw batchError ?? new CourierError('kv', `${c.key} was not read`);
+        if ('error' in outcome && isTooLarge(outcome.error)) {
+          // Logged where every intake error is, by id only, then marked done: reading it again gives the same answer.
+          input.log('intake-error', { peer: peer.handle, threadId: c.threadId, msgId: c.msgId, code: 'too-large' });
+          markDone(input, peer.handle, c.msgId, 'too-large');
+          continue;
+        }
         if ('error' in outcome) throw outcome.error;
         const got = outcome.got;
         if (!got || !isRecord(got.value) || got.value.messageId !== c.msgId || got.value.contextId !== c.threadId) {

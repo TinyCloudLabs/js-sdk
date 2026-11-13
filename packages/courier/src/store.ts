@@ -104,35 +104,56 @@ export type JsonReadOutcome<T> = { got: JsonRead<T> } | { error: unknown };
 
 /**
  * Each key read as `getJson` reads it, in bounded batches (`tinycloud.kv/get` on each key of a batch, one invocation).
- * A failed batch call throws; one key's failure is only that key's outcome.
+ * A failed batch call throws; one key's failure is only that key's outcome. A batch the node refuses because one value
+ * is over the cap is read again key by key, with the same cap: the oversized key gets a KV_RESPONSE_TOO_LARGE outcome
+ * and every other key its value, so one oversized value written by a peer never hides the rest.
  */
 export async function readJsonMany<T>(kv: KV, keys: readonly string[]): Promise<Map<string, JsonReadOutcome<T>>> {
   const outcomes = new Map<string, JsonReadOutcome<T>>();
   const unique = [...new Set(keys)];
+  const settle = (key: string, result: ResultLike<KVResponse<unknown>>) => {
+    try { outcomes.set(key, { got: jsonResult<T>(result, key) }); } catch (error) { outcomes.set(key, { error }); }
+  };
   for (const [group, valueBytes] of [[unique.filter(key => !isTaskKey(key)), ENTRY_VALUE_BYTES], [unique.filter(isTaskKey), TASK_VALUE_BYTES]] as const) {
     const size = Math.floor(BATCH_TOTAL_BYTES / valueBytes);
     for (let start = 0; start < group.length; start += size) {
       const chunk = group.slice(start, start + size);
       const r = (await readRetry(() => kv.batchGet(chunk, { ...FULL, maxResponseBytes: valueBytes }))) as ResultLike<{ results: Array<{ key: string; result: ResultLike<KVResponse<unknown>> }> }>;
+      if (r && r.ok === false && (r.error as { code?: unknown } | undefined)?.code === 'KV_RESPONSE_TOO_LARGE') {
+        for (const key of chunk) settle(key, (await readRetry(() => kv.get(key, { ...FULL, maxResponseBytes: valueBytes }))) as ResultLike<KVResponse<unknown>>);
+        continue;
+      }
       const batch = unwrap(r, `batch get ${chunk.length} key(s)`);
       if (batch.results.length !== chunk.length) throw new CourierError('kv', `batch get returned ${batch.results.length} of ${chunk.length} keys`);
       for (const [index, item] of batch.results.entries()) {
         if (item.key !== chunk[index]) throw new CourierError('kv', 'batch get answered a different key');
-        try { outcomes.set(item.key, { got: jsonResult<T>(item.result, item.key) }); } catch (error) { outcomes.set(item.key, { error }); }
+        settle(item.key, item.result);
       }
     }
   }
   return outcomes;
 }
 
-/** `readJsonMany` where any key's failure fails the whole read, as a series of `getJson` calls would. */
-export async function getJsonMany<T>(kv: KV, keys: readonly string[]): Promise<Map<string, JsonRead<T>>> {
-  const found = new Map<string, JsonRead<T>>();
+/** True for a key whose value is over the batch cap: report it and carry on; reading it again gives the same answer. */
+export function isTooLarge(error: unknown): boolean {
+  return error instanceof CourierError && error.code === 'KV_RESPONSE_TOO_LARGE';
+}
+
+/** What `getJsonMany` read: each key's value (undefined if missing), and the keys whose value was over the cap. */
+export interface JsonReads<T> { values: Map<string, JsonRead<T>>; tooLarge: string[] }
+
+/**
+ * `readJsonMany` where any key's failure fails the whole read, as a series of `getJson` calls would, except a value over
+ * the cap: that key is reported in `tooLarge` and the rest are read.
+ */
+export async function getJsonMany<T>(kv: KV, keys: readonly string[]): Promise<JsonReads<T>> {
+  const reads: JsonReads<T> = { values: new Map(), tooLarge: [] };
   for (const [key, outcome] of await readJsonMany<T>(kv, keys)) {
-    if ('error' in outcome) throw outcome.error;
-    found.set(key, outcome.got);
+    if ('got' in outcome) reads.values.set(key, outcome.got);
+    else if (isTooLarge(outcome.error)) reads.tooLarge.push(key);
+    else throw outcome.error;
   }
-  return found;
+  return reads;
 }
 
 function jsonResult<T>(r: ResultLike<KVResponse<unknown>>, key: string): { value: T; etag: string | null } | undefined {

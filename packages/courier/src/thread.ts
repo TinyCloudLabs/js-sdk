@@ -297,10 +297,14 @@ export async function collectThread(input: {
       const cacheId = kind === 'task' || !source ? undefined : `${source}:${key}`;
       return [{ key, kind, cacheId, cached: cacheId === undefined ? undefined : input.cache?.get(cacheId) }];
     });
-    // Everything not already cached in one batch read per 100 keys; each entry is still checked on its own below.
+    // Everything not already cached in bounded batches; each entry is still checked on its own below. A value over
+    // the cap is reported as an error for that entry, and every other entry is shown.
     const fetched = await getJsonMany(kv, wanted.filter(entry => entry.cached === undefined).map(entry => entry.key));
+    for (const key of fetched.tooLarge) {
+      errors.push({ peer, code: 'entry-too-large', message: `An entry of ${oneLine(peer, 80)} is too large to read (${oneLine(key.slice(key.lastIndexOf('/') + 1), 80)}).` });
+    }
     for (const { key, kind, cacheId, cached } of wanted) {
-      const got = cached !== undefined ? { value: cached } : fetched.get(key);
+      const got = cached !== undefined ? { value: cached } : fetched.values.get(key);
       if (!got) continue;
       if (cacheId !== undefined && cached === undefined) input.cache?.set(cacheId, got.value);
       const id = kind === 'meta' ? threadId : key.slice(key.lastIndexOf('/') + 1, -5);

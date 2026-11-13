@@ -315,8 +315,11 @@ create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
 only new entries and the tasks, which can change. Entries are fetched in
 bounded batches, each one `tinycloud.kv/get` invocation: up to 16 messages or
 meta of at most 2 MiB each, or 4 tasks of at most 8 MiB each, so no response
-exceeds 32 MiB. A larger value fails its batch with `KV_RESPONSE_TOO_LARGE`.
-Each entry is still checked on its own.
+exceeds 32 MiB.
+Each entry is still checked on its own. When one value in a batch is over its cap, the node refuses the batch, and
+Courier reads that batch's keys once more one by one, with the same cap. That key is then reported by id, never its
+content (`entry-too-large` in `courier read`, `message-too-large` in `courier inbox`, `ignored` with reason `too-large`
+once per watcher process, an `intake-error` in intake), and every other entry is read as usual.
 Your own side comes from a local owner-space record of the writes made under
 your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
 session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
@@ -913,8 +916,9 @@ already exists. A message id more than 10 minutes ahead of local time is not rec
 the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A mirror key whose
 message or thread id is not a ULID is logged as `intake-skip` (`bad-id`) and gets no marker. A message id whose
 time cannot be decoded gets a `bad-id` done marker. A fetched row that is malformed, or whose `messageId` or
-`contextId` does not match its key, gets a `mismatch` done marker. A message whose processing throws is logged
-as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
+`contextId` does not match its key, gets a `mismatch` done marker. A message over 2 MiB is logged as `intake-error`
+(`too-large`, with its thread and message id) and gets a `too-large` done marker; the other messages are queued. A
+message whose processing throws is logged as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
 `courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
 `init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
 first cycle works through the backlog from the oldest id inside the 7-day window, 200 rows per cycle.

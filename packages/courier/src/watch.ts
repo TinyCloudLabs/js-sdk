@@ -7,7 +7,7 @@ import { k, PREFIX, stateKeys, type StateKeys } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
-import { del, getJson, listAll, putCreate, putMatch, putOverwrite, readJsonMany, type JsonRead, type JsonReadOutcome } from './store.js';
+import { del, getJson, isTooLarge, listAll, putCreate, putMatch, putOverwrite, readJsonMany, type JsonRead, type JsonReadOutcome } from './store.js';
 import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
 import { appendNotice, type Notice, type Notifier } from './notify.js';
 import { nextNoticeId, writePauseMarker } from './pause.js';
@@ -339,6 +339,8 @@ export class Watcher {
   /** Etag of this agent's watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
+  /** Peer keys whose value is over the batch cap: reported once and not read again by this process. */
+  private readonly tooLarge = new Set<string>();
   private readonly metaMirrored: Set<string>;
   private readonly markerReadAt: Map<string, number>;
   private claimsPrunedAt: number;
@@ -797,6 +799,7 @@ export class Watcher {
 
     const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
     const selectedItems = unseen.filter(item => !seen.has(`${item.threadId}/${item.messageId}`)).filter(selected => {
+      if (this.tooLarge.has(`${peer.handle}\n${selected.key}`)) return false;
       if (SAFE_ID.test(selected.threadId) && SAFE_ID.test(selected.messageId)) return true;
       log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
       return false;
@@ -815,6 +818,12 @@ export class Watcher {
       const outcome = outcomes.get(selected.key);
       if (!outcome) continue;
       try {
+        if ('error' in outcome && isTooLarge(outcome.error)) {
+          // Over the cap: reported once and not read again by this process; the others go ahead. No receipt.
+          this.tooLarge.add(`${peer.handle}\n${selected.key}`);
+          log('ignored', { peer: peer.handle, threadId: selected.threadId, messageId: selected.messageId, reason: 'too-large' });
+          continue;
+        }
         if ('error' in outcome) throw outcome.error;
         const got = outcome.got;
         if (!got) continue;

@@ -74,8 +74,11 @@ export async function collectInbound(input: {
       const deliveries: PendingDelivery[] = [];
       const selected = selectUndelivered(keys, receipts);
       const fetched = await getJsonMany<unknown>(peerKv, selected.map(item => item.key));
+      for (const item of selected.filter(item => fetched.tooLarge.includes(item.key))) {
+        errors.push({ peer: peer.handle, code: 'message-too-large', message: `message ${item.messageId} in thread ${item.threadId}: too large to read` });
+      }
       for (const item of selected) {
-        const result = fetched.get(item.key);
+        const result = fetched.values.get(item.key);
         if (!result) continue;
         const value = result.value;
         if (!isRecord(value) || value.messageId !== item.messageId || value.contextId !== item.threadId) continue;
