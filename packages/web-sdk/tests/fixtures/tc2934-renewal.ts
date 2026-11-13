@@ -51,13 +51,19 @@ try {
   { label: 'signed renewal mixed case', requested: address.toLowerCase(), slot: address },
   { label: 'signed renewal DID', requested: `did:pkh:eip155:1:${address}`, slot: address },
   { label: 'signed renewal wrong chain', requested: `eip155:137:${address}`, slot: address, refused: true },
+  { label: 'signed renewal rewritten metadata', requested: '0x1111111111111111111111111111111111111111', slot: '0x1111111111111111111111111111111111111111', refused: true, forgedMetadata: true },
   { label: 'signed renewal wrong slot', requested: '0x1111111111111111111111111111111111111111', slot: '0x1111111111111111111111111111111111111111', refused: true },
  ]) {
   const requested=scenario.requested;
   localStorage.clear();
   const key=`tinycloud:session:${scenario.slot.toLowerCase()}`;
-  localStorage.setItem(key,JSON.stringify(record));
+  const data=structuredClone(record);
+  if(scenario.forgedMetadata) { data.address=requested; data.tinycloudSession.spaceId=data.tinycloudSession.spaceId.replace(address,requested); data.siwe=data.siwe.replace(address,requested); }
+  localStorage.setItem(key,JSON.stringify(data));
   const app=new TinyCloudWeb({ui:false,sessionStorage:new BrowserSessionStorage({storage:localStorage}),tinycloudHosts:[host],tinycloudRegistryUrl:registry,newUserHost:null,autoDiscoverLocalNode:false});
+  let ensureNodeCalls=0;
+  const ensureNode=Reflect.get(app,"ensureNode").bind(app);
+  Reflect.set(app,"ensureNode",async()=>{ensureNodeCalls++;return ensureNode();});
   const before=statusCalls;
   const result=await app.restoreSessionWithRenewal(lease.leaseAuthorization,requested);
   if(!scenario.refused) assert.equal(result.status,'restored',result.error?.message);
@@ -66,6 +72,7 @@ try {
    assert(result.error instanceof SessionAccountMismatchError);
    assert.equal(localStorage.getItem(key),null);
    assert.equal(statusCalls,before);
+   assert.equal(ensureNodeCalls,0);
   }
   console.log(JSON.stringify({label:scenario.label,status:result.status}));
   app.cleanup();

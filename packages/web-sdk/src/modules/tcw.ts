@@ -1012,7 +1012,7 @@ export class TinyCloudWeb {
         this._sessionRestoreStatus = "missing";
         return { status: "missing" };
       }
-      assertRequestedRestoreAccount(requestedAccount ?? restoreAddress, loaded.data);
+      await assertRequestedRestoreAccount(requestedAccount ?? restoreAddress, loaded.data);
       const node = await this.ensureNode();
       assertNotSignedOut();
       const was = node.spaceId;

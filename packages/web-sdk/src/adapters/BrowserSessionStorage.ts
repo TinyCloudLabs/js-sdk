@@ -240,7 +240,7 @@ export class BrowserSessionStorage implements ISessionStorage {
         this.clearActiveAddress(address);
         return { status: "corrupt", data: null };
       }
-      assertRequestedRestoreAccount(address, result.data);
+      await assertRequestedRestoreAccount(address, result.data);
       if (this.isRetired(address, result.data.signature)) return { status: "missing", data: null };
 
       if (!result.data.tinycloudSession?.spaceId) {
