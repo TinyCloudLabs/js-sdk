@@ -36,6 +36,7 @@
     "courier-collect-peer-renewal",
     "courier-home-file-allowlist",
     "courier-idle-polling",
+    "courier-inbox-unsafe-ids",
     "courier-local-read-watch",
     "courier-registry-verdict-cache",
     "courier-unknown-flags",
