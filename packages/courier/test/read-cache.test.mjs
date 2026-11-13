@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { collectThread, diskThreadCache } from '../dist/thread.js';
+import { clearReadCache, collectThread, diskThreadCache } from '../dist/thread.js';
+import { recordAuthorityRefusal } from '../dist/interim-runtime.js';
 import { buildMessage, buildTask } from '../dist/a2a.js';
 import { k, PREFIX } from '../dist/keys.js';
 import { profileDir } from '../dist/profile.js';
@@ -21,6 +22,9 @@ function countingKv(calls) {
     },
   };
 }
+
+const AGENT = 'did:key:z6MkAgentA';
+const AGENT_DIR = () => path.join(profileDir(), 'read-cache', 'z6MkAgentA');
 
 const peer = {
   handle: 'bob', ownerDid: 'did:pkh:eip155:1:0x02', courierDid: 'did:key:zBob', spaceId: 'space-bob', theirHandleForMe: 'alice',
@@ -41,8 +45,8 @@ function thread(entries) {
   for (let i = 0; i < entries / 2; i++) { add(mine, k.threadRoot('bob', threadId)); add(theirs, `${PREFIX}/to/alice/threads/${threadId}`); }
   theirs.rows.set(`${PREFIX}/to/alice/threads/${threadId}/task/K1.json`, buildTask({ taskId: 'K1', threadId, state: 'TASK_STATE_WORKING' }));
   const self = { courierDid: 'did:key:zAlice', spaceId: 'space-alice' };
-  const read = async ({ me = self, them = peer } = {}) => {
-    const cache = diskThreadCache(threadId);
+  const read = async ({ me = self, them = peer, limits, agent = AGENT } = {}) => {
+    const cache = diskThreadCache(agent, threadId, limits);
     const before = { ...calls };
     const result = await collectThread({ threadId, selfKv: mine, peers: [them], exactPeer: true, kvFor: async () => theirs, cache, self: me });
     cache.save();
@@ -71,7 +75,7 @@ test('a task update is always shown; a corrupt or foreign cache file is ignored'
   th.theirs.rows.set(key, buildTask({ taskId: 'K1', threadId: th.threadId, state: 'TASK_STATE_COMPLETED' }));
   const task = (await th.read()).result.entries.find((entry) => entry.kind === 'task');
   assert.equal(task.body.status.state, 'TASK_STATE_COMPLETED');
-  const file = path.join(profileDir(), 'read-cache', `${th.threadId}.json`);
+  const file = path.join(AGENT_DIR(), `${th.threadId}.json`);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   fs.writeFileSync(file, '{not json');
   const rebuilt = await th.read();
@@ -83,7 +87,7 @@ test('a cached body is shown only for a key the current authorized listing retur
   const th = thread(4);
   await th.read();
   const refused = { list: async () => ({ ok: false, error: { status: 403, message: 'revoked' } }) };
-  const cache = diskThreadCache(th.threadId);
+  const cache = diskThreadCache(AGENT, th.threadId);
   const revoked = await collectThread({ threadId: th.threadId, selfKv: th.mine, peers: [peer], exactPeer: true, kvFor: async () => refused, cache, self: th.self });
   assert.equal(revoked.entries.filter((entry) => entry.side === 'peer').length, 0, 'a refused listing shows nothing cached');
   assert.equal(revoked.partial, true);
@@ -106,4 +110,48 @@ test('a re-init (new agent key or new space) and a peer session change start the
   assert.equal((await th.read({ me: { ...th.self, spaceId: 'space-alice-reinit' } })).get, 4, 'a new own space refetches them too');
   assert.equal((await th.read({ them: { ...peer, sessionId: th.threadId } })).get, 3, 'a peer session change refetches its messages');
   assert.equal((await th.read({ them: { ...peer, courierDid: 'did:key:zBobRotated' } })).get, 3, 'so does a peer key change');
+});
+
+test('a peer rewriting or deleting and recreating a message in its own space: read shows the first version, as the mirror does; a deleted key is gone', async () => {
+  const th = thread(4);
+  const prefix = `${PREFIX}/to/alice/threads/${th.threadId}/msg/`;
+  const [key] = [...th.theirs.rows.keys()].filter((name) => name.startsWith(prefix));
+  const first = structuredClone(th.theirs.rows.get(key));
+  await th.read();
+  th.theirs.rows.set(key, { ...first, parts: [{ kind: 'text', text: 'rewritten' }] }); // overwrite in place
+  const peerMessage = (result) => result.entries.find((entry) => entry.side === 'peer' && entry.id === first.messageId);
+  assert.deepEqual(peerMessage((await th.read()).result).body, first, 'overwrite: the first version, never refetched');
+  th.theirs.rows.delete(key); // delete
+  assert.equal(peerMessage((await th.read()).result), undefined, 'a deleted key is not shown from the cache');
+  th.theirs.rows.set(key, { ...first, parts: [{ kind: 'text', text: 'recreated' }] }); // recreate under the same key
+  assert.deepEqual(peerMessage((await th.read()).result).body, first, 'delete-recreate: still the first version');
+});
+
+test('each agent has its own cache; revocation and refusal clear it', async () => {
+  const th = thread(4);
+  await th.read();
+  assert.equal((await th.read({ agent: 'did:key:z6MkAgentB' })).get, 6, "another agent of this home does not see agent A's cache");
+  assert.ok(fs.existsSync(path.join(profileDir(), 'read-cache', 'z6MkAgentB')));
+  clearReadCache();
+  assert.equal(fs.existsSync(path.join(profileDir(), 'read-cache')), false);
+  await th.read();
+  await recordAuthorityRefusal('peer:nobody').catch(() => {}); // the profile transaction may fail here; the cache goes first
+  assert.equal(fs.existsSync(path.join(profileDir(), 'read-cache')), false, 'a recorded refusal clears it');
+});
+
+test('the cache stays within its byte bound (newest kept) and drops files older than its age bound', async () => {
+  const a = thread(4);
+  const b = thread(4);
+  await a.read();
+  const aFile = path.join(AGENT_DIR(), `${a.threadId}.json`);
+  const bytes = fs.statSync(aFile).size;
+  const earlier = new Date(Date.now() - 10_000);
+  fs.utimesSync(aFile, earlier, earlier);
+  await b.read({ limits: { now: Date.now(), maxBytes: bytes + 10, maxAgeMs: 3600_000 } }); // room for one file: the older goes
+  assert.equal(fs.existsSync(aFile), false);
+  assert.ok(fs.existsSync(path.join(AGENT_DIR(), `${b.threadId}.json`)));
+  assert.equal((await b.read({ limits: { now: Date.now() + 8 * 86_400_000, maxBytes: 1 << 26, maxAgeMs: 7 * 86_400_000 } })).get, 6, 'a file older than 7 days is not used');
+  b.add(b.theirs, `${PREFIX}/to/alice/threads/${b.threadId}`); // something new to save
+  await b.read({ limits: { now: Date.now(), maxBytes: 10, maxAgeMs: 3600_000 } });
+  assert.equal(fs.existsSync(path.join(AGENT_DIR(), `${b.threadId}.json`)), false, 'a thread larger than the whole bound is not kept');
 });

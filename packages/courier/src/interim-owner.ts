@@ -11,6 +11,7 @@ import { siweTimes } from './authority.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import type { InterimPeer } from './interim-renewal.js';
+import { clearReadCache } from './thread.js';
 
 export const OWNER_ASK_AHEAD_MS = 8 * 86_400_000;
 export interface OwnerEpisode {
@@ -110,6 +111,7 @@ export async function preflightOwner(options: { request?: boolean } = {}): Promi
 
 /** A terminal owner-authority refusal never triggers an automatic approval retry. */
 export async function markOwnerRefused(): Promise<void> {
+  clearReadCache();
   await withProfileTransaction(async (profile, save) => {
     const grant = loadGrant();
     if (!grant) return;

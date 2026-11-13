@@ -13,6 +13,7 @@ import { CourierError } from './errors.js';
 import { base64url32, ed25519DidKey, ed25519PublicKey } from './did-key.js';
 import { formatRemovalCommand, recordLiveness } from './file-lock.js';
 import type { Liveness } from './file-lock.js';
+import { clearReadCache } from './thread.js';
 
 /**
  * One derivation of where `init` stands, shared by every init mode.
@@ -495,6 +496,7 @@ function applyRotation(journal: RotationJournal): void {
   saveKey(journal.key);
   saveProfile(journal.profile);
   removeIfPresent(path.join(profileDir(), 'grant.json'));
+  clearReadCache(); // the old agent's cached counterparty bodies
   if (journal.discardApproval) clearPending();
   for (const grant of journal.discardedGrants ?? []) dropPendingDelegation(grant.delegationCid);
   syncDir();

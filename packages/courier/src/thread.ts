@@ -2,29 +2,60 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { messageView, oneLine, taskView } from './a2a.js';
 import type { KV } from './inbox.js';
-import { k, PREFIX } from './keys.js';
+import { agentId, k, PREFIX } from './keys.js';
 import { profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
 import { getJson, listAll } from './store.js';
 
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
-const MAX_CACHE_BYTES = 32 * 1024 * 1024;
+/** All of one agent's cached threads together, in bytes as written. */
+const CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const CACHE_MAX_AGE_MS = 7 * 24 * 3600_000;
 
-/** Bodies of create-only thread entries (messages and meta) already read, by side, peer and key. */
+/** Bodies of create-only thread entries (messages and meta) already read, by source identity and key. */
 export interface ThreadCache {
   get(id: string): unknown;
   set(id: string, body: unknown): void;
 }
 
+const cacheRoot = () => path.join(profileDir(), 'read-cache');
+
+/** The bounds of one agent's read cache; tests pass smaller ones. */
+export interface CacheLimits { now: number; maxBytes: number; maxAgeMs: number }
+
+/** A cached thread file is used only while it is a regular file of this user written within the age bound. */
+function fresh(file: string, limits: CacheLimits): boolean {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && stat.uid === process.getuid?.() && limits.now - stat.mtimeMs < limits.maxAgeMs;
+  } catch { return false; }
+}
+
+/** Keeps the agent's newest thread files within the byte bound and drops any older than the age bound. */
+function prune(dir: string, limits: CacheLimits): void {
+  const files = fs.readdirSync(dir).filter(name => name.endsWith('.json')).map(name => {
+    const file = path.join(dir, name);
+    const stat = fs.lstatSync(file);
+    return { file, mtime: stat.mtimeMs, bytes: stat.size, keep: stat.isFile() && limits.now - stat.mtimeMs < limits.maxAgeMs };
+  }).sort((a, b) => b.mtime - a.mtime);
+  let total = 0;
+  for (const entry of files) {
+    total += entry.bytes;
+    if (!entry.keep || total > limits.maxBytes) fs.rmSync(entry.file, { force: true });
+  }
+}
+
 /**
- * `courier read`'s private cache of one thread (`<COURIER_HOME>/read-cache/<thread>.json`, owner-only): messages and meta
- * are create-only, so a repeated read fetches only entries it has not read yet. Tasks change and are always fetched.
- * A missing, foreign or corrupt file is an empty cache.
+ * `courier read`'s private cache of one thread, per agent (`<COURIER_HOME>/read-cache/<did:key id>/<thread>.json`,
+ * owner-only): messages and meta are create-only, so a repeated read fetches only entries it has not read yet. Tasks
+ * change and are always fetched. A missing, foreign, expired (7 days) or corrupt file is an empty cache; the agent's
+ * files stay within 64 MiB together, oldest dropped first.
  */
-export function diskThreadCache(threadId: string): ThreadCache & { save(): void } {
-  const dir = path.join(profileDir(), 'read-cache');
+export function diskThreadCache(agent: string, threadId: string,
+  limits: CacheLimits = { now: Date.now(), maxBytes: CACHE_MAX_BYTES, maxAgeMs: CACHE_MAX_AGE_MS }): ThreadCache & { save(): void } {
+  const dir = path.join(cacheRoot(), agentId(agent));
   const file = path.join(dir, `${threadId}.json`);
   let entries: Record<string, unknown> = {};
-  if (SAFE_ID.test(threadId)) {
+  if (SAFE_ID.test(threadId) && fresh(file, limits)) {
     try {
       const parsed: unknown = JSON.parse(readRegularFile(file) ?? '{}');
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries = parsed as Record<string, unknown>;
@@ -35,12 +66,20 @@ export function diskThreadCache(threadId: string): ThreadCache & { save(): void 
     get: (id) => Object.hasOwn(entries, id) ? entries[id] : undefined,
     set: (id, body) => { entries[id] = body; changed = true; },
     save() {
-      if (!changed || !SAFE_ID.test(threadId) || JSON.stringify(entries).length > MAX_CACHE_BYTES) return;
+      if (!changed || !SAFE_ID.test(threadId)) return;
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      if (!fs.lstatSync(dir).isDirectory()) return;
-      writeSecure(file, entries);
+      if (!fs.lstatSync(cacheRoot()).isDirectory() || !fs.lstatSync(dir).isDirectory()) return;
+      // writeSecure writes pretty JSON and a newline.
+      if (Buffer.byteLength(JSON.stringify(entries, null, 2)) + 1 > limits.maxBytes) fs.rmSync(file, { force: true });
+      else writeSecure(file, entries);
+      prune(dir, limits);
     },
   };
+}
+
+/** Revocation, refusal, peer removal or a new agent key: every cached counterparty body on this machine goes. */
+export function clearReadCache(): void {
+  fs.rmSync(cacheRoot(), { recursive: true, force: true });
 }
 
 export interface ThreadEntry {

@@ -30,7 +30,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
-import { collectThread, diskThreadCache, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
+import { clearReadCache, collectThread, diskThreadCache, partialReadText, peerReadError, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
@@ -564,6 +564,7 @@ export async function cmdRevoke(args: ParsedArgs) {
     await revokePeer(node, profile, handle, save);
     delete profile.peers[handle];
     save();
+    clearReadCache();
     try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
     console.log(`Revoked ${shown} (${peer.courierDid}). Files you already shared with ${shown} stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).`);
   });
@@ -684,7 +685,7 @@ export type { ThreadEntry } from './thread.js';
 export async function cmdRead(args: ParsedArgs) {
   const { profile, node } = await ctx(true, args.get('peer'));
   const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
-  const cache = diskThreadCache(threadId);
+  const cache = diskThreadCache(profile.courierDid, threadId);
   const result = await collectThread({
     threadId,
     selfKv: node.kv,

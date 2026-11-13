@@ -82,14 +82,20 @@ export interface StateKeys {
 
 const DID_KEY = /^did:key:(z[1-9A-HJ-NP-Za-km-z]{1,128})$/;
 
+/** The method-specific id of an agent's `did:key`: the stable name of everything Courier keeps per agent. */
+export function agentId(agent: string): string {
+  const id = DID_KEY.exec(agent)?.[1];
+  if (!id) throw new CourierError('bad-profile', 'The Courier agent DID is not a did:key; its per-agent state has no key.');
+  return id;
+}
+
 /**
  * Watcher state of one Courier agent, under `me/state/agents/<its did:key id>/`: agents of one owner share the space,
  * never one watcher state or pause marker. Without an agent: the shared `me/state/` keys used before TC-2917.
  */
 export function stateKeys(agent?: string): StateKeys {
   if (agent === undefined) return { watch: k.watchState, paused: k.paused, pausedPrefix: k.pausedPrefix, wakeClaim: k.wakeClaim, wakeClaimsPrefix: k.wakeClaimsPrefix };
-  const id = DID_KEY.exec(agent)?.[1];
-  if (!id) throw new CourierError('bad-profile', 'The Courier agent DID is not a did:key; its watcher state has no key.');
+  const id = agentId(agent);
   const root = `${PREFIX}/me/state/agents/${id}/`;
   return {
     watch: `${root}watch.json`,
