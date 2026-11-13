@@ -53,3 +53,8 @@ test('rejects mismatched receipt CID, signed expiry and original signed bytes CI
 test('rejects a correctly signed lease carrying a proof chain', async () => {
   await expect(verifyOwnerRenewal(payload, fixture.ownerDid, await receipt(undefined, undefined, undefined, undefined, [fixture.delegation.cid]))).rejects.toThrow();
 });
+
+test('compares the agent principal when the signed audience uses its verification-method fragment', async () => {
+  await expect(verifyOwnerRenewal({ ...payload, verificationMethod: `${payload.verificationMethod}#key` }, fixture.ownerDid, await receipt())).resolves.toBeUndefined();
+  await expect(verifyOwnerRenewal({ ...payload, verificationMethod: 'did:key:zOther#key' }, fixture.ownerDid, await receipt())).rejects.toThrow();
+});

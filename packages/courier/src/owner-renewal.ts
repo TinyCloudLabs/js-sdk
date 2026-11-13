@@ -19,7 +19,7 @@ export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string
     || !Number.isFinite(originalStart) || !Number.isFinite(leaseStart)
     || originalStart > approved + 60_000 || leaseStart > now + 60_000
     || receipt.originalCid !== original.cid || !principalDidEquals(original.issuer, ownerDid)
-    || !principalDidEquals(lease.issuer, ownerDid) || original.audience !== payload.verificationMethod.split('#', 1)[0]
+    || !principalDidEquals(lease.issuer, ownerDid) || !principalDidEquals(original.audience, payload.verificationMethod)
     || lease.audience !== receipt.nodeIdentity.renewerDid
     || Object.keys(lease.attenuation).length !== 1 || !resource || Object.keys(resource).length !== 1
     || !Array.isArray(caveats) || caveats.length !== 1 || !caveats[0] || typeof caveats[0] !== 'object'
