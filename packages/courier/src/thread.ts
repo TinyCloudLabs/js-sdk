@@ -19,6 +19,30 @@ export interface ThreadCache {
 
 const cacheRoot = () => path.join(profileDir(), 'read-cache');
 
+let preparedRoot: string | undefined;
+
+/**
+ * Once per process: the cache directories are owner-only (0700) even if an earlier run left them looser, and thread
+ * files from before the cache was per agent (`read-cache/<thread>.json`) are deleted. Symlinks and other users' entries
+ * are never followed or changed.
+ */
+function prepareCacheRoot(): void {
+  const root = cacheRoot();
+  if (preparedRoot === root) return;
+  preparedRoot = root;
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(root); } catch { return; }
+  if (!stat.isDirectory() || stat.uid !== process.getuid?.()) return;
+  if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(root, 0o700);
+  for (const name of fs.readdirSync(root)) {
+    const entry = path.join(root, name);
+    const child = fs.lstatSync(entry);
+    if (child.uid !== process.getuid?.()) continue;
+    if (child.isFile() && name.endsWith('.json')) fs.rmSync(entry, { force: true });
+    else if (child.isDirectory() && (child.mode & 0o777) !== 0o700) fs.chmodSync(entry, 0o700);
+  }
+}
+
 /** The bounds of one agent's read cache; tests pass smaller ones. */
 export interface CacheLimits { now: number; maxBytes: number; maxAgeMs: number }
 
@@ -52,6 +76,7 @@ function prune(dir: string, limits: CacheLimits): void {
  */
 export function diskThreadCache(agent: string, threadId: string,
   limits: CacheLimits = { now: Date.now(), maxBytes: CACHE_MAX_BYTES, maxAgeMs: CACHE_MAX_AGE_MS }): ThreadCache & { save(): void } {
+  prepareCacheRoot();
   const dir = path.join(cacheRoot(), agentId(agent));
   const file = path.join(dir, `${threadId}.json`);
   let entries: Record<string, unknown> = {};
@@ -80,6 +105,7 @@ export function diskThreadCache(agent: string, threadId: string,
 /** Revocation, refusal, peer removal or a new agent key: every cached counterparty body on this machine goes. */
 export function clearReadCache(): void {
   fs.rmSync(cacheRoot(), { recursive: true, force: true });
+  preparedRoot = undefined;
 }
 
 export interface ThreadEntry {
