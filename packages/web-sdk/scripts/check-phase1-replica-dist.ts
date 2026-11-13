@@ -1,3 +1,4 @@
+import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
 import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -222,6 +223,12 @@ if (prBaseSha) {
   validateLedger(baseLedger, true);
   validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
   validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
+  validateTc2931BootstrapScopeTransition(baseLedger.tc2931BootstrapScope, ledger.tc2931BootstrapScope);
+  if (ledger.tc2931BootstrapScope !== undefined && baseLedger.tc2931BootstrapScope === undefined &&
+      (baseLedger.tc2936RestoreCommitRoot === undefined || !hasAncestor(repoRoot, ledger.tc2931BootstrapScope.sourceCommits.at(-1)!))) {
+    console.error("The TC-2931 admission requires the merged TC-2936 row and its measured source ancestor.");
+    failed = true;
+  }
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
   validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);

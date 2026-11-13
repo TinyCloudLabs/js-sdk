@@ -28,7 +28,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
-import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
+import { startBrowserLocationRegistry, type BrowserLocationRegistry } from "./browser/location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const STRICT = process.env.TC1888_ACCEPTANCE_STRICT === "1";
@@ -70,7 +70,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-1888 local-copy purge (Chromium)", (
   let host = "";
   let node: ChildProcess | undefined;
   let fixtureServer: Bun.Server<undefined> | undefined;
-  let registry: UnregisteredLocationRegistry;
+  let registry: BrowserLocationRegistry;
   let origin = "";
   let browser: Browser | undefined;
   let owner: TinyCloudNode | undefined;
@@ -143,7 +143,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-1888 local-copy purge (Chromium)", (
   beforeAll(async () => {
     if (!STRICT) return;
     dataDir = await mkdtemp(join("/var/tmp", "tc1888-node-"));
-    registry = startUnregisteredLocationRegistry();
+    registry = startBrowserLocationRegistry();
     const nodePort = await freePort();
     host = `http://127.0.0.1:${nodePort}`;
     await startNode(nodePort);
@@ -172,6 +172,9 @@ describe.skipIf(NODE_BIN === undefined)("TC-1888 local-copy purge (Chromium)", (
     await ownerB.signIn();
     const putB = await ownerB.kv.put("notes/b-only", new TextEncoder().encode("belongs to B"));
     if (!putB.ok) throw new Error(`account B seed failed: ${JSON.stringify(putB.error)}`);
+    const nodeDid = (await owner.activeNodeIdentity()).nodeDid;
+    await registry.register(WALLET_KEY, host, nodeDid);
+    await registry.register(ACCOUNT_B_KEY, host, nodeDid);
     browser = await chromium.launch();
   }, 120_000);
 
