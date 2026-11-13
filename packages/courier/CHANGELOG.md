@@ -1,5 +1,53 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.35
+
+### Patch Changes
+
+- 85095e8: Courier looks each owner up in the location registry once per command instead of once per node call. A `watch --once` pass made 28 to 34 registry lookups for one owner, and `read` of a 344-entry thread made 698; each now makes one lookup per owner (for an owner with no registry record, one v2 and one v1).
+
+  sdk-core adds an opt-in `verdictCache` option on `lookupOwnerRegistryVerdict`, `resolveRegistryResource` and `resolveFailClosedTinyCloudHosts`, and the entry point `@tinycloud/sdk-core/registry-verdict-cache` with `createRegistryVerdictCache()`, `REGISTRY_VERDICT_REGISTERED_TTL_MS`, `REGISTRY_VERDICT_UNREGISTERED_TTL_MS` and `REGISTRY_VERDICT_CACHE_MAX_ENTRIES`. node-sdk adds the `registryVerdictCache` option on `TinyCloudNode`.
+
+  How the cache behaves:
+  - It is keyed by owner DID and by the registry base the lookup fetches (host case and a default port don't matter), and concurrent lookups of one owner share one request. A registry URL with `?`, `#`, `@`, `\` or whitespace is refused.
+  - It keeps a registered record and a confirmed absence (v2 and v1 both not found) for 60 seconds each, on a monotonic clock, so a revoked registration stops routing and a new one is seen within a minute. It holds at most 256 owners.
+  - It never keeps an unavailable verdict, an outage fallback from saved settings or a failed lookup.
+  - A verdict, kept or still in flight, is served to a client only if that client's own registry stores agree with it: a registered record only when the client already holds that exact sequence, or an absence only for an owner the client has no registration evidence for (no sequence marker, no saved settings). Otherwise the client looks the owner up itself, which raises its floor and saves its settings. A failed or unavailable lookup is shared with clients waiting on it as it is; an outage fallback from one client's saved settings is never served to another.
+  - A route the record does not list, in routing or at sign-in, drops the owner's entry at once, and a refresh that finds no record drops the registered one.
+
+  Without the option, every lookup asks the registry, as before.
+
+  Courier gives every node it creates the same cache, registry sequence store and saved-settings store, so `send`, `read`, `inbox`, `watch`, `intake` and `outbox serve` share one lookup per owner. A long-running `watch`, `intake` or `outbox serve` looks an owner up again after those bounds.
+
+  Details: TC-2970
+
+- Updated dependencies [85095e8]
+  - @tinycloud/sdk-core@3.12.0-beta.30
+  - @tinycloud/node-sdk@3.12.0-beta.30
+
+## 0.6.0-beta.34
+
+### Patch Changes
+
+- 7c1f987: `courier read` of an unchanged thread now makes one KV call, the peer's listing. Your own side of the thread comes from a local, per-entry owner-space record of the writes made under your thread roots. That record is used for an hour after a listing, then your side is listed again. A peer's renewal marker is read at most every 5 minutes per thread. `courier read --full` lists both sides and fetches everything again. The documented meaning of `authority: "self"` in `courier read` output is now "written by an agent of the same owner", because same-owner agents are one principal. The output itself is unchanged.
+
+  `courier watch` keeps what it already knows in `<COURIER_HOME>/watch-cache/<agent>.json`: receipted messages, mirrored meta, marker reads and the claim pruning time. A restart or a `--once` run doesn't fetch these again. The file is bound to this agent's DID and space. Each peer's facts carry the DID, space and session they were learned under, and are dropped, never relabelled, once that peer is a different agent, space or session. Facts are kept per peer, so two peers that use the same name for this agent never share mirrored meta or task state. It keeps only eligible peers, and is deleted with the read cache.
+
+  A wake or inform put off because the authority check gave no verdict is held for at most 24 hours, then dropped and logged. Imports keep retrying. After 24 hours without a verdict, the human gets one `access-unverified` notice for that peer, and no more until a check succeeds and access is lost again. A positive verdict restarts an inform's 24 hours even if its post then fails. `courier guard` keeps the mode of `.claude/settings.local.json` whatever the umask. The local caches are used only when `COURIER_HOME` is a real directory of yours and every directory above it is owned by root or you and not writable by others (ssh StrictModes; a sticky `/tmp` is allowed when the directory below it is yours and owner-only). Otherwise everything is fetched. Each cache directory is opened without following a symlink, made owner-only through that handle, and checked again right before every read, write or delete, including clearing. The one-time clean-up of the old cache layout deletes only `<thread ULID>.json` files.
+
+  Courier now reads entries in bounded batches: `courier read`, `courier inbox`, intake, and the watcher's import and mirroring each read up to 16 messages or meta (at most 2 MiB each) or 4 tasks (at most 8 MiB each) in one `tinycloud.kv/get` invocation, so no response exceeds 32 MiB. Before, every entry took its own call. When one value is over its cap, the node refuses that batch, and Courier reads that batch's keys once more one by one. The oversized entry is reported by id (`entry-too-large` in `read`, `message-too-large` in `inbox`, an `ignored` watcher log line once per process for a message, meta or task, an `intake-error` plus a `too-large` done marker in intake), and every other entry is read. Each entry is still checked on its own. A cache directory that can't be made owner-only is not used and everything is fetched. A first read of a 260-entry thread drops from 265 invocations to 21, and importing 130 messages takes 9 reads instead of 130.
+
+  Details: TC-2917, TC-2951
+
+## 0.6.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies [0080686]
+  - @tinycloud/sdk-core@3.12.0-beta.28
+  - @tinycloud/node-sdk@3.12.0-beta.28
+  - @tinycloud/share-sdk@1.5.0-beta.4
+
 ## 0.6.0-beta.32
 
 ### Patch Changes

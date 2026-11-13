@@ -649,6 +649,8 @@ test("accepted run lookup: finds the acceptance in an earlier run's log, ignorin
       repo: r.repo,
       head: version,
       currentRunId: "9",
+      // Pinned: the default reads GITHUB_RUN_ATTEMPT, so a re-run of this CI job would otherwise read run 9's earlier attempt.
+      currentAttempt: 1,
       listRuns: () => runs,
       runLog: (id, attempt) => (fetched.push(id), attempt === 1 ? logs[id] ?? "" : ""),
       ...extra,

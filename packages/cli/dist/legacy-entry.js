@@ -18627,7 +18627,7 @@ var init_duration = __esm({
 });
 
 // src/lib/named-keys.ts
-import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { endToEndNodeHost, extractRecapAttenuations } from "@tinycloud/sdk-core";
 import {
   EncryptionResourceError,
   KEY_CREATE_ABILITY,
@@ -18661,7 +18661,7 @@ function keyPathInPrefix(prefix, path) {
 async function assertNodeSupportsNamedKeys(host, fetchImpl = fetch) {
   let info = null;
   try {
-    const response = await fetchImpl(`${host}/info`);
+    const response = await fetchImpl(`${endToEndNodeHost(host)}/info`, { redirect: "error" });
     if (response.ok) info = await response.json();
   } catch {
     info = null;

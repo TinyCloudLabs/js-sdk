@@ -41,6 +41,7 @@ export default defineConfig({
     "src/held-credentials/index.ts",
     "src/kv-list-matching/index.ts",
     "src/registry-publication.ts",
+    "src/registry-verdict-cache.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { sameTinyCloudNode } from "./tinycloud-node";
+import { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
 
 const node = "https://node.tinycloud.xyz";
 const tee = "https://tee.node.tinycloud.xyz";
@@ -27,5 +27,13 @@ test("non-production URL strings retain exact equality", () => {
   ]) {
     expect(sameTinyCloudNode(a!, b!)).toBe(false);
     expect(sameTinyCloudNode(a!, a!)).toBe(true);
+  }
+});
+
+test("end-to-end host maps only the two exact production names to the TEE origin", () => {
+  expect(endToEndNodeHost(node)).toBe(tee);
+  expect(endToEndNodeHost(tee)).toBe(tee);
+  for (const other of ["https://evil.example", "https://node.tinycloud.xyz.evil.example", "https://evilnode.tinycloud.xyz", "https://tee-node.tinycloud.xyz", "http://node.tinycloud.xyz", "https://node.tinycloud.xyz:444", node + "/", node + "/path", "https://user@node.tinycloud.xyz", "http://127.0.0.1:8000", "invalid"]) {
+    expect(endToEndNodeHost(other)).toBe(other);
   }
 });

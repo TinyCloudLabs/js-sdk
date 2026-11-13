@@ -231,9 +231,16 @@ jobs:
           # (web-sdk, TC-1457). The accepted versions are recorded in this
           # run's log, which the next run's pre-publish reads, so a version
           # that is accepted but not yet visible is never published again.
+          # Publish in dependency order (publish-in-dependency-order.mjs): one
+          # `changeset publish` per layer of the workspace dependency graph, and
+          # npm must serve every tarball of a layer (HTTP 200) before the next
+          # layer starts. `changeset publish` alone starts all packages at once,
+          # so courier was installable before the sdk-core it requires.
+          # The announce log is the publish log minus any version whose tarball
+          # never appeared; only it feeds the GitHub Releases.
           set +e
-          bunx changeset publish 2>&1 | tee "$RUNNER_TEMP/changeset-publish.log"
-          status=${PIPESTATUS[0]}
+          node .github/scripts/publish-in-dependency-order.mjs "$RUNNER_TEMP/changeset-publish.log" "$RUNNER_TEMP/announce/changeset-publish.log"
+          status=$?
           set -e
           node .github/scripts/check-npm-release-provenance.mjs record-accepted "$RUNNER_TEMP/changeset-publish.log"
           exit "$status"
@@ -247,7 +254,7 @@ jobs:
         id: published
         if: always() && steps.check.outputs.pending != '0'
         run: |
-          COUNT=$(node .github/scripts/github-releases.mjs count "$RUNNER_TEMP/changeset-publish.log")
+          COUNT=$(node .github/scripts/github-releases.mjs count "$RUNNER_TEMP/announce/changeset-publish.log")
           if [ "${COUNT:-0}" -gt 0 ]; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
@@ -261,7 +268,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: beta-publish-log
-          path: ${{ runner.temp }}/changeset-publish.log
+          path: ${{ runner.temp }}/announce/changeset-publish.log
           retention-days: 1
           if-no-files-found: error
 
@@ -544,11 +551,9 @@ jobs:
           # already-published versions are skipped gracefully, matching the
           # beta job's behavior.
           # Keep the output for the GitHub release step (O25).
-          set +e
-          bunx changeset publish 2>&1 | tee "$RUNNER_TEMP/changeset-publish.log"
-          status=${PIPESTATUS[0]}
-          set -e
-          exit "$status"
+          # Publish in dependency order, waiting for npm to serve each layer's
+          # tarballs before the next layer (see the beta job).
+          node .github/scripts/publish-in-dependency-order.mjs "$RUNNER_TEMP/changeset-publish.log"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}

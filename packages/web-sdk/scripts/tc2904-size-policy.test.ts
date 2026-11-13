@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import ledgerWithTc2927 from "./replica-size-ledger.json";
-const ledger = structuredClone(ledgerWithTc2927);
-delete ledger.tc2927ShareApprovalRoot;
+import ledger from "./replica-size-ledger.json";
 import { approvedTc2904OwnerDirectProofRoot, rootCeilingFor, validateLedger, validateTc2904OwnerDirectProofRootTransition } from "./replica-size-policy";
 
 describe("TC-2904 exact proof-parser allowance", () => {
@@ -11,7 +9,7 @@ describe("TC-2904 exact proof-parser allowance", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
       const row = ledger.tc2904OwnerDirectProofRoot;
       expect(row.root.ceiling[format] - ledger.tc2872RenewalRoot.root.ceiling[format]).toBe(row.root.delta[format]);
-      expect(rootCeilingFor({ ...ledger, tc2924NodeAliasesRoot: undefined, tc2934RequestedAccountRoot: undefined, tc2936RestoreCommitRoot: undefined, tc2931BootstrapScope: undefined }, format)).toMatchObject({ row: "tc2904OwnerDirectProofRoot", ceiling: row.root.ceiling[format] });
+      expect(rootCeilingFor({ ...ledger, tc2924NodeAliasesRoot: undefined, tc2934RequestedAccountRoot: undefined, tc2936RestoreCommitRoot: undefined, tc2931BootstrapScope: undefined, tc2923EncryptionTeeOriginRoot: undefined, tc2949PanelChunkRecoveryRoot: undefined, tc2970RegistryVerdictCacheRoot: undefined }, format)).toMatchObject({ row: "tc2904OwnerDirectProofRoot", ceiling: row.root.ceiling[format] });
     }
   });
   test("refuses changed, removed, or unstacked allowances", () => {

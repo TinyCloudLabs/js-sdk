@@ -43,6 +43,7 @@ import {
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
   type RegistryCacheStore,
+  type RegistryVerdictCache,
   type RegistryFallbackReason,
   registryOwnerSubjectV1,
   type LocalNodeIdentityStore,
@@ -72,6 +73,7 @@ import {
   ENCRYPTION,
   publicJwk,
   type CapabilityPresentationEnvelopeV1,
+  endToEndNodeHost,
 } from "@tinycloud/sdk-core";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import {
@@ -302,6 +304,8 @@ export interface NodeUserAuthorizationConfig {
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory. */
   registrySequenceStore?: RegistrySequenceStore;
   registryCacheStore?: RegistryCacheStore;
+  /** Opt-in reuse of registry verdicts across lookups; default: every lookup asks the registry. */
+  registryVerdictCache?: RegistryVerdictCache;
   /** Value-free warning after an actual cached-settings or default-node fallback. */
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /**
@@ -436,6 +440,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly registryChainId?: number;
   private readonly registrySequenceStore: RegistrySequenceStore;
   private readonly registryCacheStore: RegistryCacheStore;
+  private readonly registryVerdictCache?: RegistryVerdictCache;
   private readonly onNodeNotFound?: OnNodeNotFound;
   private readonly onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Verdict from the last `fail-closed` host resolution, reused by {@link assertMayCreateSpace}. */
@@ -543,6 +548,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.registrySequenceStore =
       config.registrySequenceStore ?? createInMemoryRegistrySequenceStore();
     this.registryCacheStore = config.registryCacheStore ?? createInMemoryRegistryCacheStore();
+    this.registryVerdictCache = config.registryVerdictCache;
     this.onNodeNotFound = config.onNodeNotFound;
     this.onRegistryFallback = config.onRegistryFallback;
     this.autoDiscoverLocalNode = config.autoDiscoverLocalNode;
@@ -772,6 +778,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           registryChainId: this.registryChainId,
           sequenceStore: this.registrySequenceStore,
           cacheStore: this.registryCacheStore,
+          verdictCache: this.registryVerdictCache,
           onRegistryFallback: this.onRegistryFallback,
         });
         this.registryVerdict = resolved.verdict;
@@ -1557,7 +1564,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
       if (record.encryptionNode && resources.some((resource) => resource.startsWith("urn:tinycloud:encryption:"))) {
         const node = record.nodes.find((candidate) => candidate.did === record.encryptionNode)!;
-        targets.set(node.url, { url: node.url, nodeDid: node.did });
+        // Encryption traffic uses the node's TEE-terminated origin (TC-2923), like TinyCloudNode routing.
+        const url = endToEndNodeHost(node.url);
+        targets.set(url, { url, nodeDid: node.did });
       }
     }
     let result: SpaceHostResult | undefined;

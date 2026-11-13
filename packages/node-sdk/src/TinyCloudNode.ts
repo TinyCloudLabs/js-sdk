@@ -185,8 +185,10 @@ import {
   createInMemoryRegistrySequenceStore,
   createInMemoryRegistryCacheStore,
   refreshOwnerRegistry,
+  lookupOwnerRegistryVerdict,
   registryOwnerKeyV2,
   type RegistryCacheStore,
+  type RegistryVerdictCache,
   type RegistryFallbackReason,
   publishLocationRecord,
   type LocalNodeIdentityStore,
@@ -234,6 +236,7 @@ import {
   err,
   serviceError,
   type Result,
+  endToEndNodeHost,
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
@@ -936,6 +939,11 @@ export interface TinyCloudNodeConfig {
   registrySequenceStore?: RegistrySequenceStore;
   /** Exact signed-v2 responses; pass a persistent adapter to survive restarts. */
   registryCacheStore?: RegistryCacheStore;
+  /**
+   * Opt-in reuse of registry verdicts, shareable across clients in one process: a registered record or a confirmed
+   * absence for 60 s; failures and outage fallbacks are never reused. Default: every lookup asks the registry.
+   */
+  registryVerdictCache?: RegistryVerdictCache;
   /** Value-free warning after an actual cached-settings or default-node fallback. */
   onRegistryFallback?: (reason: string, code?: RegistryFallbackReason) => void;
   /** Retry or abort when registry resolution fails; `use-host` is accepted only for genuine no-entry onboarding. */
@@ -2305,6 +2313,17 @@ export class TinyCloudNode {
   }
 
   private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+    const destinations = await this.registryDestinations(resource, access, noEntryHosts);
+    // Encryption-network traffic carries key material and public keys, so it
+    // only uses the origin whose TLS terminates inside the node (TC-2923). The
+    // identity check that follows runs against that origin; nothing retries on
+    // the other production name.
+    return access === "encryption"
+      ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) }))
+      : destinations;
+  }
+
+  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
         (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
@@ -2323,6 +2342,7 @@ export class TinyCloudNode {
       registryChainId: this.config.registryChainId,
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
+      verdictCache: this.config.registryVerdictCache,
       onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
@@ -2751,6 +2771,8 @@ export class TinyCloudNode {
         return response;
       },
     });
+    // Our own registration changed: the next lookup asks the registry.
+    this.config.registryVerdictCache?.invalidate(registryUrl, subject);
     graph.assertActive();
     return record;
   }
@@ -2827,12 +2849,16 @@ export class TinyCloudNode {
     const key = registryOwnerKeyV2(subject);
     if (this.registryRefreshOwners.has(key)) return;
     this.registryRefreshOwners.add(key);
-    void refreshOwnerRegistry(subject, {
+    const options = {
       registryUrl: this.config.tinycloudRegistryUrl,
       registryChainId: this.config.registryChainId,
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
-    }).catch(() => undefined);
+    };
+    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one.
+    void (this.config.registryVerdictCache
+      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache })
+      : refreshOwnerRegistry(subject, options)).catch(() => undefined);
   }
 
   /** Normalize signed capabilities without collapsing nested encryption into raw authority. */
@@ -4678,10 +4704,10 @@ export class TinyCloudNode {
   /** Registry-policy settings shared by every authorization this client creates. */
   private registryPolicyConfig(): Pick<
     TinyCloudNodeConfig,
-    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "onNodeNotFound" | "onRegistryFallback"
+    "registryPolicy" | "newUserHost" | "registryChainId" | "registrySequenceStore" | "registryCacheStore" | "registryVerdictCache" | "onNodeNotFound" | "onRegistryFallback"
   > & { registryNoEntryHosts: readonly string[] } {
-    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback } = this.config;
-    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, onNodeNotFound, onRegistryFallback,
+    const { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, registryVerdictCache, onNodeNotFound, onRegistryFallback } = this.config;
+    return { registryPolicy, newUserHost, registryChainId, registrySequenceStore, registryCacheStore, registryVerdictCache, onNodeNotFound, onRegistryFallback,
       registryNoEntryHosts: this.trustedNoEntryHosts };
   }
 
@@ -6331,8 +6357,13 @@ export class TinyCloudNode {
       wellKnown: {
         fetchWellKnown: async (principal, discoveryKey) => {
           graph.assertActive();
-          const destination = await this.encryptionDestination(this.getDefaultEncryptionNetworkId());
-          if (this.auth?.registryRecordPresent) return null;
+          const networkId = this.getDefaultEncryptionNetworkId();
+          // The advisory record is only for an owner with no registry record:
+          // a registered owner's descriptor is authoritative at its node. A
+          // session-only restore has no auth object, so ask the router.
+          const routed = await this.routingDestinations(networkId, "encryption");
+          if (this.auth?.registryRecordPresent || routed.some(({ nodeDid }) => nodeDid !== undefined)) return null;
+          const destination = await this.encryptionDestination(networkId);
           if (!address || !didPrincipalMatches(principal, did)) {
             return null;
           }
@@ -6340,7 +6371,7 @@ export class TinyCloudNode {
           const encodedKey = discoveryKey.split("/").map(encodeURIComponent).join("/");
           const response = await graph.fetch(
             `${destination.url}/public/${encodeURIComponent(publicSpaceId)}/kv/${encodedKey}`,
-            { method: "GET" },
+            { method: "GET", redirect: "error" },
           );
           graph.assertActive();
           if (!response.ok) {

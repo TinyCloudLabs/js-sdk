@@ -229,7 +229,12 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   it each take a fresh check on the node first (no cached verdict), and a
   removed or refused peer's queued wake or inform is dropped and logged. A
   check that cannot confirm access (a node error, a timeout) does nothing:
-  the item stays queued and is retried on the next pass. With
+  the item stays queued and is retried on the next pass, for up to 24 hours.
+  A wake or inform held that long is dropped and logged; imports keep
+  retrying, since the peer's messages stay in its space. After 24 hours
+  without a verdict the human gets one notice for that peer
+  (`access-unverified`), not repeated until a check succeeds and access is
+  lost again. With
   `--poll` above 5 minutes, this check and the retry of a peer whose sync did
   not finish still run every 5 minutes. A hook event for a
   peer's renewal marker (`pairing/delegation.json`) reads the marker and checks
@@ -243,7 +248,15 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 - **Wake.** After `--debounce` seconds (default 30, never later than twice that
   after the first message) the thread gets one wake carrying all its new
   messages. `inform` messages never wake. Pending wakes live in the agent's
-  own `watch.json` (see below), so a restart does not lose them.
+  own `watch.json` (see below), so a restart does not lose them. What the
+  watcher already knows (receipted message ids, mirrored meta, when each
+  renewal marker was read, when wake claims were pruned) is kept in
+  `<COURIER_HOME>/watch-cache/<agent did:key id>.json` (owner-only), so a
+  restart or a `watch --once` run doesn't fetch it again. It is bound to this
+  agent's DID and space. Each peer's facts carry the DID, space and session they
+  were learned under, and are dropped, never relabelled, once that peer is a
+  different agent, space or session. Only eligible peers' facts are kept. Facts are kept per peer, so two peers that
+  use the same name for this agent never share them.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
@@ -299,12 +312,35 @@ catch-up covers those gaps.
 
 `courier read` keeps the messages and thread meta it has read (both are
 create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
-(owner-only). Reading the thread again lists both sides and fetches only new
-entries and the tasks, which can change. Messages are create-only; a later
-overwrite of the same key isn't shown. One agent's cache stays within 64 MiB,
-files older than 7 days are not used, and a missing or unreadable file is
-rebuilt. `courier revoke`, a recorded refusal, an owner revocation and `init
---rotate-key` delete the cache.
+(owner-only). Reading the thread again lists only the peer's side and fetches
+only new entries and the tasks, which can change. Entries are fetched in
+bounded batches, each one `tinycloud.kv/get` invocation: up to 16 messages or
+meta of at most 2 MiB each, or 4 tasks of at most 8 MiB each, so no response
+exceeds 32 MiB.
+Each entry is still checked on its own. When one value in a batch is over its cap, the node refuses the batch, and
+Courier reads that batch's keys once more one by one, with the same cap. That key is then reported by id, never its
+content (`entry-too-large` in `courier read`, `message-too-large` in `courier inbox`, `ignored` with reason `too-large`
+once per watcher process for a message, thread meta or task, an `intake-error` in intake), and every other entry is read
+as usual. A cache directory that can't be made owner-only is not used: everything is fetched.
+Your own side comes from a local owner-space record of the writes made under
+your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
+session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
+is used for an hour after a listing of your side, then your side is listed
+again. A peer's renewal marker is read at most every 5 minutes per thread.
+`courier read --full` lists both sides and fetches everything again. Messages
+are create-only; a later overwrite of the same key isn't shown. One agent's
+cache stays within 64 MiB, files older than 7 days are not used, and a missing
+or unreadable file is rebuilt. The local caches (`read-cache/`,
+`watch-cache/`) are used only if `COURIER_HOME` is a real directory of yours,
+not a symlink, and every directory above it up to `/` is owned by root or you
+and not writable by group or others. A sticky directory such as `/tmp` is
+allowed when the directory just below it is yours and owner-only. This is the
+rule ssh's StrictModes uses. Otherwise the caches are not used and everything
+is fetched. Each cache directory is opened without following a symlink, is
+made owner-only through that handle, and is checked again right before every
+read, write or delete. `courier revoke`, a recorded refusal, an owner
+revocation and `init --rotate-key` delete the cache and the watcher's local
+knowledge, through the same checked directories.
 
 ### Wake adapters
 
@@ -882,8 +918,9 @@ already exists. A message id more than 10 minutes ahead of local time is not rec
 the cursor moves past it, so it is retried only when the cursor next wraps around the mirror. A mirror key whose
 message or thread id is not a ULID is logged as `intake-skip` (`bad-id`) and gets no marker. A message id whose
 time cannot be decoded gets a `bad-id` done marker. A fetched row that is malformed, or whose `messageId` or
-`contextId` does not match its key, gets a `mismatch` done marker. A message whose processing throws is logged
-as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
+`contextId` does not match its key, gets a `mismatch` done marker. A message over 2 MiB is logged as `intake-error`
+(`too-large`, with its thread and message id) and gets a `too-large` done marker; the other messages are queued. A
+message whose processing throws is logged as `intake-error`, and the cursor still moves past it. Existing history is not queued if you run
 `courier intake --init-from-now` first. It marks the current mirror messages of each paired peer as done (outcome
 `init`), and it refuses to run again while a paired peer has done entries unless `--force` is given. Without it, the
 first cycle works through the backlog from the oldest id inside the 7-day window, 200 rows per cycle.
@@ -937,9 +974,13 @@ Messages and tasks are A2A v1.0 JSON with the
 `xyz.tinycloud.courier/` in the owner's `agents` space.
 
 Inbound text and JSON `notice`/`authority` fields identify peer content as
-counterparty data, never as an owner's instruction. Message roles are assigned
-from thread/task ownership. The `courier` skill documents the authority rules
-and handoff shape. The view is TC-711.
+counterparty data, never as an owner's instruction. In `courier read` output,
+`authority: "self"` means the entry is under this agent's thread root in the
+owner's space: it was written by an agent of the same owner. That may be this
+agent or another agent of the same owner, because same-owner agents are one
+principal, as their grants are. Message roles are assigned from thread/task
+ownership. The `courier` skill documents the authority rules and handoff shape.
+The view is TC-711.
 
 ## References
 

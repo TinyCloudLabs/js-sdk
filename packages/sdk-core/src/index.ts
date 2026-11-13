@@ -1122,7 +1122,7 @@ export {
   verifyLocationRecordV2,
 } from "./location";
 export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
-export { resolveRegistryResource } from "./registry-policy";
+export { resolveRegistryResource, type RegistryVerdictCache, type RegistryVerdictScope } from "./registry-policy";
 
 export {
   createInMemoryRegistryCacheStore,
@@ -1227,7 +1227,7 @@ export {
   type UnsignedPolicyStatus,
 } from "./policy";
 
-export { sameTinyCloudNode } from "./tinycloud-node";
+export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
 export { verifyNewShareApproval, type NewShareApprovalExpected, type NewShareApprovalIdentity,
   type NewShareApprovalResult } from "./authorization/new-share-approval";
 export { AccountSetupRequiredError } from "./account-setup";

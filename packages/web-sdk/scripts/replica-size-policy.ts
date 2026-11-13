@@ -471,8 +471,10 @@ export type Ledger = {
   tc2924NodeAliasesRoot?: Tc2872RenewalRootBudget;
   tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2936RestoreCommitRoot?: LogoutRatchet;
-  tc2927ShareApprovalRoot?: LogoutRatchet;
   tc2931BootstrapScope?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
+  tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
+  tc2949PanelChunkRecoveryRoot?: LogoutRatchet;
+  tc2970RegistryVerdictCacheRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1099,7 +1101,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (root.tc2936RestoreCommitRoot !== undefined) pins.push({ row: "tc2936RestoreCommitRoot", pin: root.tc2936RestoreCommitRoot.sourceCommits.at(-1)! });
   if (root.tc2931BootstrapScope !== undefined) pins.push({ row: "tc2931BootstrapScope", pin: root.tc2931BootstrapScope.sourceCommits.at(-1)! });
-  if (root.tc2927ShareApprovalRoot !== undefined) pins.push({ row: "tc2927ShareApprovalRoot", pin: root.tc2927ShareApprovalRoot.sourceCommits.at(-1)! });
+  if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
+  if (root.tc2949PanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949PanelChunkRecoveryRoot", pin: root.tc2949PanelChunkRecoveryRoot.sourceCommits.at(-1)! });
+  if (root.tc2970RegistryVerdictCacheRoot !== undefined) pins.push({ row: "tc2970RegistryVerdictCacheRoot", pin: root.tc2970RegistryVerdictCacheRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1196,7 +1200,9 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
     ["tc2936RestoreCommitRoot", root.tc2936RestoreCommitRoot?.root.ceiling],
     ["tc2931BootstrapScope", root.tc2931BootstrapScope?.root.ceiling],
-    ["tc2927ShareApprovalRoot", root.tc2927ShareApprovalRoot?.root.ceiling],
+    ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
+    ["tc2949PanelChunkRecoveryRoot", root.tc2949PanelChunkRecoveryRoot?.root.ceiling],
+    ["tc2970RegistryVerdictCacheRoot", root.tc2970RegistryVerdictCacheRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3324,31 +3330,71 @@ export const approvedTc2931BootstrapScope: NonNullable<Ledger["tc2931BootstrapSc
   "reason": "Combined post-TC-2936 canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin. Exact root delta is +544/+448 over TC-2936; worker deltas remain +161/+150. Earlier rows and cumulative/general allowances remain unchanged. Details: TC-2931"
 };
 
-export const approvedTc2927ShareApprovalRoot: NonNullable<Ledger["tc2927ShareApprovalRoot"]> = {
-  "label": "new-share approval root admission (TC-2927)",
-  "ruling": "size-ruling: TC-2927: exact canonical CI root bytes after the merged bootstrap scope admission, at most +1900 B per format over that base. Immutable named row; no general, optional or worker allowance change. Details: TC-2927",
-  "base": "bc6584e7de9d5567a7d57b5c0fe888d2ef837365",
+export const approvedTc2923EncryptionTeeOriginRoot: LogoutRatchet = {
+  "label": "encryption-network TEE origin root admission (TC-2923)",
+  "ruling": "Naomi SIZE RULING TC-2923: exact canonical CI bytes, capped at +260 ESM/+200 CJS over the newest root; re-stacked on TC-2931 after #945 merged and re-measured; every other bucket unchanged; no general ceiling change. Details: TC-2923",
+  "base": "7fd34235ae6e915d78cb5a74d460bce9d4cebb01",
   "sourceCommits": [
-    "164e60d0bdd296d6f73583469f711ecfb31de3b2"
+    "8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6"
   ],
   "canonicalCI": {
-    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43450792796",
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607",
     "jobs": [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43450792796/job/131972091130",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43450792796/job/131972091088"
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968531764",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43449761607/job/131968532352"
     ]
   },
   "root": {
     "delta": {
-      "index.mjs": 1733,
-      "index.cjs": 1703
+      "index.mjs": 234,
+      "index.cjs": 186
     },
     "ceiling": {
-      "index.mjs": 1525548,
-      "index.cjs": 1460034
+      "index.mjs": 1524049,
+      "index.cjs": 1458517
     }
   },
-  "reason": "Canonical Node 22/Bun 1.3.14/source-WASM production webpack, gzip -9 stdin, measured at 164e60d0 after master bc6584e7 including TC-2931. Exact root growth is +1733/+1703. The later master merge eca50422 changes only release-workflow heap settings, with no package input change. Existing general, cumulative, optional and worker allowances remain unchanged. Details: TC-2927"
+  "reason": "Encryption-network calls for the production node use its TEE-terminated origin: the host mapping, the encryption routing and advisory-descriptor guards, and the sign-in activation mapping ship in the root bundle, with no new dependency. Canonical Node 22/Bun 1.3.14 CI at 8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6 measures 1524049/1458517 gzip -9 bytes over master 7fd34235ae6e915d78cb5a74d460bce9d4cebb01 at the TC-2931 ceiling 1523815/1458331. Optional, cumulative and worker allowances remain unchanged. Details: TC-2923"
+};
+
+/** Naomi's exact TC-2949 panel-recovery root allowance from canonical CI. */
+export const approvedTc2949PanelChunkRecoveryRoot: LogoutRatchet = {
+  "label": "panel chunk-load recovery root admission (TC-2949)",
+  "ruling": "Naomi's TC-2949 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root. Run 43456942350 measured 1524168/1458646 on base 790c8b08; current base 4ff23e8e differs only by #963's CI workflow env line, with no package input change. Details: TC-2949",
+  "base": "4ff23e8e9f2c9ccb39b5edb5dc7bdd4a97c3912d",
+  "sourceCommits": ["f9ccd5b8ffbe55a4dbef27e03562a777b08951e8"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350/job/131993450248",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350/job/131993450694"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 119, "index.cjs": 129 },
+    "ceiling": { "index.mjs": 1524168, "index.cjs": 1458646 }
+  },
+  "reason": "Chunk-load recovery logs a value-free failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI measured 1524168/1458646 gzip -9 bytes on 7af3a69c, based on 790c8b08; #963 changed only a CI workflow env line, so the measurement applies to current base 4ff23e8e. This is +119/+129 over the TC-2923 ceilings 1524049/1458517, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2949"
+};
+
+/** Naomi's exact TC-2970 registry verdict cache root allowance from canonical CI. */
+export const approvedTc2970RegistryVerdictCacheRoot: LogoutRatchet = {
+  "label": "registry verdict cache option root admission (TC-2970)",
+  "ruling": "Naomi's TC-2970 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root row when it merges; re-stacked on TC-2949 after #955 merged and re-measured. Details: TC-2970",
+  "base": "efb14e603ba4a49c4bb70690a4c501295e2292cf",
+  "sourceCommits": ["e04620cbd235645a02b55cf077efcaa2e7381fdf"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794375",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794928"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 127, "index.cjs": 86 },
+    "ceiling": { "index.mjs": 1524295, "index.cjs": 1458732 }
+  },
+  "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
 };
 
 export const approvedLedgerRows: Record<string, unknown> = {
@@ -3444,7 +3490,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
   tc2936RestoreCommitRoot: approvedTc2936RestoreCommitRoot,
   tc2931BootstrapScope: approvedTc2931BootstrapScope,
-  tc2927ShareApprovalRoot: approvedTc2927ShareApprovalRoot,
+  tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
+  tc2949PanelChunkRecoveryRoot: approvedTc2949PanelChunkRecoveryRoot,
+  tc2970RegistryVerdictCacheRoot: approvedTc2970RegistryVerdictCacheRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3861,18 +3909,28 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2924NodeAliasesRoot || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
     throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
   }
-  if (value.tc2927ShareApprovalRoot !== undefined &&
-      (!value.tc2931BootstrapScope || JSON.stringify(value.tc2927ShareApprovalRoot) !== JSON.stringify(approvedTc2927ShareApprovalRoot))) {
-    throw new Error("Only the exact TC-2927 share-approval root admission with its predecessor is approved.");
-  }
   if (value.tc2931BootstrapScope !== undefined &&
       (!value.tc2936RestoreCommitRoot || !value.tc2872RenewalKvWorker || !value.tc2872RenewalReplicaWorker ||
         JSON.stringify(value.tc2931BootstrapScope) !== JSON.stringify(approvedTc2931BootstrapScope))) {
     throw new Error("Only the exact TC-2931 root and worker admission with its predecessors is approved.");
   }
+  if (value.tc2923EncryptionTeeOriginRoot !== undefined &&
+      (!value.tc2931BootstrapScope || JSON.stringify(value.tc2923EncryptionTeeOriginRoot) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot))) {
+    throw new Error("Only Naomi's exact TC-2923 root admission is approved.");
+  }
   if (value.tc2936RestoreCommitRoot !== undefined &&
       (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
     throw new Error("Only Naomi's exact TC-2936 root admission is approved.");
+  }
+  if (value.tc2949PanelChunkRecoveryRoot !== undefined &&
+      (!value.tc2923EncryptionTeeOriginRoot ||
+        JSON.stringify(value.tc2949PanelChunkRecoveryRoot) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot))) {
+    throw new Error("Only Naomi's exact TC-2949 root admission is approved.");
+  }
+  if (value.tc2970RegistryVerdictCacheRoot !== undefined &&
+      (!value.tc2949PanelChunkRecoveryRoot ||
+        JSON.stringify(value.tc2970RegistryVerdictCacheRoot) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot))) {
+    throw new Error("Only Naomi's exact TC-2970 root admission is approved.");
   }
 }
 
@@ -4697,10 +4755,26 @@ export function validateTc2931BootstrapScopeTransition(base?: Ledger["tc2931Boot
   }
 }
 
-/** The measured TC-2927 root admission is introduced once and cannot be changed or removed. */
-export function validateTc2927ShareApprovalRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
-  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2927ShareApprovalRoot) ||
+/** The exact TC-2923 encryption-network TEE origin root admission is introduced once and immutable. */
+export function validateTc2923EncryptionTeeOriginRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
-    throw new Error("The TC-2927 root admission may be introduced once and cannot change later.");
+    throw new Error("The TC-2923 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2949 panel chunk-recovery root admission is introduced once and immutable. */
+export function validateTc2949PanelChunkRecoveryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2949 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2970 registry verdict cache root admission is introduced once and immutable. */
+export function validateTc2970RegistryVerdictCacheRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2970RegistryVerdictCacheRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2970 root admission may be introduced once and cannot change later.");
   }
 }

@@ -513,7 +513,9 @@ describe("TC-2096 lazy content fetch optional allowance", () => {
 describe("TC-2481 Web routing exact optional admission", () => {
   const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
     delete root.tc2931BootstrapScope;
-    delete root.tc2927ShareApprovalRoot;
+    delete root.tc2923EncryptionTeeOriginRoot;
+    delete root.tc2949PanelChunkRecoveryRoot;
+    delete root.tc2970RegistryVerdictCacheRoot;
   delete root.tc2481OfflineReplicaTransport;
   root.entries = root.entries.filter((entry) => entry.pr !== "#873");
   root.allowance["index.mjs"] = 388;
@@ -684,7 +686,9 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
   const fixture = () => {
     const root = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
     delete root.tc2931BootstrapScope;
-    delete root.tc2927ShareApprovalRoot;
+    delete root.tc2923EncryptionTeeOriginRoot;
+    delete root.tc2949PanelChunkRecoveryRoot;
+    delete root.tc2970RegistryVerdictCacheRoot;
     root.allowance = { "index.mjs": 391, "index.cjs": 861 };
     root.entries = root.entries.slice(0, root.entries.findIndex((entry) => entry.pr === "#873"));
     root.entries.push({

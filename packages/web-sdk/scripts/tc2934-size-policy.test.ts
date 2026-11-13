@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
-import ledgerWithTc2927 from "./replica-size-ledger.json";
-const ledger = structuredClone(ledgerWithTc2927);
-delete ledger.tc2927ShareApprovalRoot;
+import ledger from "./replica-size-ledger.json";
 import { approvedTc2934RequestedAccountRoot, ancestryPins, rootCeilingFor, validateLedger, validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
 
 test("TC-2934 admits only its exact canonical root bytes with unchanged workers", () => {
@@ -10,7 +8,7 @@ test("TC-2934 admits only its exact canonical root bytes with unchanged workers"
   expect(row).toEqual(approvedTc2934RequestedAccountRoot);
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - ledger.tc2924NodeAliasesRoot.root.ceiling[format]).toBe(row.root.delta[format]);
-    expect(rootCeilingFor({ ...ledger, tc2936RestoreCommitRoot: undefined, tc2931BootstrapScope: undefined }, format)).toEqual({ row: "tc2934RequestedAccountRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2936RestoreCommitRoot: undefined, tc2931BootstrapScope: undefined, tc2923EncryptionTeeOriginRoot: undefined, tc2949PanelChunkRecoveryRoot: undefined, tc2970RegistryVerdictCacheRoot: undefined }, format)).toEqual({ row: "tc2934RequestedAccountRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({ row: "tc2934RequestedAccountRoot", pin: row.sourceCommits[0] });
   expect(Object.keys(row).sort()).toEqual(["base", "canonicalCI", "label", "reason", "root", "ruling", "sourceCommits"]);

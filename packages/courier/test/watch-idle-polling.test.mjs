@@ -46,6 +46,11 @@ function memoryKv(name, count) {
       const row = rows.get(key);
       return row ? { ok: true, data: { data: row.value, headers: { etag: row.etag } } } : { ok: false, error: { status: 404, message: 'not found' } };
     },
+    async batchGet(keys, options) {
+      const results = [];
+      for (const key of keys) results.push({ key, result: await this.get(key, options) });
+      return { ok: true, data: { results, count: results.length } };
+    },
     async put(key, value, options = {}) {
       count(`${name} put`);
       if (kv.failPut?.(key)) { kv.failPut = undefined; return { ok: false, error: { status: 400, message: 'bad request' } }; }

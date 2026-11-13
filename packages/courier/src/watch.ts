@@ -7,7 +7,7 @@ import { k, PREFIX, stateKeys, type StateKeys } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
-import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
+import { del, getJson, isTooLarge, listAll, putCreate, putMatch, putOverwrite, readJsonMany, type JsonRead, type JsonReadOutcome } from './store.js';
 import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
 import { appendNotice, type Notice, type Notifier } from './notify.js';
 import { nextNoticeId, writePauseMarker } from './pause.js';
@@ -48,6 +48,8 @@ const MAX_OUTBOX = 50;
 const MAX_OUTBOX_TRIES = 8;
 const MAX_NOTICE_ATTEMPTS = 3;
 const MAX_HELD_PER_THREAD = 100;
+/** An action put off because its authority check gave no verdict is dropped after this; its peer's human is told once. */
+const DEFERRAL_LIMIT_MS = DAY_MS;
 /** The subject is peer-controlled text that reaches state, prompts and environments: one line, control characters removed, capped. */
 const MAX_SUBJECT = 200;
 /** Thread and message ids come from key names the peer controls; they reach prompts and argv, so only ULID-like ids pass. */
@@ -62,6 +64,8 @@ export interface PendingWake {
   approvals?: WakeApproval[];
   firstSeenAt: number;
   lastSeenAt: number;
+  /** When an authority check first gave no verdict for this wake; cleared by a verdict. */
+  deferredSince?: number;
 }
 
 interface ApprovalWake {
@@ -104,6 +108,17 @@ interface PauseEpisode extends NoticeRetry {
 const emptyEpisode = (): PauseEpisode => ({ kind: '', eventId: ZERO_ULID, repeats: '000000', ...emptyNoticeRetry() });
 const incrementCount = (count: string) => String(Math.min(MAX_COALESCED_PAUSES, Number(count) + 1)).padStart(6, '0');
 const episodeKey = (key: string, slot: number) => `notice:${key}:${slot}`;
+const accessKey = (peer: string) => `access:${peer}`;
+
+/**
+ * A peer whose authority checks give no verdict: since when, and once that lasts `DEFERRAL_LIMIT_MS`, the one notice
+ * (`eventId`) its human gets for this outage. A verdict ends the outage; a later one notifies again.
+ */
+interface UnverifiedPeer extends NoticeRetry {
+  since: number;
+  eventId: string;
+  notified: boolean;
+}
 
 /** Allocated only from our own thread/wake/pause records, never from incoming notice ids. */
 interface ThreadNoticeState {
@@ -146,11 +161,38 @@ export interface WatchState {
   noticeGlobalLog: number[];
   /** Every dispatch attempt, success or failure, per peer for the shared rolling-hour cap. */
   noticeLog: Record<string, number[]>;
+  /** Paired peers whose authority checks currently give no verdict. */
+  unverified: Record<string, UnverifiedPeer>;
 }
+
+/**
+ * What a watcher already knows and need not ask the node again, kept on this machine across runs: a `--once` loop
+ * starts fresh each time. Losing it only costs the calls it saves.
+ */
+export interface LocalWatchCache {
+  v: 1;
+  /** When wake claims were last pruned (hourly). */
+  claimsPrunedAt?: number;
+  /** When each peer's renewal marker was last read. */
+  markerReadAt: Record<string, number>;
+  /** Per peer, its `meta.json` keys already mirrored (create-only). Two peers may use the same name for us, so keys alone are ambiguous. */
+  metaMirrored: Record<string, string[]>;
+  /** Per peer, `thread/message` ids its receipts already list (receipts only grow). */
+  receipted: Record<string, string[]>;
+  /** Per peer, the identity (DID, space, session) its facts above were learned under; facts without one are dropped. */
+  identities: Record<string, PeerIdentity>;
+}
+
+export interface PeerIdentity { did: string; space: string; session: string | null }
+
+export const peerIdentity = (peer: StoredPeer): PeerIdentity =>
+  ({ did: peer.courierDid, space: peer.spaceId, session: peer.sessionId ?? null });
+export const sameIdentity = (a: PeerIdentity | undefined, b: PeerIdentity) =>
+  a !== undefined && a.did === b.did && a.space === b.space && a.session === b.session;
 
 /** `tries`: notification dispatch attempts (max 3), or failed inform attempts (max 8). */
 export type OutboxItem =
-  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; pauseId?: string; tries?: number; nextAttemptAt?: number }
+  | { id: string; kind: 'inform'; peer: string; threadId: string; text: string; pauseId?: string; tries?: number; nextAttemptAt?: number; deferredSince?: number }
   | { id: string; kind: 'notify'; notice: Notice; tries?: number; nextAttemptAt?: number; logged?: boolean };
 
 /** Messages that arrived while a thread was paused; they wake the agent once, together, after `courier resume`. */
@@ -219,6 +261,8 @@ export interface WatchDeps {
   notificationHome?: string;
   /** D mode mirrors and receipts, then notifies without invoking a wake adapter. */
   notifyOnly?: boolean;
+  /** This machine's copy of what the watcher already knows (see `LocalWatchCache`). Default: none, kept in memory. */
+  localCache?: { load(): LocalWatchCache | undefined; save(cache: LocalWatchCache): void };
   /**
    * Who this watcher is, for wake claims. `profileId` is stable for this profile on this machine (a restart keeps it,
    * a second profile or machine differs); `pid` and `isAlive` tell a restarted watcher its predecessor is dead.
@@ -230,7 +274,7 @@ export interface WatchDeps {
 type Via = 'startup' | 'hook' | 'poll';
 
 export function emptyWatchState(): WatchState {
-  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], wakeRetries: {}, approvalRetries: {}, outbox: [], held: {}, threadNotices: {}, peerNotices: {}, noticeGlobalLog: [], noticeLog: {} };
+  return { v: 1, pending: {}, woken: [], approvalsSeen: [], wakes: {}, paused: [], wakeRetries: {}, approvalRetries: {}, outbox: [], held: {}, threadNotices: {}, peerNotices: {}, noticeGlobalLog: [], noticeLog: {}, unverified: {} };
 }
 
 /** Wake time: `debounce` after the latest message, but never later than twice `debounce` after the first. */
@@ -287,7 +331,6 @@ export class Watcher {
   private readonly profileId: string;
   private readonly pid: number;
   private readonly isAlive: (pid: number) => boolean;
-  private lastClaimPrune = 0;
   /** Set when another watcher is writing this profile's state: this one stops and `run` throws it. */
   private fatalError: CourierError | undefined;
   /** Set once `run` is told to stop: nothing new is woken after that. */
@@ -295,8 +338,17 @@ export class Watcher {
   private onFatal: (() => void) | undefined;
   /** Etag of this agent's watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
+  /** Per `<peer handle>\n<peer task key>`: two peers may use the same name for us, so a key alone is ambiguous. */
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
-  private readonly metaMirrored = new Set<string>();
+  /** Peer keys whose value is over the batch cap: reported once and not read again by this process. */
+  private readonly tooLarge = new Set<string>();
+  private readonly metaMirrored: Map<string, Set<string>>;
+  private readonly markerReadAt: Map<string, number>;
+  private claimsPrunedAt: number;
+  /** Per peer, the identity the facts above were learned under: a peer that changed identity starts with none. */
+  private readonly factIdentity: Map<string, PeerIdentity>;
+  /** The local cache changed since it was last saved. */
+  private localDirty = false;
   private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean }>();
   /** Peers whose last sync did not finish: a cycle between full catch-ups lists only these again. */
   private readonly dirtyPeers = new Set<string>();
@@ -308,7 +360,7 @@ export class Watcher {
   /** Open hook streams by subscription id; absent while one is failed, ended or not yet opened. */
   private readonly hookStreams = new Map<string, { openedAt: number; proven: boolean }>();
   /** Message keys each peer's receipts already list; receipts only grow, so a listing within this set has nothing new. */
-  private readonly receipted = new Map<string, Set<string>>();
+  private readonly receipted: Map<string, Set<string>>;
   private stateQueue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly keys: StateKeys;
@@ -319,6 +371,42 @@ export class Watcher {
     this.pid = deps.holder?.pid ?? process.pid;
     this.isAlive = deps.holder?.isAlive ?? pidAlive;
     this.keys = stateKeys(deps.agent);
+    const cached = deps.localCache?.load();
+    this.metaMirrored = new Map(Object.entries(cached?.metaMirrored ?? {}).map(([peer, keys]) => [peer, new Set(keys)]));
+    this.markerReadAt = new Map(Object.entries(cached?.markerReadAt ?? {}));
+    this.receipted = new Map(Object.entries(cached?.receipted ?? {}).map(([peer, ids]) => [peer, new Set(ids)]));
+    this.claimsPrunedAt = cached?.claimsPrunedAt ?? 0;
+    this.factIdentity = new Map(Object.entries(cached?.identities ?? {}));
+  }
+
+  /**
+   * Before using or learning facts about a peer: if the peer is now a different agent, space or session than the one
+   * the facts were learned under, they are dropped, so a new peer's delivery is never skipped on an old peer's facts.
+   */
+  private bindFacts(peer: StoredPeer): void {
+    const identity = peerIdentity(peer);
+    if (sameIdentity(this.factIdentity.get(peer.handle), identity)) return;
+    this.receipted.delete(peer.handle);
+    this.markerReadAt.delete(peer.handle);
+    this.metaMirrored.delete(peer.handle);
+    for (const cache of [this.taskCache, this.tooLarge]) for (const key of [...cache.keys()]) if (key.startsWith(`${peer.handle}\n`)) cache.delete(key);
+    this.factIdentity.set(peer.handle, identity);
+    this.localDirty = true;
+  }
+
+  private saveLocal(): void {
+    if (!this.localDirty || !this.deps.localCache) return;
+    this.localDirty = false;
+    try {
+      this.deps.localCache.save({
+        v: 1, claimsPrunedAt: this.claimsPrunedAt, markerReadAt: Object.fromEntries(this.markerReadAt),
+        metaMirrored: Object.fromEntries([...this.metaMirrored].map(([peer, keys]) => [peer, [...keys]])),
+        receipted: Object.fromEntries([...this.receipted].map(([peer, ids]) => [peer, [...ids]])),
+        identities: Object.fromEntries(this.factIdentity),
+      });
+    } catch (error) {
+      this.deps.log('sync-error', { source: 'local-cache', ...errInfo(error) });
+    }
   }
 
   /**
@@ -327,9 +415,12 @@ export class Watcher {
    * marks the move done. Every write is create-only, so a crash or a second process repeats it harmlessly; the shared
    * keys are left in place.
    */
-  private async migrateLegacyState(): Promise<void> {
+  private async migrateLegacyState(): Promise<{ value: WatchState; etag: string | null } | undefined> {
     const { selfKv, log } = this.deps;
-    if (!this.deps.agent || await getJson(selfKv, this.keys.watch)) return;
+    if (!this.deps.agent) return undefined;
+    // Already moved: this read is also the state load.
+    const own = await getJson<WatchState>(selfKv, this.keys.watch);
+    if (own) return own;
     const mine = new Set(this.deps.peerHandles?.() ?? this.deps.loadPeers().map(peer => peer.handle));
     const ownKey = (key: string) => mine.has(key.split('/')[0]);
     let markers = 0;
@@ -354,12 +445,14 @@ export class Watcher {
     };
     await this.mirrorCreate(this.keys.watch, copy);
     log('state-migrated', { pending: Object.keys(copy.pending).length, paused: markers });
+    return undefined;
   }
 
   // ---------- state ----------
 
-  async loadState(): Promise<void> {
-    const got = await getJson<WatchState>(this.deps.selfKv, this.keys.watch);
+  /** `preloaded`: this agent's watch.json as just read (saves reading it twice at startup). */
+  async loadState(preloaded?: { value: WatchState; etag: string | null }): Promise<void> {
+    const got = preloaded ?? await getJson<WatchState>(this.deps.selfKv, this.keys.watch);
     const value = got?.value;
     this.stateEtag = got?.etag ?? null;
     this.state = isRecord(value) && value.v === 1
@@ -396,6 +489,11 @@ export class Watcher {
     }
     this.state.outbox = this.state.outbox.filter(item => {
       if (item.kind === 'inform') return true;
+      if (item.notice.kind === 'access-unverified') {
+        if (!this.noticeSlot(item) || item.id !== accessKey(item.notice.peer)) return false;
+        this.rememberNotice(item);
+        return true;
+      }
       const kind = needsKind(item.notice.kind);
       if (kind) {
         const slot = this.noticeSlot(item);
@@ -522,17 +620,22 @@ export class Watcher {
     }
   }
 
-  /** Claim markers are only needed while a double wake is possible; drop those older than two days. */
-  private async pruneClaims(): Promise<void> {
+  /** Claim markers are only needed while a double wake is possible; once an hour, drop those older than two days. */
+  private async pruneClaimsIfDue(): Promise<void> {
+    const at = this.now();
+    if (at - this.claimsPrunedAt <= 3600_000) return;
     try {
       for (const key of await listAll(this.deps.selfKv, this.keys.wakeClaimsPrefix)) {
         const id = /\/([^/]+)\.json$/.exec(key)?.[1];
         const sentAt = id ? Date.parse(sentAtOf(id)) : NaN;
-        if (Number.isFinite(sentAt) && this.now() - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
+        if (Number.isFinite(sentAt) && at - sentAt > 2 * DAY_MS) await del(this.deps.selfKv, key);
       }
     } catch (error) {
       this.deps.log('sync-error', { source: 'claims', ...errInfo(error) });
+      return;
     }
+    this.claimsPrunedAt = at;
+    this.localDirty = true;
   }
 
   // ---------- catch-up and delivery ----------
@@ -614,22 +717,63 @@ export class Watcher {
   private async authorized(peer: string | StoredPeer): Promise<boolean> {
     const handle = typeof peer === 'string' ? peer : peer.handle;
     if (!this.deps.checkAuthority) return true; // a library caller without an authority source
-    await this.deps.checkAuthority(handle);
+    try {
+      await this.deps.checkAuthority(handle);
+    } catch (error) {
+      await this.noteUnverified(handle);
+      throw error;
+    }
+    if (Object.hasOwn(this.state.unverified, handle)) await this.mutate(() => this.endUnverified(handle));
     return this.deps.loadPeers().some(current => current.handle === handle);
+  }
+
+  /**
+   * A check gave no verdict for this peer: the outage starts now if it isn't already running. Once it has lasted
+   * `DEFERRAL_LIMIT_MS`, the peer's human is told once (Naomi's TC-2951 ruling: imports keep retrying; wakes and informs
+   * deferred that long are dropped). Only configured paired peers allocate a record.
+   */
+  private async noteUnverified(handle: string): Promise<void> {
+    if (!HANDLE.test(handle) || !this.deps.loadPeers().some(peer => peer.handle === handle && peer.status === 'paired')) return;
+    const now = this.now();
+    const record = this.state.unverified[handle];
+    if (record && (record.eventId || now - record.since < DEFERRAL_LIMIT_MS)) return;
+    await this.mutate(() => {
+      const current = this.state.unverified[handle] ??= { since: now, eventId: '', notified: false, ...emptyNoticeRetry() };
+      if (current.eventId || now - current.since < DEFERRAL_LIMIT_MS) return;
+      current.eventId = ulid(now);
+      this.deps.log('access-unverified', { peer: handle, since: new Date(current.since).toISOString() });
+      this.fillOutbox();
+    });
+  }
+
+  /** A verdict ends the outage; a notice not yet sent for it is withdrawn. Called inside mutate. */
+  private endUnverified(handle: string): void {
+    delete this.state.unverified[handle];
+    this.state.outbox = this.state.outbox.filter(item => item.id !== accessKey(handle) || this.outboxBusy.has(item.id));
   }
 
   /** The scheduled renewal and authority check for every peer; each peer's next sync also reads its renewal marker. */
   private async checkAuthority(): Promise<void> {
     await this.deps.checkAuthority?.();
-    for (const peer of this.deps.loadPeers()) this.renewalDue.add(peer.handle);
+    // The renewal marker is read on the same schedule, across runs: a `--once` loop does not read it every run.
+    const at = this.now();
+    for (const peer of this.deps.loadPeers()) {
+      this.bindFacts(peer);
+      if (at - (this.markerReadAt.get(peer.handle) ?? -Infinity) >= AUTHORITY_CHECK_MS) this.renewalDue.add(peer.handle);
+    }
   }
 
   private async syncPeer(peer: StoredPeer, via: Via, listPaused: boolean, renew: boolean): Promise<void> {
     if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) return;
+    this.bindFacts(peer);
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer, renew);
-    if (renew) this.renewalDue.delete(peer.handle);
+    if (renew) {
+      this.renewalDue.delete(peer.handle);
+      this.markerReadAt.set(peer.handle, this.now());
+      this.localDirty = true;
+    }
     let allowed: Promise<boolean> | undefined;
     if (this.authorityDue.delete(peer.handle)) {
       // The marker changed: check now, even with nothing to import; the verdict also serves this sync's imports.
@@ -650,17 +794,38 @@ export class Watcher {
       receipts.threads ??= {};
       for (const [threadId, thread] of Object.entries(receipts.threads)) for (const id of thread.delivered ?? []) seen.add(`${threadId}/${id}`);
       this.receipted.set(peer.handle, seen);
+      this.localDirty = true;
     }
 
     const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
-    for (const selected of unseen.filter(item => !seen.has(`${item.threadId}/${item.messageId}`))) {
-      if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
-        log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
-        continue;
-      }
-      if (!(await authorized())) return;
+    const selectedItems = unseen.filter(item => !seen.has(`${item.threadId}/${item.messageId}`)).filter(selected => {
+      if (this.tooLarge.has(`${peer.handle}\n${selected.key}`)) return false;
+      if (SAFE_ID.test(selected.threadId) && SAFE_ID.test(selected.messageId)) return true;
+      log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
+      return false;
+    });
+    if (selectedItems.length && !(await authorized())) return;
+    // One batch read per 100 messages. A failed batch leaves them all for the next sync; one message's failure, only it.
+    let outcomes: Map<string, JsonReadOutcome<unknown>>;
+    try {
+      outcomes = await readJsonMany<unknown>(peerKv, selectedItems.map(item => item.key));
+    } catch (error) {
+      this.dirtyPeers.add(peer.handle);
+      log('sync-error', { peer: peer.handle, messages: selectedItems.length, ...errInfo(error) });
+      outcomes = new Map();
+    }
+    for (const selected of selectedItems) {
+      const outcome = outcomes.get(selected.key);
+      if (!outcome) continue;
       try {
-        const got = await getJson<unknown>(peerKv, selected.key);
+        if ('error' in outcome && isTooLarge(outcome.error)) {
+          // Over the cap: reported once and not read again by this process; the others go ahead. No receipt.
+          this.tooLarge.add(`${peer.handle}\n${selected.key}`);
+          log('ignored', { peer: peer.handle, threadId: selected.threadId, messageId: selected.messageId, reason: 'too-large' });
+          continue;
+        }
+        if ('error' in outcome) throw outcome.error;
+        const got = outcome.got;
         if (!got) continue;
         const value = got.value;
         if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
@@ -679,8 +844,13 @@ export class Watcher {
     }
 
     const subjects = new Map<string, string>();
-    for (const threadId of new Set(delivered.map((d) => d.threadId))) {
-      const meta = await getJson<unknown>(peerKv, `${PREFIX}/to/${mailbox}/threads/${threadId}/meta.json`).catch(() => undefined);
+    const threads = [...new Set(delivered.map((d) => d.threadId))];
+    const metaKey = (threadId: string) => `${PREFIX}/to/${mailbox}/threads/${threadId}/meta.json`;
+    // A missing or unreadable meta only costs the subject.
+    const metas = await readJsonMany<unknown>(peerKv, threads.map(metaKey)).catch(() => new Map<string, JsonReadOutcome<unknown>>());
+    for (const threadId of threads) {
+      const outcome = metas.get(metaKey(threadId));
+      const meta = outcome && 'got' in outcome ? outcome.got : undefined;
       subjects.set(threadId, isRecord(meta?.value) && typeof meta.value.subject === 'string' ? oneLine(meta.value.subject, MAX_SUBJECT) : '(no subject)');
     }
     const at = this.now();
@@ -738,6 +908,7 @@ export class Watcher {
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
     for (const item of delivered) seen.add(`${item.threadId}/${item.messageId}`);
+    if (delivered.length) this.localDirty = true;
     await this.mirrorThreads(peer, peerKv, keys, authorized);
   }
 
@@ -770,9 +941,34 @@ export class Watcher {
    * message delivery and each item is isolated: a bad or unwritable peer task never blocks receipts or wakes.
    */
   private async mirrorThreads(peer: StoredPeer, peerKv: KV, keys: string[], authorized: () => Promise<boolean>): Promise<void> {
-    for (const key of keys) {
+    // Only what may need copying is read: a meta not yet mirrored, a task not yet terminal, never a key found oversized.
+    const wanted = keys.filter(key => {
+      if (this.tooLarge.has(`${peer.handle}\n${key}`)) return false;
+      const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
+      if (meta) return SAFE_ID.test(meta[1]) && !this.metaMirrored.get(peer.handle)?.has(key);
+      const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
+      return Boolean(task && SAFE_ID.test(task[1]) && SAFE_ID.test(task[2]) && !this.taskCache.get(`${peer.handle}\n${key}`)?.terminal);
+    });
+    let outcomes: Map<string, JsonReadOutcome<unknown>>;
+    try {
+      outcomes = await readJsonMany<unknown>(peerKv, wanted);
+    } catch (error) {
+      this.dirtyPeers.add(peer.handle);
+      this.deps.log('mirror-error', { peer: peer.handle, ...errInfo(error) });
+      return;
+    }
+    for (const key of wanted) {
       try {
-        await this.mirrorThreadItem(peer, peerKv, key, authorized);
+        const outcome = outcomes.get(key)!;
+        if ('error' in outcome && isTooLarge(outcome.error)) {
+          // Over the cap: reported once and not read again by this process, like an oversized message.
+          this.tooLarge.add(`${peer.handle}\n${key}`);
+          const [, threadId, item] = /\/threads\/([^/]+)\/(meta|task\/[^/]+)\.json$/.exec(key)!;
+          this.deps.log('ignored', { peer: peer.handle, threadId, item, reason: 'too-large' });
+          continue;
+        }
+        if ('error' in outcome) throw outcome.error;
+        await this.mirrorThreadItem(peer, key, outcome.got, authorized);
       } catch (error) {
         this.dirtyPeers.add(peer.handle);
         this.deps.log('mirror-error', { peer: peer.handle, ...errInfo(error) });
@@ -780,29 +976,23 @@ export class Watcher {
     }
   }
 
-  private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string, authorized: () => Promise<boolean>): Promise<void> {
+  private async mirrorThreadItem(peer: StoredPeer, key: string, got: JsonRead<unknown>, authorized: () => Promise<boolean>): Promise<void> {
+    if (!got) return;
     const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
     if (meta) {
-      if (!SAFE_ID.test(meta[1])) return;
-      if (this.metaMirrored.has(key)) return;
-      const got = await getJson<unknown>(peerKv, key);
-      if (!got) return;
       if (!(await authorized())) return;
       await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
-      this.metaMirrored.add(key);
+      this.metaMirrored.set(peer.handle, (this.metaMirrored.get(peer.handle) ?? new Set()).add(key));
+      this.localDirty = true;
       return;
     }
-    const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
-    if (!task || !SAFE_ID.test(task[1]) || !SAFE_ID.test(task[2])) return;
-    const cached = this.taskCache.get(key);
-    if (cached?.terminal) return;
-    const got = await getJson<unknown>(peerKv, key);
-    if (!got) return;
+    const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key)!;
+    const cached = this.taskCache.get(`${peer.handle}\n${key}`);
     if (cached && got.etag && cached.etag === got.etag) return;
     if (!(await authorized())) return;
     await putOverwrite(this.deps.selfKv, k.mirrorTask(peer.handle, task[1], task[2]), got.value);
     const state = taskView(got.value).state;
-    this.taskCache.set(key, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
+    this.taskCache.set(`${peer.handle}\n${key}`, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
   }
 
   /**
@@ -984,6 +1174,21 @@ export class Watcher {
       allowed = await this.authorized(pending.peer);
     } catch (error) {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
+      const now = this.now();
+      const since = this.state.pending[key]?.deferredSince ?? now;
+      if (now - since >= DEFERRAL_LIMIT_MS) {
+        // Put off for 24 h without a verdict: dropped. The peer's human gets the one outage notice.
+        await this.mutate(() => {
+          delete this.state.pending[key];
+          delete this.state.wakeRetries[key];
+          delete this.state.approvalRetries[key];
+        });
+        this.deps.log('wake-dropped', { peer: pending.peer, threadId: pending.threadId, messageIds: woken, approvalIds: approvedIds, reason: 'authority-unverified-24h', ...errInfo(error) });
+        return;
+      }
+      if (this.state.pending[key] && this.state.pending[key].deferredSince === undefined) {
+        await this.mutate(() => { if (this.state.pending[key]) this.state.pending[key].deferredSince ??= since; });
+      }
       this.retryAt.set(key, at + WAKE_RETRY_MS);
       this.deps.log('wake-deferred', { peer: pending.peer, threadId: pending.threadId, reason: 'authority-unverified', ...errInfo(error) });
       return;
@@ -1004,6 +1209,7 @@ export class Watcher {
       await this.mutate(() => {
         this.state.threadNotices[key] ??= threadNoticeState();
         if (woken.length) this.state.wakes[key] = [...this.recentWakes(key), this.now()];
+        if (this.state.pending[key]) delete this.state.pending[key].deferredSince;
       });
     } catch (error) {
       await this.releaseClaim(pending.peer, pending.threadId, claimId);
@@ -1136,7 +1342,11 @@ export class Watcher {
     }
   }
 
-  private noticeSlot(item: Extract<OutboxItem, { kind: 'notify' }>): PauseEpisode | NeedsSlot | undefined {
+  private noticeSlot(item: Extract<OutboxItem, { kind: 'notify' }>): PauseEpisode | NeedsSlot | UnverifiedPeer | undefined {
+    if (item.notice.kind === 'access-unverified') {
+      const record = this.state.unverified[item.notice.peer];
+      return record?.eventId && !record.notified && record.eventId === item.notice.eventId ? record : undefined;
+    }
     const kind = needsKind(item.notice.kind);
     if (kind) {
       const slot = this.state.peerNotices[item.notice.peer]?.[kind];
@@ -1226,6 +1436,12 @@ export class Watcher {
           } };
       }
     }
+    for (const [peer, record] of Object.entries(this.state.unverified)) {
+      if (record.eventId && !record.notified) yield { id: accessKey(peer), kind: 'notify',
+        tries: record.tries, nextAttemptAt: record.nextAttemptAt, logged: record.logged, notice: {
+          kind: 'access-unverified', peer, threadId: ZERO_ULID, eventId: record.eventId, detail: 'authority unverified for 24 h',
+        } };
+    }
   }
 
   /** Admit local work first, allowing eligible peers to pass deferred entries in a full queue. */
@@ -1257,7 +1473,11 @@ export class Watcher {
     const peer = item.kind === 'inform' ? item.peer : item.notice.peer;
     const threadId = item.kind === 'inform' ? item.threadId : item.notice.threadId;
     const record = this.state.threadNotices[`${peer}/${threadId}`];
-    if (item.kind === 'notify' && needsKind(item.notice.kind)) {
+    if (item.kind === 'notify' && item.notice.kind === 'access-unverified') {
+      // One notice per outage, delivered or given up on: it is not queued again until a verdict ends the outage.
+      const slot = this.noticeSlot(item) as UnverifiedPeer | undefined;
+      if (slot) slot.notified = true;
+    } else if (item.kind === 'notify' && needsKind(item.notice.kind)) {
       const slot = this.noticeSlot(item) as NeedsSlot | undefined;
       if (slot) {
         const arrivals = slot.dispatchArrivals === '------' ? '000000' : slot.dispatchArrivals;
@@ -1368,10 +1588,21 @@ export class Watcher {
             try {
               allowed = await this.authorized(item.peer);
             } catch (error) {
+              const now = this.now();
+              const stored = this.state.outbox.find(o => o.id === item.id);
+              const since = stored?.kind === 'inform' ? stored.deferredSince ?? now : now;
+              if (now - since >= DEFERRAL_LIMIT_MS) {
+                // Put off for 24 h without a verdict: dropped. The peer's human gets the one outage notice.
+                this.deps.log('inform-dropped', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'authority-unverified-24h', ...errInfo(error) });
+                await this.mutate(() => this.finishOutbox(item));
+                return;
+              }
               this.deps.log('inform-deferred', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'authority-unverified', ...errInfo(error) });
               await this.mutate(() => {
-                const stored = this.state.outbox.find(o => o.id === item.id);
-                if (stored) stored.nextAttemptAt = this.now() + WAKE_RETRY_MS;
+                const current = this.state.outbox.find(o => o.id === item.id);
+                if (current?.kind !== 'inform') return;
+                current.nextAttemptAt = now + WAKE_RETRY_MS;
+                current.deferredSince ??= since;
               });
               return;
             }
@@ -1379,6 +1610,14 @@ export class Watcher {
               this.deps.log('inform-dropped', { id: item.id, peer: item.peer, threadId: item.threadId, reason: 'peer-not-authorized' });
               await this.mutate(() => this.finishOutbox(item));
               return;
+            }
+            if (item.deferredSince !== undefined) {
+              // A positive verdict ends the deferral: a post that then fails is retried on its own clock, never dropped
+              // for the earlier outage.
+              await this.mutate(() => {
+                const current = this.state.outbox.find(o => o.id === item.id);
+                if (current?.kind === 'inform') delete current.deferredSince;
+              });
             }
             await this.deps.postInform?.(item.peer, item.threadId, item.text, item.pauseId);
           } else {
@@ -1403,7 +1642,7 @@ export class Watcher {
               const episode = this.noticeSlot(stored);
               if (episode) {
                 if ('repeats' in episode) item.notice.repeats = stored.notice.repeats = episode.repeats;
-                else {
+                else if ('count' in episode) {
                   item.notice.threadId = stored.notice.threadId = episode.threadId;
                   item.notice.count = stored.notice.count = episode.count;
                   episode.arrivalFirstSeenAt = EPOCH;
@@ -1555,11 +1794,9 @@ export class Watcher {
       await this.deps.beforePoll?.();
       await this.checkAuthority();
       let authorityAt = this.now();
-      await this.migrateLegacyState();
-      await this.loadState();
+      await this.loadState(await this.migrateLegacyState());
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
-      await this.pruneClaims();
-      this.lastClaimPrune = this.now();
+      await this.pruneClaimsIfDue();
       const reconcile = () => {
         const desired = new Map<string, { sub: HookSubscription; hooks: () => Promise<HooksLike>; onEvent: (event?: HookEventLike) => void }>();
         for (const peer of this.deps.loadPeers()) {
@@ -1627,10 +1864,8 @@ export class Watcher {
           } else {
             await this.syncDirty();
           }
-          if (this.now() - this.lastClaimPrune > 3600_000) {
-            this.lastClaimPrune = this.now();
-            await this.pruneClaims();
-          }
+          await this.pruneClaimsIfDue();
+          this.saveLocal();
         }
       }
     } catch (error) {
@@ -1641,6 +1876,7 @@ export class Watcher {
       for (const controller of supervisors.values()) controller.abort();
       external.removeEventListener('abort', onExternalAbort);
       this.onFatal = undefined;
+      this.saveLocal();
       log('stop');
     }
     if (this.fatalError) throw this.fatalError;
