@@ -27,7 +27,7 @@ jobs:
       # Immutable, read-only operator and lockfile; never execute a moving branch.
       - uses: actions/checkout@v4
         with:
-          ref: 1ee52e7b71e098f37f26bd0a8b52d1b200d33bb0
+          ref: 19e25d393089fb46e09c2ab54660f072ead6acb7
           persist-credentials: false
           sparse-checkout: |
             .github/deploy-tools
@@ -71,3 +71,4 @@ jobs:
           path: |
             ${{ runner.temp }}/courier-canary-evidence/network-contract.json
             ${{ runner.temp }}/courier-canary-evidence/domain-diagnosis.json
+            ${{ runner.temp }}/courier-canary-evidence/routing-registry.json
