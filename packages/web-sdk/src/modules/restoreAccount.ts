@@ -1,4 +1,4 @@
-import { canonicalizeAddress, parsePkhDid, parseSpaceUri } from "@tinycloud/sdk-core";
+import { canonicalizeAddress, parsePkhDid, parseSpaceUri, parseSignedSiweCacao, type PersistedSessionData } from "@tinycloud/sdk-core";
 
 export class SessionAccountMismatchError extends Error {
   readonly code = "ACCOUNT_MISMATCH";
@@ -19,15 +19,22 @@ export function requestedRestoreAccount(account: string): { address: string; cha
   }
 }
 
-/** Signed restore validation subsequently binds these metadata fields to the owner proof. */
-export function assertRequestedRestoreAccount(
+/** Bind the request to the verified CACAO owner before restoring any session state. */
+export async function assertRequestedRestoreAccount(
   requested: string,
-  session: { address: string; chainId: number; tinycloudSession?: { spaceId: string } },
-): void {
+  session: Pick<PersistedSessionData, "address" | "chainId" | "tinycloudSession">,
+): Promise<void> {
   try {
     const expected = requestedRestoreAccount(requested);
+    const authorization = session.tinycloudSession?.delegationHeader.Authorization;
+    if (!authorization || !session.tinycloudSession?.delegationCid) throw new SessionAccountMismatchError();
+    const signed = await parseSignedSiweCacao(authorization.replace(/^Bearer\s+/i, ""), session.tinycloudSession.delegationCid);
+    const owner = parsePkhDid(signed.issuer);
     const space = parseSpaceUri(session.tinycloudSession?.spaceId ?? "");
-    if (expected.address.toLowerCase() !== canonicalizeAddress(session.address).toLowerCase() ||
+    if (!owner || owner.address.toLowerCase() !== expected.address.toLowerCase() ||
+      owner.chainId !== session.chainId ||
+      (expected.chainId !== undefined && owner.chainId !== expected.chainId) ||
+      expected.address.toLowerCase() !== canonicalizeAddress(session.address).toLowerCase() ||
       (expected.chainId !== undefined && expected.chainId !== session.chainId) ||
       space?.address?.toLowerCase() !== expected.address.toLowerCase() ||
       space.chainId !== String(session.chainId)) {

@@ -1,3 +1,4 @@
+import { signedBrowserSession } from "./fixtures/signed-browser-session";
 import { describe, expect, it } from "bun:test";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
 
@@ -7,7 +8,8 @@ import {
   restoreDataFromPersisted,
 } from "../src/modules/browserSessionPersistence";
 
-const ADDRESS = "0x1234567890abcdef1234567890abcdef12345678";
+const SIGNED_SESSION = await signedBrowserSession();
+const ADDRESS = SIGNED_SESSION.address;
 
 class MemoryStorage implements Storage {
   private readonly items = new Map<string, string>();
@@ -38,24 +40,7 @@ class MemoryStorage implements Storage {
 }
 
 function persistedSession(overrides: Partial<PersistedSessionData> = {}): PersistedSessionData {
-  const now = new Date();
-  return {
-    address: ADDRESS,
-    chainId: 1,
-    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "secret" }),
-    siwe: "example.com wants you to sign in\n\nExpiration Time: 2999-01-01T00:00:00.000Z",
-    signature: "0xsig",
-    tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer delegation" },
-      delegationCid: "bafydelegation",
-      spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
-      verificationMethod: "did:key:z6MkSession#z6MkSession",
-    },
-    expiresAt: new Date(now.getTime() + 60_000).toISOString(),
-    createdAt: now.toISOString(),
-    version: "1.0",
-    ...overrides,
-  };
+  return { ...structuredClone(SIGNED_SESSION), ...overrides };
 }
 
 describe("BrowserSessionStorage", () => {

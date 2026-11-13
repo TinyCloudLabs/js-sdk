@@ -12,6 +12,9 @@ const record = { address: proof.address, chainId: proof.chainId, sessionKey: JSO
 let calls = 0;
 globalThis.fetch = async () => { calls++; return Response.json({ error: "location record not found" }, { status: 404 }); };
 for (const scenario of [
+  { label: "signed owner differs from rewritten metadata", requested: wrong, slot: wrong, refused: true, forgedMetadata: true },
+  { label: "custom signed owner differs from rewritten metadata", requested: wrong, slot: wrong, refused: true, forgedMetadata: true, custom: true },
+  { label: "noncanonical persisted address casing", requested: proof.address, slot: proof.address, storedCasing: true },
   { label: "custom storage wrong slot", requested: wrong, slot: wrong, refused: true, custom: true },
   { label: "ordinary wrong slot", requested: wrong, slot: wrong, refused: true },
   { label: "ordinary same account", requested: proof.address, slot: proof.address },
@@ -23,12 +26,21 @@ for (const scenario of [
   localStorage.clear();
   const data = structuredClone(record);
   if (scenario.wrongSpace) data.tinycloudSession.spaceId = data.tinycloudSession.spaceId.replace(proof.address, wrong);
+  if (scenario.storedCasing) data.address = `0x${proof.address.slice(2).toUpperCase()}`;
+  if (scenario.forgedMetadata) {
+    data.address = wrong;
+    data.tinycloudSession.spaceId = data.tinycloudSession.spaceId.replace(proof.address, wrong);
+    data.siwe = data.siwe.replace(proof.address, wrong);
+  }
   const key = `tinycloud:session:${scenario.slot.toLowerCase()}`;
   localStorage.setItem(key, JSON.stringify(data));
   const unrelatedKey = "unrelated-session";
   localStorage.setItem(unrelatedKey, "preserved");
   const storage = scenario.custom ? { load: async () => data, save: async () => {}, clear: async () => { localStorage.removeItem(key); } } : new BrowserSessionStorage({ storage: localStorage });
   const app = new TinyCloudWeb({ ui: false, sessionStorage: storage, newUserHost: null, autoDiscoverLocalNode: false, tinycloudRegistryUrl: "http://127.0.0.1:1" });
+  let ensureNodeCalls = 0;
+  const ensureNode = Reflect.get(app, "ensureNode").bind(app);
+  Reflect.set(app, "ensureNode", async () => { ensureNodeCalls++; return ensureNode(); });
   const before = calls;
   const result = await app.restoreSession(scenario.requested);
   if (scenario.refused) {
@@ -37,6 +49,7 @@ for (const scenario of [
     assert.equal(result.error.code, "ACCOUNT_MISMATCH");
     assert.equal(localStorage.getItem(key), null);
     assert.equal(calls, before, "account refusal precedes network/activation");
+    assert.equal(ensureNodeCalls, 0, "account refusal precedes ensureNode");
     assert.equal(result.session, undefined);
     assert.equal(localStorage.getItem(unrelatedKey), "preserved");
     assert(!result.error.message.includes(proof.address));
