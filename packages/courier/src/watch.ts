@@ -22,6 +22,8 @@ const WAKEN_MEMORY = 500;
 const WAKE_RETRY_MS = 60_000;
 /** Delay between starting a re-opened subscription and its catch-up list, so the stream is live first. */
 const RECONNECT_CATCH_UP_MS = 2000;
+/** Spec §8: while every hook subscription is healthy, the full catch-up listing runs this often (otherwise every `pollMs`). */
+const HEALTHY_RECONCILE_MS = 300_000;
 /** Spec §7: an approval expires after 24 hours; an older one found at startup wakes nobody. */
 const APPROVAL_MAX_AGE_MS = 24 * 3600 * 1000;
 /** Adapter runs are capped at 30 min in total (`--wake-timeout`, one deadline across all its calls). This profile's own claim is respected 35 min unless its holder is provably gone; another profile's or machine's, 45. */
@@ -176,7 +178,13 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
+  /** Local owner checks, before startup and every cycle; throws to stop the watcher. */
   beforePoll?(): Promise<void>;
+  /**
+   * Renewal and authority checks against the node: one peer, or every peer when `handle` is omitted. Runs at startup,
+   * every cycle, and before anything is imported from a peer whose last check is older than `pollMs`.
+   */
+  checkAuthority?(handle?: string): Promise<void>;
   onAuthorityRefusal?(source: string): Promise<void>;
   selfKv: KV;
   /** Own space id, for the `me/approvals/` subscription. */
@@ -187,7 +195,8 @@ export interface WatchDeps {
   peerHooks(peer: StoredPeer): Promise<HooksLike>;
   /** Fresh peer list each call (pairing and renewals change the profile under a running watcher). */
   loadPeers(): StoredPeer[];
-  kvFor(peer: StoredPeer): Promise<KV>;
+  /** `renew`: also read the peer's renewal marker (on the renewal schedule, a marker hook event, or a refusal). */
+  kvFor(peer: StoredPeer, renew?: boolean): Promise<KV>;
   wake: Waker;
   log: WatchLog;
   /** Posts the `thread-paused` inform to a peer (own space, `to/<peer>/threads/<id>/msg/`). Default: nothing. */
@@ -276,7 +285,16 @@ export class Watcher {
   private stateEtag: string | null | undefined;
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   private readonly metaMirrored = new Set<string>();
-  private readonly syncing = new Map<string, { again: boolean; via: Via }>();
+  private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean }>();
+  /** Peers whose last sync did not finish: a cycle between full catch-ups lists only these again. */
+  private readonly dirtyPeers = new Set<string>();
+  private approvalsDirty = false;
+  /** Peers whose next sync also reads their renewal marker. */
+  private readonly renewalDue = new Set<string>();
+  /** When each peer's authority was last checked against the node. */
+  private readonly authorityAt = new Map<string, number>();
+  /** Open hook streams by subscription id; absent while one is failed, ended or not yet opened. */
+  private readonly hookStreams = new Map<string, { openedAt: number; proven: boolean }>();
   private stateQueue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
 
@@ -468,22 +486,37 @@ export class Watcher {
 
   // ---------- catch-up and delivery ----------
 
-  /** Serialises syncs per peer; a request that arrives mid-sync reruns once after it. */
-  async sync(peer: StoredPeer, via: Via): Promise<void> {
+  /**
+   * Serialises syncs per peer; a request that arrives mid-sync reruns once after it. `pausedListed`: the caller has
+   * just listed the pause markers for this cycle, so the sync shares that listing instead of making its own.
+   */
+  async sync(peer: StoredPeer, via: Via, pausedListed = false): Promise<void> {
     const running = this.syncing.get(peer.handle);
     if (running) {
       running.again = true;
+      running.listPaused ||= !pausedListed;
       return;
     }
-    const entry = { again: false, via };
+    const entry = { again: false, via, listPaused: !pausedListed };
     this.syncing.set(peer.handle, entry);
+    let renewAfterRefusal = false;
     try {
       do {
         entry.again = false;
+        const listPaused = entry.listPaused;
+        entry.listPaused = false;
+        const renew = renewAfterRefusal || this.renewalDue.has(peer.handle);
+        this.dirtyPeers.delete(peer.handle);
         try {
-          await this.syncPeer(peer, entry.via);
+          await this.syncPeer(peer, entry.via, listPaused, renew);
         } catch (error) {
-          if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`); return; }
+          if (isAuthorizationRefusal(error)) {
+            // The peer may have renewed: a refusal is final only once its latest renewal marker has been read.
+            if (!renew) { renewAfterRefusal = entry.again = true; continue; }
+            await this.deps.onAuthorityRefusal?.(`peer:${peer.handle}`);
+            return;
+          }
+          this.dirtyPeers.add(peer.handle);
           this.deps.log('sync-error', { peer: peer.handle, ...errInfo(error) });
         }
       } while (entry.again);
@@ -492,16 +525,41 @@ export class Watcher {
     }
   }
 
-  private async syncPeer(peer: StoredPeer, via: Via): Promise<void> {
+  /** What a peer sent is imported only under authority checked within the last `pollMs`; false once the peer is gone. */
+  private async authorized(peer: StoredPeer): Promise<boolean> {
+    if (!this.deps.checkAuthority) return true;
+    const at = this.now();
+    if (!(at - (this.authorityAt.get(peer.handle) ?? -Infinity) < this.opts.pollMs)) {
+      await this.deps.checkAuthority(peer.handle);
+      this.authorityAt.set(peer.handle, at);
+    }
+    return this.deps.loadPeers().some(current => current.handle === peer.handle);
+  }
+
+  /** The scheduled renewal and authority check for every peer; each peer's next sync also reads its renewal marker. */
+  private async checkAuthority(): Promise<void> {
+    const at = this.now();
+    const peers = this.deps.loadPeers();
+    if (this.deps.checkAuthority) {
+      await this.deps.checkAuthority();
+      for (const peer of peers) this.authorityAt.set(peer.handle, at);
+    }
+    for (const peer of peers) this.renewalDue.add(peer.handle);
+  }
+
+  private async syncPeer(peer: StoredPeer, via: Via, listPaused: boolean, renew: boolean): Promise<void> {
     if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) return;
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
-    const peerKv = await this.deps.kvFor(peer);
-    // Pause markers are read with every listing, so a `courier resume` or `courier pause` takes effect on the very
-    // next message instead of at the next poll (a message delivered while the watcher still thought the thread was
-    // paused would never wake anyone).
+    const peerKv = await this.deps.kvFor(peer, renew);
+    if (renew) this.renewalDue.delete(peer.handle);
+    let allowed: Promise<boolean> | undefined;
+    const authorized = () => allowed ??= this.authorized(peer);
+    // Pause markers are read with every listing (a cycle lists them once for all its peers just before), so a
+    // `courier resume` or `courier pause` takes effect on the very next message instead of at the next poll (a
+    // message delivered while the watcher still thought the thread was paused would never wake anyone).
     const prefix = peer.sessionId ? `${k.threadRoot(mailbox, peer.sessionId)}/` : `${PREFIX}/to/${mailbox}/threads/`;
-    const [keys] = await Promise.all([listAll(peerKv, prefix), this.syncPaused(), this.syncKnownThreads(peer)]);
+    const [keys] = await Promise.all([listAll(peerKv, prefix), listPaused ? this.syncPaused() : undefined, this.syncKnownThreads(peer)]);
     const receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
     receipts.threads ??= {};
 
@@ -511,6 +569,7 @@ export class Watcher {
         log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
         continue;
       }
+      if (!(await authorized())) return;
       try {
         const got = await getJson<unknown>(peerKv, selected.key);
         if (!got) continue;
@@ -521,11 +580,12 @@ export class Watcher {
         delivered.push({ threadId: selected.threadId, messageId: selected.messageId, intent: view.intent, notice: view.notice });
       } catch (error) {
         // Not delivered, so no receipt: this message is retried on the next sync; the others go ahead.
+        this.dirtyPeers.add(peer.handle);
         log('sync-error', { peer: peer.handle, messageId: selected.messageId, ...errInfo(error) });
       }
     }
     if (!delivered.length) {
-      await this.mirrorThreads(peer, peerKv, keys);
+      await this.mirrorThreads(peer, peerKv, keys, authorized);
       return;
     }
 
@@ -584,7 +644,7 @@ export class Watcher {
       this.fillOutbox();
     });
     await commitReceipts(selfKv, new Map([[peer.handle, delivered.map(({ threadId, messageId }) => ({ threadId, messageId }))]]));
-    await this.mirrorThreads(peer, peerKv, keys);
+    await this.mirrorThreads(peer, peerKv, keys, authorized);
   }
 
   /** Only locally authored meta/messages/tasks, or a local wake/pause witness, establish a known thread. */
@@ -615,23 +675,25 @@ export class Watcher {
    * meta.json is immutable (create-only); tasks are mutable, so copy the latest until they are terminal. Runs after
    * message delivery and each item is isolated: a bad or unwritable peer task never blocks receipts or wakes.
    */
-  private async mirrorThreads(peer: StoredPeer, peerKv: KV, keys: string[]): Promise<void> {
+  private async mirrorThreads(peer: StoredPeer, peerKv: KV, keys: string[], authorized: () => Promise<boolean>): Promise<void> {
     for (const key of keys) {
       try {
-        await this.mirrorThreadItem(peer, peerKv, key);
+        await this.mirrorThreadItem(peer, peerKv, key, authorized);
       } catch (error) {
+        this.dirtyPeers.add(peer.handle);
         this.deps.log('mirror-error', { peer: peer.handle, ...errInfo(error) });
       }
     }
   }
 
-  private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string): Promise<void> {
+  private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string, authorized: () => Promise<boolean>): Promise<void> {
     const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
     if (meta) {
       if (!SAFE_ID.test(meta[1])) return;
       if (this.metaMirrored.has(key)) return;
       const got = await getJson<unknown>(peerKv, key);
       if (!got) return;
+      if (!(await authorized())) return;
       await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
       this.metaMirrored.add(key);
       return;
@@ -643,6 +705,7 @@ export class Watcher {
     const got = await getJson<unknown>(peerKv, key);
     if (!got) return;
     if (cached && got.etag && cached.etag === got.etag) return;
+    if (!(await authorized())) return;
     await putOverwrite(this.deps.selfKv, k.mirrorTask(peer.handle, task[1], task[2]), got.value);
     const state = taskView(got.value).state;
     this.taskCache.set(key, { etag: got.etag, terminal: Boolean(state && TERMINAL_TASK_STATES.has(state)) });
@@ -661,9 +724,11 @@ export class Watcher {
     try {
       do {
         this.approvalsAgain = false;
+        this.approvalsDirty = false;
         try {
           await this.syncApprovalsOnce(via);
         } catch (error) {
+          this.approvalsDirty = true;
           this.deps.log('sync-error', { source: 'approvals', ...errInfo(error) });
         }
       } while (this.approvalsAgain);
@@ -693,6 +758,7 @@ export class Watcher {
         handled.push(id);
       } catch (error) {
         // Unread (transient failure): left unseen so the next sync retries it.
+        this.approvalsDirty = true;
         log('sync-error', { source: 'approvals', approvalId: id, ...errInfo(error) });
       }
     }
@@ -1258,8 +1324,12 @@ export class Watcher {
 
   // ---------- run loop ----------
 
+  /** One full catch-up: every peer and approvals, under one pause-marker listing. */
   async pollOnce(via: Via, preflight = true): Promise<void> {
-    if (preflight) await this.deps.beforePoll?.();
+    if (preflight) {
+      await this.deps.beforePoll?.();
+      await this.checkAuthority();
+    }
     if (this.deps.notifyOnly) {
       const paired = this.deps.loadPeers().filter(peer => peer.status === 'paired' && HANDLE.test(peer.handle)).map(peer => peer.handle);
       if (paired.some(peer => !Object.hasOwn(this.state.peerNotices, peer))
@@ -1272,8 +1342,29 @@ export class Watcher {
     }
     await this.syncPaused();
     await this.pruneState();
-    await Promise.all(this.deps.loadPeers().map((peer) => this.sync(peer, via)));
+    await Promise.all(this.deps.loadPeers().map((peer) => this.sync(peer, via, true)));
     await this.syncApprovals(via);
+  }
+
+  /** Between full catch-ups, a cycle lists again only what is dirty: a peer or approvals whose last sync did not finish. */
+  private async syncDirty(): Promise<void> {
+    const peers = this.deps.loadPeers().filter(peer => this.dirtyPeers.has(peer.handle));
+    for (const handle of this.dirtyPeers) if (!peers.some(peer => peer.handle === handle)) this.dirtyPeers.delete(handle);
+    if (peers.length) {
+      await this.syncPaused();
+      await Promise.all(peers.map(peer => this.sync(peer, 'poll', true)));
+    }
+    if (this.approvalsDirty) await this.syncApprovals('poll');
+  }
+
+  /** Healthy: every subscription has an open stream that delivered an event or has lasted one ticket without failing. */
+  private hooksHealthy(ids: Iterable<string>): boolean {
+    const at = this.now();
+    for (const id of ids) {
+      const stream = this.hookStreams.get(id);
+      if (!stream || !(stream.proven || at - stream.openedAt >= this.opts.ticketSeconds * 1000)) return false;
+    }
+    return true;
   }
 
   /**
@@ -1293,6 +1384,7 @@ export class Watcher {
     let ticker: NodeJS.Timeout | undefined;
     try {
       await this.deps.beforePoll?.();
+      await this.checkAuthority();
       await this.loadState();
       log('start', { debounceMs: this.opts.debounceMs, pollMs: this.opts.pollMs, ticketSeconds: this.opts.ticketSeconds, once: Boolean(options.once) });
       await this.pruneClaims();
@@ -1305,7 +1397,11 @@ export class Watcher {
           desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
             sub: { space: peer.spaceId, service: 'kv', pathPrefix: peer.sessionId ? k.threadRoot(peer.theirHandleForMe, peer.sessionId) : `${PREFIX}/to/${peer.theirHandleForMe}` },
             hooks: () => this.deps.peerHooks(peer),
-            onEvent: () => void this.sync(peer, 'hook'),
+            onEvent: (event) => {
+              // A peer renewing its delegation to us writes this marker; a path-less event may be it.
+              if (event && (event.path === undefined || event.path.endsWith('/pairing/delegation.json'))) this.renewalDue.add(peer.handle);
+              void this.sync(peer, 'hook');
+            },
           });
         }
         desired.set('approvals', {
@@ -1317,6 +1413,7 @@ export class Watcher {
           if (!desired.has(id)) {
             controller.abort();
             supervisors.delete(id);
+            this.hookStreams.delete(id);
           }
         }
         for (const [id, source] of desired) {
@@ -1333,14 +1430,22 @@ export class Watcher {
         // Open the subscriptions first, then catch up: a write between the two is seen by one or the other.
         reconcile();
         await sleep(RECONNECT_CATCH_UP_MS, signal);
+        let fullAt = this.now();
         if (!signal.aborted) await this.pollOnce('startup', false);
         ticker = setInterval(() => void this.tick().catch((e) => log('wake-error', errInfo(e))), 1000);
         while (!signal.aborted) {
           await sleep(this.opts.pollMs, signal);
           if (signal.aborted) break;
           await this.deps.beforePoll?.();
+          await this.checkAuthority();
           reconcile();
-          await this.pollOnce('poll', false);
+          // Healthy hooks deliver at once, so the full listing is only the fallback for an event they missed.
+          if (!this.hooksHealthy(supervisors.keys()) || this.now() - fullAt >= HEALTHY_RECONCILE_MS) {
+            fullAt = this.now();
+            await this.pollOnce('poll', false);
+          } else {
+            await this.syncDirty();
+          }
           if (this.now() - this.lastClaimPrune > 3600_000) {
             this.lastClaimPrune = this.now();
             await this.pruneClaims();
@@ -1360,7 +1465,10 @@ export class Watcher {
     if (this.fatalError) throw this.fatalError;
   }
 
-  /** One hook subscription. Authorization refusals stop this subscription; transient failures back off. */
+  /**
+   * One hook subscription. Authorization refusals stop this subscription; transient failures back off. A failed or
+   * ended stream catches up at once, and the watcher lists everything every `pollMs` until a new stream is healthy.
+   */
   private async supervise(
     id: string,
     sub: HookSubscription,
@@ -1379,16 +1487,25 @@ export class Watcher {
         if (opened) void sleep(RECONNECT_CATCH_UP_MS, signal).then(() => { if (!signal.aborted) onEvent(); });
         opened = true;
         const service = await hooks();
+        const stream = { openedAt: this.now(), proven: false };
+        this.hookStreams.set(id, stream);
         for await (const event of service.subscribe([sub], { ttlSeconds: this.opts.ticketSeconds, signal })) {
           failures = 0;
+          stream.proven = true;
           this.deps.log('hook-event', { source: id.split(':').slice(0, 2).join(':'), path: event.path ?? null });
           onEvent(event);
         }
-        if (!signal.aborted) await sleep(5_000, signal);
+        this.hookStreams.delete(id);
+        if (!signal.aborted) {
+          onEvent();
+          await sleep(5_000, signal);
+        }
       } catch (error) {
+        this.hookStreams.delete(id);
         if (isAuthorizationRefusal(error)) { await this.deps.onAuthorityRefusal?.(id); return; }
         failures++;
         this.deps.log('hook-error', { source: id.split(':').slice(0, 2).join(':'), ...errInfo(error) });
+        if (!signal.aborted) onEvent();
         await sleep(Math.min(300_000, 15_000 * 2 ** Math.min(failures - 1, 5)), signal);
       }
     }

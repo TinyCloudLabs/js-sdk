@@ -212,10 +212,20 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   `to/<me>/`, and one on your own `me/approvals/`, each on 25 s tickets
   (`--ticket`). A hook signals that something changed; the watcher then lists
   the peer's messages, and that listing is the source of truth.
-- **Catch up.** Every `--poll` seconds (default 60, not 5 minutes) and at
-  start, it lists each peer's `threads/` prefix in full and diffs it against
-  `to/<peer>/receipts.json`. A subscription that is refused (for example an
-  expired delegation) backs off and the poll keeps delivering.
+- **Catch up.** At start, and every 5 minutes while every subscription is
+  healthy, it lists each peer's `threads/` prefix in full and diffs it against
+  `to/<peer>/receipts.json`; a write whose hook event was missed is delivered by
+  the next one. When a subscription fails or ends, the watcher catches up at
+  once and lists everything every `--poll` seconds (default 60) until a new
+  stream has delivered an event or lasted one ticket. In between, each
+  `--poll` cycle lists again only a peer (or approvals) whose last sync did not
+  finish. A subscription that is refused (for example an expired delegation)
+  backs off and the poll keeps delivering.
+- **Authority.** Every `--poll` seconds, separately from the catch-up, the
+  watcher checks each peer's renewal and authority on the node; before it
+  imports anything from a peer whose last check is older than that, it checks
+  again. A peer's renewal marker is read on that schedule, on a hook event for
+  the marker, and before a refusal is treated as final.
 - **Deliver.** Each new message is copied create-only into
   `me/mirror/<peer>/threads/<id>/msg/`, the peer's `meta.json` and tasks are
   copied next to it (`task/` is overwritten until the task is terminal), and
@@ -258,8 +268,8 @@ Wakes are at-least-once: a crash between a wake and the state write wakes that
 thread again on restart (the new watcher takes the dead one's claim).
 When a subscription is re-opened the watcher also runs a catch-up sync two
 seconds later (the SDK's hook stream exposes no "connected" signal, only
-events); the SDK's own ticket renewals are invisible to it, and the poll covers
-those gaps.
+events); the SDK's own ticket renewals are invisible to it, and the 5-minute
+catch-up covers those gaps.
 
 ### Wake adapters
 

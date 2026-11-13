@@ -120,11 +120,15 @@ export async function createRuntimeNode(): Promise<TinyCloudNode> {
   }
 }
 
-/** A changed owner grant restarts a service so every captured SDK service uses the verified new session. */
-export async function watchPreflight(node: TinyCloudNode): Promise<void> {
+/** Local only: owner access state, and a changed owner grant restarts a service so every captured SDK service uses the verified new session. */
+export async function watchOwnerPreflight(node: TinyCloudNode): Promise<void> {
   await prepareOwnerAccess();
   if (loadGrant()?.delegationCid !== node.restorableSession?.delegationCid) {
     throw new CourierError('owner-grant-changed', `Your approval for Courier changed. Run your \`${cmd('watch')}\` command again to use it.`);
   }
+}
+
+export async function watchPreflight(node: TinyCloudNode): Promise<void> {
+  await watchOwnerPreflight(node);
   await maintainPeerSet(node);
 }

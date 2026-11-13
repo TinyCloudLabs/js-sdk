@@ -104,13 +104,14 @@ export async function currentInbound(node: TinyCloudNode, profile: Profile, peer
   return current;
 }
 
-export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer) {
+/** `renew: false` skips reading the peer's renewal marker; the watcher reads it on its renewal schedule instead. */
+export async function peerKv(node: TinyCloudNode, profile: Profile, peer: StoredPeer, options: { renew?: boolean } = {}) {
   const original = renewalBinding(profile, peer);
   const current = await currentInbound(node, profile, peer);
   const cids = activatedCids.get(node)!;
   const kv = node.kvForSpace(peer.spaceId);
   // Awaiting-C still needs the explicit pairing acknowledgement, not a renewal.
-  if (peer.status !== 'paired') return kv;
+  if (peer.status !== 'paired' || options.renew === false) return kv;
   const update = await getJson<{ delegation?: string }>(kv, k.peerDelegation(peer.theirHandleForMe!, peer.sessionId));
   assertInboundLive(peer, current.expiry);
   if (!update?.value.delegation) return kv;

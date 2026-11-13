@@ -1,4 +1,4 @@
-import { createRuntimeNode, recordAuthorityRefusal, watchPeerEligible, watchPreflight } from './interim-runtime.js';
+import { createRuntimeNode, maintainPeerSet, recordAuthorityRefusal, watchOwnerPreflight, watchPeerEligible } from './interim-runtime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -235,7 +235,8 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const log = jsonLineLog();
   const node = await createRuntimeNode();
   const watcher = new Watcher({
-    beforePoll: () => watchPreflight(node),
+    beforePoll: () => watchOwnerPreflight(node),
+    checkAuthority: (handle) => maintainPeerSet(node, handle),
     onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
@@ -244,7 +245,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     selfHooks: node.hooks,
     peerHooks: (peer) => peerHooks(node, loadProfile(), peer),
     loadPeers: () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer)),
-    kvFor: (peer) => peerKv(node, loadProfile(), peer),
+    kvFor: (peer, renew) => peerKv(node, loadProfile(), peer, { renew }),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
