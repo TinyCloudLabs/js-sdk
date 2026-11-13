@@ -7,10 +7,20 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+const FAKE_LINKS = new URL('./support/fake-links-fetch.mjs', import.meta.url).href;
 
+// The spawned CLI's `init --request` creates an approval link. Without these two variables it would POST to the production
+// links API (nine requests per run): the unresolvable origin plus the local stub answer that call in-process instead.
+// `NODE_OPTIONS` keeps what the test environment already carries (the production-origin guard).
 function run(home, argv, input) {
   return spawnSync(process.execPath, [CLI, ...argv], {
-    env: { ...process.env, COURIER_HOME: home }, encoding: 'utf8', timeout: 20_000, input,
+    env: {
+      ...process.env,
+      COURIER_HOME: home,
+      TC_LINKS_API_ORIGIN: 'https://links.fixture.invalid',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${FAKE_LINKS}`].filter(Boolean).join(' '),
+    },
+    encoding: 'utf8', timeout: 20_000, input,
   });
 }
 
@@ -34,7 +44,7 @@ for (const argv of [
   test(`unknown flag exits 2 with no side effect: ${argv.join(' ')}`, () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-unknown-flag-'));
     const made = run(home, ['init', '--request', '--handle', 'alice']);
-    // The init request needs a link API; without one the profile is still written before it fails or succeeds.
+    // The init request needs a link API: the local stub answers it, so the profile and a saved request exist before the unknown flag.
     const before = snapshot(home);
     const stray = path.join(home, 'profile.json.tmp-999999');
     const r = run(home, argv, 'not a grant');
