@@ -2590,5 +2590,30 @@
     "canonicalCI": { "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870", "jobs": ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870/job/129622759743"] },
     "root": { "delta": { "index.mjs": 468, "index.cjs": 455 }, "ceiling": { "index.mjs": 1479183, "index.cjs": 1421693 } },
     "reason": "Stable host SIWE expiry builder and its authorization import seam: canonical CI measures 1479183 ESM / 1421693 CJS gzip bytes, +468 / +455 above the prior root caps. The released 3.11.1 base already measured 36 B over the ESM cap locally (1478751 vs 1478715). No optional, gated, cumulative or worker allowance changes."
+  },
+  "tc2934RequestedAccountRoot": {
+    "label": "requested-account browser restore root admission (TC-2934)",
+    "ruling": "Naomi SIZE RULING TC-2934: exact canonical final-head CI bytes; stable root caps +500 ESM/+2300 CJS; workers unchanged; no general ceiling changes. Details: TC-2934",
+    "base": "b51b019c47fa8042ad0cf6661b328d37755fe550",
+    "sourceCommits": [
+      "97c27800f59a5445b991b467ec38f9a4f9158305"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418183937",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418183937/job/131861249254"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 429,
+        "index.cjs": 2203
+      },
+      "ceiling": {
+        "index.mjs": 1479612,
+        "index.cjs": 1423896
+      }
+    },
+    "reason": "The browser restore guard verifies the saved CACAO owner before node creation. The stable CJS bundle now includes the required signature/CID verifier; ESM already included it. Canonical Node 22/Bun 1.3.14/source-WASM CI at 97c27800f59a5445b991b467ec38f9a4f9158305 measures 1479612/1423896 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
   }
 }

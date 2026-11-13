@@ -421,6 +421,7 @@ export type Ledger = {
   tc2276TechnicalLimits?: Tc2276TechnicalLimits;
   tc2418AbortListenerCleanup?: Tc2418AbortListenerCleanup;
   tc2691HostExpiry?: LogoutRatchet;
+  tc2934RequestedAccountRoot?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1022,6 +1023,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   for (const row of ["tc2691HostExpiry"] as const) {
     if (root[row] !== undefined) pins.push({ row, pin: root[row].sourceCommits.at(-1)! });
   }
+  if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1097,6 +1099,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2276TechnicalLimits", root.tc2276TechnicalLimits?.root.ceiling],
     ["tc2418AbortListenerCleanup", root.tc2418AbortListenerCleanup?.root.ceiling],
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
+    ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2680,6 +2683,32 @@ export function validateGatedOnlyRatchet(row?: GatedOnlyRatchet, base?: GatedOnl
 const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 
 /** Every ledger row, except allowance and entries, with its approved constant. A row commit wires its constant here once. */
+export const approvedTc2934RequestedAccountRoot: LogoutRatchet = {
+  "label": "requested-account browser restore root admission (TC-2934)",
+  "ruling": "Naomi SIZE RULING TC-2934: exact canonical final-head CI bytes; stable root caps +500 ESM/+2300 CJS; workers unchanged; no general ceiling changes. Details: TC-2934",
+  "base": "b51b019c47fa8042ad0cf6661b328d37755fe550",
+  "sourceCommits": [
+    "97c27800f59a5445b991b467ec38f9a4f9158305"
+  ],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418183937",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43418183937/job/131861249254"
+    ]
+  },
+  "root": {
+    "delta": {
+      "index.mjs": 429,
+      "index.cjs": 2203
+    },
+    "ceiling": {
+      "index.mjs": 1479612,
+      "index.cjs": 1423896
+    }
+  },
+  "reason": "The browser restore guard verifies the saved CACAO owner before node creation. The stable CJS bundle now includes the required signature/CID verifier; ESM already included it. Canonical Node 22/Bun 1.3.14/source-WASM CI at 97c27800f59a5445b991b467ec38f9a4f9158305 measures 1479612/1423896 gzip -9 bytes. Optional, cumulative and worker allowances remain unchanged. Details: TC-2934"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -2747,6 +2776,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2276TechnicalLimits: approvedTc2276TechnicalLimits,
   tc2418AbortListenerCleanup: approvedTc2418AbortListenerCleanup,
   tc2691HostExpiry: approvedTc2691HostExpiry,
+  tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3057,6 +3087,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         (!value.tc2418AbortListenerCleanup || JSON.stringify(value[row]) !== JSON.stringify(approvedLedgerRows[row]))) {
       throw new Error("Only Naomi's exact host SIWE expiry (TC-2691) admission is approved.");
     }
+  }
+  if (value.tc2934RequestedAccountRoot !== undefined &&
+      (!value.tc2691HostExpiry || JSON.stringify(value.tc2934RequestedAccountRoot) !== JSON.stringify(approvedTc2934RequestedAccountRoot))) {
+    throw new Error("Only Naomi's exact TC-2934 root admission is approved.");
   }
 }
 
@@ -3683,5 +3717,12 @@ export function validateTc2691HostExpiryTransition(base: Ledger, current: Ledger
         base[row] !== undefined && JSON.stringify(current[row]) !== JSON.stringify(base[row])) {
       throw new Error("The host SIWE expiry (TC-2691) admission may be introduced once and cannot change later.");
     }
+  }
+}
+
+export function validateTc2934RequestedAccountRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2934RequestedAccountRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2934 root admission may be introduced once and cannot change later.");
   }
 }
