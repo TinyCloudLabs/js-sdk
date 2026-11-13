@@ -153,6 +153,44 @@ test('exec: refuses without --unguarded and runs nothing; with it, says so on ev
   assert.match(prompt, /this wake is not approval-guarded/, 'the agent sees it too');
 });
 
+test('exec: an agent CLI runs only with agentCli, claude never does, and the wake still says it is unguarded', async () => {
+  let ran = 0;
+  const lines = [];
+  const waker = (extra) => createWaker(config('exec', { unguarded: true, exec: 'codex exec "$COURIER_PROMPT"', ...extra }), {
+    sessions: { get: () => undefined, set() {} }, env: { PATH: '/bin' }, notice: (l) => lines.push(l),
+    run: async () => { ran++; return { code: 0, stdout: '', stderr: '' }; },
+  });
+  await assert.rejects(waker({})(request), /without --agent-cli/);
+  await assert.rejects(waker({ agentCli: true, exec: 'claude -p hi' })(request), /guarded --wake claude adapter/);
+  assert.equal(ran, 0, 'nothing is woken');
+  assert.deepEqual(lines, [], 'and no notice claims a wake happened');
+  await waker({ agentCli: true })(request);
+  assert.equal(ran, 1);
+  assert.match(lines[0], /this wake is not approval-guarded/);
+});
+
+test('--home-file: the named file reaches the clean HOME; credential stores, start-up files and paths outside HOME refuse', async () => {
+  fs.mkdirSync(path.join(fakeRealHome, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(fakeRealHome, '.codex', 'auth.json'), '{"login":"x"}');
+  const waker = createWaker(config('exec', { unguarded: true, homeFiles: ['.codex/auth.json'] }), {
+    sessions: { get: () => undefined, set() {} }, env: { PATH: '/bin' }, notice() {}, run: async () => ({ code: 0, stdout: '', stderr: '' }),
+  });
+  await waker(request);
+  const copied = path.join(agentHome(courierHome), '.codex', 'auth.json');
+  assert.equal(fs.readFileSync(copied, 'utf8'), '{"login":"x"}');
+  assert.equal(fs.statSync(copied).mode & 0o777, 0o600);
+
+  const cfg = (...argv) => wakeConfig(parseArgs(['watch', '--exec', 'echo hi', '--unguarded', ...argv]), 'sam');
+  assert.deepEqual(cfg('--home-file', '.codex/auth.json', '--home-file', '.local/share/opencode/auth.json').homeFiles, ['.codex/auth.json', '.local/share/opencode/auth.json']);
+  for (const rel of ['/etc/passwd', '../x', '.ssh/id_ed25519', '.config/gh/hosts.yml', '.npmrc', '.aws/credentials', '.bashrc']) assert.throws(() => cfg('--home-file', rel), /--home-file/, rel);
+  assert.throws(() => cfg('--home-file'), /needs a value/);
+  assert.throws(() => wakeConfig(parseArgs(['watch', '--wake', 'none', '--home-file', '.codex/auth.json']), 'sam'), /only applies with --wake exec or --wake claude/);
+  // Both flags survive into the service command line.
+  const args = parseArgs(['watch', '--exec', 'codex exec hi', '--unguarded', '--agent-cli', '--home-file', '.codex/auth.json', '--install-systemd', '--dry-run']);
+  const argv = serviceArgv({ ...args, positional: [] }, wakeConfig(args, 'sam'), ['node', '/opt/courier.js', 'watch']);
+  assert.ok(argv.includes('--agent-cli') && argv.join(' ').includes('--home-file .codex/auth.json'));
+});
+
 test('claude and paseo wakes are unaffected by the exec notice and never print it', async () => {
   const lines = [];
   const sessions = { get: () => undefined, set() {} };
