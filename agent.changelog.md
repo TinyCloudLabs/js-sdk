@@ -16,6 +16,10 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   legacy read/write/query recovery, stale-ETag refusal, new-layout writes and sibling
   permission refusal. Stale markers now change revision on every write so a
   concurrent same-day update cannot be incorrectly cleared during a copy rebuild.
+- TC-2416 recovery follow-up: `tinycloud_apps_context` inlines legacy kind
+  catalogs only while all catalog records serialize to at most 60,000
+  characters; past that it inlines app catalogs only and lists the rest in
+  `catalog.keys`, so the hosted 100,000-character limit cannot fail the call.
 
 ## 2026-11-12
 
