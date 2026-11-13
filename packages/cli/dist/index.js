@@ -7668,7 +7668,7 @@ __export(sdk_exports, {
 import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
-import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
+import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
 function configuredRegistryUrl(contextUrl, profile) {
   const envUrl = process.env.TC_REGISTRY_URL;
   if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
@@ -7706,13 +7706,13 @@ function signedLifetimePassed(delegation) {
   const expiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : void 0;
   return expiry !== void 0 && expiry.getTime() <= Date.now();
 }
-async function restoreProfileSession(node, profileName, profile, sessionData, stored) {
+async function restoreProfileSession(node, profileName, profile, sessionData) {
   const posture = profile === null ? void 0 : resolveProfilePosture(profile);
   if (ownerSessionLacksProof(sessionData, profile)) {
     throw sessionExpiredError(profileName, posture);
   }
   try {
-    await restoreStoredSession(node, sessionData, stored);
+    await node.restoreSession(sessionData);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
       throw sessionExpiredError(profileName, posture);
@@ -7742,7 +7742,7 @@ async function restoreProfileSessionNode(ctx) {
   if (typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" || session.delegationHeader === null || typeof session.delegationHeader !== "object" || !("Authorization" in session.delegationHeader) || typeof session.delegationHeader.Authorization !== "string") {
     return { unavailable: "session_invalid" };
   }
-  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now() && liveStoredLease(session) === void 0) {
+  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now()) {
     return { unavailable: "session_expired" };
   }
   const key = await ProfileManager.getKey(ctx.profile);
@@ -7756,7 +7756,7 @@ async function restoreProfileSessionNode(ctx) {
       host: ctx.host,
       ...profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}
     });
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
     return { node };
   } catch (error) {
     if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
@@ -7784,7 +7784,7 @@ async function storedSessionVerifiesLocally(profileName) {
       host: profile.host ?? DEFAULT_HOST,
       ...local ? { privateKey: profile.privateKey } : {}
     });
-    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
+    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
     return true;
   } catch {
     return false;
@@ -7846,7 +7846,7 @@ async function createSDKInstance(ctx, options) {
     }
     const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
     if (restoredOwnSession) {
-      await restoreProfileSession(node2, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
+      await restoreProfileSession(node2, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
     } else {
       await node2.signIn();
     }
@@ -7892,7 +7892,7 @@ async function createSDKInstance(ctx, options) {
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
     recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
       host: ctx.host,
       ownerSpace: profile?.spaceId,
@@ -16203,7 +16203,7 @@ var init_named_keys = __esm({
 // src/auth/scoped-login.ts
 import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile as isLocalOwnerProfile2, liveStoredLease as liveStoredLease2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile as isLocalOwnerProfile2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 function parseRequestedExpiry(value) {
   if (typeof value === "number") return { durationMs: value };
@@ -16460,7 +16460,7 @@ var init_scoped_login = __esm({
     CLOCK_SKEW_MS = 3e4;
     SIGNED_RECAP = "signed-recap";
     MIN_SIGNED_REMAINING_MS = 6e4;
-    TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime", "renewal"];
+    TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
   }
 });
 
@@ -16857,8 +16857,6 @@ import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath, profilePath as profilePath9 } from "@tinycloud/operations/state";
 import { principalDidEquals } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2 } from "@tinycloud/sdk-core";
-import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
-import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 function invalid(message) {
   return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
 }
@@ -17008,66 +17006,10 @@ function verifyPendingResult(entry, key) {
       }
     );
     if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid("Result owner or expiry differs from its signed delegation.");
-    if (!entry.request.renewal) return { delegation, session: verified.session };
-    let renewal;
-    try {
-      renewal = checkApprovalResultBinding(opened, { requestId: entry.requestId, bodyCid: entry.bodyCid, request: entry.request }).renewal;
-    } catch {
-      throw invalid("The approved renewal doesn't match this request. Sign in again for a new approval.");
-    }
-    return { delegation, session: verified.session, ...renewal ? { renewal } : {} };
+    return { delegation, session: verified.session };
   } catch (error) {
     if (isPermanentRefusal(error) || error instanceof CLIError && error.code === "APPROVAL_RESULT_INVALID") carryRefusedDelegation(error, seen);
     throw error;
-  }
-}
-async function admitApprovedRenewal(host, entry, verified) {
-  const { delegation, session, renewal } = verified;
-  const header = delegation.delegationHeader;
-  const original = {
-    delegationHeader: { Authorization: typeof header === "object" && header !== null && "Authorization" in header ? String(header.Authorization) : "" },
-    delegationCid: String(delegation.delegationCid),
-    verificationMethod: String(delegation.verificationMethod)
-  };
-  const refused = (message) => {
-    const error = invalid(message);
-    carryRefusedDelegation(error, delegation);
-    return error;
-  };
-  let signed;
-  try {
-    signed = await verifyOwnerRenewalLease(original, session.ownerDid, renewal);
-  } catch {
-    throw refused("This renewal doesn't match the permission you approved, so it wasn't turned on. Sign in again for a new approval.");
-  }
-  if (Date.parse(signed.originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
-    throw refused("The approved session ends too soon for its renewal to start. Sign in again for a new approval.");
-  }
-  try {
-    await admitOwnerRenewalLease({
-      host: new URL(host).origin,
-      originalAuthorization: original.delegationHeader.Authorization,
-      originalCid: original.delegationCid,
-      ownerDid: session.ownerDid,
-      agentDid: entry.request.targetDid,
-      spaceId: String(delegation.spaceId),
-      nodeIdentity: renewal.receipt.nodeIdentity,
-      leaseAuthorization: renewal.receipt.leaseAuthorization,
-      leaseCid: renewal.receipt.leaseCid,
-      leaseExpiresAt: signed.leaseSignedExpiresAt
-    });
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
-      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
-    }
-    if (error instanceof Error && error.message === "Renewal node identity changed") {
-      throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
-    }
-    throw Object.assign(new CLIError(
-      "NETWORK_ERROR",
-      "The TinyCloud node didn't accept this session's renewal. Your approval is saved, so run the same command again.",
-      ExitCode.NETWORK_ERROR
-    ), { cause: error });
   }
 }
 function pendingApproval(entry, approvalWait, created = false) {
@@ -17138,8 +17080,7 @@ async function acquireApprovalRequest(_did, options) {
     nodeOrigin: options.host,
     permissions: options.permissions,
     ...options.reason ? { reason: options.reason } : {},
-    grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
-    ...options.renewalLeaseSeconds === void 0 ? {} : { renewal: { version: 1, leaseLifetimeSeconds: options.renewalLeaseSeconds } }
+    grantLifetimeSeconds: grantLifetimeSeconds(options.expiry)
   };
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
@@ -17277,12 +17218,10 @@ ${entry.approvalUrl}
   let verified;
   try {
     verified = verifyPendingResult(entry, signingKey);
-    if (verified.renewal) await admitApprovedRenewal(options.host, entry, { ...verified, renewal: verified.renewal });
   } catch (error) {
     if (isPermanentRefusal(error)) await forgetApproval(profile, entry);
     throw error;
   }
-  if (verified.renewal) renewals.set(verified.delegation, verified.renewal);
   await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
   acquisitions.set(verified.delegation, entry);
   if (approvalWait) approvalWaits.set(entry, approvalWait);
@@ -17319,7 +17258,7 @@ function invitationGrantOf(delegation, key) {
     acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt
   });
 }
-var acquisitions, approvalWaits, renewals, STATE_FILE, RESULT_RETENTION_MS, EXPIRY_SKEW_MS;
+var acquisitions, approvalWaits, STATE_FILE, RESULT_RETENTION_MS, EXPIRY_SKEW_MS;
 var init_approval_request = __esm({
   "src/auth/approval-request.ts"() {
     "use strict";
@@ -17341,7 +17280,6 @@ var init_approval_request = __esm({
     init_invitation_key_grant();
     acquisitions = /* @__PURE__ */ new WeakMap();
     approvalWaits = /* @__PURE__ */ new WeakMap();
-    renewals = /* @__PURE__ */ new WeakMap();
     STATE_FILE = "approval-pending.json";
     RESULT_RETENTION_MS = 6e5;
     EXPIRY_SKEW_MS = 6e4;
