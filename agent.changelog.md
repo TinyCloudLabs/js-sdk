@@ -3,6 +3,14 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-12
+
+- Hosted MCP consent carries its public requester origin; OpenKey binds the
+  host into the SIWE and labels it without claiming verified app identity.
+  Generic app changes now grant discovery get/put only on the selected app's
+  exact entry, with catalog-root reads. Existing broad grants need revocation
+  or expiry and reapproval; no deployment or grant revocation was performed.
+
 ## 2026-11-09
 
 - TC-2393: staged ten-client hosted MCP requirements, existing protocol support,

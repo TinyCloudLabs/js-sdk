@@ -4917,14 +4917,15 @@ export class TinyCloudNode {
     if (renewalRestore && !hasPersistedProof) {
       throw new InvalidRestoredSessionError("Renewal restore requires the original signed SIWE proof.");
     }
+    let delegationExpiry: Date | undefined;
     if (!hasPersistedProof) {
       // A SIWE-less session (a delegate session `tc auth import` bootstrapped)
       // lasts as long as the compact UCAN it restores. Refuse it once
       // that has passed, as an expired SIWE is refused below, before any host
       // lookup. Other bytes are left to the node, as before.
       const authorization = sessionData.delegationHeader?.Authorization;
-      const signedExpiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
-      if (signedExpiry !== undefined && signedExpiry.getTime() <= Date.now()) {
+      delegationExpiry = typeof authorization === "string" ? signedCompactUcanExpiry(authorization) : undefined;
+      if (delegationExpiry !== undefined && delegationExpiry.getTime() <= Date.now()) {
         throw new InvalidRestoredSessionError("Persisted session delegation has expired.");
       }
     }
@@ -5090,6 +5091,14 @@ export class TinyCloudNode {
     await this.accountRegistryTail;
     // Nothing is committed yet: a sign-out since the start simply wins.
     this.assertSessionEpoch(epoch, "Session restore");
+    // Expiry was checked before the awaits above. A session that lapsed meanwhile is not installed; the
+    // renewal candidate pass (allowExpired without effectiveExpiry) restores an expired original on purpose.
+    const commitExpiry = !hasPersistedProof
+      ? delegationExpiry
+      : renewalRestore && !renewalRestore.effectiveExpiry ? undefined : stagedSessionExpiry;
+    if (commitExpiry !== undefined && commitExpiry.getTime() <= Date.now()) {
+      throw new InvalidRestoredSessionError("Persisted session expired during restore.");
+    }
 
     // Every operation below is a non-throwing pointer/value swap.
     const oldGraph = this._serviceGraph;

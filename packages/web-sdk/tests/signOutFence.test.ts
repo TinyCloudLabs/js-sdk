@@ -416,6 +416,30 @@ describe("signOut ends the session locally first (TC-2379)", () => {
     expect((await storage.load(old.address))?.signature === next.persisted.signature).toBe(true);
     expect(storage.activeAddress() === old.address.toLowerCase()).toBe(true);
   });
+
+  test("a restore that another instance signs out mid-flight does not install the session (TC-2936)", async () => {
+    const host = "https://cross-instance-restore.test";
+    const backend = memoryBackend();
+    const { tcw: otherTab, address } = await signedInWeb(host, backend);
+    const { tcw } = await reloadedWeb(backend);
+    const node = new TinyCloudNode({ host, tinycloudRegistryUrl: null, wasmBindings: new NodeWasmBindings(), autoBootstrapAccount: false });
+    Reflect.set(tcw, "_node", node);
+    // The other tab signs out after this restore passed its fence check, while the node is still staging.
+    let otherSignOut: Promise<void> | undefined;
+    Reflect.set(node, "accountRegistryTail", {
+      then(resolve: () => void) {
+        otherSignOut = otherTab.signOut();
+        otherSignOut.then(resolve, resolve);
+      },
+    });
+
+    const result = await tcw.restoreSession(address);
+
+    expect(otherSignOut).toBeDefined();
+    expect(result.status).not.toBe("restored");
+    expect(tcw.session()).toBeUndefined();
+    expect(node.restorableSession).toBeUndefined();
+  });
 });
 
 describe("BrowserSessionStorage signed-out fence", () => {

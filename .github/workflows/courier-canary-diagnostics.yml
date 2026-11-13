@@ -1,0 +1,69 @@
+name: Read-only Courier canary diagnostics
+run-name: Courier canary 1e7fgu — read-only domain diagnosis
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: courier-canary-1e7fgu-service
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.repository == 'TinyCloudLabs/js-sdk' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      deployment: false
+    env:
+      MCP_DEPLOY_TOOLS: ${{ runner.temp }}/courier-canary-deploy-tools
+      CANARY_EVIDENCE_DIR: ${{ runner.temp }}/courier-canary-evidence
+      CANARY_IDENTITY_FILE: ${{ runner.temp }}/canary-identity.json
+      CANARY_IMAGE: ghcr.io/tinycloudlabs/tinycloud-mcp@sha256:d4019ae22809b1988a522e700974cb0fcf0afef9c4837a9e5b5ee4119803a6fd
+      CANARY_IDENTITY_JSON: >-
+        {"schema":"courier.canary-service.v1","name":"tinycloud-courier-canary-1e7fgu-rep-jdm3x","vm_uuid":"e3d48b8e-6d5f-43ec-a082-23bb644a4ce6","app_id":"2891364ea7cf4fa4ab049a81fb51a459a6cf7d82","image":"ghcr.io/tinycloudlabs/tinycloud-mcp@sha256:d4019ae22809b1988a522e700974cb0fcf0afef9c4837a9e5b5ee4119803a6fd","compose_sha256":"f00a621b59514be522b9fc6204b448c78525639541d3c3ae9fbe104fd958a24c","compose_hash":"2c1912d9ec181825bb31e44392bbe5009f9a5cb35545846b4611acc7043b66fd"}
+    steps:
+      # Immutable, read-only operator and lockfile; never execute a moving branch.
+      - uses: actions/checkout@v4
+        with:
+          ref: 1ee52e7b71e098f37f26bd0a8b52d1b200d33bb0
+          persist-credentials: false
+          sparse-checkout: |
+            .github/deploy-tools
+            canary/service
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: Prepare the fixed canary identity and locked tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = TinyCloudLabs/js-sdk
+          test "$GITHUB_REF" = refs/heads/master
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { mkdir, writeFile } from 'node:fs/promises';
+          assert.equal(process.version, 'v24.21.0');
+          await writeFile(process.env.CANARY_IDENTITY_FILE, process.env.CANARY_IDENTITY_JSON, { mode: 0o600, flag: 'wx' });
+          await mkdir(process.env.MCP_DEPLOY_TOOLS, { mode: 0o700 });
+          NODE
+          cp .github/deploy-tools/package.json .github/deploy-tools/package-lock.json "$MCP_DEPLOY_TOOLS/"
+          npm ci --prefix "$MCP_DEPLOY_TOOLS" --ignore-scripts --registry=https://registry.npmjs.org --no-audit --no-fund
+      - name: Diagnose only the existing canary without changing deployment or DNS
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        run: node canary/service/operator.mjs domain-diagnosis-canary
+      - name: Preserve only allowlisted nonsecret diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: courier-canary-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/courier-canary-evidence/network-contract.json
+            ${{ runner.temp }}/courier-canary-evidence/domain-diagnosis.json
