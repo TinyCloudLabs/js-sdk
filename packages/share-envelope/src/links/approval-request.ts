@@ -49,6 +49,8 @@ const requestSchema = z.object({
   permissions: z.array(permission), reason: z.string().optional(),
   grantLifetimeSeconds: z.number().int().positive(), resultEncryptionPublicJwk: p256Jwk,
   context: invitationContext.optional(),
+  /** D11: absence means task; keep absent bytes unchanged for signed request compatibility. */
+  purpose: z.enum(["task", "standing"]).optional(),
   renewal: approvalRenewalRequestSchema.optional(),
   /**
    * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
@@ -93,3 +95,8 @@ export function parseApprovalRequest(value: unknown, options: { readonly issuer?
   return request;
 }
 
+
+/** Purpose is explicit when supplied; a legacy request is always task, never inferred as standing. */
+export function approvalRequestPurpose(request: Pick<OpenKeyApprovalRequestV1, "purpose">): "task" | "standing" {
+  return request.purpose ?? "task";
+}
