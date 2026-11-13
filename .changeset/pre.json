@@ -39,6 +39,7 @@
     "hide-courier-invite",
     "kv-503-not-applied-failed",
     "local-replica-restore",
+    "manifest-login-one-hour",
     "openkey-public-session-key",
     "panel-load-failure-reload",
     "restore-commit-expiry",
