@@ -2998,5 +2998,25 @@
       "ceiling": 774411
     },
     "reason": "Canonical Replica e2e CI measured 774,411 gzip bytes on both SQLite and Postgres. The exact increase over the prior 771,106 ceiling is 3,305 B (within Naomi's 4,000 B maximum); master measured 771,106 B. No unrelated worker allowance changes."
+  },
+  "tc2904OwnerDirectProofRoot": {
+    "label": "strict owner-direct proof parsing root budget (TC-2904)",
+    "ruling": "size-ruling: TC-2904: Naomi approves the exact canonical CI measurement over tc2872RenewalRoot, limited to +1100 ESM/+1000 CJS gzip (-9); workers unchanged. Supersedes local reused-WASM rulings.",
+    "base": "cd34e10f2efe302d422f56bf7de82d70bf6a6785",
+    "sourceCommits": [
+      "80ccc21b2596e938eb0f085ecc4bb8d05c152d12"
+    ],
+    "measuredWith": "Canonical CI Node 22 / Bun 1.3.14 / rustc 1.99.0; production webpack; gzip -9 -c. Prior TC-2904 run 43387903289; rebased-head confirmation pending.",
+    "root": {
+      "delta": {
+        "index.mjs": 1009,
+        "index.cjs": 852
+      },
+      "ceiling": {
+        "index.mjs": 1522718,
+        "index.cjs": 1456384
+      }
+    },
+    "reason": "Only the strict signed proof list parser and typed-code import bindings are eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
   }
 }

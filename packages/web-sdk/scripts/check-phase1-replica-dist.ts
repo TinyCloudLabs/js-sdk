@@ -51,6 +51,7 @@ import {
   validateTc2872RenewalReplicaWorkerTransition,
   validateTc2872RenewalRootTransition,
 } from "./replica-size-policy";
+import { validateTc2904OwnerDirectProofRootTransition } from "./replica-size-policy";
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
@@ -691,6 +692,12 @@ if (prBaseSha) {
   if (renewalReplicaWorker !== undefined && baseLedger.tc2872RenewalReplicaWorker === undefined &&
       (renewalKvWorker === undefined || !hasAncestor(repoRoot, renewalReplicaWorker.sourceCommits.at(-1)!))) {
     console.error("The TC-2872 replica worker budget requires the kv-storage worker row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2904OwnerDirectProofRootTransition(baseLedger.tc2904OwnerDirectProofRoot, ledger.tc2904OwnerDirectProofRoot);
+  if (ledger.tc2904OwnerDirectProofRoot !== undefined && baseLedger.tc2904OwnerDirectProofRoot === undefined &&
+      (baseLedger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, ledger.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2904 root budget requires the TC-2872 root row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

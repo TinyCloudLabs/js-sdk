@@ -320,8 +320,20 @@ const lazyEntries = {
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
 
+// CACAO verification uses viem's deferred secp256k1 import. Keep that primitive
+// inside the already-lazy entry: a second webpack chunk creates a computed import
+// whose downstream context includes declaration files in dist/.
+const lazyModule = {
+  ...baseConfig.module,
+  rules: [...rules, {
+    test: /[\\/]viem[\\/]_esm[\\/]utils[\\/]signature[\\/]recoverPublicKey\.js$/,
+    parser: { dynamicImportMode: "eager" },
+  }],
+};
+
 const lazyEsmConfig = {
   ...esmConfig,
+  module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("module", "mjs"),
   plugins: esmConfig.plugins.filter(notChunkLimit),
@@ -330,6 +342,7 @@ const lazyEsmConfig = {
 
 const lazyCjsConfig = {
   ...cjsConfig,
+  module: lazyModule,
   entry: lazyEntries,
   externals: lazyExternals("commonjs", "cjs"),
   plugins: cjsConfig.plugins.filter(notChunkLimit),
