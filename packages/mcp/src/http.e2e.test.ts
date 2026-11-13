@@ -12,8 +12,9 @@ import { join } from "node:path";
 import { createServer as createPortServer } from "node:net";
 
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { NodeWasmBindings, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { serializeDelegation, NodeWasmBindings, TinyCloudNode, type TinyCloudSession } from "@tinycloud/node-sdk";
 
+import { RemoteTenantStore } from "./remote-store.js";
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import { registerMcpFixtureServer, resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import {
@@ -1515,19 +1516,23 @@ test("a refused delegation approval names its stage, code and reason, and never 
   expect(await postCallback(app, delegationUrl, approval)).toEqual({ status: 200, body: { success: true } });
 }, 60_000);
 
-test("a tenant created on the retired default node host is moved to TC_HOST, so its authority approval imports", async () => {
-  const outcome = await approveWithStoredHost("https://node.tinycloud.xyz");
+for (const storedHost of ["https://node.tinycloud.xyz", "https://tee.node.tinycloud.xyz"]) {
+test(`a tenant created on production name ${storedHost} is moved to TC_HOST, so its authority approval imports`, async () => {
+  const outcome = await approveWithStoredHost(storedHost);
   expect(outcome.callback).toEqual({ status: 200, body: { success: true } });
   expect(outcome.storedHost).toBe(outcome.nodeHost);
   expect(outcome.diagnostics).toEqual([
-    `[tinycloud-mcp-http] tenant node host migrated: from=https://node.tinycloud.xyz to=${new URL(outcome.nodeHost).origin}\n`,
+    `[tinycloud-mcp-http] tenant node host migrated: from=${storedHost} to=${new URL(outcome.nodeHost).origin}\n`,
   ]);
   expect((await outcome.client.callTool({ name: "tinycloud_kv_get", arguments: outcome.kvGet })).structuredContent)
     .toMatchObject({ status: "ok", output: { value: { name: "Ada", role: "operator" } } });
 }, 60_000);
 
-test("a tenant pinned to another node host still refuses its authority approval with DELEGATION_HOST_MISMATCH", async () => {
-  const outcome = await approveWithStoredHost("https://node.example.com");
+}
+
+for (const storedHost of ["https://node.example.com", "https://evil.example", "https://node.tinycloud.xyz.evil.example", "https://tee-node.tinycloud.xyz", "http://node.tinycloud.xyz", "https://node.tinycloud.xyz:444"]) {
+test(`a tenant pinned to ${storedHost} still refuses its authority approval with DELEGATION_HOST_MISMATCH`, async () => {
+  const outcome = await approveWithStoredHost(storedHost);
   expect(outcome.callback).toEqual({
     status: 400,
     body: {
@@ -1536,11 +1541,70 @@ test("a tenant pinned to another node host still refuses its authority approval 
       message: "TinyCloud could not accept this delegation.",
     },
   });
-  expect(outcome.storedHost).toBe("https://node.example.com");
+  expect(outcome.storedHost).toBe(storedHost);
   expect(outcome.diagnostics).toEqual([
     "[tinycloud-mcp-http] connect callback rejected: stage=auth_import code=DELEGATION_HOST_MISMATCH detail=none\n",
   ]);
 }, 60_000);
+
+}
+
+for (const [nodeHost, grantHost] of [
+  ["https://tee.node.tinycloud.xyz", "https://node.tinycloud.xyz"],
+  ["https://node.tinycloud.xyz", "https://tee.node.tinycloud.xyz"],
+] as const) {
+  test(`native grant from ${grantHost} is accepted by ${nodeHost} while lookalikes are refused`, async () => {
+    const { createHermeticEncryptedNode } = await import("./test-support/hermetic-node.mjs");
+    const fixture = await createHermeticEncryptedNode({ ownerConnectorCapabilities: true });
+    resources.push(async () => fixture.stop());
+    const fixtureFetch = globalThis.fetch;
+    const routed = spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === nodeHost) {
+        const target = fixture.host + url.pathname + url.search;
+        return fixtureFetch(input instanceof Request ? new Request(target, input) : target, init);
+      }
+      return fixtureFetch(input, init);
+    });
+    resources.push(async () => routed.mockRestore());
+    const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-native-alias-"));
+    resources.push(() => rm(stateDir, { recursive: true, force: true }));
+    const config = {
+      stateDir, stateSecret: "test-secret-that-is-at-least-thirty-two-bytes",
+      publicUrl: new URL("https://mcp.test/mcp"), nodeHost,
+      openkeyHost: "https://openkey.test", approvalTtlSeconds: 300, delegationExpiry: "1h",
+    };
+    const identity = await new RemoteTenantStore(config).nativeServiceIdentity();
+    const delegation = await fixture.mintDelegationForAudienceWithPermissions(identity.serviceDid, [
+      { service: "tinycloud.sql", space: fixture.applicationsSpaceId, path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
+      { service: "tinycloud.kv", space: fixture.applicationsSpaceId, path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+    ], { expiry: "2h" });
+    const credential = "native-alias-test-credential-with-enough-entropy";
+    const app = createHostedMcpApp({ ...config, nativeServiceCredential: credential,
+      oauthMetadata: {
+        issuer: "https://openkey.test/api/auth",
+        authorization_endpoint: "https://openkey.test/api/auth/oauth2/authorize",
+        token_endpoint: "https://openkey.test/api/auth/oauth2/token",
+        jwks_uri: "https://openkey.test/api/auth/jwks",
+        registration_endpoint: "https://openkey.test/api/auth/oauth2/register",
+        response_types_supported: ["code"],
+      },
+    });
+    resources.push(() => app.close());
+    const submit = (host: string) => app.fetch(new Request("https://mcp.test/native/grant", {
+      method: "POST", headers: { host: "mcp.test", "content-type": "application/json", "x-tinycloud-service-credential": credential },
+      body: JSON.stringify({ delegation: serializeDelegation({ ...delegation, host }) }),
+    }));
+    for (const host of ["https://evil.example", "https://node.tinycloud.xyz.evil.example", "https://tee-node.tinycloud.xyz", "http://node.tinycloud.xyz", "https://node.tinycloud.xyz:444"]) {
+      const response = await submit(host);
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: "native_grant_rejected" });
+    }
+    const response = await submit(grantHost);
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ ownerDid: fixture.ownerDid.toLowerCase(), serviceDid: identity.serviceDid });
+  }, 60_000);
+}
 
 /**
  * The production shape: TC_HOST names the MCP's node, while the tenant
