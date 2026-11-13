@@ -82,8 +82,8 @@ async function registration(store: RegistrySequenceStore | undefined, ownerKey: 
  * an outage fallback from saved settings and a failed lookup are dropped as
  * they settle, so the next call asks the registry again. A kept verdict is
  * served to a client only if its own stores allow it. Times use a monotonic
- * clock (`performance.now`). The absent-reads mode retains only confirmed absence for
- * reads/lookups; registered results and non-read operations always perform their own lookup.
+ * clock (`performance.now`). The absent-reads mode retains only confirmed absence, for lookups marked
+ * `dataRead`; registered results and every unmarked lookup always perform their own lookup.
  */
 export function createRegistryVerdictCache(options: { now?: () => number; mode?: "absent-reads" } = {}): RegistryVerdictCache {
   const now = options.now ?? (() => performance.now());
@@ -98,7 +98,7 @@ export function createRegistryVerdictCache(options: { now?: () => number; mode?:
   return {
     async get(scope, lookup) {
       const key = keyOf(scope.registryUrl, scope.subject);
-      if (options.mode === "absent-reads" && scope.access !== undefined && scope.access !== "read") {
+      if (options.mode === "absent-reads" && scope.dataRead !== true) {
         entries.delete(key);
         return lookup();
       }

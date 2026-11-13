@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { privateKeyToAccount } from "viem/accounts";
 import { signLocationRecordV2 } from "./location";
-import { resolveRegistryResource } from "./registry-policy";
+import { lookupOwnerRegistryVerdict, resolveFailClosedTinyCloudHosts, resolveRegistryResource } from "./registry-policy";
 import { createRegistryVerdictCache } from "./registry-verdict-cache";
 import { REGISTRY_NOT_FOUND_BODY, type RegistryVerdict } from "./registry-verdict";
 
@@ -25,7 +25,7 @@ function fixture() {
     requests++;
     return body === undefined ? new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 }) : new Response(body);
   }, { preconnect() {} });
-  const options = { registryUrl: "https://registry.test", fetch: fetchFn,
+  const options = { registryUrl: "https://registry.test", fetch: fetchFn, dataRead: true,
     verdictCache: createRegistryVerdictCache({ now: () => now, mode: "absent-reads" }) };
   return { options, set(value: string) { body = value; }, at(value: number) { now = value; }, count: () => requests };
 }
@@ -71,7 +71,7 @@ for (const access of ["write", "host", "encryption"] as const) {
 test("a registered in-flight result is not reused by the next reader", async () => {
   const cache = createRegistryVerdictCache({ mode: "absent-reads" });
   const pending = Promise.withResolvers<RegistryVerdict>();
-  const scope = { registryUrl: "https://registry.test", subject, access: "read" as const };
+  const scope = { registryUrl: "https://registry.test", subject, dataRead: true };
   let calls = 0;
   const first = cache.get(scope, () => { calls++; return pending.promise; });
   const second = cache.get(scope, async () => { calls++; return { status: "unavailable", subject, reason: "network-error", source: "offchain", message: "unavailable", hosts: [] }; });
@@ -79,4 +79,31 @@ test("a registered in-flight result is not reused by the next reader", async () 
   expect((await first).status).toBe("registered");
   expect((await second).status).toBe("unavailable");
   expect(calls).toBe(2);
+});
+
+test("a lookup not marked as a data read never uses a cached absence, even when it routes as a read", async () => {
+  const f = fixture();
+  expect((await resolveRegistryResource(subject, space, "read", f.options)).hosts).toEqual([]);
+  const absent = f.count();
+  f.set(await record(0, "https://new-node.test"));
+  const { dataRead: _, ...unmarked } = f.options;
+  expect((await resolveRegistryResource(subject, space, "read", unmarked)).hosts[0]?.urls[0]).toBe("https://new-node.test");
+  expect((await lookupOwnerRegistryVerdict(subject, unmarked)).status).toBe("registered");
+  expect((await resolveFailClosedTinyCloudHosts(owner.address, { ...unmarked, autoDiscoverLocalNode: false, newUserHost: "https://default.test" })).hosts)
+    .toEqual(["https://new-node.test"]);
+  expect(f.count()).toBe(absent + 3);
+});
+
+test("an unmarked lookup drops an in-flight absence, so a store-less data reader looks up again", async () => {
+  const f = fixture();
+  const pending = Promise.withResolvers<RegistryVerdict>();
+  const read = f.options.verdictCache.get({ registryUrl: "https://registry.test", subject, dataRead: true }, () => pending.promise);
+  f.set(await record(0, "https://new-node.test"));
+  const { dataRead: _, ...unmarked } = f.options;
+  expect((await resolveRegistryResource(subject, space, "read", unmarked)).hosts[0]?.urls[0]).toBe("https://new-node.test");
+  pending.resolve({ status: "unregistered", subject, source: "offchain", hosts: [] } as unknown as RegistryVerdict);
+  expect((await read).status).toBe("unregistered");
+  const before = f.count();
+  expect((await resolveRegistryResource(subject, space, "read", f.options)).hosts[0]?.urls[0]).toBe("https://new-node.test");
+  expect(f.count()).toBe(before + 1);
 });
