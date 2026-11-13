@@ -30,7 +30,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
-import { clearReadCache, collectThread, diskOwnIndex, diskThreadCache, partialReadText, peerReadError, recordOwnWrite, type ThreadEntry } from './thread.js';
+import { clearLocalCaches, collectThread, diskOwnerSpaceIndex, diskThreadCache, partialReadText, peerReadError, recordOwnerSpaceWrite, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
@@ -564,7 +564,7 @@ export async function cmdRevoke(args: ParsedArgs) {
     await revokePeer(node, profile, handle, save);
     delete profile.peers[handle];
     save();
-    clearReadCache();
+    clearLocalCaches();
     try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
     console.log(`Revoked ${shown} (${peer.courierDid}). Files you already shared with ${shown} stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).`);
   });
@@ -618,10 +618,10 @@ export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHan
       createdAt: new Date().toISOString(),
     };
     await putCreate(node.kv, k.threadMeta(peerHandle, threadId), meta);
-    recordOwnWrite(profile.courierDid, profile.spaceId, threadId, k.threadMeta(peerHandle, threadId));
+    recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, k.threadMeta(peerHandle, threadId));
   }
   await putCreate(node.kv, k.msg(peerHandle, threadId, msg.messageId), msg);
-  recordOwnWrite(profile.courierDid, profile.spaceId, threadId, k.msg(peerHandle, threadId, msg.messageId));
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, k.msg(peerHandle, threadId, msg.messageId));
   return msg;
 }
 
@@ -706,7 +706,7 @@ export async function cmdRead(args: ParsedArgs) {
       return peerKv(node, profile, peer, { renew });
     },
     cache,
-    own: diskOwnIndex(profile.courierDid, profile.spaceId!, threadId, full),
+    ownerSpace: diskOwnerSpaceIndex(profile.courierDid, profile.spaceId!, threadId, full),
     self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
   });
   cache.save();
@@ -791,7 +791,7 @@ export async function cmdTask(args: ParsedArgs) {
   } else {
     await putCreate(node.kv, key, task);
   }
-  recordOwnWrite(profile.courierDid, profile.spaceId, threadId, key);
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, key);
   printJson({ ok: true, taskId, threadId, state, updated: Boolean(existing) });
 }
 
@@ -831,7 +831,7 @@ export async function cmdRequest(args: ParsedArgs) {
   const task = authRequiredTask(existing?.value, threadId, taskId);
   if (existing?.etag) await putMatch(node.kv, taskKey, task, existing.etag);
   else await putCreate(node.kv, taskKey, task);
-  recordOwnWrite(profile.courierDid, profile.spaceId, threadId, taskKey);
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, taskKey);
   if (!(await getJson<CourierTask>(node.kv, taskKey))) fail('task-missing', `The task ${taskId} is not in ${taskKey}; no request was written.`);
   await putCreate(node.kv, k.request(id), request);
   // `requestHash` is what the view's card shows as its fingerprint (first 8 hex digits) and `courier approval` prints in full.

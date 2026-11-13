@@ -6,7 +6,7 @@ import { oneLine } from './a2a.js';
 import { loadGrant, loadProfile, withProfileTransaction } from './profile.js';
 import type { StoredPeer } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { clearReadCache } from './thread.js';
+import { clearLocalCaches } from './thread.js';
 import { maintainOutbound } from './interim-renewal.js';
 import { markOwnerRefused, preflightOwner } from './interim-owner.js';
 
@@ -118,7 +118,7 @@ export function watchPeerEligible(peer: StoredPeer, now = Date.now()): boolean {
 }
 
 export async function recordAuthorityRefusal(source: string): Promise<void> {
-  clearReadCache();
+  clearLocalCaches();
   if (!source.startsWith('peer:')) { await markOwnerRefused(); return; }
   const handle = source.split(':')[1];
   await withProfileTransaction(async (profile, save) => {

@@ -6,12 +6,11 @@ import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cmd, programName } from './program.js';
 import { CourierError } from './errors.js';
-import { loadProfile, profileDir, readRegularFile, writeSecure } from './profile.js';
+import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
-import { WATCH_DEFAULTS, Watcher, type LocalWatchCache, type WatchOptions } from './watch.js';
-import { agentId } from './keys.js';
-import { isRecord } from './a2a.js';
+import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
+import { fileWatchCache } from './watch-cache.js';
 import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
 import { startsAgentCli } from './guard/policy.js';
 import { guardArgv } from './guard/command.js';
@@ -154,27 +153,6 @@ export function watcherProfileId(): string {
   }
 }
 
-/** `<COURIER_HOME>/watch-cache/<did:key id>.json`, owner-only: what the agent's watcher already knows. A bad file is ignored. */
-function fileWatchCache(agent: string) {
-  const dir = path.join(profileDir(), 'watch-cache');
-  const file = path.join(dir, `${agentId(agent)}.json`);
-  const strings = (value: unknown) => Array.isArray(value) && value.every(item => typeof item === 'string');
-  return {
-    load(): LocalWatchCache | undefined {
-      try {
-        const value: unknown = JSON.parse(readRegularFile(file) ?? 'null');
-        if (!isRecord(value) || value.v !== 1 || !strings(value.metaMirrored) || !isRecord(value.markerReadAt) || !isRecord(value.receipted)
-          || !Object.values(value.markerReadAt).every(at => typeof at === 'number') || !Object.values(value.receipted).every(strings)) return undefined;
-        return value as unknown as LocalWatchCache;
-      } catch { return undefined; }
-    },
-    save(cache: LocalWatchCache): void {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      writeSecure(file, cache);
-    },
-  };
-}
-
 /** Claude session ids per thread, local to this machine (a session id means nothing on another one). */
 function fileSessions(): SessionStore {
   const file = path.join(profileDir(), 'sessions.json');
@@ -279,7 +257,8 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
     holder: { profileId: watcherProfileId() },
-    localCache: fileWatchCache(node.credentialHolderDid),
+    // Only eligible peers' facts are kept: a refused, latched or removed peer's facts go with the next save.
+    localCache: fileWatchCache(node.credentialHolderDid, profile.spaceId!, () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer))),
     log,
   }, opts);
 

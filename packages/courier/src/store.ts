@@ -86,6 +86,11 @@ export async function getJson<T>(kv: KV, key: string): Promise<{ value: T; etag:
 
 /** The node's batch read limit: one invocation reads at most this many keys. */
 const BATCH_READ_KEYS = 100;
+/**
+ * Asked of the node for each key of a batch (`x-tinycloud-max-response-bytes`): a larger value fails the batch with
+ * KV_RESPONSE_TOO_LARGE instead of being sent. Courier's largest entries are 256 KB messages and tasks with artifacts.
+ */
+const BATCH_READ_MAX_BYTES = 8 * 1024 * 1024;
 
 /** A key read as `getJson` reads it: the value and its etag, or undefined if the key is missing. */
 export type JsonRead<T> = { value: T; etag: string | null } | undefined;
@@ -101,7 +106,7 @@ export async function readJsonMany<T>(kv: KV, keys: readonly string[]): Promise<
   const unique = [...new Set(keys)];
   for (let start = 0; start < unique.length; start += BATCH_READ_KEYS) {
     const chunk = unique.slice(start, start + BATCH_READ_KEYS);
-    const r = (await readRetry(() => kv.batchGet(chunk, FULL))) as ResultLike<{ results: Array<{ key: string; result: ResultLike<KVResponse<unknown>> }> }>;
+    const r = (await readRetry(() => kv.batchGet(chunk, { ...FULL, maxResponseBytes: BATCH_READ_MAX_BYTES }))) as ResultLike<{ results: Array<{ key: string; result: ResultLike<KVResponse<unknown>> }> }>;
     const batch = unwrap(r, `batch get ${chunk.length} key(s)`);
     if (batch.results.length !== chunk.length) throw new CourierError('kv', `batch get returned ${batch.results.length} of ${chunk.length} keys`);
     for (const [index, item] of batch.results.entries()) {

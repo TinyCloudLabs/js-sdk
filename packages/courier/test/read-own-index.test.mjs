@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { collectThread, diskOwnIndex, diskThreadCache, recordOwnWrite } from '../dist/thread.js';
+import { collectThread, diskOwnerSpaceIndex, diskThreadCache, recordOwnerSpaceWrite } from '../dist/thread.js';
 import { buildMessage } from '../dist/a2a.js';
 import { k, PREFIX } from '../dist/keys.js';
 import { profileDir } from '../dist/profile.js';
@@ -61,7 +61,7 @@ function thread() {
     const own = message(threadId);
     const key = k.msg('bob', threadId, own.messageId);
     mine.rows.set(key, own);
-    recordOwnWrite(AGENT, SELF.spaceId, threadId, key);
+    recordOwnerSpaceWrite(AGENT, SELF.spaceId, threadId, key);
     return own;
   };
   const read = async ({ full = false, now = Date.now(), self = SELF } = {}) => {
@@ -69,7 +69,7 @@ function thread() {
     const before = { mine: { ...mine.calls }, theirs: { ...theirs.calls } };
     const result = await collectThread({
       threadId, selfKv: mine, peers: [peer], exactPeer: true, kvFor: async () => theirs, cache, self,
-      own: diskOwnIndex(AGENT, self.spaceId, threadId, full, now),
+      ownerSpace: diskOwnerSpaceIndex(AGENT, self.spaceId, threadId, full, now),
     });
     cache.save();
     const delta = (kv, was) => ({ list: kv.calls.list - was.list, get: kv.calls.get - was.get });
@@ -127,10 +127,10 @@ test('a write whose record fails makes the next read list our side', async () =>
   const blocked = message(th.threadId);
   const key = k.msg('bob', th.threadId, blocked.messageId);
   const name = `e-${createHash('sha256').update(`${SELF.spaceId}\n${key}`).digest('hex')}.json`;
-  const dir = path.join(profileDir(), 'read-cache', 'z6MkAgentC', 'own', th.threadId);
+  const dir = path.join(profileDir(), 'read-cache', 'z6MkAgentC', 'owner-space', th.threadId);
   fs.mkdirSync(path.join(dir, name)); // the record can't be written there
   th.mine.rows.set(key, blocked);
-  recordOwnWrite(AGENT, SELF.spaceId, th.threadId, key);
+  recordOwnerSpaceWrite(AGENT, SELF.spaceId, th.threadId, key);
   const next = await th.read();
   assert.equal(next.mine.list, 1);
   assert.ok(ids(next.result, 'me').includes(`msg:${blocked.messageId}`));
@@ -144,7 +144,7 @@ test("another space's record is never used: a re-init lists its own side, and it
   const elsewhere = message(th.threadId);
   const key = k.msg('bob', th.threadId, elsewhere.messageId);
   th.mine.rows.set(key, elsewhere);
-  recordOwnWrite(AGENT, 'space-alice-reinit', th.threadId, key);
+  recordOwnerSpaceWrite(AGENT, 'space-alice-reinit', th.threadId, key);
   const here = await th.read();
   assert.equal(here.mine.list, 0);
   assert.ok(!ids(here.result, 'me').includes(`msg:${elsewhere.messageId}`), "the other space's write isn't listed for this one");

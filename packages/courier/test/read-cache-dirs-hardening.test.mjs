@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { clearReadCache, diskOwnIndex, diskThreadCache, recordOwnWrite } from '../dist/thread.js';
+import { clearReadCache, diskOwnerSpaceIndex, diskThreadCache, recordOwnerSpaceWrite } from '../dist/thread.js';
 import { profileDir } from '../dist/profile.js';
 
 test('only thread-named root files are pruned, and a symlinked directory is never chmodded', () => {
@@ -35,9 +35,9 @@ test('nothing is written or trusted through a symlinked directory inside the cac
   const threadId = ulid();
   // The agent's own-writes directory is a link out of the cache.
   fs.mkdirSync(path.join(root, 'z6MkAgentB'), { recursive: true, mode: 0o700 });
-  fs.symlinkSync(outside, path.join(root, 'z6MkAgentB', 'own'));
-  recordOwnWrite('did:key:z6MkAgentB', 'space', threadId, `xyz/to/bob/threads/${threadId}/msg/m.json`);
-  const own = diskOwnIndex('did:key:z6MkAgentB', 'space', threadId);
+  fs.symlinkSync(outside, path.join(root, 'z6MkAgentB', 'owner-space'));
+  recordOwnerSpaceWrite('did:key:z6MkAgentB', 'space', threadId, `xyz/to/bob/threads/${threadId}/msg/m.json`);
+  const own = diskOwnerSpaceIndex('did:key:z6MkAgentB', 'space', threadId);
   own.listed(`xyz/to/bob/threads/${threadId}`, [`xyz/to/bob/threads/${threadId}/msg/m.json`]);
   assert.equal(own.keys(`xyz/to/bob/threads/${threadId}`), undefined, 'the record is not used: the side is listed');
   // The agent's whole cache directory is a link out of the cache.

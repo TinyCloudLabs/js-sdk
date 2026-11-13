@@ -252,7 +252,9 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   watcher already knows (receipted message ids, mirrored meta, when each
   renewal marker was read, when wake claims were pruned) is kept in
   `<COURIER_HOME>/watch-cache/<agent did:key id>.json` (owner-only), so a
-  restart or a `watch --once` run doesn't fetch it again.
+  restart or a `watch --once` run doesn't fetch it again. It is bound to this
+  agent's DID and space, and each peer's part to that peer's DID, space and
+  session. Only eligible peers' facts are kept.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
@@ -311,16 +313,21 @@ create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
 (owner-only). Reading the thread again lists only the peer's side and fetches
 only new entries and the tasks, which can change. Entries are fetched in
 batches of up to 100 keys per call (one `tinycloud.kv/get` invocation each);
-each entry is still checked on its own. Your own side comes from a
-local record of your own writes (`send`, the outbox, pause notices, `task`,
-`request`, a session's meta) in `read-cache/<agent>/own/<thread>/`; that record
+each entry is still checked on its own, and each value is limited to 8 MiB.
+Your own side comes from a local owner-space record of the writes made under
+your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
+session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
 is used for an hour after a listing of your side, then your side is listed
 again. A peer's renewal marker is read at most every 5 minutes per thread.
 `courier read --full` lists both sides and fetches everything again. Messages
 are create-only; a later overwrite of the same key isn't shown. One agent's
 cache stays within 64 MiB, files older than 7 days are not used, and a missing
-or unreadable file is rebuilt. `courier revoke`, a recorded refusal, an owner
-revocation and `init --rotate-key` delete the cache.
+or unreadable file is rebuilt. Nothing is read or written unless every
+directory from `COURIER_HOME` down is a real directory of yours (not a
+symlink). Each one is made owner-only, and the chain is checked again right
+before each read, write or delete. `courier revoke`, a recorded refusal, an
+owner revocation and `init --rotate-key` delete the cache and the watcher's
+local knowledge.
 
 ### Wake adapters
 
@@ -953,9 +960,13 @@ Messages and tasks are A2A v1.0 JSON with the
 `xyz.tinycloud.courier/` in the owner's `agents` space.
 
 Inbound text and JSON `notice`/`authority` fields identify peer content as
-counterparty data, never as an owner's instruction. Message roles are assigned
-from thread/task ownership. The `courier` skill documents the authority rules
-and handoff shape. The view is TC-711.
+counterparty data, never as an owner's instruction. In `courier read` output,
+`authority: "self"` means the entry is under this agent's thread root in the
+owner's space: it was written by an agent of the same owner. That may be this
+agent or another agent of the same owner, because same-owner agents are one
+principal, as their grants are. Message roles are assigned from thread/task
+ownership. The `courier` skill documents the authority rules and handoff shape.
+The view is TC-711.
 
 ## References
 

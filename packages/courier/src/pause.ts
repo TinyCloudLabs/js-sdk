@@ -9,7 +9,7 @@ import type { ParsedArgs } from './args.js';
 import { cmd } from './program.js';
 import { courierNode, peerKv } from './node.js';
 import { getPeer, loadProfile, type Profile } from './profile.js';
-import { recordOwnWrite } from './thread.js';
+import { recordOwnerSpaceWrite } from './thread.js';
 
 const SAFE = /^[0-9A-Za-z_-]{1,64}$/;
 
@@ -47,7 +47,7 @@ export async function postPausedInform(kv: KV, profile: Profile, peerHandle: str
   try { await putCreate(kv, key, message); } catch (error) {
     if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
   }
-  recordOwnWrite(profile.courierDid, profile.spaceId, threadId, key);
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, key);
   return message.messageId;
 }
 

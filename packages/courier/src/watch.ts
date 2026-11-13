@@ -1562,6 +1562,14 @@ export class Watcher {
               await this.mutate(() => this.finishOutbox(item));
               return;
             }
+            if (item.deferredSince !== undefined) {
+              // A positive verdict ends the deferral: a post that then fails is retried on its own clock, never dropped
+              // for the earlier outage.
+              await this.mutate(() => {
+                const current = this.state.outbox.find(o => o.id === item.id);
+                if (current?.kind === 'inform') delete current.deferredSince;
+              });
+            }
             await this.deps.postInform?.(item.peer, item.threadId, item.text, item.pauseId);
           } else {
             const { notice } = item;
