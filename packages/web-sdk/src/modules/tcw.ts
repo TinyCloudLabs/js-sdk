@@ -1030,6 +1030,13 @@ export class TinyCloudWeb {
         // Also when a later step throws after the node committed the new account. A sign-out resets itself.
         if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
       }
+      // Another instance on this storage may have signed this session out while the node restored it.
+      if (fencing.isSignedOut?.(restoreAddress, loaded.data.signature)) {
+        await node.signOut().catch(() => undefined);
+        assertNotSignedOut();
+        this._sessionRestoreStatus = "missing";
+        return { status: "missing" };
+      }
       assertNotSignedOut();
       this.resetSessionScopedCaches();
       const data = loaded.data;
