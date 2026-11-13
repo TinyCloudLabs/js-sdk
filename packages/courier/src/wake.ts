@@ -267,6 +267,7 @@ export function createWaker(
     prepareCleanHome({
       realHome: config.realHome ?? env.HOME ?? os.homedir(),
       cleanHome: agentHome(config.home), claude: config.adapter !== 'exec', files: config.homeFiles,
+      agentCli: config.adapter === 'exec' && config.exec ? agentCliStarted(config.exec) : undefined,
     });
     prepareAgentProfile(config.home);
   };

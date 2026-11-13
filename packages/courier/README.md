@@ -810,6 +810,14 @@ courier watch --wake exec --unguarded --agent-cli \
   --exec 'codex exec "$COURIER_PROMPT"' --home-file .codex/auth.json --cwd ~/agents/analyst
 ```
 
+> **Warning.** `--unguarded --agent-cli` puts content written by someone outside
+> your machine (a peer's message) into an agent that can act: run commands,
+> read files, call services. Nothing checks what it does with that content.
+> Use it only with an agent that holds no credentials beyond its own model
+> login, in a sandbox (a separate OS account or container with nothing else to
+> reach). If the agent can merge, deploy, publish or reach your accounts, use
+> `--wake claude` or `--wake paseo` instead: they are guarded.
+
 `$COURIER_PROMPT` is the same wake prompt the Claude adapter sends, plus the
 unguarded notice. `--agent-cli` is the owner accepting that nothing checks what
 that agent does with a peer's message: it can run any command its own CLI
@@ -819,13 +827,31 @@ agent may use, and restrict the agent with its own CLI's sandbox or approval
 flags inside `--exec`. `claude` and `paseo` stay refused under `exec` with or
 without the flag: use their guarded adapters.
 
-The clean HOME holds no model login for an `exec` wake. `--home-file <path>`
+The clean HOME holds no model login for an `exec` wake. `--env-pass NAME` passes
+one environment variable, for a CLI that takes an API key. `--home-file <path>`
 (repeatable, relative to your HOME) copies one file into it on every wake, mode
-0600, for a CLI that keeps its login in a file; `--env-pass NAME` passes one
-environment variable, for a CLI that takes an API key. Shell start-up files,
-tool settings and credential stores the clean HOME never holds (`.ssh`, `.aws`,
-`.npmrc`, `.netrc`, `.config/gh`, `.config/git`, Claude and MCP settings) are
-refused.
+0600, and only the known model-login file of a supported agent CLI is accepted;
+anything else is refused, at start-up and again on every wake:
+
+| Agent CLI | `--home-file` accepts |
+| --- | --- |
+| `codex` | `.codex/auth.json` |
+| `gemini` | `.gemini/oauth_creds.json` (newer versions may keep it in the OS keychain: then there is no file) |
+| `opencode` | `.local/share/opencode/auth.json` |
+| `amp` | `.local/share/amp/secrets.json` |
+| `goose` | `.config/goose/secrets.yaml` (only when goose uses file storage; its default is the keyring) |
+| `aider` | `.aider/oauth-keys.env` |
+| `omp`, `cursor-agent` | nothing: `omp` keeps its login in a database with every account and its state, and Cursor does not publish where `cursor-agent` keeps its credentials. Use `--env-pass` or run the agent under its own account |
+
+When `--exec` starts one of these CLIs only that CLI's file is accepted; for any
+other command (a wrapper script) any file in the table is. Settings files are
+not logins and are refused (they can name MCP servers, hooks or extensions that
+run commands), as are shell start-up files, credential stores and owner state
+(`.ssh`, `.aws`, `.npmrc`, `.netrc`, `.config/gh`, `.config/git`, `.omp`,
+`.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`, Claude and
+MCP settings). A symbolic link is refused, whether it is the file or a
+directory above it: name the real file inside your HOME. `--wake claude` takes
+no `--home-file`; its login is copied automatically.
 
 Executable allowances require an identity recorded by the guard: the resolved
 path and device/inode of the installed tool. A basename such as `gh`, `git` or

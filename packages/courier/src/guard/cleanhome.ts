@@ -25,6 +25,8 @@ export interface CleanHomeOptions {
   files?: readonly string[];
   /** Exec adapters need no model login. */
   claude?: boolean;
+  /** The agent CLI the exec command starts (`codex`, `omp`, …), if it starts one: which `--home-file` login files are allowed. */
+  agentCli?: string;
 }
 
 export interface CleanHome {
@@ -60,13 +62,65 @@ const SCRUBBED = ['.claude.json', '.claude/settings.json', '.claude/settings.loc
 
 const under = (rel: string, roots: readonly string[]) => roots.some((f) => rel === f || rel.startsWith(`${f}/`));
 
+/** Owner tool state and credential stores no `--home-file` may name, whatever else is allowed: refused with their own message. */
+const DENIED_ROOTS = ['.omp', '.tinycloud', '.gnupg', '.docker', '.kube', '.config/gcloud', '.paseo'];
+
+/**
+ * The model-login file each supported agent CLI keeps in a file of the owner's HOME, and the only files `--home-file`
+ * copies. Settings files are not logins (they can name MCP servers, hooks and extensions that run commands), so none is listed.
+ * An empty list means the CLI's login cannot be carried by one file; hand it the login another way (`--env-pass`).
+ *  - codex: ~/.codex/auth.json (checked on a host with codex installed).
+ *  - gemini: ~/.gemini/oauth_creds.json (newer versions may keep it in the OS keychain instead: then there is nothing to copy).
+ *  - opencode: ~/.local/share/opencode/auth.json. amp: ~/.local/share/amp/secrets.json (Amp's security reference).
+ *  - goose: ~/.config/goose/secrets.yaml (only when goose uses file storage; its default is the keyring).
+ *  - aider: ~/.aider/oauth-keys.env (the OpenRouter key from aider's own sign-in).
+ *  - omp: none. Its login is inside ~/.omp/agent/agent.db together with every account and its state; copying it hands over all of them.
+ *  - cursor-agent: none. Cursor does not publish where the CLI keeps its credentials.
+ */
+export const MODEL_LOGIN_FILES: Readonly<Record<string, readonly string[]>> = {
+  codex: ['.codex/auth.json'],
+  gemini: ['.gemini/oauth_creds.json'],
+  opencode: ['.local/share/opencode/auth.json'],
+  amp: ['.local/share/amp/secrets.json'],
+  goose: ['.config/goose/secrets.yaml'],
+  aider: ['.aider/oauth-keys.env'],
+  omp: [],
+  'cursor-agent': [],
+};
+
+const NO_LOGIN_FILE: Readonly<Record<string, string>> = {
+  omp: 'its login sits in a database with every account and its state, so no single file can carry just a login',
+  'cursor-agent': 'it does not publish where its credentials are kept',
+};
+
+/** Which login files `--home-file` may name: none for the claude adapter, the started CLI's, or (a wrapper command) every supported CLI's. */
+function allowedLoginFiles(target: HomeFileTarget): { files: readonly string[]; cli?: string } {
+  if (target.adapter === 'claude') return { files: [] };
+  const cli = target.agentCli;
+  if (cli !== undefined && cli in MODEL_LOGIN_FILES) return { files: MODEL_LOGIN_FILES[cli]!, cli };
+  return { files: [...new Set(Object.values(MODEL_LOGIN_FILES).flat())] };
+}
+
+/** What a `--home-file` is for: the adapter, and the agent CLI an exec command starts (if any). */
+export interface HomeFileTarget {
+  adapter?: string;
+  agentCli?: string;
+}
+
 /** Why `--home-file <rel>` is refused, before anything is read: the same rules at start-up and on every wake. */
-export function homeFileRefusal(rel: string): string | undefined {
+export function homeFileRefusal(rel: string, target: HomeFileTarget = {}): string | undefined {
   const normal = path.posix.normalize(rel.split(path.sep).join('/'));
-  if (!rel || path.isAbsolute(rel) || normal === '.' || normal === '..' || normal.startsWith('../')) return `--home-file ${JSON.stringify(rel)} must be a path inside the home directory`;
-  if (under(normal, SHELL_STARTUP_FILES)) return `--home-file ${JSON.stringify(rel)} is a shell start-up file and is never copied`;
-  if (under(normal, SCRUBBED)) return `--home-file ${JSON.stringify(rel)} is tool configuration or a credential store the clean HOME never holds`;
-  return undefined;
+  const name = `--home-file ${JSON.stringify(rel)}`;
+  if (!rel || path.isAbsolute(rel) || normal === '.' || normal === '..' || normal.startsWith('../')) return `${name} must be a path inside the home directory`;
+  if (under(normal, SHELL_STARTUP_FILES)) return `${name} is a shell start-up file and is never copied`;
+  if (under(normal, SCRUBBED)) return `${name} is tool configuration or a credential store the clean HOME never holds`;
+  if (under(normal, DENIED_ROOTS)) return `${name} is owner tool state or a credential store (${DENIED_ROOTS.join(', ')}) and is never copied`;
+  const { files, cli } = allowedLoginFiles(target);
+  if (files.includes(normal)) return undefined;
+  if (target.adapter === 'claude') return `${name} is not needed with --wake claude: its login is copied automatically, and no other file is`;
+  if (cli !== undefined && files.length === 0) return `${name} is refused: ${cli} cannot take a login through --home-file (${NO_LOGIN_FILE[cli] ?? 'no login file is known'}); give it the login with --env-pass or run it under its own account`;
+  const known = files.map((file) => JSON.stringify(file)).join(', ');
+  return `${name} is not a model-login file${cli ? ` of ${cli}` : ' of a supported agent CLI'} (only ${known} can be copied)`;
 }
 
 function copyFile(from: string, to: string, mode: number): boolean {
@@ -79,6 +133,38 @@ function copyFile(from: string, to: string, mode: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Read one `--home-file` source without following a link: the path must resolve to exactly itself inside the real HOME
+ * (no link on the file or on any directory above it), it is opened with O_NOFOLLOW, and it must still be the same inode
+ * afterwards. Returns the bytes, or throws with the reason.
+ */
+function readHomeFile(realHome: string, rel: string): Buffer {
+  const name = `--home-file ${JSON.stringify(rel)}`;
+  const from = path.join(realHome, rel);
+  let expected: string;
+  let resolved: string;
+  try {
+    expected = path.join(fs.realpathSync(realHome), path.posix.normalize(rel.split(path.sep).join('/')));
+    resolved = fs.realpathSync(from);
+  } catch {
+    throw new Error(`${name} is not a readable file in ${realHome}`);
+  }
+  if (resolved !== expected) throw new Error(`${name} is a symbolic link or sits behind one and is never followed; name the real file inside ${realHome}`);
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(from, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(fd);
+    if (!opened.isFile()) throw new Error('not a regular file');
+    const still = fs.lstatSync(expected);
+    if (still.isSymbolicLink() || still.dev !== opened.dev || still.ino !== opened.ino) throw new Error('changed while it was read');
+    return fs.readFileSync(fd);
+  } catch (error) {
+    throw new Error(`${name} is not a readable regular file in ${realHome} (${error instanceof Error && /changed while|regular file/.test(error.message) ? error.message : 'it could not be opened without following a link'})`);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
 }
 
@@ -116,11 +202,14 @@ export function prepareCleanHome(options: CleanHomeOptions): CleanHome {
   }
 
   for (const rel of options.files ?? []) {
-    const refusal = homeFileRefusal(rel);
-    const from = inside(realHome, rel);
+    const refusal = homeFileRefusal(rel, { adapter: options.claude === false ? 'exec' : 'claude', agentCli: options.agentCli });
     const to = inside(home, rel);
-    if (refusal || !from || !to) throw new Error(refusal ?? `--home-file ${JSON.stringify(rel)} must be a path inside the home directory`);
-    if (!copyFile(from, to, 0o600)) throw new Error(`--home-file ${JSON.stringify(rel)} is not a readable file in ${realHome}`);
+    if (refusal || !inside(realHome, rel) || !to) throw new Error(refusal ?? `--home-file ${JSON.stringify(rel)} must be a path inside the home directory`);
+    const bytes = readHomeFile(realHome, rel);
+    fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+    fs.rmSync(to, { force: true });
+    fs.writeFileSync(to, bytes, { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(to, 0o600);
     exposed.push(rel);
   }
   return { home, configDir: claudeDir, exposed };
