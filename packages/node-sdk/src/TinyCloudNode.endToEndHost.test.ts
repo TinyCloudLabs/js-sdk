@@ -30,7 +30,7 @@ afterEach(() => {
 
 type Attempt = { url: string; method: string; redirect: RequestRedirect | undefined };
 
-async function fixture(options: { routedUrl?: string; teeDown?: boolean; unregistered?: boolean } = {}) {
+async function fixture(options: { routedUrl?: string; teeDown?: "status" | "network"; unregistered?: boolean } = {}) {
   const routedUrl = options.routedUrl ?? PROXIED;
   const proof = await signedRestorableSession({ abilities: { kv: { "": ["tinycloud.kv/get"] } } });
   const payload: LocationRecordV2Payload = {
@@ -49,7 +49,8 @@ async function fixture(options: { routedUrl?: string; teeDown?: boolean; unregis
         ? Response.json({ record })
         : Response.json({ error: "location record not found" }, { status: 404 });
     }
-    if (url.origin === TEE && options.teeDown) return new Response("unavailable", { status: 503 });
+    if (url.origin === TEE && options.teeDown === "network") throw new TypeError("fetch failed");
+    if (url.origin === TEE && options.teeDown === "status") return new Response("unavailable", { status: 503 });
     if (url.pathname === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: ["encryption-named-keys-v1"], nodeId: NODE_DID });
     if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     if (url.pathname.startsWith("/encryption/networks/")) {
@@ -96,15 +97,17 @@ test("a session restored on the proxied name reads keys through the TEE origin o
   expect(nodeOrigins(attempts)).not.toContain(PROXIED);
 });
 
-test("a TEE failure fails the encryption call and never reaches the proxied name, including on retry", async () => {
-  const { node, attempts } = await fixture({ teeDown: true });
-  await expect(node.getEncryptionNetwork()).rejects.toMatchObject({ code: "NODE_NOT_RESPONDING" });
-  await expect(node.getEncryptionNetwork()).rejects.toMatchObject({ code: "NODE_NOT_RESPONDING" });
-  const keys = createNamedKeyClient(node);
-  await expect(keys.getPublicKey("apps/demo/key")).rejects.toThrow();
-  expect(nodeOrigins(attempts).length).toBeGreaterThan(0);
-  expect(nodeOrigins(attempts)).not.toContain(PROXIED);
-});
+for (const teeDown of ["status", "network"] as const) {
+  test(`a TEE ${teeDown} failure fails the encryption call and never reaches the proxied name, including on retry`, async () => {
+    const { node, attempts } = await fixture({ teeDown });
+    await expect(node.getEncryptionNetwork()).rejects.toMatchObject({ code: "NODE_NOT_RESPONDING" });
+    await expect(node.getEncryptionNetwork()).rejects.toMatchObject({ code: "NODE_NOT_RESPONDING" });
+    const keys = createNamedKeyClient(node);
+    await expect(keys.getPublicKey("apps/demo/key")).rejects.toThrow();
+    expect(nodeOrigins(attempts).length).toBeGreaterThan(0);
+    expect(nodeOrigins(attempts)).not.toContain(PROXIED);
+  });
+}
 
 test("an owner with no registry record takes the TEE origin's identity from that origin, not the proxied name", async () => {
   const { node, attempts } = await fixture({ unregistered: true });
