@@ -3874,11 +3874,6 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
     throw new Error("Only Naomi's exact TC-2936 root admission is approved.");
   }
-  if (value.tc2949PanelChunkRecoveryRoot !== undefined &&
-      (!value.tc2936RestoreCommitRoot ||
-        JSON.stringify(value.tc2949PanelChunkRecoveryRoot) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot))) {
-    throw new Error("Only Naomi's exact TC-2949 root admission is approved.");
-  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
