@@ -352,6 +352,8 @@ export type Tc2276SignedExpiry = HardeningRatchet & { replicaWorker: { delta: nu
 export type Tc2276TechnicalLimits = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2418 abort-listener cleanup admission (root, replica workers, first import, activation); the ceilings of the rows it follows carry where a bucket stays inside them. */
 export type Tc2418AbortListenerCleanup = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Worker-only TC-2205 feed --once hotfix admission; all other ceilings are unchanged. */
+export type Tc2205FeedOnceHotfix = WorkerRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -421,6 +423,7 @@ export type Ledger = {
   tc2276TechnicalLimits?: Tc2276TechnicalLimits;
   tc2418AbortListenerCleanup?: Tc2418AbortListenerCleanup;
   tc2691HostExpiry?: LogoutRatchet;
+  tc2205FeedOnceHotfix?: Tc2205FeedOnceHotfix;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1022,6 +1025,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   for (const row of ["tc2691HostExpiry"] as const) {
     if (root[row] !== undefined) pins.push({ row, pin: root[row].sourceCommits.at(-1)! });
   }
+  if (root.tc2205FeedOnceHotfix !== undefined) pins.push({ row: "tc2205FeedOnceHotfix", pin: root.tc2205FeedOnceHotfix.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -2650,6 +2654,23 @@ export const approvedTc2691HostExpiry: LogoutRatchet = {
   reason: "Stable host SIWE expiry builder and its authorization import seam: canonical CI measures 1479183 ESM / 1421693 CJS gzip bytes, +468 / +455 above the prior root caps. The released 3.11.1 base already measured 36 B over the ESM cap locally (1478751 vs 1478715). No optional, gated, cumulative or worker allowance changes.",
 };
 
+export const approvedTc2205FeedOnceHotfix: Tc2205FeedOnceHotfix = {
+  label: "TC-2205 feed --once hotfix",
+  ruling: "Measured in run 43348904365, approved by Naomi 2026-11-13, zero headroom: canonical worker +43 B to 776604; replica.worker.js +19 B to 770513. No other allowance changes.",
+  base: "dcee98981f6d16b9edd02cecc25b16923edf08f4",
+  sourceCommits: ["f7604af8dfc908c952146edf2d4e39f8203e30c2"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43348904365",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43348904365/job/131634904861",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43348904365/job/131634904573",
+    ],
+  },
+  worker: { delta: 43, ceiling: 776604 },
+  replicaWorker: { delta: 19, ceiling: 770513 },
+  reason: "Exact matching SQLite and PostgreSQL gzip measurements for the feed --once hotfix, on top of TC-2418's unchanged worker history. Root, first-import, activation and optional allowances are unchanged.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2747,6 +2768,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2276TechnicalLimits: approvedTc2276TechnicalLimits,
   tc2418AbortListenerCleanup: approvedTc2418AbortListenerCleanup,
   tc2691HostExpiry: approvedTc2691HostExpiry,
+  tc2205FeedOnceHotfix: approvedTc2205FeedOnceHotfix,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3057,6 +3079,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         (!value.tc2418AbortListenerCleanup || JSON.stringify(value[row]) !== JSON.stringify(approvedLedgerRows[row]))) {
       throw new Error("Only Naomi's exact host SIWE expiry (TC-2691) admission is approved.");
     }
+  }
+  if (value.tc2205FeedOnceHotfix !== undefined &&
+      (!value.tc2418AbortListenerCleanup || JSON.stringify(value.tc2205FeedOnceHotfix) !== JSON.stringify(approvedTc2205FeedOnceHotfix))) {
+    throw new Error("Only Naomi's exact TC-2205 feed --once hotfix ratchet is approved.");
   }
 }
 

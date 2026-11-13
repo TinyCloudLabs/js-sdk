@@ -2941,6 +2941,7 @@ delete tc2043Ledger.tc2276SignedExpiry;
 delete tc2043Ledger.tc2276TechnicalLimits;
 delete tc2043Ledger.tc2418AbortListenerCleanup;
 delete tc2043Ledger.tc2691HostExpiry;
+delete tc2043Ledger.tc2205FeedOnceHotfix;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4498,8 +4499,8 @@ describe("host SIWE expiry (TC-2691) exact stable-line admissions", () => {
   });
 
   it("retains the original worker ceilings without a hosting allowance", () => {
-    expect(MAX_WORKER_GZIP_BYTES).toBe(776561);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(770494);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(current.tc2205FeedOnceHotfix!.worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(current.tc2205FeedOnceHotfix!.replicaWorker.ceiling);
   });
 
   for (const key of ["tc2691HostExpiry"] as const) {

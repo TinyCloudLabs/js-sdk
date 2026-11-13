@@ -2578,8 +2578,8 @@
       "delta": { "activation.mjs": -5, "activation.cjs": -2 },
       "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
     },
-    "worker": { "delta": 22, "ceiling": 776604 },
-    "replicaWorker": { "delta": 27, "ceiling": 770513 },
+    "worker": { "delta": 22, "ceiling": 776561 },
+    "replicaWorker": { "delta": 27, "ceiling": 770494 },
     "reason": "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276."
   },
   "tc2691HostExpiry": {
@@ -2590,5 +2590,21 @@
     "canonicalCI": { "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870", "jobs": ["https://github.com/TinyCloudLabs/js-sdk/actions/runs/42753620870/job/129622759743"] },
     "root": { "delta": { "index.mjs": 468, "index.cjs": 455 }, "ceiling": { "index.mjs": 1479183, "index.cjs": 1421693 } },
     "reason": "Stable host SIWE expiry builder and its authorization import seam: canonical CI measures 1479183 ESM / 1421693 CJS gzip bytes, +468 / +455 above the prior root caps. The released 3.11.1 base already measured 36 B over the ESM cap locally (1478751 vs 1478715). No optional, gated, cumulative or worker allowance changes."
+  },
+  "tc2205FeedOnceHotfix": {
+    "label": "TC-2205 feed --once hotfix",
+    "ruling": "Measured in run 43348904365, approved by Naomi 2026-11-13, zero headroom: canonical worker +43 B to 776604; replica.worker.js +19 B to 770513. No other allowance changes.",
+    "base": "dcee98981f6d16b9edd02cecc25b16923edf08f4",
+    "sourceCommits": ["f7604af8dfc908c952146edf2d4e39f8203e30c2"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43348904365",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43348904365/job/131634904861",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43348904365/job/131634904573"
+      ]
+    },
+    "worker": { "delta": 43, "ceiling": 776604 },
+    "replicaWorker": { "delta": 19, "ceiling": 770513 },
+    "reason": "Exact matching SQLite and PostgreSQL gzip measurements for the feed --once hotfix, on top of TC-2418's unchanged worker history. Root, first-import, activation and optional allowances are unchanged."
   }
 }
