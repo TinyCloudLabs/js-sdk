@@ -24,6 +24,14 @@ export function sharePlacementMessage(payload: SharePlacementPayload): string {
   });
 }
 
+function validatePlacementDestination(record: SharePlacementPayload): void {
+  if (exactHttpOrigin(record.nodeUrl, "share node") !== record.nodeUrl) throw new Error("Share node URL must be exact");
+  // Reuse the registry's strict destination/space field validation, not its record signature domain.
+  validateLocationRecordV2Payload({ version: 2, subject: record.ownerDid,
+    nodes: [{ did: record.nodeDid, url: record.nodeUrl }], spaces: [{ space: record.spaceId, nodes: [{ did: record.nodeDid, mode: "read-only" }] }],
+    encryptionNode: null, updated_at: record.issuedAt, sequence: 0 });
+}
+
 async function parentBinding(parent: SharePlacementParent) {
   if (!parent.authHeader) throw new Error("Share placement requires signed parent bytes");
   const verified = await verifiedDelegationRouting(parent.authHeader, parent.cid);
@@ -43,11 +51,7 @@ export async function verifySharePlacement(input: unknown, parent: SharePlacemen
   if (record.ownerDid.toLowerCase() !== binding.ownerDid.toLowerCase() || record.parentCid !== parent.cid || record.spaceId !== parent.spaceId ||
       Date.parse(record.notAfter) !== binding.expiry.getTime() || Date.parse(record.issuedAt) > now ||
       Date.parse(record.issuedAt) >= Date.parse(record.notAfter) || now >= Date.parse(record.notAfter)) throw new Error("Share placement binding or validity is invalid");
-  if (exactHttpOrigin(record.nodeUrl, "share node") !== record.nodeUrl) throw new Error("Share node URL must be exact");
-  // Reuse the registry's strict destination/space field validation, not its record signature domain.
-  validateLocationRecordV2Payload({ version: 2, subject: record.ownerDid,
-    nodes: [{ did: record.nodeDid, url: record.nodeUrl }], spaces: [{ space: record.spaceId, nodes: [{ did: record.nodeDid, mode: "read-only" }] }],
-    encryptionNode: null, updated_at: record.issuedAt, sequence: 0 });
+  validatePlacementDestination(record);
   if (!(await verifyMessage({ address: record.ownerDid.slice(record.ownerDid.lastIndexOf(":") + 1) as `0x${string}`,
     message: sharePlacementMessage(record), signature: record.signature as `0x${string}` }))) throw new Error("Share placement owner signature is invalid");
   return record;
@@ -58,6 +62,8 @@ export async function signSharePlacement(parent: SharePlacementParent, node: { d
   const { ownerDid, expiry } = await parentBinding(parent);
   const payload: SharePlacementPayload = { type: SHARE_PLACEMENT_TYPE, ownerDid, parentCid: parent.cid,
     spaceId: parent.spaceId, nodeDid: node.did, nodeUrl: node.url, issuedAt: new Date(now).toISOString(), notAfter: expiry.toISOString() };
+  validatePlacementDestination(payload);
+  if (now >= expiry.getTime()) throw new Error("Share placement parent is expired");
   const signature = await signMessage(sharePlacementMessage(payload));
   return verifySharePlacement({ ...payload, signature }, parent, now);
 }

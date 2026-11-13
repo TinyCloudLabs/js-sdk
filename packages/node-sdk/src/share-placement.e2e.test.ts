@@ -3,7 +3,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Wallet } from "ethers";
 import { TinyCloudNode } from "./index";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
-import { sharePlacementDestinations, verifySharePlacement } from "../../sdk-core/src/share-placement";
+import { sharePlacementDestinations, signSharePlacement, verifySharePlacement } from "../../sdk-core/src/share-placement";
 import { signLocationRecordV2, validateLocationRecordV2, verifyLocationRecordV2 } from "../../sdk-core/src/location";
 
 const cleanup: Array<() => void> = [];
@@ -144,4 +144,16 @@ test("placement signing is explicit and cannot survive account retirement", asyn
   const attempted = active.fixture.nativeBearerStats().delegationAttempts;
   await expect(generate(active.node)).rejects.toThrow();
   expect(active.fixture.nativeBearerStats().delegationAttempts).toBe(attempted);
+});
+
+
+test("malformed placement destinations are refused before asking the owner to sign", async () => {
+  const { node } = await sender();
+  const decoded = node.sharing.decodeLink((await generate(node)).token);
+  let signatures = 0;
+  await expect(signSharePlacement({ ...decoded.delegation, spaceId: decoded.spaceId },
+    { did: decoded.placement!.nodeDid, url: decoded.placement!.nodeUrl + "/untrusted-path" },
+    async () => { signatures++; throw new Error("must not sign malformed placement"); },
+  )).rejects.toThrow();
+  expect(signatures).toBe(0);
 });
