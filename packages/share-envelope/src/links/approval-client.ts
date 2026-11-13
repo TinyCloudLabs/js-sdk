@@ -13,6 +13,7 @@
  * resumes from the caller's own record. Uses only `fetch`, WebCrypto and the package's primitives, so it runs
  * unchanged in browsers and in Node. `fetch` is injectable for tests.
  */
+import { approvalRenewalSchema, type ApprovalRenewal } from "./approval-renewal.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import { p256 } from "@noble/curves/p256";
 import { hmac } from "@noble/hashes/hmac";
@@ -364,12 +365,16 @@ export interface ApprovalResultExpectation {
   readonly requestId: string;
   readonly bodyCid: string;
   /** The request the result must answer: its issuer is the requester and its target the key being delegated to. */
-  readonly request: { readonly issuer: string; readonly targetDid: string };
+  readonly request: { readonly issuer: string; readonly targetDid: string; readonly renewal?: { readonly version: 1; readonly leaseLifetimeSeconds: number } };
   /** Epoch milliseconds; default now. A result whose delegation has already expired is refused. */
   readonly now?: number;
+  /** Stage only: caller must prove live admitted renewal before installing expired originals. */
+  readonly allowExpiredRenewal?: boolean;
 }
 
 export interface CheckedApprovalResult {
+  readonly renewalChoice?: "finite" | "leased";
+  readonly renewal?: ApprovalRenewal;
   readonly ownerDid: string;
   /** The delegation's expiry, canonical ISO-8601. */
   readonly delegationExpiresAt: string;
@@ -384,6 +389,22 @@ export interface CheckedApprovalResult {
  * checked here; it depends on what the caller asked for.
  */
 export function checkApprovalResultBinding(opened: Record<string, unknown>, expected: ApprovalResultExpectation): CheckedApprovalResult {
+  const allowed = new Set(["resultVersion", "requestId", "requestDigest", "requesterDid", "targetDid", "ownerDid", "delegationExpiresAt", "delegation", "renewalChoice", "renewal"]);
+  if (Object.keys(opened).some(key => !allowed.has(key))) throw invalidResult("The encrypted result contains unknown fields.");
+  let renewal: ApprovalRenewal | undefined;
+  if (expected.request.renewal) {
+    if (opened.renewalChoice === "leased") {
+      const parsed = approvalRenewalSchema.safeParse(opened.renewal);
+      if (!parsed.success || parsed.data.approvedLeaseLifetimeSeconds > expected.request.renewal.leaseLifetimeSeconds || Date.parse(parsed.data.approvedAt) > (expected.now ?? Date.now()) + 60_000) {
+        throw invalidResult("The approved renewal does not match this request.");
+      }
+      renewal = parsed.data;
+    } else if (opened.renewalChoice !== "finite" || opened.renewal !== undefined) {
+      throw invalidResult("The approved renewal choice is missing or inconsistent.");
+    }
+  } else if (opened.renewalChoice !== undefined || opened.renewal !== undefined) {
+    throw invalidResult("The result contains renewal that was not requested.");
+  }
   const { ownerDid, delegationExpiresAt, delegation } = opened;
   const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) &&
     new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
@@ -398,6 +419,6 @@ export function checkApprovalResultBinding(opened: Record<string, unknown>, expe
     ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)],
   ].filter(([, matches]) => !matches).map(([field]) => field);
   if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
-  if (Date.parse(delegationExpiresAt as string) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
-  return { ownerDid: ownerDid as string, delegationExpiresAt: delegationExpiresAt as string, delegation: delegation as Record<string, unknown> };
+  if (Date.parse(delegationExpiresAt as string) <= (expected.now ?? Date.now()) && !(expected.allowExpiredRenewal && renewal)) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid: ownerDid as string, delegationExpiresAt: delegationExpiresAt as string, delegation: delegation as Record<string, unknown>, ...(expected.request.renewal ? { renewalChoice: opened.renewalChoice as "finite" | "leased", ...(renewal ? { renewal } : {}) } : {}) };
 }
