@@ -753,14 +753,22 @@ export interface LookupOwnerRegistryVerdictOptions {
   verdictCache?: RegistryVerdictCache;
 }
 
+/** The owner a cached verdict is for, and the reading client's own fail-closed stores. */
+export interface RegistryVerdictScope {
+  registryUrl: string;
+  subject: string;
+  sequenceStore?: RegistrySequenceStore;
+  cacheStore?: RegistryCacheStore;
+}
+
 /**
  * Opt-in, in-memory reuse of registry verdicts (TC-2970), keyed by registry URL
  * and owner DID. Create one with `createRegistryVerdictCache` from
  * `@tinycloud/sdk-core/registry-verdict-cache`.
  */
 export interface RegistryVerdictCache {
-  /** The owner's fresh verdict, or `lookup`'s, shared with concurrent callers. */
-  get(registryUrl: string, subject: string, lookup: () => Promise<RegistryVerdict>): Promise<RegistryVerdict>;
+  /** The owner's fresh verdict if the scope's stores allow it, else `lookup`'s, shared with concurrent callers. */
+  get(scope: RegistryVerdictScope, lookup: () => Promise<RegistryVerdict>): Promise<RegistryVerdict>;
   /** Drops the owner's verdict for this registry: the next call asks the registry. */
   invalidate(registryUrl: string, subject: string): void;
 }
@@ -780,7 +788,7 @@ export async function lookupOwnerRegistryVerdict(
     });
   }
   return options.verdictCache
-    ? options.verdictCache.get(options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, subject, () => lookupOwnerRegistry(subject, options))
+    ? options.verdictCache.get({ ...options, registryUrl: options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, subject }, () => lookupOwnerRegistry(subject, options))
     : lookupOwnerRegistry(subject, options);
 }
 
@@ -956,8 +964,11 @@ export async function resolveFailClosedTinyCloudHosts(
     try {
       hosts = hostsForVerdict(verdict, newUserHost);
     } catch (error) {
-      if (error instanceof NodeNotFoundError && error.verdict.status === "registered" && options.cacheStore) {
-        await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence, verdictRevisions.get(error.verdict)!);
+      if (error instanceof NodeNotFoundError && error.verdict.status === "registered") {
+        options.verdictCache?.invalidate(options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL, subject);
+        if (options.cacheStore) {
+          await dropOwnerRegistryCache(subject, options.cacheStore, options.sequenceStore, registryOwnerKeyV2(subject), error.verdict.sequence, verdictRevisions.get(error.verdict)!);
+        }
       }
       throw error;
     }
