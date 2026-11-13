@@ -93,7 +93,7 @@ Guards (woken agents run with these; humans rarely do):
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 
 Delivery (one watcher per person per machine; never calls a model):
-  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--once]
+  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded [--agent-cli]] [--env-pass NAME]… [--home-file REL]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--once]
                                    Subscribe to each peer's to/<me>/ and your me/approvals/, poll every
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
@@ -107,9 +107,12 @@ Delivery (one watcher per person per machine; never calls a model):
                                              Claude agents only (use --paseo-provider claude), refuses without it
                                      claude  \`claude -p\`, always guarded, session id kept per thread and resumed
                                              [--claude-settings f] [--claude-allow rule]… [--claude-bin p]
-                                     exec    sh -c <cmd> with COURIER_THREAD, COURIER_PEER, COURIER_MESSAGES.
+                                     exec    sh -c <cmd> with COURIER_THREAD, COURIER_PEER, COURIER_MESSAGES, COURIER_PROMPT.
                                              NOT approval-guarded: needs --unguarded, prints a notice on every
-                                             wake; not for agents that can merge, deploy or publish
+                                             wake; not for agents that can merge, deploy or publish.
+                                             An agent CLI with no guarded adapter (codex, opencode, omp, gemini, …)
+                                             also needs --agent-cli: nothing checks what it does with a peer's
+                                             message, so give its OS account only what the agent may use
                                    [--wake-timeout 900] limits one wake run, in seconds.
                                    Wake budget: at most --wake-budget message wake attempts per thread per UTC day; then
                                    the thread pauses (inform "thread paused" to the peer, notification to you via
@@ -117,8 +120,9 @@ Delivery (one watcher per person per machine; never calls a model):
                                    Notification paths never start or message agents. inform never wakes.
                                    Woken claude/exec runs get an environment allowlist (PATH, HOME, locale,
                                    proxy/CA, COURIER_*), clean HOME/XDG paths, no tokens; [--env-pass NAME]…
-                                   adds one on purpose. paseo agents inherit the Paseo daemon's environment:
-                                   known credential names are blanked, others are not.
+                                   adds one variable and [--home-file REL]… copies one file of your HOME (an
+                                   agent's model login) on purpose. paseo agents inherit the Paseo daemon's
+                                   environment: known credential names are blanked, others are not.
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]
                                    Install the same watch command as a macOS launchd agent or a Linux
                                    systemd --user unit. --dry-run prints the exact file and commands.

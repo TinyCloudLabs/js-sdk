@@ -24,7 +24,7 @@ export const COMMAND_FLAGS: Record<string, readonly string[]> = {
   task: ['peer', 'thread', 'state', 'note', 'artifact', 'ask', 'request-message'],
   request: ['task', 'why', 'peer', 'verb', 'target', 'summary', 'head-sha', 'base', 'risk', 'action'],
   orders: ['json'],
-  watch: ['wake', 'exec', 'unguarded', 'env-pass', 'cwd', 'debounce', 'poll', 'ticket', 'wake-budget', 'wake-timeout', 'notify', 'notify-exec',
+  watch: ['wake', 'exec', 'unguarded', 'agent-cli', 'env-pass', 'home-file', 'cwd', 'debounce', 'poll', 'ticket', 'wake-budget', 'wake-timeout', 'notify', 'notify-exec',
     'once', 'paseo-bin', 'paseo-mode', 'paseo-provider', 'claude-allow', 'claude-bin', 'claude-settings', 'install-launchd', 'install-systemd', 'dry-run', 'name'],
   intake: ['queue-dir', 'done-dir', 'overflow-dir', 'state-dir', 'peers-file', 'peers-owner', 'interval', 'once', 'init-from-now', 'force'],
   outbox: ['thread', 'new', 'outbox-dir', 'pipe', 'socket-group', 'peers-file', 'peers-owner', 'sent-dir', 'once', 'dry-run', ...TEXT],
