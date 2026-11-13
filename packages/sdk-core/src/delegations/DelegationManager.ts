@@ -315,33 +315,38 @@ export class DelegationManager {
         error: createError(DelegationErrorCodes.INVALID_INPUT, "cid is required"),
       };
     }
-    if (!this.invokeAny) {
+    const signer = this.sessionInvocationSigner;
+    if (!signer) {
       return {
         ok: false,
         error: createError(
           DelegationErrorCodes.NOT_INITIALIZED,
-          "Delegation status requires an invokeAny function that can sign the target CID"
+          "Delegation status requires a proofless session invocation signer"
         ),
       };
     }
 
     try {
       const send = async (fetchFn: FetchFunction, host: string, target?: ResourceTransportTarget) => {
-        const headers = await this.invocationHeaders([{
-          resource: `urn:cid:${cid}`,
-          service: "delegation",
-          path: "",
-          action: DelegationAction.STATUS,
-        }], target);
+        let authorization = signer.signDelegationStatus && cid === this.session.delegationCid
+          ? await signer.signDelegationStatus(cid)
+          : await signer.sign({
+              [`urn:cid:${cid}`]: { [DelegationAction.STATUS]: [{}] },
+            });
+        if (target) authorization = await target.bindAudience(authorization);
         return fetchFn(`${host}/delegation/status`, {
           method: "POST",
-          headers: Array.isArray(headers) ? [...headers, ["Content-Type", "application/json"]] : { ...headers, "Content-Type": "application/json" },
+          headers: { Authorization: authorization, "Content-Type": "application/json" },
           body: JSON.stringify({ cid }),
           redirect: "error",
         });
       };
       const response = this.resourceTransport
-        ? await this.resourceTransport([{ resource: this.session.spaceId, access: "read" }], (target) => send(target.fetch, target.url, target), { nodeLocal: true })
+        ? await this.resourceTransport(
+            [{ resource: this.session.spaceId, access: "read" }],
+            (target) => send(target.fetch, target.url, target),
+            { nodeLocal: true, invocationSession: this.session },
+          )
         : await send(this.fetchFn, this.host);
       if (!response.ok && response.status !== 404) {
         const errorText = await response.text();

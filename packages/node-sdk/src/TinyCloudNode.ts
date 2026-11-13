@@ -167,6 +167,11 @@ import {
   DUCKDB,
   ENCRYPTION,
   EXPIRY,
+  assertRenewalNodeIdentity,
+  parseSignedSiweCacao,
+  verifyRenewalHistory,
+  type RenewalNodeIdentity,
+  type RenewalStampHistoryEntry,
   assertExpiryWithinTechnicalLimit,
   canonicalHashHex,
   canonicalizeEncryptionJson,
@@ -357,6 +362,16 @@ const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
 const OWNER_REVOCATION_WINDOW_MS = 10 * 60_000;
 
 export type CreateOwnerDelegationParams = CoreCreateOwnerDelegationParams;
+
+export interface RenewalLeaseReceipt {
+  readonly originalCid: string;
+  readonly leaseCid: string;
+  readonly leaseAuthorization: string;
+  readonly leaseExpiresAt: string;
+  readonly leaseGeneration: 1;
+  readonly nodeIdentity: RenewalNodeIdentity;
+}
+
 
 export interface UnifiedOwnerRootInput {
   readonly ownerDid: string;
@@ -721,6 +736,14 @@ export class InvalidRestoredSessionError extends Error {
     this.name = "InvalidRestoredSessionError";
   }
 }
+export class RenewalLeaseOriginalExpiredError extends Error {
+  readonly code = "RENEWAL_LEASE_ORIGINAL_EXPIRED" as const;
+
+  constructor() {
+    super("Cannot create a renewal lease after the original session expires");
+    this.name = "RenewalLeaseOriginalExpiredError";
+  }
+}
 
 function canonicalRestoredVerificationMethod(
   canonicalVerificationMethod: string,
@@ -865,7 +888,10 @@ function ownerPermissionsToAbilities(
   const abilities: AbilitiesMap = {};
   const rawAbilities: Record<string, string[]> = {};
   for (const permission of permissions) {
-    if (permission.service === ENCRYPTION_PERMISSION_SERVICE) {
+    if (
+      permission.service === ENCRYPTION_PERMISSION_SERVICE
+      || (permission.service === "tinycloud.delegation" && permission.path.startsWith("urn:cid:"))
+    ) {
       rawAbilities[permission.path] = [...permission.actions];
       continue;
     }
@@ -2489,6 +2515,189 @@ export class TinyCloudNode {
     return Object.freeze({ origin: parsed.origin, nodeDid });
   }
 
+  /** Discover the active node's public renewal identity over that node's verified origin. */
+  async renewalNodeIdentity(): Promise<RenewalNodeIdentity> {
+    const graph = this._serviceGraph;
+    const active = await this.activeNodeIdentity();
+    graph.assertActive();
+    const response = await this.fetchForGraph(graph)(
+      `${active.origin}/.well-known/tinycloud/node-keys`,
+      { redirect: "error", signal: AbortSignal.timeout(5_000) },
+    );
+    graph.assertActive();
+    if (!response.ok) throw await httpResponseError(response, "Failed to fetch node renewal identity");
+    const value: unknown = await response.json();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("Node renewal identity response is invalid");
+    }
+    const keys = value as Record<string, unknown>;
+    if (
+      keys.nodeDid !== active.nodeDid ||
+      typeof keys.renewerDid !== "string" ||
+      typeof keys.renewerPublicKey !== "string" ||
+      !Number.isSafeInteger(keys.renewerEpoch) ||
+      (keys.renewerEpoch as number) < 0
+    ) {
+      throw new Error("Node renewal identity response is invalid");
+    }
+    const identity: RenewalNodeIdentity = {
+      nodeDid: active.nodeDid,
+      renewerDid: keys.renewerDid,
+      renewerPublicKey: keys.renewerPublicKey,
+      renewerEpoch: keys.renewerEpoch as number,
+    };
+    assertRenewalNodeIdentity(identity);
+    return identity;
+  }
+
+  /**
+   * Admit one owner-signed renewal lease for this session's exact delegation.
+   * The node records it while importing the ordinary delegation; this method
+   * does not initiate a renewal.
+   */
+  async createRenewalLease(expiresAt: Date): Promise<RenewalLeaseReceipt> {
+    const session = this.currentTinyCloudSession();
+    if (!session || !this.signer) throw new Error("Owner wallet signer and session are required");
+    const original = await parseSignedSiweCacao(
+      session.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""),
+      session.delegationCid,
+    );
+    const ownerDid = pkhDid(session.address, session.chainId);
+    const sessionDid = session.verificationMethod.split("#", 1)[0]!;
+    if (
+      !principalDidEquals(original.issuer, ownerDid)
+      || !principalDidEquals(original.audience, sessionDid)
+      || original.expiresAt === undefined
+    ) {
+      throw new Error("Renewal lease requires an owner-signed expiring session delegation");
+    }
+    const now = Date.now();
+    const originalExpiresAt = Date.parse(original.expiresAt);
+    const requestedExpiry = expiresAt instanceof Date ? expiresAt.getTime() : NaN;
+    if (!Number.isSafeInteger(originalExpiresAt) || originalExpiresAt <= now) {
+      throw new RenewalLeaseOriginalExpiredError();
+    }
+    if (
+      !Number.isSafeInteger(requestedExpiry) || requestedExpiry <= now
+      || requestedExpiry > now + 365 * 24 * 60 * 60 * 1000
+    ) {
+      throw new Error("Renewal lease expiry must be future and at most 365 days");
+    }
+    const nodeIdentity = await this.renewalNodeIdentity();
+    const receipt = await this.createOwnerDelegation({
+      delegateDid: nodeIdentity.renewerDid,
+      spaceId: session.spaceId,
+      expiresAt,
+      permissions: [{
+        service: "tinycloud.delegation",
+        path: `urn:cid:${session.delegationCid}`,
+        actions: ["tinycloud.delegation/renew"],
+      }],
+    });
+    const leaseAuthorization = receipt.delegation.authHeader;
+    if (!leaseAuthorization) throw new Error("Node did not return the admitted renewal lease");
+    return Object.freeze({
+      originalCid: session.delegationCid,
+      leaseCid: receipt.delegationCid,
+      leaseAuthorization,
+      leaseExpiresAt: expiresAt.toISOString(),
+      leaseGeneration: 1,
+      nodeIdentity,
+    });
+  }
+
+
+  /**
+   * Recompute current session authority from the owner's signed lease, the
+   * node's live status, and its independently verified admitted-stamp chain.
+   * Node-reported expiry can only shorten the result; it never grants access.
+   */
+  async getRenewalEffectiveExpiry(leaseAuthorization: string): Promise<number> {
+    const session = this.currentTinyCloudSession();
+    if (!session) throw new Error("A session is required to verify renewal authority");
+    const original = await parseSignedSiweCacao(
+      session.delegationHeader.Authorization.replace(/^Bearer\s+/i, ""),
+      session.delegationCid,
+    );
+    const ownerDid = pkhDid(session.address, session.chainId);
+    const lease = await parseSignedSiweCacao(leaseAuthorization);
+    const identity = await this.renewalNodeIdentity();
+    const target = `urn:cid:${session.delegationCid}`;
+    const resource = lease.attenuation[target];
+    const caveats = resource?.["tinycloud.delegation/renew"];
+    if (
+      !principalDidEquals(original.issuer, ownerDid)
+      || !principalDidEquals(lease.issuer, original.issuer)
+      || lease.audience !== identity.renewerDid
+      || original.expiresAt === undefined
+      || lease.expiresAt === undefined
+      || Object.keys(lease.attenuation).length !== 1
+      || !resource || Object.keys(resource).length !== 1
+      || !Array.isArray(caveats) || caveats.length !== 1
+      || typeof caveats[0] !== "object" || caveats[0] === null
+      || Array.isArray(caveats[0]) || Object.keys(caveats[0]).length !== 0
+    ) {
+      throw new Error("Renewal lease does not authorize only this session delegation");
+    }
+    const leaseExpiresAt = Math.floor(Date.parse(lease.expiresAt) / 1000);
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isSafeInteger(leaseExpiresAt) || leaseExpiresAt <= now) {
+      throw new Error("Renewal lease has expired");
+    }
+    const statusResult = await this.getDelegationStatus(session.delegationCid);
+    if (!statusResult.ok) throw statusResult.error;
+    const status = statusResult.data;
+    if (
+      !status.exists || !status.active || status.revoked || status.expired
+      || status.effective_expiry === undefined || status.effective_expiry === null
+      || !Number.isSafeInteger(status.effective_expiry)
+    ) {
+      throw new Error("Node reports no active renewal authority");
+    }
+    const verified = verifyRenewalHistory({
+      originalCid: session.delegationCid,
+      leaseCid: lease.cid,
+      leaseExpiresAt,
+      ancestorEffectiveExpiry: status.effective_expiry,
+      nodeIdentity: identity,
+      history: status.renewal_history ?? [],
+      now,
+    });
+    return verified.effectiveExpiry;
+  }
+
+  /**
+   * Restore only after the node reports a still-live admitted renewal stamp.
+   * The persisted expiry is treated as a candidate, never as renewed authority.
+   */
+  async restoreSessionWithRenewal(
+    sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+    leaseAuthorization: string,
+  ): Promise<void> {
+    const epoch = this.sessionEpoch;
+    const candidateConfig = { ...this.config, wasmBindings: this.wasmBindings };
+    delete candidateConfig.signer;
+    delete candidateConfig.privateKey;
+    delete candidateConfig.replication;
+    const candidate = new TinyCloudNode(candidateConfig);
+    try {
+      await candidate.restoreSessionInternal(sessionData, { allowExpired: true });
+      const session = candidate.currentTinyCloudSession();
+      if (!session || extractSiweExpiration(session.siwe) === undefined) {
+        throw new InvalidRestoredSessionError("Renewal restore requires an owner-signed session with a finite expiry.");
+      }
+      const effectiveExpiry = await candidate.getRenewalEffectiveExpiry(leaseAuthorization);
+      const effectiveExpiryDate = new Date(effectiveExpiry * 1000);
+      if (!Number.isFinite(effectiveExpiryDate.getTime()) || effectiveExpiryDate.getTime() <= Date.now()) {
+        throw new InvalidRestoredSessionError("Node reports no live admitted renewal authority.");
+      }
+      this.assertSessionEpoch(epoch, "Session renewal restore");
+      await this.restoreSessionInternal(sessionData, { allowExpired: true, effectiveExpiry: effectiveExpiryDate });
+    } finally {
+      candidate._serviceGraph.retire();
+      (candidate.tc as { retireServices?: () => void } | null)?.retireServices?.();
+    }
+  }
   /** Publish the active owner Node as a session-signed registry record. */
   async publishActiveNodeLocation(
     registryUrl: string,
@@ -4609,6 +4818,13 @@ export class TinyCloudNode {
      */
     replicaStamp?: { incarnation: string; lifecycleEpoch: number } | null;
   }): Promise<void> {
+    return this.restoreSessionInternal(sessionData);
+  }
+
+  private async restoreSessionInternal(
+    sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+    renewalRestore?: { allowExpired: true; effectiveExpiry?: Date },
+  ): Promise<void> {
     // Read synchronously: a sign-out called after this restore started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
@@ -4685,6 +4901,9 @@ export class TinyCloudNode {
     if (!hasPersistedProof && (proofValues.some((value) => value !== undefined) || sessionData.expiresAt !== undefined)) {
       throw new InvalidRestoredSessionError("Persisted session authority metadata is incomplete.");
     }
+    if (renewalRestore && !hasPersistedProof) {
+      throw new InvalidRestoredSessionError("Renewal restore requires the original signed SIWE proof.");
+    }
     if (!hasPersistedProof) {
       // A SIWE-less session (a delegate session `tc auth import` bootstrapped)
       // lasts as long as the compact UCAN it restores. Refuse it once
@@ -4706,12 +4925,15 @@ export class TinyCloudNode {
     let stagedSessionExpiry = new Date(0);
     let stagedRecap: WasmRecapEntry[] = [];
     if (hasPersistedProof) {
-      if (typeof this.wasmBindings.validatePersistedSession !== "function") {
+      const validate = renewalRestore?.allowExpired
+        ? this.wasmBindings.validatePersistedSessionForRenewal
+        : this.wasmBindings.validatePersistedSession;
+      if (typeof validate !== "function") {
         throw new UnsupportedSessionRestoreError("it cannot verify persisted SIWE authority");
       }
       const verified = (() => {
         try {
-          return this.wasmBindings.validatePersistedSession!({
+          return validate.call(this.wasmBindings, {
             delegationHeader: sessionData.delegationHeader,
             delegationCid: sessionData.delegationCid,
             spaceId: sessionData.spaceId,
@@ -4726,16 +4948,23 @@ export class TinyCloudNode {
         }
       })();
       stagedRecap = exactVerifiedRecap(verified);
-      const signedExpiry = verified.expiresAt === undefined
-        ? undefined
-        : persistedExpiry(verified.expiresAt);
-      const persistedPolicyExpiry = sessionData.expiresAt === undefined
-        ? undefined
-        : persistedExpiry(sessionData.expiresAt);
+      const parseExpiry = (value: unknown): Date | undefined => {
+        if (value === undefined) return undefined;
+        if (!renewalRestore) return persistedExpiry(value);
+        if (typeof value !== "string") throw new InvalidRestoredSessionError("Persisted session must include expiresAt.");
+        const expiry = new Date(value);
+        if (!Number.isFinite(expiry.getTime())) throw new InvalidRestoredSessionError("Persisted session expiry is invalid.");
+        return expiry;
+      };
+      const signedExpiry = parseExpiry(verified.expiresAt);
+      const persistedPolicyExpiry = parseExpiry(sessionData.expiresAt);
       if (signedExpiry && persistedPolicyExpiry && !sameInstant(signedExpiry, persistedPolicyExpiry)) {
         throw new InvalidRestoredSessionError("Persisted session expiry does not match its signed SIWE authority.");
       }
-      stagedSessionExpiry = signedExpiry ?? persistedPolicyExpiry ?? persistedExpiry(undefined);
+      stagedSessionExpiry = renewalRestore?.effectiveExpiry
+        ?? signedExpiry
+        ?? persistedPolicyExpiry
+        ?? persistedExpiry(undefined);
     }
     const restoreHints = this.explicitHost ? [this.explicitHost] : sessionData.tinycloudHosts ?? [];
     const stagedHost = exactHttpOrigin(restoreHints[0] ?? this.config.host!, "restored host hint");
@@ -5298,22 +5527,44 @@ export class TinyCloudNode {
    * this Node's DID; each invocation lives 60 seconds.
    */
   private sessionInvocationSignerFor(session: ServiceSession): SessionInvocationSigner {
+    const sign = async (
+      attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>,
+      nodeAudience?: string,
+    ) => {
+      const now = Math.floor(Date.now() / 1000);
+      const invocation = await signCompactUcanAuthorization({
+        issuerDid: session.verificationMethod.split("#", 1)[0]!,
+        audienceDid: nodeAudience ?? await this.fetchNodeId(undefined, session.spaceId),
+        attenuation,
+        facts: [{}],
+        proofs: [],
+        notBefore: now,
+        expiresAt: now + 60,
+        nonce: `urn:uuid:${crypto.randomUUID()}`,
+        sign: (bytes) => signBytesWithJwk(bytes, session.jwk),
+      });
+      return invocation.authorization;
+    };
     return {
       did: () => session.verificationMethod.split("#", 1)[0]!,
-      sign: async (attenuation, nodeAudience) => {
-        const now = Math.floor(Date.now() / 1000);
-        const invocation = await signCompactUcanAuthorization({
-          issuerDid: session.verificationMethod.split("#", 1)[0]!,
-          audienceDid: nodeAudience ?? await this.fetchNodeId(undefined, session.spaceId),
-          attenuation,
-          facts: [{}],
-          proofs: [],
-          notBefore: now,
-          expiresAt: now + 60,
-          nonce: `urn:uuid:${crypto.randomUUID()}`,
-          sign: (bytes) => signBytesWithJwk(bytes, session.jwk),
-        });
-        return invocation.authorization;
+      sign,
+      signDelegationStatus: async (cid) => {
+        const invokeStatus = this.wasmBindings.invokeDelegationStatus;
+        if (!invokeStatus || cid !== session.delegationCid) {
+          return sign({
+            [`urn:cid:${cid}`]: { "tinycloud.delegation/status": [{}] },
+          });
+        }
+        const audience = await this.fetchNodeId(undefined, session.spaceId);
+        const headers = invokeStatus(session, cid, audience);
+        if (Array.isArray(headers)) {
+          const authorization = headers.find(([name]) => name.toLowerCase() === "authorization")?.[1];
+          if (authorization) return authorization;
+        } else {
+          const authorization = headers.Authorization ?? headers.authorization;
+          if (authorization) return authorization;
+        }
+        throw new Error("WASM delegation status invocation returned no Authorization header");
       },
     };
   }

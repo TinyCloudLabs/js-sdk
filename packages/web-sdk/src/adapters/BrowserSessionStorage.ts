@@ -31,14 +31,15 @@ function toRuntimeGrant(entry: unknown): PortableDelegation | undefined {
 
 export type BrowserSessionLoadStatus =
   | "loaded"
+  | "renewal-candidate"
   | "missing"
   | "expired"
   | "corrupt"
   | "storage-unavailable";
 
 export type BrowserSessionLoadResult =
-  | { status: "loaded"; data: PersistedSessionData }
-  | { status: Exclude<BrowserSessionLoadStatus, "loaded">; data: null };
+  | { status: "loaded" | "renewal-candidate"; data: PersistedSessionData }
+  | { status: Exclude<BrowserSessionLoadStatus, "loaded" | "renewal-candidate">; data: null };
 
 export interface BrowserSessionStorageOptions {
   /** Storage backend. Defaults to globalThis.localStorage when available. */
@@ -203,7 +204,18 @@ export class BrowserSessionStorage implements ISessionStorage {
     return validatePersistedSessionData(networkData);
   }
 
-  async loadWithStatus(address: string): Promise<BrowserSessionLoadResult> {
+  loadWithStatus(address: string): Promise<BrowserSessionLoadResult> {
+    return this.loadForRestore(address, false);
+  }
+
+  loadRenewalCandidate(address: string): Promise<BrowserSessionLoadResult> {
+    return this.loadForRestore(address, true);
+  }
+
+  private async loadForRestore(
+    address: string,
+    preserveExpiredCandidate: boolean,
+  ): Promise<BrowserSessionLoadResult> {
     if (!this.storage) return { status: "storage-unavailable", data: null };
 
     const key = this.key(address);
@@ -238,6 +250,9 @@ export class BrowserSessionStorage implements ISessionStorage {
       }
 
       const expiresAt = new Date(result.data.expiresAt);
+      if (preserveExpiredCandidate && Number.isFinite(expiresAt.getTime()) && expiresAt.getTime() <= Date.now()) {
+        return { status: "renewal-candidate", data: result.data };
+      }
       if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) {
         this.storage.removeItem(key);
         this.clearActiveAddress(address);
