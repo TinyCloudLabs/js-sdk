@@ -211,6 +211,7 @@ export {
   TinyCloudNode,
   UnsupportedSessionRestoreError,
   InvalidRestoredSessionError,
+  RenewalLeaseOriginalExpiredError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,

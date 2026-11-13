@@ -42,6 +42,7 @@ export {
 
   // Delegation types
   Delegation,
+  RenewalStampHistory,
   DelegationStatus,
   DelegationRevocationReceipt,
   AccountDelegationResource,
@@ -82,6 +83,13 @@ export {
 
 // Classes
 export { DelegationManager } from "./DelegationManager";
+export { assertRenewalNodeIdentity, verifyRenewalHistory } from "./renewal";
+export type {
+  RenewalNodeIdentity,
+  RenewalStampHistoryEntry,
+  VerifyRenewalHistoryInput,
+  VerifiedRenewalHistory,
+} from "./renewal";
 
 // v2 SharingService
 export {

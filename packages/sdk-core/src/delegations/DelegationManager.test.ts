@@ -252,7 +252,11 @@ describe("DelegationManager.query", () => {
 describe("DelegationManager.status", () => {
   test("binds the same target CID in the signed resource and request body", async () => {
     const session = { spaceId: "space" } as ServiceSession;
-    const invokeAny = mock(() => ({ Authorization: "TinyCloudStatus fixture" }));
+    const sessionInvocationSigner = {
+      did: () => "did:key:holder",
+      sign: mock(async () => "TinyCloudStatus fixture"),
+    };
+    const invokeAny = mock(() => ({ Authorization: "unused parented invocation" }));
     const fetch = mock(async () => new Response(JSON.stringify({
       cid: "bafy-child",
       status: "revoked",
@@ -266,18 +270,17 @@ describe("DelegationManager.status", () => {
       session,
       invoke: mock(() => ({ Authorization: "unused" })),
       invokeAny,
+      sessionInvocationSigner,
       fetch,
     });
 
     const result = await manager.status("bafy-child");
 
     expect(result).toEqual({ ok: true, data: expect.objectContaining({ status: "revoked" }) });
-    expect(invokeAny).toHaveBeenCalledWith(session, [{
-      resource: "urn:cid:bafy-child",
-      service: "delegation",
-      path: "",
-      action: "tinycloud.delegation/status",
-    }]);
+    expect(invokeAny).not.toHaveBeenCalled();
+    expect(sessionInvocationSigner.sign).toHaveBeenCalledWith({
+      "urn:cid:bafy-child": { "tinycloud.delegation/status": [{}] },
+    });
   });
 
   test("returns an indistinguishable not-found status and rejects CID mismatch", async () => {
@@ -304,6 +307,7 @@ describe("DelegationManager.status", () => {
       session: { spaceId: "space" } as ServiceSession,
       invoke: mock(() => ({ Authorization: "unused" })),
       invokeAny: mock(() => ({ Authorization: "fixture" })),
+      sessionInvocationSigner: { did: () => "did:key:holder", sign: async () => "fixture" },
       fetch: mock(async () => responses.shift()!),
     });
 
@@ -326,6 +330,7 @@ describe("DelegationManager.status", () => {
       session: { spaceId: "space" } as ServiceSession,
       invoke: mock(() => ({ Authorization: "unused" })),
       invokeAny: mock(() => ({ Authorization: "fixture" })),
+      sessionInvocationSigner: { did: () => "did:key:holder", sign: async () => "fixture" },
       fetch: mock(async () => new Response(JSON.stringify(bodies.shift()), {
         status: statuses.shift(),
         headers: { "content-type": "application/json" },
@@ -335,6 +340,33 @@ describe("DelegationManager.status", () => {
     expect((await manager.status("bafy-child")).ok).toBe(false);
     expect((await manager.status("bafy-child")).ok).toBe(false);
     expect((await manager.status("bafy-child")).ok).toBe(false);
+  });
+
+  test("refuses an oversized status body before JSON parsing", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+        controller.close();
+      },
+    });
+    const response = new Response(body, { status: 200 });
+    const json = mock(async () => {
+      throw new Error("oversized response must not be parsed");
+    });
+    response.json = json;
+    const manager = new DelegationManager({
+      hosts: ["https://node.tinycloud.xyz"],
+      session: { spaceId: "space" } as ServiceSession,
+      invoke: mock(() => ({ Authorization: "unused" })),
+      invokeAny: mock(() => ({ Authorization: "fixture" })),
+      sessionInvocationSigner: { did: () => "did:key:holder", sign: async () => "fixture" },
+      fetch: mock(async () => response),
+    });
+
+    const result = await manager.status("bafy-child");
+
+    expect(result.ok).toBe(false);
+    expect(json).not.toHaveBeenCalled();
   });
 });
 

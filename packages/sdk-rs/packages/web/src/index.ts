@@ -17,10 +17,12 @@ export namespace tcwSession {
 export namespace tinycloud {
   export import completeSessionSetup = lib.completeSessionSetup;
   export import validatePersistedSession = lib.validatePersistedSession;
+  export import validatePersistedSessionForRenewal = lib.validatePersistedSessionForRenewal;
   export import generateHostSIWEMessage = lib.generateHostSIWEMessage;
   export import siweToDelegationHeaders = lib.siweToDelegationHeaders;
   export import invoke = lib.invoke;
   export import invokeAny = lib.invokeAny;
+  export import invokeDelegationStatus = lib.invokeDelegationStatus;
   export import computeCid = lib.computeCid;
   export import makeSpaceId = lib.makeSpaceId;
   export import prepareSession = lib.prepareSession;

@@ -97,6 +97,15 @@ function decodeDagCbor(bytes: Uint8Array): unknown {
   if (offset !== bytes.length) throw new Error("CBOR input has trailing bytes");
   return value;
 }
+/** Decode DAG-CBOR and refuse non-canonical encodings. */
+export function decodeCanonicalDagCbor(bytes: Uint8Array): unknown {
+  const value = decodeDagCbor(bytes);
+  const canonical = encodeDagCbor(value);
+  if (canonical.length !== bytes.length || canonical.some((byte, index) => byte !== bytes[index])) {
+    throw new Error("DAG-CBOR is not canonical");
+  }
+  return value;
+}
 
 /** Canonical DAG-CBOR: minimal heads, definite lengths, map keys ordered by encoded length then bytes. */
 export function encodeDagCbor(value: unknown): Uint8Array {

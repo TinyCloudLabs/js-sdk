@@ -56,6 +56,12 @@ export interface IWasmBindings {
   invoke: InvokeFunction;
   /** Invoke multiple TinyCloud capabilities in one authorization header */
   invokeAny?: InvokeAnyFunction;
+  /** Sign the exact delegation-status capability with the session key and no proofs. */
+  invokeDelegationStatus?: (
+    session: Parameters<InvokeAnyFunction>[0],
+    cid: string,
+    audienceDid: string,
+  ) => ReturnType<InvokeAnyFunction>;
   /** Compute a CID for signed invocation bytes. */
   computeCid?: (data: Uint8Array, codec: bigint) => string;
   /** Prepare a session (generate session key, build SIWE message) */
@@ -117,6 +123,15 @@ export interface IWasmBindings {
    * authenticated persisted data when the primitive is unavailable.
    */
   validatePersistedSession?: (
+    proof: PersistedSessionProof,
+  ) => ValidatedPersistedSessionProof;
+
+  /**
+   * Verify persisted SIWE authority while allowing its signed expiry to have
+   * passed. Only the SDK's renewal-restore path may use this as a candidate;
+   * a verified live node-admitted stamp is still required before access.
+   */
+  validatePersistedSessionForRenewal?: (
     proof: PersistedSessionProof,
   ) => ValidatedPersistedSessionProof;
 

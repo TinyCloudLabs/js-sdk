@@ -100,6 +100,16 @@ export type LogoutRatchet = {
   root: { delta: GzipSizes; ceiling: GzipSizes };
   reason: string;
 };
+/** Naomi's ticket-scoped root-only allowance for the compiled renewal WASM exports. */
+export type Tc2872RenewalRootBudget = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  measuredWith: string;
+  root: { delta: GzipSizes; ceiling: GzipSizes };
+  reason: string;
+};
 /**
  * One reviewed exact-delta admission of TC-1413 (js-sdk #574): typed node retry errors in sdk-services.
  * Same shape as the #565 hardening row, because the change moves the root, first-import, activation and
@@ -172,6 +182,12 @@ export type WorkerRatchet = {
   canonicalCI: { run: string; jobs: string[] };
   worker: { delta: number; ceiling: number };
   reason: string;
+};
+/** One ticket-scoped TC-2872 admission for the hashed kv-storage worker. */
+export type Tc2872RenewalKvWorkerRatchet = WorkerRatchet;
+/** One ticket-scoped TC-2872 admission for replica.worker.js. */
+export type Tc2872RenewalReplicaWorkerRatchet = Omit<WorkerRatchet, "worker"> & {
+  replicaWorker: { delta: number; ceiling: number };
 };
 /**
  * One cumulative reviewed exact-delta admission of the master drift since 75eb5304 (the last green
@@ -448,6 +464,9 @@ export type Ledger = {
   tc2691HostExpiry?: LogoutRatchet;
   tc2773LazyRestoreRoot?: LogoutRatchet;
   tc2234InvitationPolicyRoot?: LogoutRatchet;
+  tc2872RenewalRoot?: Tc2872RenewalRootBudget;
+  tc2872RenewalKvWorker?: Tc2872RenewalKvWorkerRatchet;
+  tc2872RenewalReplicaWorker?: Tc2872RenewalReplicaWorkerRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1066,6 +1085,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2773LazyRestoreReplicaWorker !== undefined) pins.push({ row: "tc2773LazyRestoreReplicaWorker", pin: root.tc2773LazyRestoreReplicaWorker.sourceCommits.at(-1)! });
   if (root.tc2773LazyRestoreRoot !== undefined) pins.push({ row: "tc2773LazyRestoreRoot", pin: root.tc2773LazyRestoreRoot.sourceCommits.at(-1)! });
   if (root.tc2234InvitationPolicyRoot !== undefined) pins.push({ row: "tc2234InvitationPolicyRoot", pin: root.tc2234InvitationPolicyRoot.sourceCommits.at(-1)! });
+  if (root.tc2872RenewalRoot !== undefined) pins.push({ row: "tc2872RenewalRoot", pin: root.tc2872RenewalRoot.sourceCommits.at(-1)! });
+  if (root.tc2872RenewalKvWorker !== undefined) pins.push({ row: "tc2872RenewalKvWorker", pin: root.tc2872RenewalKvWorker.sourceCommits.at(-1)! });
+  if (root.tc2872RenewalReplicaWorker !== undefined) pins.push({ row: "tc2872RenewalReplicaWorker", pin: root.tc2872RenewalReplicaWorker.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1156,6 +1178,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
     ["tc2773LazyRestoreRoot", root.tc2773LazyRestoreRoot?.root.ceiling],
     ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
+    ["tc2872RenewalRoot", root.tc2872RenewalRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3068,6 +3091,39 @@ export const approvedTc2234InvitationPolicyRoot: LogoutRatchet = {
   "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
 };
 
+export const approvedTc2872RenewalRoot: Tc2872RenewalRootBudget = {
+  "label": "renewal WASM exports root budget (TC-2872)",
+  "ruling": "Naomi, TC-2872, 2026-11-13: use the exact canonical CI root sizes; no general ceiling change. budget-ruling: Naomi, TC-2872.",
+  "base": "b7ba5e8cc9facc90a1644e3c153b1856ef1bb2cb",
+  "sourceCommits": ["766d27a2b96bff5f0c1090ad2d8c2f13f7eba6b9"],
+  "measuredWith": "Replica e2e CI run 43392230112 (Postgres 131774657231, SQLite 131774657301); Node 22, Bun 1.3.14, rustc 1.99.0, wasm-pack 0.13.1; gzip -9 -c",
+  "root": {
+    "delta": { "index.mjs": 6200, "index.cjs": 4997 },
+    "ceiling": { "index.mjs": 1521709, "index.cjs": 1455532 }
+  },
+  "reason": "The remaining eager growth comes from renewal Rust exports in the monolithic web-sdk-wasm; renewal verifier JavaScript is lazy. Canonical run 43392230112 measured 1,521,709 ESM and 1,455,532 CJS. The ledger delta is measured against the previous TC-2234 ceilings (1,515,509 / 1,450,535); current master measured 1,515,509 / 1,450,516 in run 43363966953. No general ceiling changes."
+};
+
+export const approvedTc2872RenewalKvWorker: Tc2872RenewalKvWorkerRatchet = {
+  label: "renewal WASM exports, kv-storage worker (TC-2872)",
+  ruling: "Naomi, TC-2872, 2026-11-13: admit the exact measured worker size, with a maximum +4,000 B ticket-scoped increase and no headroom. budget-ruling: Naomi, TC-2872.",
+  base: "b7ba5e8cc9facc90a1644e3c153b1856ef1bb2cb",
+  sourceCommits: ["766d27a2b96bff5f0c1090ad2d8c2f13f7eba6b9"],
+  canonicalCI: { run: "43392230112", jobs: ["131774657231", "131774657301"] },
+  worker: { delta: 3518, ceiling: 780742 },
+  reason: "Canonical Replica e2e CI measured 780,742 gzip bytes on both SQLite and Postgres. The exact increase over the prior 777,224 ceiling is 3,518 B (within Naomi's 4,000 B maximum); master measured 777,206 B. No unrelated worker allowance changes."
+};
+
+export const approvedTc2872RenewalReplicaWorker: Tc2872RenewalReplicaWorkerRatchet = {
+  label: "renewal WASM exports, replica worker (TC-2872)",
+  ruling: "Naomi, TC-2872, 2026-11-13: admit the exact measured worker size, with a maximum +4,000 B ticket-scoped increase and no headroom. budget-ruling: Naomi, TC-2872.",
+  base: "b7ba5e8cc9facc90a1644e3c153b1856ef1bb2cb",
+  sourceCommits: ["766d27a2b96bff5f0c1090ad2d8c2f13f7eba6b9"],
+  canonicalCI: { run: "43392230112", jobs: ["131774657231", "131774657301"] },
+  replicaWorker: { delta: 3305, ceiling: 774411 },
+  reason: "Canonical Replica e2e CI measured 774,411 gzip bytes on both SQLite and Postgres. The exact increase over the prior 771,106 ceiling is 3,305 B (within Naomi's 4,000 B maximum); master measured 771,106 B. No unrelated worker allowance changes."
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3207,6 +3263,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2773LazyRestoreReplicaWorker: approvedTc2773LazyRestoreReplicaWorker,
   tc2773LazyRestoreRoot: approvedTc2773LazyRestoreRoot,
   tc2234InvitationPolicyRoot: approvedTc2234InvitationPolicyRoot,
+  tc2872RenewalRoot: approvedTc2872RenewalRoot,
+  tc2872RenewalKvWorker: approvedTc2872RenewalKvWorker,
+  tc2872RenewalReplicaWorker: approvedTc2872RenewalReplicaWorker,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3595,6 +3654,21 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2773LazyRestoreRoot ||
         JSON.stringify(value.tc2234InvitationPolicyRoot) !== JSON.stringify(approvedTc2234InvitationPolicyRoot))) {
     throw new Error("Only Naomi's exact TC-2234 root admission is approved.");
+  }
+  if (value.tc2872RenewalRoot !== undefined &&
+      (!value.tc2234InvitationPolicyRoot ||
+        JSON.stringify(value.tc2872RenewalRoot) !== JSON.stringify(approvedTc2872RenewalRoot))) {
+    throw new Error("Only Naomi's exact TC-2872 root budget admission is approved.");
+  }
+  if (value.tc2872RenewalKvWorker !== undefined &&
+      (!value.tc2872RenewalRoot ||
+        JSON.stringify(value.tc2872RenewalKvWorker) !== JSON.stringify(approvedTc2872RenewalKvWorker))) {
+    throw new Error("Only Naomi's exact TC-2872 kv-storage worker budget admission is approved.");
+  }
+  if (value.tc2872RenewalReplicaWorker !== undefined &&
+      (!value.tc2872RenewalRoot || !value.tc2872RenewalKvWorker ||
+        JSON.stringify(value.tc2872RenewalReplicaWorker) !== JSON.stringify(approvedTc2872RenewalReplicaWorker))) {
+    throw new Error("Only Naomi's exact TC-2872 replica worker budget admission is approved.");
   }
 }
 
@@ -4338,6 +4412,38 @@ export function validateTc2234InvitationPolicyRootTransition(base?: LogoutRatche
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2234InvitationPolicyRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2234 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2872 root-only renewal budget is introduced once and immutable afterwards. */
+export function validateTc2872RenewalRootTransition(
+  base?: Tc2872RenewalRootBudget,
+  current?: Tc2872RenewalRootBudget,
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2872RenewalRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2872 root budget admission may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2872 kv-storage worker admission is introduced once and immutable afterwards. */
+export function validateTc2872RenewalKvWorkerTransition(
+  base?: Ledger["tc2872RenewalKvWorker"],
+  current?: Ledger["tc2872RenewalKvWorker"],
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2872RenewalKvWorker) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2872 kv-storage worker budget admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2872 replica worker admission is introduced once and immutable afterwards. */
+export function validateTc2872RenewalReplicaWorkerTransition(
+  base?: Ledger["tc2872RenewalReplicaWorker"],
+  current?: Ledger["tc2872RenewalReplicaWorker"],
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2872RenewalReplicaWorker) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2872 replica worker budget admission may be introduced once and cannot change later.");
   }
 }
 

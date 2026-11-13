@@ -195,7 +195,20 @@ export const DelegationSchema = z.object({
 
 export type Delegation = z.infer<typeof DelegationSchema>;
 
-/** Node-confirmed lifecycle state for one delegation. */
+/** A node-signed renewal stamp returned as untrusted status evidence. */
+export const RenewalStampHistorySchema = z.object({
+  cid: z.string().min(1),
+  lease_cid: z.string().min(1),
+  generation: z.number().int().nonnegative().safe(),
+  previous_stamp_cid: z.string().min(1),
+  new_end: z.number().int().nonnegative().safe(),
+  signed_bytes: z.string().min(1),
+  signature: z.string().min(1),
+}).strict();
+
+export type RenewalStampHistory = z.infer<typeof RenewalStampHistorySchema>;
+
+/** Node-confirmed lifecycle state plus optional #547 renewal evidence. */
 export const DelegationStatusSchema = z.object({
   cid: z.string().min(1),
   status: z.enum(["active", "revoked", "expired", "unavailable", "not_found"]),
@@ -203,6 +216,8 @@ export const DelegationStatusSchema = z.object({
   active: z.boolean(),
   revoked: z.boolean(),
   expired: z.boolean(),
+  effective_expiry: z.number().int().nullable().optional(),
+  renewal_history: z.array(RenewalStampHistorySchema).optional(),
 }).strict().superRefine((value, context) => {
   const valid = value.status === "active"
     ? value.exists && value.active && !value.revoked && !value.expired
@@ -548,9 +563,7 @@ export type GenerateShareParams = z.infer<typeof GenerateShareParamsSchema>;
 // We use z.unknown().refine() for runtime type checking while preserving TypeScript types.
 
 /**
- * Signs invocations with the session's own did:key and no proof. The node
- * accepts these for listing the delegations that key issued and for revoking
- * a delegation that key is the delegator of.
+ * Signs short-lived proofless invocations with the session's own did:key.
  */
 export interface SessionInvocationSigner {
   /** The session key's bare did:key (no fragment). */
@@ -560,6 +573,8 @@ export interface SessionInvocationSigner {
    * proof; returns the `Authorization` header value.
    */
   sign(attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>, nodeAudience?: string): Promise<string>;
+  /** Signs the exact delegation-status invocation through a platform-specific WASM binding, when available. */
+  signDelegationStatus?(cid: string): Promise<string>;
 }
 
 /**

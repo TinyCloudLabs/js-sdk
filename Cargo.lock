@@ -4991,6 +4991,7 @@ name = "tinycloud-web-sdk-rs"
 version = "0.1.0"
 dependencies = [
  "base64 0.21.7",
+ "cid",
  "console_error_panic_hook",
  "ed25519-dalek",
  "getrandom 0.2.17",

@@ -869,21 +869,33 @@ export class TinyCloudWeb {
   // Auth Methods (delegate to TinyCloudNode)
   // ===========================================================================
 
-  private async resolveRestoreAddress(address?: string): Promise<string | undefined> {
+  private async resolveRestoreAddress(
+    address?: string,
+    allowExpiredRenewalCandidate = false,
+  ): Promise<string | undefined> {
     if (address) return address;
     if (this._node?.address) return this._node.address;
     const connected = await this.walletSigner?.getConnectedAddress();
     if (connected !== undefined) return connected;
     const storage = this.sessionStorage as
-      | (ISessionStorage & { activeAddress?: () => string | undefined })
+      | (ISessionStorage & {
+        activeAddress?: () => string | undefined;
+        activeAddressForRenewal?: () => string | undefined;
+      })
       | undefined;
-    return storage?.activeAddress?.();
+    return allowExpiredRenewalCandidate
+      ? storage?.activeAddressForRenewal?.()
+      : storage?.activeAddress?.();
   }
 
   private async loadPersistedSession(
     address: string,
+    allowRenewalCandidate = false,
   ): Promise<BrowserSessionLoadResult> {
     if (!this.sessionStorage) return { status: "storage-unavailable", data: null };
+    if (allowRenewalCandidate && "loadRenewalCandidate" in this.sessionStorage) {
+      return (this.sessionStorage as BrowserSessionStorage).loadRenewalCandidate(address);
+    }
     if ("loadWithStatus" in this.sessionStorage) {
       return (this.sessionStorage as BrowserSessionStorage).loadWithStatus(address);
     }
@@ -905,6 +917,32 @@ export class TinyCloudWeb {
   }
 
   async restoreSession(address?: string): Promise<SessionRestoreResult> {
+    return this.restoreSessionInternal(address);
+  }
+
+  /**
+   * Restore an expired browser session only when the owner-signed lease admission
+   * and the node's independently verified renewal history extend its authority.
+   * The lease authorization must come from an owner-approved source, not storage metadata.
+   */
+  async restoreSessionWithRenewal(
+    leaseAuthorization: string,
+    address?: string,
+  ): Promise<SessionRestoreResult> {
+    if (!leaseAuthorization) {
+      return {
+        status: "restore-failed",
+        error: new Error("An owner-signed renewal lease authorization is required."),
+      };
+    }
+    return this.restoreSessionInternal(address, leaseAuthorization);
+  }
+
+  private async restoreSessionInternal(
+    address?: string,
+    leaseAuthorization?: string,
+  ): Promise<SessionRestoreResult> {
+
     const signOuts = this.signOutCount;
     // A restore may bring back a different account: a runtime permission signer set for the current one is cleared.
     this.runtimeSigner = undefined;
@@ -922,7 +960,7 @@ export class TinyCloudWeb {
     if (this.persistedRestoreBlocked) {
       if (this.signOutCleanupFailed) return refused();
       try {
-        const restoreAddress = await this.resolveRestoreAddress(address);
+        const restoreAddress = await this.resolveRestoreAddress(address, leaseAuthorization !== undefined);
         if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
         if (!restoreAddress || (await this.loadPersistedSession(restoreAddress)).status === "missing") {
           if (this.signOutCount !== signOuts || this.signOutInFlight > 0) return refused();
@@ -936,7 +974,7 @@ export class TinyCloudWeb {
     // Sign-out must see it even when storage has no activeAddress() hook.
     if (address) this.trackRestoreAddress(address);
 
-    const restoreAddress = await this.resolveRestoreAddress(address);
+    const restoreAddress = await this.resolveRestoreAddress(address, leaseAuthorization !== undefined);
     if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
       if (address) this.untrackRestoreAddress(address);
       return refused();
@@ -950,11 +988,15 @@ export class TinyCloudWeb {
 
     this._sessionRestoreStatus = "restoring";
     try {
-      const loaded = await this.loadPersistedSession(restoreAddress);
+      const loaded = await this.loadPersistedSession(restoreAddress, leaseAuthorization !== undefined);
       assertNotSignedOut();
-      if (loaded.status !== "loaded") {
+      if (loaded.status !== "loaded" && loaded.status !== "renewal-candidate") {
         this._sessionRestoreStatus = loaded.status;
         return { status: loaded.status };
+      }
+      if (loaded.status === "renewal-candidate" && leaseAuthorization === undefined) {
+        this._sessionRestoreStatus = "expired";
+        return { status: "expired" };
       }
       // A record that sign-out could not remove stays fenced: a reload must not bring it back.
       const fencing: FenceCapableStorage = this.sessionStorage;
@@ -969,7 +1011,12 @@ export class TinyCloudWeb {
       const priorHost = node.hosts?.[0];
       const priorAccount = node.restorableSession;
       try {
-        await node.restoreSession(restoreDataFromPersisted(loaded.data));
+        const restoreData = restoreDataFromPersisted(loaded.data);
+        if (loaded.status === "renewal-candidate") {
+          await node.restoreSessionWithRenewal(restoreData, leaseAuthorization!);
+        } else {
+          await node.restoreSession(restoreData);
+        }
       } finally {
         // Also when a later step throws after the node committed the new account. A sign-out resets itself.
         if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
@@ -1546,6 +1593,18 @@ export class TinyCloudWeb {
     expiryMs?: number;
   }): Promise<PortableDelegation> {
     return this.dispatchCurrentNode((node) => node.createDelegation(params));
+  }
+
+  /** Owner-sign and admit a bounded renewal lease for the current session. */
+  async createRenewalLease(
+    expiresAt: Date,
+  ): Promise<Awaited<ReturnType<TinyCloudNode["createRenewalLease"]>>> {
+    return this.dispatchCurrentNode((node) => node.createRenewalLease(expiresAt));
+  }
+
+  /** Verify current node-admitted renewal authority for the current session. */
+  async getRenewalEffectiveExpiry(leaseAuthorization: string): Promise<number> {
+    return this.dispatchCurrentNode((node) => node.getRenewalEffectiveExpiry(leaseAuthorization));
   }
 
   /** Create and activate a wallet-rooted delegation for an ephemeral share key. */
