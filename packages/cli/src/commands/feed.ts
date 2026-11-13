@@ -81,7 +81,9 @@ receives allowlisted response-header JSON on stdin and must exit zero only after
 acceptance. --once exits after the first batch it hands off, to wake a runtime whose tools
 return when a command exits. Uncertain delivery remains unconfirmed and is never
 automatically repeated. Renewal reconciles durable rows at most every five minutes while
-connected; hook notifications are wakeups, not replay or execution proof.
+connected; hook notifications are wakeups, not replay or execution proof. stdout lines
+carry the owner's response content, as sensitive as the runner's stdin: never pipe them
+into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
