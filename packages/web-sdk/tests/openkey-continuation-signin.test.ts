@@ -109,3 +109,21 @@ test("a server without the continuation advertisement uses the existing authoriz
   expect(calls.cancelled).toBe(1);
   expect(calls.legacy).toBe(1);
 });
+
+test("a typed account setup refusal cancels the continuation without fallback or activation", async () => {
+  const { web, calls } = await setup(true);
+  // TC-2931 owns the registry policy; inject its typed refusal at the preparation boundary.
+  const refusal = Object.assign(new Error("Account setup required"), {
+    name: "AccountSetupRequiredError", code: "ACCOUNT_SETUP_REQUIRED",
+    setupUrl: "https://home.tinycloud.xyz/",
+  });
+  const node = await web.ensureNode();
+  node.prepareOpenKeySignIn = async () => { throw refusal; };
+  await expect(web.signIn()).rejects.toBe(refusal);
+  expect(calls.reserved).toBe(1);
+  expect(calls.continuation).toBe(1);
+  expect(calls.cancelled).toBe(1);
+  expect(calls.legacy).toBe(0);
+  expect(calls.accountRequests).toBe(0);
+  expect(activations).toBe(0);
+});
