@@ -3165,5 +3165,23 @@
       "ceiling": { "index.mjs": 1524168, "index.cjs": 1458646 }
     },
     "reason": "Chunk-load recovery logs a value-free failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI measured 1524168/1458646 gzip -9 bytes on 7af3a69c, based on 790c8b08; #963 changed only a CI workflow env line, so the measurement applies to current base 4ff23e8e. This is +119/+129 over the TC-2923 ceilings 1524049/1458517, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2949"
+  },
+  "tc2970RegistryVerdictCacheRoot": {
+    "label": "registry verdict cache option root admission (TC-2970)",
+    "ruling": "Naomi's TC-2970 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root row when it merges; re-stacked on TC-2949 after #955 merged and re-measured. Details: TC-2970",
+    "base": "efb14e603ba4a49c4bb70690a4c501295e2292cf",
+    "sourceCommits": ["e04620cbd235645a02b55cf077efcaa2e7381fdf"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794375",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43469342097/job/132036794928"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 127, "index.cjs": 86 },
+      "ceiling": { "index.mjs": 1524295, "index.cjs": 1458732 }
+    },
+    "reason": "sdk-core's registry lookups take an opt-in verdictCache (the option branch in lookupOwnerRegistryVerdict, the route-denial drops in resolveRegistryResource and resolveFailClosedTinyCloudHosts); the cache itself ships in the separate @tinycloud/sdk-core/registry-verdict-cache entry. Canonical Node 22/Bun 1.3.14 CI measured 1524295/1458732 gzip -9 bytes on e04620cb, based on efb14e60. This is +127/+86 over the TC-2949 ceilings 1524168/1458646, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2970"
   }
 }
