@@ -27,7 +27,7 @@ function session(expiresAt: string): PersistedSessionData {
     tinycloudSession: {
       delegationHeader: { Authorization: "Bearer delegation" },
       delegationCid: "bafydelegation",
-      spaceId: "space://tinycloud/1/owner/default",
+      spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
       verificationMethod: "did:key:z6MkSession#z6MkSession",
     },
     expiresAt,
