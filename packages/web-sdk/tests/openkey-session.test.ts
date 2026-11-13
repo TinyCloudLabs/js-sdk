@@ -35,7 +35,7 @@ global.TextDecoder = TD;
 (globalThis as any).window = {
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
-  location: { hostname: "test.local" },
+  location: { host: "home.tinycloud.xyz", hostname: "home.tinycloud.xyz", origin: "https://home.tinycloud.xyz" },
 };
 (globalThis as any).document = {
   createElement: () => ({

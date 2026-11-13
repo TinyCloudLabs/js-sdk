@@ -36,6 +36,7 @@ import {
   parseSpaceUri,
   NodeNotFoundError,
   RegistryUnavailableError,
+  AccountSetupRequiredError,
   discoverLocalTinyCloudNode,
   exactHttpOrigin,
   assertSpaceCreationAllowed,
@@ -356,6 +357,10 @@ export interface NodeUserAuthorizationConfig {
   capabilityRequest?: ComposedManifestRequest;
   /** Include canonical account registry read/create-update/list permissions when composing `manifest` and plain sign-in. Default true. */
   includeAccountRegistryPermissions?: boolean;
+  /** @internal Derived from the browser bootstrap policy. */
+  includeImplicitCapabilitiesRead?: boolean;
+  /** @internal Refuse new-account setup before requesting a signature. */
+  requireExistingAccount?: boolean;
   /**
    * Replication sign-in augmentation (TC-858 §4.1): prefixes whose reads a
    * local replica may serve. For each prefix the session request gains one
@@ -455,6 +460,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private _manifest?: Manifest | Manifest[];
   private _capabilityRequest?: ComposedManifestRequest;
   private readonly includeAccountRegistryPermissions: boolean;
+  private readonly includeImplicitCapabilitiesRead: boolean;
+  private readonly requireExistingAccount: boolean;
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
@@ -548,6 +555,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.siweConfig = config.siweConfig;
     this.includeAccountRegistryPermissions =
       config.includeAccountRegistryPermissions ?? true;
+    this.includeImplicitCapabilitiesRead = config.includeImplicitCapabilitiesRead !== false;
+    this.requireExistingAccount = config.requireExistingAccount === true;
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
     this.establishReplicaStamp = config.establishReplicaStamp;
@@ -735,6 +744,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     assertCurrent?.();
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     const destinations = await this.resolveResourceDestinations(spaceId, "read");
+    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered") {
+      throw new AccountSetupRequiredError();
+    }
     for (const destination of destinations) {
       assertCurrent?.();
       await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
@@ -764,6 +776,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         });
         this.registryVerdict = resolved.verdict;
         if (resolved.verdict.status === "unregistered") {
+          if (this.requireExistingAccount) throw new AccountSetupRequiredError();
           if (noEntryHosts.length === 0 && (this.autoDiscoverLocalNode ?? true)) {
             const local = await discoverLocalTinyCloudNode({
               localNodeUrl: this.localNodeUrl,
@@ -927,6 +940,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       {
         includeAccountRegistryPermissions:
           this.includeAccountRegistryPermissions,
+        includeImplicitCapabilitiesRead: this.includeImplicitCapabilitiesRead,
       }
     );
     return this._capabilityRequest;
@@ -2017,6 +2031,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
+    if (this.requireExistingAccount) await this.resolveTinyCloudHostsForSignIn(address, chainId);
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
     // Create a session key

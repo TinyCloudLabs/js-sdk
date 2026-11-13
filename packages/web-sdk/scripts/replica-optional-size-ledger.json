@@ -1,7 +1,7 @@
 {
   "allowance": {
-    "replica.mjs": 53131,
-    "replica.cjs": 68401,
+    "replica.mjs": 53241,
+    "replica.cjs": 68504,
     "activation.mjs": 23412,
     "activation.cjs": 24981
   },
@@ -336,6 +336,68 @@
       "activation.mjs": 0,
       "activation.cjs": 0,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#945",
+      "ticket": "TC-2931",
+      "replica.mjs": 116,
+      "replica.cjs": 109,
+      "activation.mjs": 1,
+      "activation.cjs": 1,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
-  ]
+  ],
+  "tc2931": {
+    "label": "first-party bootstrap scope optional admission (TC-2931)",
+    "ruling": "size-ruling: TC-2931: Naomi approves exact canonical first-import deltas up to +150 B each over the new base, and measured activation deltas. Details: TC-2931",
+    "base": "41daf1c4717e15d6f95564f7246030877221f24a",
+    "sourceCommits": [
+      "6c748d4959f46acb3ed8031fca182326fcd0e0a2"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43438140206/job/131928463539"
+      ],
+      "before": {
+        "replica.mjs": 53125,
+        "replica.cjs": 68395,
+        "activation.mjs": 19145,
+        "activation.cjs": 20116
+      },
+      "after": {
+        "replica.mjs": 53241,
+        "replica.cjs": 68504,
+        "activation.mjs": 19146,
+        "activation.cjs": 20117
+      },
+      "delta": {
+        "replica.mjs": 116,
+        "replica.cjs": 109,
+        "activation.mjs": 1,
+        "activation.cjs": 1
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 116,
+        "replica.cjs": 109
+      },
+      "ceiling": {
+        "replica.mjs": 53241,
+        "replica.cjs": 68504
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 1,
+        "activation.cjs": 1
+      },
+      "ceiling": {
+        "activation.mjs": 23412,
+        "activation.cjs": 24981
+      }
+    },
+    "reason": "Canonical combined-head artifact bytes at the cited run. The prior TC-2936 canonical run43428324560/job131895190481 measured the recorded before values; the final checker also rebuilds the PR merge base and verifies every optional delta. Activation keeps its prior allowance. Earlier rows, mandatory direct checks and the fixed TC-2481 four-byte CJS baseline retirement remain intact. Details: TC-2931"
+  }
 }
