@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { encodeDagCbor, parseSignedSiweCacao } from "./cacao";
-import { admitOwnerRenewalLease, type AdmitOwnerRenewalLeaseInput } from "./renewal";
+import { admitOwnerRenewalLease, OwnerRenewalOriginalExpiredError, type AdmitOwnerRenewalLeaseInput } from "./renewal";
 import fixture from "../../test-fixtures/siwe-cacao/owner-share.json";
 
 const owner = privateKeyToAccount(`0x${fixture.ownerPrivateKey}`);
@@ -115,7 +115,7 @@ describe("owner-direct renewal consumer API", () => {
     const original = await parseSignedSiweCacao(originalAuthorization);
     const leaseAuthorization = await signed({ target: `urn:cid:${original.cid}` });
     const lease = await parseSignedSiweCacao(leaseAuthorization);
-    await expect(admitOwnerRenewalLease({ ...data, originalAuthorization, originalCid: original.cid, leaseAuthorization, leaseCid: lease.cid, leaseExpiresAt: lease.expiresAt! })).rejects.toThrow("expired");
+    await expect(admitOwnerRenewalLease({ ...data, originalAuthorization, originalCid: original.cid, leaseAuthorization, leaseCid: lease.cid, leaseExpiresAt: lease.expiresAt! })).rejects.toBeInstanceOf(OwnerRenewalOriginalExpiredError);
   });
 
   test("refuses changed node identity and failed node admission", async () => {
@@ -124,6 +124,14 @@ describe("owner-direct renewal consumer API", () => {
     await expect(admitOwnerRenewalLease(data)).rejects.toThrow("identity changed");
     nodeFetch(403);
     await expect(admitOwnerRenewalLease(data)).rejects.toThrow("403");
+  });
+
+  for (const declared of [false, true]) test(`bounds node identity response (${declared ? "declared" : "streamed"})`, async () => {
+    const data = await input();
+    globalThis.fetch = (async () => new Response(" ".repeat(16385), {
+      headers: declared ? { "content-length": "16385" } : {},
+    })) as typeof fetch;
+    await expect(admitOwnerRenewalLease(data)).rejects.toThrow("exceeds 16384 bytes");
   });
 
   for (const rawRecap of [

@@ -2641,7 +2641,7 @@ export class TinyCloudNode {
     const leaseExpiresAt = Math.floor(Date.parse(lease.expiresAt) / 1000);
     const now = Math.floor(Date.now() / 1000);
     if (!Number.isSafeInteger(leaseExpiresAt) || leaseExpiresAt <= now) {
-      throw new Error("Renewal lease has expired");
+      throw Object.assign(new Error("Renewal lease has expired"), { code: "RENEWAL_LEASE_EXPIRED" });
     }
     const statusResult = await this.getDelegationStatus(session.delegationCid);
     if (!statusResult.ok) throw statusResult.error;
@@ -2651,7 +2651,7 @@ export class TinyCloudNode {
       || status.effective_expiry === undefined || status.effective_expiry === null
       || !Number.isSafeInteger(status.effective_expiry)
     ) {
-      throw new Error("Node reports no active renewal authority");
+      throw Object.assign(new Error("Node reports no active renewal authority"), { code: "RENEWAL_AUTHORITY_INACTIVE" });
     }
     const { verifyRenewalHistory } = await import("@tinycloud/sdk-core/delegations/renewal");
     const verified = verifyRenewalHistory({
@@ -2689,7 +2689,7 @@ export class TinyCloudNode {
       const effectiveExpiry = await candidate.getRenewalEffectiveExpiry(leaseAuthorization);
       const effectiveExpiryDate = new Date(effectiveExpiry * 1000);
       if (!Number.isFinite(effectiveExpiryDate.getTime()) || effectiveExpiryDate.getTime() <= Date.now()) {
-        throw new InvalidRestoredSessionError("Node reports no live admitted renewal authority.");
+        throw Object.assign(new InvalidRestoredSessionError("Node reports no live admitted renewal authority."), { code: "RENEWAL_AUTHORITY_INACTIVE" });
       }
       this.assertSessionEpoch(epoch, "Session renewal restore");
       await this.restoreSessionInternal(sessionData, { allowExpired: true, effectiveExpiry: effectiveExpiryDate });

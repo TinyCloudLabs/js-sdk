@@ -467,6 +467,7 @@ export type Ledger = {
   tc2872RenewalRoot?: Tc2872RenewalRootBudget;
   tc2872RenewalKvWorker?: Tc2872RenewalKvWorkerRatchet;
   tc2872RenewalReplicaWorker?: Tc2872RenewalReplicaWorkerRatchet;
+  tc2904OwnerDirectProofRoot?: Tc2872RenewalRootBudget;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1088,6 +1089,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2872RenewalRoot !== undefined) pins.push({ row: "tc2872RenewalRoot", pin: root.tc2872RenewalRoot.sourceCommits.at(-1)! });
   if (root.tc2872RenewalKvWorker !== undefined) pins.push({ row: "tc2872RenewalKvWorker", pin: root.tc2872RenewalKvWorker.sourceCommits.at(-1)! });
   if (root.tc2872RenewalReplicaWorker !== undefined) pins.push({ row: "tc2872RenewalReplicaWorker", pin: root.tc2872RenewalReplicaWorker.sourceCommits.at(-1)! });
+  if (root.tc2904OwnerDirectProofRoot !== undefined) pins.push({ row: "tc2904OwnerDirectProofRoot", pin: root.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1179,6 +1181,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2773LazyRestoreRoot", root.tc2773LazyRestoreRoot?.root.ceiling],
     ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
     ["tc2872RenewalRoot", root.tc2872RenewalRoot?.root.ceiling],
+    ["tc2904OwnerDirectProofRoot", root.tc2904OwnerDirectProofRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3124,6 +3127,27 @@ export const approvedTc2872RenewalReplicaWorker: Tc2872RenewalReplicaWorkerRatch
   reason: "Canonical Replica e2e CI measured 774,411 gzip bytes on both SQLite and Postgres. The exact increase over the prior 771,106 ceiling is 3,305 B (within Naomi's 4,000 B maximum); master measured 771,106 B. No unrelated worker allowance changes."
 };
 
+export const approvedTc2904OwnerDirectProofRoot: Tc2872RenewalRootBudget = {
+  "label": "strict owner-direct proof parsing root budget (TC-2904)",
+  "ruling": "size-ruling: TC-2904: Naomi allows the measured root residual +878 B ESM / +503 B CJS (gzip -9) for strict proof parsing in the root parser, stacked on tc2872RenewalRoot; admission remains lazy. No general ceiling change.",
+  "base": "c01c8fe9d",
+  "sourceCommits": [
+    "4f32b4feda39c2955039631f683323911139f913"
+  ],
+  "measuredWith": "Bun 1.4.4; production web-sdk build; reused TC-2872 WASM; gzip -9 -c",
+  "root": {
+    "delta": {
+      "index.mjs": 878,
+      "index.cjs": 503
+    },
+    "ceiling": {
+      "index.mjs": 1517948,
+      "index.cjs": 1451512
+    }
+  },
+  "reason": "Only the strict signed proof list parser is eager; exact-CID owner lease admission stays on the existing lazy renewal subpath. No worker or general allowance changes."
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3266,6 +3290,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2872RenewalRoot: approvedTc2872RenewalRoot,
   tc2872RenewalKvWorker: approvedTc2872RenewalKvWorker,
   tc2872RenewalReplicaWorker: approvedTc2872RenewalReplicaWorker,
+  tc2904OwnerDirectProofRoot: approvedTc2904OwnerDirectProofRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3669,6 +3694,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2872RenewalRoot || !value.tc2872RenewalKvWorker ||
         JSON.stringify(value.tc2872RenewalReplicaWorker) !== JSON.stringify(approvedTc2872RenewalReplicaWorker))) {
     throw new Error("Only Naomi's exact TC-2872 replica worker budget admission is approved.");
+  }
+  if (value.tc2904OwnerDirectProofRoot !== undefined &&
+      (!value.tc2872RenewalRoot || JSON.stringify(value.tc2904OwnerDirectProofRoot) !== JSON.stringify(approvedTc2904OwnerDirectProofRoot))) {
+    throw new Error("Only Naomi's exact TC-2904 root budget admission is approved.");
   }
 }
 
@@ -4452,5 +4481,13 @@ export function validateTc2773LazyRestoreRootTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2773LazyRestoreRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2773 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2904 proof-parser root budget is introduced once and immutable. */
+export function validateTc2904OwnerDirectProofRootTransition(base?: Tc2872RenewalRootBudget, current?: Tc2872RenewalRootBudget): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2904OwnerDirectProofRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2904 root budget admission may be introduced once and cannot change later.");
   }
 }

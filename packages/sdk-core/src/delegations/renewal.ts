@@ -225,14 +225,24 @@ export interface AdmitOwnerRenewalLeaseInput {
   readonly signal?: AbortSignal;
 }
 
-/** Structurally identical to node-sdk's RenewalLeaseReceipt. */
-export interface OwnerRenewalLeaseReceipt {
+/** First-admission receipt; structurally identical to node-sdk's RenewalLeaseReceipt. */
+export interface OwnerRenewalLeaseFirstAdmissionReceipt {
   readonly originalCid: string;
   readonly leaseCid: string;
   readonly leaseAuthorization: string;
   readonly leaseExpiresAt: string;
+  /** First-admission marker, never the live generation after stop/re-enable. */
   readonly leaseGeneration: 1;
   readonly nodeIdentity: RenewalNodeIdentity;
+}
+
+/** The original expired before lease admission could complete. */
+export class OwnerRenewalOriginalExpiredError extends Error {
+  readonly code = "RENEWAL_LEASE_ORIGINAL_EXPIRED" as const;
+  constructor() {
+    super("Original grant expired before renewal lease admission. Restore an already-admitted renewal if available; otherwise fresh owner approval is required.");
+    this.name = "OwnerRenewalOriginalExpiredError";
+  }
 }
 
 /**
@@ -241,7 +251,7 @@ export interface OwnerRenewalLeaseReceipt {
  * bytes and return the same receipt; this function never signs or creates a lease.
  * The node remains authoritative for revocation and live graph admission.
  */
-export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput): Promise<OwnerRenewalLeaseReceipt> {
+export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput): Promise<OwnerRenewalLeaseFirstAdmissionReceipt> {
   const { parseSignedSiweCacao } = await import("./cacao");
   const { principalDidEquals } = await import("../identity");
   const { activateSessionWithHost } = await import("../space");
@@ -278,6 +288,7 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
   const leaseEnd = Date.parse(lease.expiresAt ?? "");
   const leaseStart = Date.parse(lease.notBefore ?? lease.issuedAt);
   const year = 365 * 24 * 60 * 60 * 1000;
+  if (Number.isSafeInteger(originalEnd) && originalEnd <= now) throw new OwnerRenewalOriginalExpiredError();
   if (![originalEnd, originalStart, leaseEnd, leaseStart].every(Number.isSafeInteger)
     || originalStart <= 0 || originalStart > now || originalEnd <= now
     || originalEnd <= originalStart || originalEnd - originalStart > 10 * year
@@ -290,7 +301,10 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
     redirect: "error", signal: input.signal,
   });
   if (!response.ok) throw new Error(`Renewal identity discovery failed: ${response.status}`);
-  const current = await response.json() as Partial<RenewalNodeIdentity>;
+  const { boundedResponseBytes } = await import("../location");
+  const bytes = await boundedResponseBytes(response, 16 * 1024);
+  if (bytes === null) throw new Error("Renewal node identity response exceeds 16384 bytes");
+  const current = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as Partial<RenewalNodeIdentity>;
   if (!current || Object.keys(input.nodeIdentity).some((key) =>
     current[key as keyof RenewalNodeIdentity] !== input.nodeIdentity[key as keyof RenewalNodeIdentity])) {
     throw new Error("Renewal node identity changed");
