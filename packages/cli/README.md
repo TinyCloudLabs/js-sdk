@@ -11,6 +11,16 @@ npm install -g @tinycloud/cli@1.5.0-beta.20
 Requires Node.js >= 20; TinyCloud's agent guides use Node.js 22.20 or later.
 Agents: start at https://agents.tinycloud.xyz/onboarding.
 
+## Bug report attachments
+
+`tinycloud bug-report --attach <report-id>` shows the redacted CLI log before
+asking to send it. In a non-interactive run, it saves the exact upload on this
+computer with owner-only access and prints a 32-character review hash. Nothing
+is sent until you read the saved log and run the command again with
+`--confirm <hash>`. The review hash is tied to both the report and saved bytes;
+if the file changes, the CLI refuses to send it. Sensitive values are removed
+where found.
+
 The package exposes `tinycloud` as its preferred command and keeps `tc` as a
 deprecated compatibility alias at the same entry. Both names accept the same
 commands and flags, with identical exit codes and stdout. A POSIX `tc` executable
