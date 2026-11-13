@@ -24,6 +24,7 @@ test("public preparation checks account registration before creating SIWE withou
       capabilityRequest: composeManifestRequest([{ app_id: "notes", name: "Notes", permissions: [{ service: "tinycloud.kv", path: "notes/", actions: ["get"] }] }], { includeAccountRegistryPermissions: false, includeImplicitCapabilitiesRead: false }),
     });
     await expect(auth.prepareSessionForSigning()).rejects.toBeInstanceOf(AccountSetupRequiredError);
+    await expect(auth.prepareSessionForSigning()).rejects.toBeInstanceOf(AccountSetupRequiredError);
     expect(registryReads).toBeGreaterThan(0);
     expect(preparations).toBe(0);
   } finally { globalThis.fetch = previousFetch; }

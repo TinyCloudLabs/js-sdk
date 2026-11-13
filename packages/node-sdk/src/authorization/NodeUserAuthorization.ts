@@ -744,6 +744,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     assertCurrent?.();
     const spaceId = restoredSpaceId ?? this.resolveSignInCapabilities(address, chainId).spaceId;
     const destinations = await this.resolveResourceDestinations(spaceId, "read");
+    if (this.requireExistingAccount && this.registryVerdict?.status === "unregistered") {
+      throw new AccountSetupRequiredError();
+    }
     for (const destination of destinations) {
       assertCurrent?.();
       await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
