@@ -1,10 +1,10 @@
 import { verifyMessage } from "viem";
 import { z } from "zod";
-import { parseSpaceUri } from "./spaces/SpaceService";
-import { exactHttpOrigin, validateLocationRecordV2Payload } from "./location";
-import { decodeBase64Url } from "./credentials/digest";
-import { parseSignedSiweCacao } from "./delegations/cacao";
-import { verifiedDelegationRouting, spaceIdsEqual } from "./delegations/portable";
+import {
+  parseSpaceUri, exactHttpOrigin, validateLocationRecordV2Payload, decodeBase64Url,
+  parseSignedSiweCacao, verifiedDelegationRouting, spaceIdsEqual,
+  resolveOwnerHosts, RegistryUnavailableError, type ResolveOwnerHostsOptions,
+} from "./share-placement-helpers";
 
 export const SHARE_PLACEMENT_TYPE = "tinycloud/share-placement/v1" as const;
 const schema = z.object({
@@ -46,15 +46,19 @@ async function parentBinding(parent: SharePlacementParent) {
 }
 
 export async function verifySharePlacement(input: unknown, parent: SharePlacementParent, now = Date.now()): Promise<SharePlacement> {
-  const record = schema.parse(input);
-  const binding = await parentBinding(parent);
-  if (record.ownerDid.toLowerCase() !== binding.ownerDid.toLowerCase() || record.parentCid !== parent.cid || record.spaceId !== parent.spaceId ||
-      Date.parse(record.notAfter) !== binding.expiry.getTime() || Date.parse(record.issuedAt) > now ||
-      Date.parse(record.issuedAt) >= Date.parse(record.notAfter) || now >= Date.parse(record.notAfter)) throw new Error("Share placement binding or validity is invalid");
-  validatePlacementDestination(record);
-  if (!(await verifyMessage({ address: record.ownerDid.slice(record.ownerDid.lastIndexOf(":") + 1) as `0x${string}`,
-    message: sharePlacementMessage(record), signature: record.signature as `0x${string}` }))) throw new Error("Share placement owner signature is invalid");
-  return record;
+  try {
+    const record = schema.parse(input);
+    const binding = await parentBinding(parent);
+    if (record.ownerDid.toLowerCase() !== binding.ownerDid.toLowerCase() || record.parentCid !== parent.cid || record.spaceId !== parent.spaceId ||
+        Date.parse(record.notAfter) !== binding.expiry.getTime() || Date.parse(record.issuedAt) > now ||
+        Date.parse(record.issuedAt) >= Date.parse(record.notAfter) || now >= Date.parse(record.notAfter)) throw new Error("Share placement binding or validity is invalid");
+    validatePlacementDestination(record);
+    if (!(await verifyMessage({ address: record.ownerDid.slice(record.ownerDid.lastIndexOf(":") + 1) as `0x${string}`,
+      message: sharePlacementMessage(record), signature: record.signature as `0x${string}` }))) throw new Error("Share placement owner signature is invalid");
+    return record;
+  } catch {
+    throw new Error("Invalid share placement");
+  }
 }
 
 export async function signSharePlacement(parent: SharePlacementParent, node: { did: string; url: string },
@@ -70,10 +74,17 @@ export async function signSharePlacement(parent: SharePlacementParent, node: { d
 
 /** Resolve only this share's space; carried statements never update global registry state. */
 export async function sharePlacementDestinations(record: SharePlacement, parent: SharePlacementParent,
-  options: import("./registry-policy").ResolveOwnerHostsOptions = {}) {
+  options: ResolveOwnerHostsOptions = {}) {
   const checked = await verifySharePlacement(record, parent);
-  const { resolveOwnerHosts, RegistryUnavailableError } = await import("./registry-policy");
-  const verdict = await resolveOwnerHosts(checked.ownerDid, options);
+  const request = options.fetch ?? globalThis.fetch;
+  let failureStatus: number | undefined;
+  const observedFetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const response = await request(input, init);
+    if (response.status !== 200 && response.status !== 404) failureStatus = response.status;
+    return response;
+  }, { preconnect: request.preconnect });
+  const verdict = await resolveOwnerHosts(checked.ownerDid, { ...options, fetch: observedFetch });
+  if (failureStatus !== undefined && (failureStatus < 500 || failureStatus > 599)) throw new Error("Share placement registry lookup refused");
   if (verdict.status === "registered") {
     if (!verdict.record) throw new RegistryUnavailableError(checked.ownerDid, undefined);
     const membership = verdict.record.spaces.find(({ space }) => spaceIdsEqual(space, checked.spaceId));
@@ -84,7 +95,8 @@ export async function sharePlacementDestinations(record: SharePlacement, parent:
       return { nodeDid: node.did, url: node.url };
     });
   }
-  if (verdict.status === "unavailable" && !["network-error", "timeout", "http-status"].includes(verdict.reason)) {
+  if (verdict.status === "unavailable" && !(verdict.reason === "network-error" || verdict.reason === "timeout" ||
+      (verdict.reason === "http-status" && failureStatus !== undefined && failureStatus >= 500 && failureStatus <= 599))) {
     throw new RegistryUnavailableError(checked.ownerDid, verdict);
   }
   return [{ nodeDid: checked.nodeDid, url: checked.nodeUrl }];

@@ -2061,7 +2061,9 @@ export class TinyCloudWeb {
         autoSubdelegate: false,
         useSessionKey: false,
       });
-      if (received.ok === false) return received;
+      if (received.ok === false) return { ok: false, error: {
+        code: received.error.code, message: "Could not receive shared data.", service: "delegation",
+      } };
       const share = received.data;
 
       // receive() has verified the parent CID, signature, space and embedded key.
@@ -2080,12 +2082,11 @@ export class TinyCloudWeb {
         },
       );
       if (!delegateResponse.ok) {
-        const errorText = await delegateResponse.text();
         return {
           ok: false,
           error: {
             code: "DELEGATION_FAILED",
-            message: `Failed to register delegation: ${delegateResponse.status} - ${errorText}`,
+            message: "Could not activate the shared delegation.",
             service: "delegation",
           },
         };
@@ -2108,27 +2109,24 @@ export class TinyCloudWeb {
       }
 
       const routed = routingFailure(kvResult.error);
-      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
-      const errorResult = kvResult;
+      if (routed) return { ok: false, error: { code: routed.code, message: "Could not access shared data.", service: "delegation" } };
       return {
         ok: false as const,
         error: {
           code: "DATA_FETCH_FAILED",
-          message: `Failed to fetch shared data: ${errorResult.error.message}`,
+          message: "Could not fetch shared data.",
           service: "delegation" as const,
-          cause: errorResult.error.cause,
         },
       };
     } catch (err) {
       const routed = routingFailure(err);
-      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
+      if (routed) return { ok: false, error: { code: routed.code, message: "Could not access shared data.", service: "delegation" } };
       return {
         ok: false,
         error: {
           code: "DECODE_FAILED",
-          message: `Failed to process share link: ${err instanceof Error ? err.message : String(err)}`,
+          message: "Could not process the sharing link.",
           service: "delegation",
-          cause: err instanceof Error ? err : undefined,
         },
       };
     }

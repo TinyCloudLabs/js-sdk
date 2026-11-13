@@ -3,7 +3,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Wallet } from "ethers";
 import { TinyCloudNode } from "./index";
 import { createHermeticEncryptedNode } from "./test-support/hermetic-encrypted-node";
-import { sharePlacementDestinations, signSharePlacement, verifySharePlacement } from "../../sdk-core/src/share-placement";
+import { sharePlacementDestinations, signSharePlacement, sharePlacementMessage, verifySharePlacement } from "../../sdk-core/src/share-placement";
 import { signLocationRecordV2, validateLocationRecordV2, verifyLocationRecordV2 } from "../../sdk-core/src/location";
 
 const cleanup: Array<() => void> = [];
@@ -156,4 +156,35 @@ test("malformed placement destinations are refused before asking the owner to si
     async () => { signatures++; throw new Error("must not sign malformed placement"); },
   )).rejects.toThrow();
   expect(signatures).toBe(0);
+});
+
+
+test("share placement canonical bytes pin the independent domain and signed type", () => {
+  const payload = { type: "tinycloud/share-placement/v1" as const,
+    ownerDid: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001", parentCid: "bafy-fixed-parent",
+    spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications",
+    nodeDid: "did:key:z6MkrJVcY6xCzz6qGFmYwNwSuzyLkxEMWrbhtcRbXSRwV7Hn", nodeUrl: "https://node.example",
+    issuedAt: "2026-11-13T00:00:00.000Z", notAfter: "2026-11-14T00:00:00.000Z" };
+  const expected = 'tinycloud/share-placement/v1\n{"type":"tinycloud/share-placement/v1","ownerDid":"did:pkh:eip155:1:0x0000000000000000000000000000000000000001","parentCid":"bafy-fixed-parent","spaceId":"tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:applications","nodeDid":"did:key:z6MkrJVcY6xCzz6qGFmYwNwSuzyLkxEMWrbhtcRbXSRwV7Hn","nodeUrl":"https://node.example","issuedAt":"2026-11-13T00:00:00.000Z","notAfter":"2026-11-14T00:00:00.000Z"}';
+  expect(new TextEncoder().encode(sharePlacementMessage(payload))).toEqual(new TextEncoder().encode(expected));
+});
+
+test("a valid owner signature cannot bind a different parent CID", async () => {
+  const { node, owner } = await sender();
+  const decoded = node.sharing.decodeLink((await generate(node)).token);
+  const mismatched = { ...decoded.placement!, parentCid: "bafy-another-parent" };
+  mismatched.signature = await owner.signMessage(sharePlacementMessage(mismatched));
+  await expect(verifySharePlacement(mismatched, { ...decoded.delegation, spaceId: decoded.spaceId })).rejects.toThrow();
+});
+
+test("registry 4xx errors refuse while canonical absence and 5xx permit the signed placement", async () => {
+  const { node } = await sender();
+  const decoded = node.sharing.decodeLink((await generate(node)).token);
+  const parent = { ...decoded.delegation, spaceId: decoded.spaceId };
+  for (const status of [400, 401, 403, 404, 500, 502, 503, 504, 599]) {
+    const fetchFn = Object.assign(async () => Response.json({ error: "location record not found" }, { status }), { preconnect() {} }) as typeof fetch;
+    const outcome = sharePlacementDestinations(decoded.placement!, parent, { registryUrl: "https://registry.example", fetch: fetchFn });
+    if (status < 500 && status !== 404) await expect(outcome).rejects.toThrow();
+    else expect(await outcome).toEqual([{ nodeDid: decoded.placement!.nodeDid, url: decoded.placement!.nodeUrl }]);
+  }
 });

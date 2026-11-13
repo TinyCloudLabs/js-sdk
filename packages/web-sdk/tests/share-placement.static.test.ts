@@ -64,3 +64,33 @@ test("wrong destination identity refuses before credential I/O", async () => {
   expect((await TinyCloudWeb.receiveShare(f.share.token, path)).ok).toBe(false);
   expect(credentialRequests).toBe(0);
 });
+
+
+test("placement validation errors never expose private share fields or a cause", async () => {
+  const f = await fixture();
+  const secret = f.decoded.key.d!;
+  const result = await TinyCloudWeb.receiveShare(encode({ ...f.decoded, placement: { ...f.decoded.placement, type: secret } }), path);
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("invalid placement unexpectedly accepted");
+  expect(result.error.code).toBe("DECODE_FAILED");
+  expect(JSON.stringify(result)).not.toContain(secret);
+  expect(result.error).not.toHaveProperty("cause");
+});
+
+test("activation refusals never expose an echoed parent credential or a cause", async () => {
+  const f = await fixture();
+  const native = globalThis.fetch;
+  const routed = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "registry.tinycloud.xyz") return Promise.resolve(Response.json({ error: "location record not found" }, { status: 404 }));
+    if (url.origin === f.node.host && url.pathname === "/delegate") return Promise.resolve(new Response(new Headers(init?.headers).get("authorization"), { status: 403 }));
+    return native(input, init);
+  }, { preconnect: native.preconnect }));
+  stops.push(() => routed.mockRestore());
+  const result = await TinyCloudWeb.receiveShare(f.share.token, path);
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("refused delegation unexpectedly accepted");
+  expect(result.error.code).toBe("DELEGATION_FAILED");
+  expect(JSON.stringify(result)).not.toContain(f.decoded.delegation.authHeader!);
+  expect(result.error).not.toHaveProperty("cause");
+});
