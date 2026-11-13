@@ -167,9 +167,7 @@ import {
   DUCKDB,
   ENCRYPTION,
   EXPIRY,
-  assertRenewalNodeIdentity,
   parseSignedSiweCacao,
-  verifyRenewalHistory,
   type RenewalNodeIdentity,
   type RenewalStampHistoryEntry,
   assertExpiryWithinTechnicalLimit,
@@ -2546,6 +2544,7 @@ export class TinyCloudNode {
       renewerPublicKey: keys.renewerPublicKey,
       renewerEpoch: keys.renewerEpoch as number,
     };
+    const { assertRenewalNodeIdentity } = await import("@tinycloud/sdk-core/delegations/renewal");
     assertRenewalNodeIdentity(identity);
     return identity;
   }
@@ -2654,6 +2653,7 @@ export class TinyCloudNode {
     ) {
       throw new Error("Node reports no active renewal authority");
     }
+    const { verifyRenewalHistory } = await import("@tinycloud/sdk-core/delegations/renewal");
     const verified = verifyRenewalHistory({
       originalCid: session.delegationCid,
       leaseCid: lease.cid,
