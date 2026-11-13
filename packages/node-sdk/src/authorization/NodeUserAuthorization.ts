@@ -55,6 +55,7 @@ import {
   EXPIRY,
   assertExpiryWithinTechnicalLimit,
   canonicalizeAddress,
+  verifyEip191MessageSignature,
   makePkhSpaceId,
   pkhDid,
   extractImmutableSiweFields,
@@ -2577,47 +2578,31 @@ export class NodeUserAuthorization implements IUserAuthorization {
       );
     }
 
-    // (2) Recover the signer from the signature over the exact bytes we are
-    // about to complete the session with. SiweMessage.verify() calls
-    // ethers.verifyMessage(EIP4361Message, signature) internally and matches
-    // the recovered address (case-insensitive) against the message's address
-    // field. Any mismatch throws, which is exactly the failure mode we want.
+    // Verify the bytes returned by OpenKey before interpreting their fields.
+    if (!await verifyEip191MessageSignature(result.signedMessage, result.signature, expectedAddress)) {
+      throw new Error("OpenKey signature verification failed");
+    }
     let parsedSignedSiwe: SiweMessage;
     try {
       parsedSignedSiwe = new SiweMessage(result.signedMessage);
-    } catch (err) {
-      throw new Error(
-        `OpenKey signedMessage is not a parseable SIWE: ${(err as Error).message}`,
-      );
+      if (new SiweMessage(parsedSignedSiwe).prepareMessage() !== result.signedMessage) {
+        throw new Error("Noncanonical SIWE");
+      }
+    } catch {
+      throw new Error("OpenKey signedMessage is not a canonical SIWE");
     }
-    const verifyResult = await parsedSignedSiwe.verify(
-      { signature: result.signature },
-      { suppressExceptions: true },
-    );
-    if (!verifyResult.success) {
-      const errData = verifyResult.error;
-      const type =
-        errData && typeof errData === "object" && "type" in errData
-          ? (errData as { type?: string }).type
-          : undefined;
-      const details =
-        errData && typeof errData === "object" && "expected" in errData
-          ? ` (expected=${(errData as { expected?: unknown }).expected}, received=${(errData as { received?: unknown }).received})`
-          : "";
-      throw new Error(
-        `OpenKey signature verification failed${type ? `: ${type}` : ""}${details}`,
-      );
+    if (canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress) {
+      throw new Error("OpenKey signedMessage owner does not match the expected signer");
     }
-    // Belt-and-braces: the SIWE `address` field must match what OpenKey
-    // reported and what the local signer will present. verify() checks
-    // signature-vs-siwe-address; we additionally cross-check the caller's
-    // claim and the local signer.
-    if (
-      canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress
-    ) {
-      throw new Error(
-        `OpenKey signedMessage.address (${parsedSignedSiwe.address}) does not match local signer address (${expectedAddress})`,
-      );
+    const now = Date.now();
+    const clockSkew = 30_000;
+    const issuedAt = Date.parse(parsedSignedSiwe.issuedAt);
+    const expiresAt = Date.parse(parsedSignedSiwe.expirationTime ?? "");
+    const notBefore = parsedSignedSiwe.notBefore === undefined ? undefined : Date.parse(parsedSignedSiwe.notBefore);
+    if (!Number.isFinite(issuedAt) || issuedAt > now + clockSkew ||
+        !Number.isFinite(expiresAt) || expiresAt <= now || issuedAt >= expiresAt ||
+        (notBefore !== undefined && (!Number.isFinite(notBefore) || notBefore > now + clockSkew || notBefore >= expiresAt))) {
+      throw new Error("OpenKey signedMessage is outside its valid time range");
     }
 
     // The expiry this code goes on to read (persisted `expiresAt`, the immutable-field comparison, the changed-expiry
@@ -2648,6 +2633,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // plain SIWE flows (no urn:recap: resource) the statement remains
     // byte-immutable.
     const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
+    if (originalHasRecap) {
+      try {
+        if (!this.wasm.parseVerifiedRecapFromSiwe) throw new Error("Strict ReCap verification unavailable");
+        this.wasm.parseVerifiedRecapFromSiwe(result.signedMessage);
+      } catch {
+        throw new Error("OpenKey signedMessage has an invalid ReCap");
+      }
+    }
     const originalFields = extractImmutableSiweFields(prepared.siwe);
     const signedFields = extractImmutableSiweFields(result.signedMessage);
     if (options?.allowExpirationChange === true) {

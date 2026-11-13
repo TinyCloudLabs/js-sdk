@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
+import { diffImmutableSiweFields, extractImmutableSiweFields, extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+import { SiweMessage } from "siwe";
 
 const registry = "https://registry.openkey-identity.test";
 const owner = new PrivateKeySigner("1".padStart(64, "0"));
@@ -69,6 +70,76 @@ test("pinned identity prepares, verifies and completes without reading a mutable
   expect(auth.tinyCloudSession?.address).toBe(await owner.getAddress());
   expect(reads()).toBe(0);
 });
+
+test("signature verification uses returned bytes rather than SIWE reconstruction", async () => {
+  const { auth, pending } = await fixture();
+  const result = await signedResult(pending.request.siwe);
+  const changed = result.signedMessage.replace("Chain ID: 1", "Chain ID: 01");
+  expect(new SiweMessage(changed).prepareMessage()).toBe(result.signedMessage);
+  await expect(auth.verifyPreparedOpenKeySignIn(pending, { ...result, signedMessage: changed }, "https://example.com"))
+    .rejects.toThrow("OpenKey signature verification failed");
+  expect(auth.tinyCloudSession).toBeUndefined();
+});
+
+test("an inserted empty Request ID cannot reuse the original signature or install a session", async () => {
+  const { auth, pending } = await fixture();
+  const result = await signedResult(pending.request.siwe);
+  const changed = { ...result, signedMessage: result.signedMessage.replace("\nResources:", "\nRequest ID: \nResources:") };
+  await expect(auth.verifyPreparedOpenKeySignIn(pending, changed, "https://example.com")).rejects.toThrow("signature verification failed");
+  await expect(auth.completeOpenKeySignIn(pending, Promise.resolve(changed))).rejects.toThrow("signature verification failed");
+  expect(auth.tinyCloudSession).toBeUndefined();
+});
+
+test("absent and empty immutable Request IDs are different", () => {
+  const fields = extractImmutableSiweFields("example.com wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nURI: https://example.com\nVersion: 1\nChain ID: 1\nNonce: 12345678\nIssued At: 2026-11-13T00:00:00.000Z");
+  expect(diffImmutableSiweFields(fields, { ...fields, requestId: "" })).toContain("requestId");
+});
+
+for (const malformed of ["padded", "missing att"]) {
+  test(`the strict WASM verifier refuses a signed ${malformed} ReCap`, async () => {
+    const { auth, pending } = await fixture();
+    const changed = pending.request.siwe.replace(/urn:recap:([A-Za-z0-9_-]+)/, (_resource, encoded) =>
+      `urn:recap:${malformed === "padded" ? `${encoded}=` : Buffer.from(JSON.stringify({})).toString("base64url")}`);
+    await expect(auth.verifyPreparedOpenKeySignIn(pending, await signedResult(changed), "https://example.com"))
+      .rejects.toThrow("invalid ReCap");
+    expect(auth.tinyCloudSession).toBeUndefined();
+  });
+}
+
+test("a signature over noncanonical SIWE bytes still refuses before activation", async () => {
+  const { auth, pending } = await fixture();
+  const changed = pending.request.siwe.replace("Chain ID: 1", "Chain ID: 01");
+  await expect(auth.verifyPreparedOpenKeySignIn(pending, await signedResult(changed), "https://example.com"))
+    .rejects.toThrow("OpenKey signedMessage is not a canonical SIWE");
+  expect(auth.tinyCloudSession).toBeUndefined();
+});
+
+test("malformed signatures return a generic refusal without logging their payload", async () => {
+  const { auth, pending } = await fixture();
+  const result = { ...await signedResult(pending.request.siwe), signature: "0xnot-a-signature" };
+  const logged: unknown[][] = [];
+  const previous = console.error;
+  console.error = (...args) => { logged.push(args); };
+  try {
+    await expect(auth.verifyPreparedOpenKeySignIn(pending, result, "https://example.com"))
+      .rejects.toThrow("OpenKey signature verification failed");
+    expect(logged).toEqual([]);
+    expect(auth.tinyCloudSession).toBeUndefined();
+  } finally { console.error = previous; }
+});
+
+for (const field of ["Issued At", "Not Before", "Expiration Time"]) {
+  test(`a signed invalid ${field} is refused explicitly`, async () => {
+    const { auth, pending } = await fixture();
+    const value = new Date(Date.now() + (field === "Expiration Time" ? -60_000 : 60_000)).toISOString();
+    const changed = field === "Not Before"
+      ? pending.request.siwe.replace(/^(Expiration Time: .+)$/m, `$1\nNot Before: ${value}`)
+      : pending.request.siwe.replace(new RegExp(`^${field}: .+$`, "m"), `${field}: ${value}`);
+    await expect(auth.verifyPreparedOpenKeySignIn(pending, await signedResult(changed), "https://example.com"))
+      .rejects.toThrow("OpenKey signedMessage is outside its valid time range");
+    expect(auth.tinyCloudSession).toBeUndefined();
+  });
+}
 
 for (const [field, change] of Object.entries({
   nonce: (s: string) => s.replace(/^Nonce: .+$/m, "Nonce: anothernonce"),

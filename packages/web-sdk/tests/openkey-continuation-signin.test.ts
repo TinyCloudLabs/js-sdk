@@ -54,7 +54,7 @@ async function signedResult(siwe: string) {
     signedMessage: siwe, selectedActionKeys, permissions };
 }
 
-async function setup(enabled: boolean) {
+async function setup(enabled: boolean, appVerifier?: () => Promise<boolean>) {
   const calls = { reserved: 0, cancelled: 0, continuation: 0, legacy: 0, accountRequests: 0 };
   const provider = { request: async ({ method }: { method: string }) => {
     if (method === "eth_chainId") return "0x1";
@@ -82,7 +82,7 @@ async function setup(enabled: boolean) {
     },
   };
   const web = await require("../dist/index.cjs").TinyCloudWeb.create({
-    openkey: { client }, manifest, tinycloudHosts: ["https://node.example.test"],
+    openkey: { client, ...(appVerifier ? { verify: appVerifier } : {}) }, manifest, tinycloudHosts: ["https://node.example.test"],
     tinycloudRegistryUrl: registry.url.origin, autoDiscoverLocalNode: false,
     persistSession: false, autoCreateSpace: false, autoBootstrapAccount: false, ui: false,
   });
@@ -108,6 +108,14 @@ test("a server without the continuation advertisement uses the existing authoriz
   expect(calls.continuation).toBe(0);
   expect(calls.cancelled).toBe(1);
   expect(calls.legacy).toBe(1);
+});
+
+test("an app-supplied verifier cannot override TinyCloud verification", async () => {
+  let invoked = 0;
+  const { web } = await setup(true, async () => { invoked++; return false; });
+  await web.signIn();
+  expect(invoked).toBe(0);
+  expect(activations).toBeGreaterThan(0);
 });
 
 test("a typed account setup refusal cancels the continuation without fallback or activation", async () => {
