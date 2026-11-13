@@ -31,6 +31,7 @@
   "changesets": [
     "chatgpt-consent-catalog-scope",
     "cli-courier-wake-agent-cli",
+    "courier-clean-home-links",
     "courier-collect-peer-renewal",
     "courier-home-file-allowlist",
     "courier-idle-polling",
