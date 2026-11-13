@@ -1558,14 +1558,15 @@ for (const [nodeHost, grantHost] of [
     const fixture = await createHermeticEncryptedNode({ ownerConnectorCapabilities: true });
     resources.push(async () => fixture.stop());
     const fixtureFetch = globalThis.fetch;
-    const routed = spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const routeFetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.origin === nodeHost) {
         const target = fixture.host + url.pathname + url.search;
         return fixtureFetch(input instanceof Request ? new Request(target, input) : target, init);
       }
       return fixtureFetch(input, init);
-    });
+    }, { preconnect: fixtureFetch.preconnect });
+    const routed = spyOn(globalThis, "fetch").mockImplementation(routeFetch);
     resources.push(async () => routed.mockRestore());
     const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-native-alias-"));
     resources.push(() => rm(stateDir, { recursive: true, force: true }));
