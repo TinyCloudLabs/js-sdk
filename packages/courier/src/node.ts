@@ -1,4 +1,5 @@
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import { createRegistryVerdictCache } from '@tinycloud/sdk-core';
 import type { IHooksService, PortableDelegation, TinyCloudSession, ValidatedRuntimeDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
@@ -9,6 +10,13 @@ import { canonicalJson } from './canonical.js';
 import { getJson } from './store.js';
 import { assertAgentGrant, assertPeerDelegation, bareDid, siweTimes } from './authority.js';
 
+/**
+ * One registry verdict cache for every node this process creates (TC-2970): each owner is looked up once per command,
+ * and a long-running `watch`, `intake` or `outbox serve` looks again after the SDK's bounds (a record 5 min, no record
+ * 60 s). Failed or unavailable lookups are not kept.
+ */
+const registryVerdictCache = createRegistryVerdictCache();
+
 export function nodeOpts(host: string) {
   return {
     host,
@@ -17,6 +25,7 @@ export function nodeOpts(host: string) {
     enablePublicSpace: false,
     autoBootstrapAccount: false,
     includeAccountRegistryPermissions: false,
+    registryVerdictCache,
   };
 }
 
