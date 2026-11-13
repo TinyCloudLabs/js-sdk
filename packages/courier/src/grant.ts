@@ -1,3 +1,4 @@
+import type { ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import { TinyCloudNode, NodeWasmBindings, publicJwk } from '@tinycloud/node-sdk';
@@ -28,6 +29,7 @@ export interface DelegateRequest {
 }
 
 export interface GrantPayload {
+  renewal?: ApprovalRenewal;
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
