@@ -96,7 +96,7 @@ function hookHub() {
   return hub;
 }
 
-function world({ handles = ['bob', 'carol'], authority = () => {}, renew = () => {} } = {}) {
+function world({ handles = ['bob', 'carol'], authority = () => {}, renew = () => {}, poll = POLL_MS } = {}) {
   const counts = {};
   const count = (key) => { counts[key] = (counts[key] ?? 0) + 1; };
   const selfKv = memoryKv('self', count);
@@ -128,7 +128,7 @@ function world({ handles = ['bob', 'carol'], authority = () => {}, renew = () =>
     wake: async () => {},
     log: (event, fields) => events.push({ event, at: Date.now(), ...fields }),
     now: () => Date.now(), // the mocked clock, whenever the test enables it
-  }, { debounceMs: 30_000, pollMs: POLL_MS, ticketSeconds: 25, wakeBudget: 12 });
+  }, { debounceMs: 30_000, pollMs: poll, ticketSeconds: 25, wakeBudget: 12 });
   const write = (handle, threadId = ulid()) => {
     const message = buildMessage({ threadId, text: 'hi', role: 'ROLE_USER', intent: 'inform', from: { owner: 'did:pkh:x', agent: `did:key:z${handle}`, label: handle } });
     message.messageId = ulid();
@@ -325,21 +325,58 @@ test('a peer whose authority is revoked is checked before an import and nothing 
   assert.equal(w.counts['self put'], undefined, 'no mirror, receipt or state write');
 });
 
-test('an import reuses an authority check younger than the poll interval and repeats an older one', async () => {
-  mock.timers.enable({ apis: ['Date'], now: START });
+test('every sync that imports takes a fresh authority verdict, however recent the last one; a sync with nothing new takes none', async () => {
+  const w = world({ handles: ['bob'] });
+  const first = w.write('bob');
+  await w.watcher.sync(w.peers[0], 'hook');
+  assert.ok(w.delivered(first.id));
+  assert.equal(w.counts['authority one'], 1);
+  w.write('bob');
+  w.write('bob');
+  await w.watcher.sync(w.peers[0], 'hook');
+  assert.equal(w.counts['authority one'], 2, 'checked again at once: no cached verdict, one check for both messages');
+  await w.watcher.sync(w.peers[0], 'hook');
+  assert.equal(w.counts['authority one'], 2, 'nothing new to import: no check');
+});
+
+test('a queued wake re-checks authority right before the adapter; a removed or refused peer\'s wake is dropped', async () => {
+  const wakes = [];
+  let revoked = false;
+  const w = world({ handles: ['bob'], authority: (handle, eligible) => { if (handle && revoked) eligible.delete(handle); } });
+  w.watcher.deps.wake = async (request) => { wakes.push(request); };
+  const sent = buildMessage({ threadId: 'T1', text: 'hi', role: 'ROLE_USER', intent: 'request', from: { owner: 'o', agent: 'a' } });
+  sent.messageId = '01J0000000000000000000000A';
+  w.peerKvs.get('bob').rows.set(`${PREFIX}/to/alice/threads/T1/msg/${sent.messageId}.json`, { value: sent, etag: 'r' });
+  await w.watcher.sync(w.peers[0], 'hook');
+  assert.equal(Object.keys(w.watcher.snapshot().pending).length, 1, 'queued while the peer was authorized');
+  revoked = true; // revoked after the message was queued, before the wake
+  await w.watcher.tick(true);
+  assert.equal(wakes.length, 0, 'the adapter never ran');
+  assert.deepEqual(w.watcher.snapshot().pending, {}, 'the request is dropped, not retried');
+  assert.ok(w.events.some((e) => e.event === 'wake-dropped' && e.peer === 'bob' && e.reason === 'peer-not-authorized'));
+  assert.equal([...w.selfKv.rows.keys()].some((key) => key.includes('/wake-claims/')), false, 'its claim is released');
+
+  const ok = world({ handles: ['bob'] });
+  const okWakes = [];
+  ok.watcher.deps.wake = async (request) => { okWakes.push(request); };
+  ok.peerKvs.get('bob').rows.set(`${PREFIX}/to/alice/threads/T1/msg/${sent.messageId}.json`, { value: sent, etag: 'r' });
+  await ok.watcher.sync(ok.peers[0], 'hook');
+  const before = ok.counts['authority one'];
+  await ok.watcher.tick(true);
+  assert.equal(okWakes.length, 1);
+  assert.equal(ok.counts['authority one'], before + 1, 'a fresh check right before the adapter, not the import\'s verdict');
+});
+
+test('with --poll above 5 minutes, authority housekeeping and dirty-peer retries still run every 5 minutes', async () => {
+  const w = world({ poll: 900_000 });
+  const stop = await start(w);
   try {
-    const w = world({ handles: ['bob'] });
-    const first = w.write('bob');
-    await w.watcher.sync(w.peers[0], 'hook');
-    assert.ok(w.delivered(first.id));
-    assert.equal(w.counts['authority one'], 1);
-    mock.timers.tick(POLL_MS - 1000);
-    w.write('bob');
-    await w.watcher.sync(w.peers[0], 'hook');
-    assert.equal(w.counts['authority one'], 1, 'checked 59 s ago: reused');
-    mock.timers.tick(1000);
-    w.write('bob');
-    await w.watcher.sync(w.peers[0], 'hook');
-    assert.equal(w.counts['authority one'], 2, 'checked 60 s ago: checked again');
-  } finally { mock.timers.reset(); }
+    w.take();
+    w.peerKvs.get('carol').failLists = 1;
+    await advance(3600_000);
+    const counts = w.take();
+    assert.equal(counts['authority all'], 12, `every 5 minutes, not every 15 (${JSON.stringify(counts)})`);
+    assert.equal(counts['bob list threads'], 4, 'the healthy fallback follows the longer --poll: every 15 minutes');
+    assert.equal(counts['carol list threads'], 5, 'the failed listing is retried at the next 5-minute cycle');
+  } finally { await stop(); }
 });

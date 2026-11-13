@@ -51,7 +51,7 @@ function say(kv, threadId, intent = 'request') {
   return message.messageId;
 }
 
-function agent({ did, selfKv, peer, peerKv, hooks = {}, budget = 12 }) {
+function agent({ did, selfKv, peer, peerKv, hooks = {}, budget = 12, extra = {} }) {
   const events = [];
   const wakes = [];
   const watcher = new Watcher({
@@ -60,6 +60,7 @@ function agent({ did, selfKv, peer, peerKv, hooks = {}, budget = 12 }) {
     wake: async (request) => { wakes.push(request); },
     log: (event, fields) => events.push({ event, at: Date.now(), ...fields }),
     now: () => Date.now(),
+    ...extra,
   }, { debounceMs: 0, pollMs: 60_000, ticketSeconds: 25, wakeBudget: budget });
   return { watcher, events, wakes };
 }
@@ -184,4 +185,47 @@ test('a second watcher of the same agent stands by: no exit, no restart loop, at
     await running;
     mock.timers.reset();
   }
+});
+
+test("a configured peer that is not eligible right now still gets its shared pause marker and pending wake moved", async () => {
+  const selfKv = memoryKv();
+  selfKv.rows.set(k.watchState, { etag: 'legacy', value: {
+    v: 1, woken: [], approvalsSeen: [], wakes: {}, paused: ['bob/T1'], wakeRetries: {}, approvalRetries: {}, outbox: [], held: {},
+    threadNotices: {}, peerNotices: {}, noticeGlobalLog: [], noticeLog: {},
+    pending: { 'bob/T2': { peer: 'bob', threadId: 'T2', subject: 'S', firstSeenAt: 0, lastSeenAt: 0, messages: [{ messageId: ulid(), intent: 'request', sentAt: '' }] } },
+  } });
+  selfKv.rows.set(k.paused('bob', 'T1'), { etag: 'p', value: { v: 1, peer: 'bob', threadId: 'T1', by: 'human', at: 'x', reason: 'r' } });
+  // bob is configured but temporarily ineligible (say its inbound grant is being renewed): loadPeers leaves it out.
+  const julie = agent({ did: JULIE, selfKv, peer: peerRecord('carol'), peerKv: memoryKv(), extra: { peerHandles: () => ['bob', 'carol'] } });
+  await julie.watcher.run(new AbortController().signal, { once: true });
+  assert.ok(selfKv.rows.has(stateKeys(JULIE).paused('bob', 'T1')), "bob's pause survives the move");
+  const mine = selfKv.rows.get(stateKeys(JULIE).watch).value;
+  assert.deepEqual(mine.paused, ['bob/T1']);
+  assert.deepEqual(julie.wakes.map((w) => `${w.peer}/${w.threadId}`), ['bob/T2'], "and so does bob's pending wake (no authority source here, so it wakes)");
+});
+
+test('a queued pause inform to a peer removed meanwhile is dropped, never posted', async () => {
+  const selfKv = memoryKv();
+  const bobKv = memoryKv();
+  let removed = false;
+  const informs = [];
+  const bob = peerRecord('bob');
+  const side = agent({ did: JULIE, selfKv, peer: bob, peerKv: bobKv, budget: 1, extra: {
+    loadPeers: () => removed ? [] : [bob],
+    checkAuthority: async () => {},
+    postInform: async (...args) => { informs.push(args); },
+  } });
+  await side.watcher.loadState();
+  const thread = ulid();
+  say(bobKv, thread, 'update');
+  await side.watcher.pollOnce('poll'); await side.watcher.tick();
+  say(bobKv, thread, 'update');
+  await side.watcher.pollOnce('poll'); await side.watcher.tick(); // over budget: paused, inform queued
+  assert.equal(side.wakes.length, 1);
+  assert.equal(side.watcher.snapshot().outbox.filter((item) => item.kind === 'inform').length, 1);
+  removed = true;
+  await side.watcher.tick();
+  assert.deepEqual(informs, [], 'nothing posted to the removed peer');
+  assert.equal(side.watcher.snapshot().outbox.filter((item) => item.kind === 'inform').length, 0, 'and the inform is dropped');
+  assert.ok(side.events.some((e) => e.event === 'inform-dropped' && e.peer === 'bob'));
 });
