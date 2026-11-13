@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.32
+
+### Patch Changes
+
+- 2c9c7cc: In a browser without `crypto.getRandomValues`, the web SDK now throws when it needs random bytes (for keys and nonces) instead of falling back to a non-cryptographic source. Browsers and webviews that have WebCrypto are unaffected.
+
+  Details: TC-3007
+
 ## 3.12.0-beta.31
 
 ### Minor Changes
