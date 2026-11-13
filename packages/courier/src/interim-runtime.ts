@@ -1,7 +1,7 @@
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { CourierError, isAuthorizationRefusal, isNotFoundError } from './errors.js';
 import { cmd } from './program.js';
-import { k } from './keys.js';
+import { stateKeys } from './keys.js';
 import { oneLine } from './a2a.js';
 import { loadGrant, loadProfile, withProfileTransaction } from './profile.js';
 import type { StoredPeer } from './profile.js';
@@ -79,7 +79,8 @@ export async function maintainPeerSet(node: TinyCloudNode, target?: string, coll
     // restoreSession is local. Even with no eligible peer lineage, prove owner authority on the node before asking.
     let authenticated = false;
     try {
-      const read = await node.kv.get(k.watchState, { prefix: '' });
+      // This agent's own watch.json: a read only, and never another agent's state.
+      const read = await node.kv.get(stateKeys(loadProfile().courierDid).watch, { prefix: '' });
       if (!read.ok && !isNotFoundError(read.error)) throw read.error;
       authenticated = true; // A signed, authorized 404 also proves the read was accepted.
     } catch (error) {
