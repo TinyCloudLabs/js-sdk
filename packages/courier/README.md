@@ -309,7 +309,9 @@ catch-up covers those gaps.
 `courier read` keeps the messages and thread meta it has read (both are
 create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
 (owner-only). Reading the thread again lists only the peer's side and fetches
-only new entries and the tasks, which can change. Your own side comes from a
+only new entries and the tasks, which can change. Entries are fetched in
+batches of up to 100 keys per call (one `tinycloud.kv/get` invocation each);
+each entry is still checked on its own. Your own side comes from a
 local record of your own writes (`send`, the outbox, pause notices, `task`,
 `request`, a session's meta) in `read-cache/<agent>/own/<thread>/`; that record
 is used for an hour after a listing of your side, then your side is listed

@@ -7,7 +7,7 @@ import { k, PREFIX, stateKeys, type StateKeys } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { isRecord, messageView, oneLine, taskView } from './a2a.js';
 import { commitReceipts, selectUndelivered, type KV, type Receipts } from './inbox.js';
-import { del, getJson, listAll, putCreate, putMatch, putOverwrite } from './store.js';
+import { del, getJson, listAll, putCreate, putMatch, putOverwrite, readJsonMany, type JsonRead, type JsonReadOutcome } from './store.js';
 import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
 import { appendNotice, type Notice, type Notifier } from './notify.js';
 import { nextNoticeId, writePauseMarker } from './pause.js';
@@ -764,14 +764,27 @@ export class Watcher {
     }
 
     const delivered: { threadId: string; messageId: string; intent?: string; notice?: string }[] = [];
-    for (const selected of unseen.filter(item => !seen.has(`${item.threadId}/${item.messageId}`))) {
-      if (!SAFE_ID.test(selected.threadId) || !SAFE_ID.test(selected.messageId)) {
-        log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
-        continue;
-      }
-      if (!(await authorized())) return;
+    const selectedItems = unseen.filter(item => !seen.has(`${item.threadId}/${item.messageId}`)).filter(selected => {
+      if (SAFE_ID.test(selected.threadId) && SAFE_ID.test(selected.messageId)) return true;
+      log('ignored', { peer: peer.handle, reason: 'unsafe-id' });
+      return false;
+    });
+    if (selectedItems.length && !(await authorized())) return;
+    // One batch read per 100 messages. A failed batch leaves them all for the next sync; one message's failure, only it.
+    let outcomes: Map<string, JsonReadOutcome<unknown>>;
+    try {
+      outcomes = await readJsonMany<unknown>(peerKv, selectedItems.map(item => item.key));
+    } catch (error) {
+      this.dirtyPeers.add(peer.handle);
+      log('sync-error', { peer: peer.handle, messages: selectedItems.length, ...errInfo(error) });
+      outcomes = new Map();
+    }
+    for (const selected of selectedItems) {
+      const outcome = outcomes.get(selected.key);
+      if (!outcome) continue;
       try {
-        const got = await getJson<unknown>(peerKv, selected.key);
+        if ('error' in outcome) throw outcome.error;
+        const got = outcome.got;
         if (!got) continue;
         const value = got.value;
         if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
@@ -790,8 +803,13 @@ export class Watcher {
     }
 
     const subjects = new Map<string, string>();
-    for (const threadId of new Set(delivered.map((d) => d.threadId))) {
-      const meta = await getJson<unknown>(peerKv, `${PREFIX}/to/${mailbox}/threads/${threadId}/meta.json`).catch(() => undefined);
+    const threads = [...new Set(delivered.map((d) => d.threadId))];
+    const metaKey = (threadId: string) => `${PREFIX}/to/${mailbox}/threads/${threadId}/meta.json`;
+    // A missing or unreadable meta only costs the subject.
+    const metas = await readJsonMany<unknown>(peerKv, threads.map(metaKey)).catch(() => new Map<string, JsonReadOutcome<unknown>>());
+    for (const threadId of threads) {
+      const outcome = metas.get(metaKey(threadId));
+      const meta = outcome && 'got' in outcome ? outcome.got : undefined;
       subjects.set(threadId, isRecord(meta?.value) && typeof meta.value.subject === 'string' ? oneLine(meta.value.subject, MAX_SUBJECT) : '(no subject)');
     }
     const at = this.now();
@@ -882,9 +900,26 @@ export class Watcher {
    * message delivery and each item is isolated: a bad or unwritable peer task never blocks receipts or wakes.
    */
   private async mirrorThreads(peer: StoredPeer, peerKv: KV, keys: string[], authorized: () => Promise<boolean>): Promise<void> {
-    for (const key of keys) {
+    // Only what may need copying is read: a meta not yet mirrored, a task not yet terminal. One batch per 100 keys.
+    const wanted = keys.filter(key => {
+      const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
+      if (meta) return SAFE_ID.test(meta[1]) && !this.metaMirrored.has(key);
+      const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
+      return Boolean(task && SAFE_ID.test(task[1]) && SAFE_ID.test(task[2]) && !this.taskCache.get(key)?.terminal);
+    });
+    let outcomes: Map<string, JsonReadOutcome<unknown>>;
+    try {
+      outcomes = await readJsonMany<unknown>(peerKv, wanted);
+    } catch (error) {
+      this.dirtyPeers.add(peer.handle);
+      this.deps.log('mirror-error', { peer: peer.handle, ...errInfo(error) });
+      return;
+    }
+    for (const key of wanted) {
       try {
-        await this.mirrorThreadItem(peer, peerKv, key, authorized);
+        const outcome = outcomes.get(key)!;
+        if ('error' in outcome) throw outcome.error;
+        await this.mirrorThreadItem(peer, key, outcome.got, authorized);
       } catch (error) {
         this.dirtyPeers.add(peer.handle);
         this.deps.log('mirror-error', { peer: peer.handle, ...errInfo(error) });
@@ -892,25 +927,18 @@ export class Watcher {
     }
   }
 
-  private async mirrorThreadItem(peer: StoredPeer, peerKv: KV, key: string, authorized: () => Promise<boolean>): Promise<void> {
+  private async mirrorThreadItem(peer: StoredPeer, key: string, got: JsonRead<unknown>, authorized: () => Promise<boolean>): Promise<void> {
+    if (!got) return;
     const meta = /\/threads\/([^/]+)\/meta\.json$/.exec(key);
     if (meta) {
-      if (!SAFE_ID.test(meta[1])) return;
-      if (this.metaMirrored.has(key)) return;
-      const got = await getJson<unknown>(peerKv, key);
-      if (!got) return;
       if (!(await authorized())) return;
       await this.mirrorCreate(k.mirrorMeta(peer.handle, meta[1]), got.value);
       this.metaMirrored.add(key);
       this.localDirty = true;
       return;
     }
-    const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key);
-    if (!task || !SAFE_ID.test(task[1]) || !SAFE_ID.test(task[2])) return;
+    const task = /\/threads\/([^/]+)\/task\/([^/]+)\.json$/.exec(key)!;
     const cached = this.taskCache.get(key);
-    if (cached?.terminal) return;
-    const got = await getJson<unknown>(peerKv, key);
-    if (!got) return;
     if (cached && got.etag && cached.etag === got.etag) return;
     if (!(await authorized())) return;
     await putOverwrite(this.deps.selfKv, k.mirrorTask(peer.handle, task[1], task[2]), got.value);

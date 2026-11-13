@@ -8,4 +8,6 @@
 
 A wake or inform put off because the authority check gave no verdict is held for at most 24 hours, then dropped and logged. Imports keep retrying. After 24 hours without a verdict, the human gets one `access-unverified` notice for that peer, and no more until a check succeeds and access is lost again. `courier guard` keeps the mode of `.claude/settings.local.json` whatever the umask. The read cache sets directory modes through no-follow descriptors and never reads or writes through a symlinked directory. The one-time clean-up of the old cache layout deletes only `<thread ULID>.json` files.
 
+Courier now reads entries in batches: `courier read`, `courier inbox`, intake, and the watcher's import and mirroring each read up to 100 keys in one `tinycloud.kv/get` invocation. Before, every entry took its own call. Each entry is still checked on its own. A first read of a 260-entry thread drops from 265 invocations to 7, and importing 130 messages takes 2 reads instead of 130.
+
 Details: TC-2917, TC-2951

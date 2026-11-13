@@ -5,7 +5,7 @@ import { messageView, oneLine, taskView } from './a2a.js';
 import type { KV } from './inbox.js';
 import { agentId, k, PREFIX } from './keys.js';
 import { mkdirOwnerOnly, profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
-import { getJson, listAll } from './store.js';
+import { getJsonMany, listAll } from './store.js';
 import { ULID } from './request.js';
 
 const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
@@ -289,15 +289,19 @@ export async function collectThread(input: {
    */
   async function append(kv: KV, keys: string[], peer: string, side: 'me' | 'peer', source: string | undefined) {
     const root = side === 'me' ? k.threadRoot(peer, threadId) : undefined;
-    for (const key of keys) {
-      if (root && !key.startsWith(`${root}/`)) continue;
-      const kind = key.endsWith('/meta.json') ? 'meta'
-        : /\/msg\/[^/]+\.json$/.test(key) ? 'msg'
-        : /\/task\/[^/]+\.json$/.test(key) ? 'task' : undefined;
-      if (!kind) continue;
+    const wanted = keys.flatMap(key => {
+      if (root && !key.startsWith(`${root}/`)) return [];
+      const kind = key.endsWith('/meta.json') ? 'meta' as const
+        : /\/msg\/[^/]+\.json$/.test(key) ? 'msg' as const
+        : /\/task\/[^/]+\.json$/.test(key) ? 'task' as const : undefined;
+      if (!kind) return [];
       const cacheId = kind === 'task' || !source ? undefined : `${source}:${key}`;
-      const cached = cacheId === undefined ? undefined : input.cache?.get(cacheId);
-      const got = cached !== undefined ? { value: cached } : await getJson(kv, key);
+      return [{ key, kind, cacheId, cached: cacheId === undefined ? undefined : input.cache?.get(cacheId) }];
+    });
+    // Everything not already cached in one batch read per 100 keys; each entry is still checked on its own below.
+    const fetched = await getJsonMany(kv, wanted.filter(entry => entry.cached === undefined).map(entry => entry.key));
+    for (const { key, kind, cacheId, cached } of wanted) {
+      const got = cached !== undefined ? { value: cached } : fetched.get(key);
       if (!got) continue;
       if (cacheId !== undefined && cached === undefined) input.cache?.set(cacheId, got.value);
       const id = kind === 'meta' ? threadId : key.slice(key.lastIndexOf('/') + 1, -5);

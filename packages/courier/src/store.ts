@@ -81,7 +81,48 @@ export async function putMatch(kv: KV, key: string, value: unknown, etag: string
 }
 
 export async function getJson<T>(kv: KV, key: string): Promise<{ value: T; etag: string | null } | undefined> {
-  const r = (await readRetry(() => kv.get(key, FULL))) as ResultLike<KVResponse<unknown>>;
+  return jsonResult<T>((await readRetry(() => kv.get(key, FULL))) as ResultLike<KVResponse<unknown>>, key);
+}
+
+/** The node's batch read limit: one invocation reads at most this many keys. */
+const BATCH_READ_KEYS = 100;
+
+/** A key read as `getJson` reads it: the value and its etag, or undefined if the key is missing. */
+export type JsonRead<T> = { value: T; etag: string | null } | undefined;
+/** One key of a batch read: what `getJson` would have returned, or the error it would have thrown. */
+export type JsonReadOutcome<T> = { got: JsonRead<T> } | { error: unknown };
+
+/**
+ * Each key read as `getJson` reads it, in one invocation per 100 keys (`tinycloud.kv/get` on each key, as one batch).
+ * A failed batch call throws; one key's failure is only that key's outcome.
+ */
+export async function readJsonMany<T>(kv: KV, keys: readonly string[]): Promise<Map<string, JsonReadOutcome<T>>> {
+  const outcomes = new Map<string, JsonReadOutcome<T>>();
+  const unique = [...new Set(keys)];
+  for (let start = 0; start < unique.length; start += BATCH_READ_KEYS) {
+    const chunk = unique.slice(start, start + BATCH_READ_KEYS);
+    const r = (await readRetry(() => kv.batchGet(chunk, FULL))) as ResultLike<{ results: Array<{ key: string; result: ResultLike<KVResponse<unknown>> }> }>;
+    const batch = unwrap(r, `batch get ${chunk.length} key(s)`);
+    if (batch.results.length !== chunk.length) throw new CourierError('kv', `batch get returned ${batch.results.length} of ${chunk.length} keys`);
+    for (const [index, item] of batch.results.entries()) {
+      if (item.key !== chunk[index]) throw new CourierError('kv', 'batch get answered a different key');
+      try { outcomes.set(item.key, { got: jsonResult<T>(item.result, item.key) }); } catch (error) { outcomes.set(item.key, { error }); }
+    }
+  }
+  return outcomes;
+}
+
+/** `readJsonMany` where any key's failure fails the whole read, as a series of `getJson` calls would. */
+export async function getJsonMany<T>(kv: KV, keys: readonly string[]): Promise<Map<string, JsonRead<T>>> {
+  const found = new Map<string, JsonRead<T>>();
+  for (const [key, outcome] of await readJsonMany<T>(kv, keys)) {
+    if ('error' in outcome) throw outcome.error;
+    found.set(key, outcome.got);
+  }
+  return found;
+}
+
+function jsonResult<T>(r: ResultLike<KVResponse<unknown>>, key: string): { value: T; etag: string | null } | undefined {
   if (r && typeof r === 'object' && 'ok' in r && !r.ok) {
     if (/space not found/i.test(String(r.error?.message))) {
       throw new CourierError('no-space', String(r.error?.message));
