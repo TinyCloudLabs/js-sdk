@@ -5,7 +5,10 @@ import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
 
 import { decodeBase64Url } from "../credentials/digest";
-import { decodeCanonicalDagCbor } from "./cacao";
+import { decodeCanonicalDagCbor, parseSignedSiweCacao } from "./cacao";
+import { principalDidEquals } from "../identity";
+import { activateSessionWithHost } from "../space";
+import { boundedResponseBytes } from "../location";
 
 const STAMP_DOMAIN = "tinycloud/node/renewal-stamp/v1";
 // Bound browser work to one accepted stamp per minute across the node's one-year lease maximum.
@@ -252,9 +255,6 @@ export class OwnerRenewalOriginalExpiredError extends Error {
  * The node remains authoritative for revocation and live graph admission.
  */
 export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput): Promise<OwnerRenewalLeaseFirstAdmissionReceipt> {
-  const { parseSignedSiweCacao } = await import("./cacao");
-  const { principalDidEquals } = await import("../identity");
-  const { activateSessionWithHost } = await import("../space");
   const origin = new URL(input.host);
   if (origin.origin !== input.host || origin.username || origin.password
     || (origin.protocol !== "https:" && !(origin.protocol === "http:"
@@ -301,7 +301,6 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
     redirect: "error", signal: input.signal,
   });
   if (!response.ok) throw new Error(`Renewal identity discovery failed: ${response.status}`);
-  const { boundedResponseBytes } = await import("../location");
   const bytes = await boundedResponseBytes(response, 16 * 1024);
   if (bytes === null) throw new Error("Renewal node identity response exceeds 16384 bytes");
   const current = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as Partial<RenewalNodeIdentity>;
@@ -311,13 +310,13 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
   }
   // The producer has already admitted the original. Only replay the saved lease.
   const result = await activateSessionWithHost(input.host, {
-    Authorization: `Bearer ${input.leaseAuthorization.replace(/^Bearer\s+/i, "")}`,
+    Authorization: input.leaseAuthorization.replace(/^Bearer\s+/i, ""),
   }, input.signal);
   if (!result.success) throw new Error(`Owner renewal admission failed: ${result.status} ${result.error ?? ""}`);
   return Object.freeze({
     originalCid: original.cid,
     leaseCid: lease.cid,
-    leaseAuthorization: `Bearer ${input.leaseAuthorization.replace(/^Bearer\s+/i, "")}`,
+    leaseAuthorization: input.leaseAuthorization.replace(/^Bearer\s+/i, ""),
     leaseExpiresAt: input.leaseExpiresAt,
     leaseGeneration: 1,
     nodeIdentity: Object.freeze({ ...input.nodeIdentity }),

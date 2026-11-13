@@ -56,7 +56,7 @@ describe("owner-direct renewal consumer API", () => {
     const posted = nodeFetch();
     const receipt = await admitOwnerRenewalLease(data);
     expect(await admitOwnerRenewalLease(data)).toEqual(receipt);
-    expect(receipt).toEqual({ originalCid: data.originalCid, leaseCid: data.leaseCid, leaseAuthorization: `Bearer ${data.leaseAuthorization}`, leaseExpiresAt: data.leaseExpiresAt, leaseGeneration: 1, nodeIdentity });
+    expect(receipt).toEqual({ originalCid: data.originalCid, leaseCid: data.leaseCid, leaseAuthorization: data.leaseAuthorization, leaseExpiresAt: data.leaseExpiresAt, leaseGeneration: 1, nodeIdentity });
     expect(posted).toEqual([receipt.leaseAuthorization, receipt.leaseAuthorization]);
   });
 
@@ -99,7 +99,7 @@ describe("owner-direct renewal consumer API", () => {
     const data = await input();
     nodeFetch();
     const receipt = await admitOwnerRenewalLease({ ...data, originalAuthorization: `Bearer ${data.originalAuthorization}`, leaseAuthorization: `Bearer ${data.leaseAuthorization}` });
-    expect(receipt.leaseAuthorization).toBe(`Bearer ${data.leaseAuthorization}`);
+    expect(receipt.leaseAuthorization).toBe(data.leaseAuthorization);
   });
 
   test("refuses a valid lease signed by another owner", async () => {
