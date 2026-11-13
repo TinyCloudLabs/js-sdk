@@ -175,7 +175,7 @@ export interface PathBoundSharePlan {
   readonly keyPath: string;
   /** `<network>/share/<shareId>`: the one decrypt resource the share grants. */
   readonly keyResource: string;
-  /** The owner session must hold these for the node to register the policy: decrypt under `<network>/share/`. */
+  /** The owner session must hold these for the node to register the policy: decrypt on this exact share key. */
   readonly registrationPermissions: PathBoundPermissionEntry[];
   /** Options for `keys.encrypt(plan.keyPath, plaintext, plan.encryptOptions({ metadata }))`. */
   encryptOptions(extra?: { readonly metadata?: Readonly<Record<string, string>> }): { networkId: string; metadata?: Record<string, string> };
@@ -200,7 +200,7 @@ export function planPathBoundShare(input: { readonly shareId: string; readonly e
     encryptionNetwork,
     keyPath,
     keyResource,
-    registrationPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
+    registrationPermissions: [{ service: "tinycloud.encryption", path: keyResource, actions: ["tinycloud.encryption/decrypt"] }],
     encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...(extra?.metadata === undefined ? {} : { metadata: { ...extra.metadata } }) }),
   };
 }

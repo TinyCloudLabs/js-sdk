@@ -249,7 +249,7 @@ describe("plan: path, permissions and the checksummed network", () => {
     const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
     expect(plan.keyPath).toBe(`share/${SHARE_ID}`);
     expect(pathBoundKeyPath(SHARE_ID)).toBe(plan.keyPath);
-    expect(plan.registrationPermissions).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/`, actions: ["tinycloud.encryption/decrypt"] }]);
+    expect(plan.registrationPermissions).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/${SHARE_ID}`, actions: ["tinycloud.encryption/decrypt"] }]);
     expect(plan.encryptOptions({ metadata: { contentType: "text/plain" } })).toEqual({ networkId: NETWORK, metadata: { contentType: "text/plain" } });
   });
 
