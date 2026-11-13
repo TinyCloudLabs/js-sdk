@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
+import { MAX_REPLICA_WORKER_GZIP_BYTES as LIVE_MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES as LIVE_MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { approvedTc1428Ratchet, validateTc1428RatchetTransition, type Tc1428Ratchet } from "./replica-size-policy";
 import { approvedTc1476Ratchet, validateTc1476RatchetTransition, type Tc1476Ratchet } from "./replica-size-policy";
@@ -77,13 +77,15 @@ import { approvedTc2234InvitationPolicyRoot, validateTc2234InvitationPolicyRootT
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 
-const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2923EncryptionTeeOriginRoot"));
+const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2931BootstrapScope"));
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 // This file retains the pre-TC-2934 historical snapshots; its new row is tested separately.
 delete shipped.tc2934RequestedAccountRoot;
 delete shipped.tc2936RestoreCommitRoot;
-delete shipped.tc2923EncryptionTeeOriginRoot;
+delete shipped.tc2931BootstrapScope;
+const MAX_WORKER_GZIP_BYTES = shipped.tc2872RenewalKvWorker?.worker.ceiling ?? LIVE_MAX_WORKER_GZIP_BYTES;
+const MAX_REPLICA_WORKER_GZIP_BYTES = shipped.tc2872RenewalReplicaWorker?.replicaWorker.ceiling ?? LIVE_MAX_REPLICA_WORKER_GZIP_BYTES;
 // Historical cases keep the earlier root-only admission and its original cumulative budget.
 // Current-PR controls below exercise the final shipped record and its true accounting.
 const current = structuredClone(shipped);

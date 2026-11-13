@@ -9,7 +9,7 @@ test("TC-2936 admits only its exact canonical root bytes over TC-2934", () => {
   for (const format of ["index.mjs", "index.cjs"] as const) {
     expect(row.root.ceiling[format] - ledger.tc2934RequestedAccountRoot.root.ceiling[format]).toBe(row.root.delta[format]);
     expect(row.root.delta[format]).toBeLessThanOrEqual(100);
-    expect(rootCeilingFor({ ...ledger, tc2923EncryptionTeeOriginRoot: undefined }, format)).toEqual({ row: "tc2936RestoreCommitRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2931BootstrapScope: undefined }, format)).toEqual({ row: "tc2936RestoreCommitRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({ row: "tc2936RestoreCommitRoot", pin: row.sourceCommits[0] });
   expect(Object.keys(row).sort()).toEqual(["base", "canonicalCI", "label", "reason", "root", "ruling", "sourceCommits"]);
