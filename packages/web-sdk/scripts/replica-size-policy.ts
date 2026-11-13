@@ -473,6 +473,7 @@ export type Ledger = {
   tc2936RestoreCommitRoot?: LogoutRatchet;
   tc2931BootstrapScope?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2923EncryptionTeeOriginRoot?: LogoutRatchet;
+  tc2949PanelChunkRecoveryRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1100,6 +1101,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2936RestoreCommitRoot !== undefined) pins.push({ row: "tc2936RestoreCommitRoot", pin: root.tc2936RestoreCommitRoot.sourceCommits.at(-1)! });
   if (root.tc2931BootstrapScope !== undefined) pins.push({ row: "tc2931BootstrapScope", pin: root.tc2931BootstrapScope.sourceCommits.at(-1)! });
   if (root.tc2923EncryptionTeeOriginRoot !== undefined) pins.push({ row: "tc2923EncryptionTeeOriginRoot", pin: root.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)! });
+  if (root.tc2949PanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949PanelChunkRecoveryRoot", pin: root.tc2949PanelChunkRecoveryRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1197,6 +1199,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2936RestoreCommitRoot", root.tc2936RestoreCommitRoot?.root.ceiling],
     ["tc2931BootstrapScope", root.tc2931BootstrapScope?.root.ceiling],
     ["tc2923EncryptionTeeOriginRoot", root.tc2923EncryptionTeeOriginRoot?.root.ceiling],
+    ["tc2949PanelChunkRecoveryRoot", root.tc2949PanelChunkRecoveryRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3351,6 +3354,26 @@ export const approvedTc2923EncryptionTeeOriginRoot: LogoutRatchet = {
   "reason": "Encryption-network calls for the production node use its TEE-terminated origin: the host mapping, the encryption routing and advisory-descriptor guards, and the sign-in activation mapping ship in the root bundle, with no new dependency. Canonical Node 22/Bun 1.3.14 CI at 8368adb0fe83bcac9fd3fc63f19bdff79e7e85c6 measures 1524049/1458517 gzip -9 bytes over master 7fd34235ae6e915d78cb5a74d460bce9d4cebb01 at the TC-2931 ceiling 1523815/1458331. Optional, cumulative and worker allowances remain unchanged. Details: TC-2923"
 };
 
+/** Naomi's exact TC-2949 panel-recovery root allowance from canonical CI. */
+export const approvedTc2949PanelChunkRecoveryRoot: LogoutRatchet = {
+  "label": "panel chunk-load recovery root admission (TC-2949)",
+  "ruling": "Naomi's TC-2949 size ruling: exact canonical CI bytes, capped at +150 B per format over the newest root. Run 43456942350 measured 1524168/1458646 on base 790c8b08; current base 4ff23e8e differs only by #963's CI workflow env line, with no package input change. Details: TC-2949",
+  "base": "4ff23e8e9f2c9ccb39b5edb5dc7bdd4a97c3912d",
+  "sourceCommits": ["f9ccd5b8ffbe55a4dbef27e03562a777b08951e8"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350/job/131993450248",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43456942350/job/131993450694"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 119, "index.cjs": 129 },
+    "ceiling": { "index.mjs": 1524168, "index.cjs": 1458646 }
+  },
+  "reason": "Chunk-load recovery logs a value-free failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI measured 1524168/1458646 gzip -9 bytes on 7af3a69c, based on 790c8b08; #963 changed only a CI workflow env line, so the measurement applies to current base 4ff23e8e. This is +119/+129 over the TC-2923 ceilings 1524049/1458517, within Naomi's +150-byte per-format cap. Other ceilings are unchanged. Details: TC-2949"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3445,6 +3468,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2936RestoreCommitRoot: approvedTc2936RestoreCommitRoot,
   tc2931BootstrapScope: approvedTc2931BootstrapScope,
   tc2923EncryptionTeeOriginRoot: approvedTc2923EncryptionTeeOriginRoot,
+  tc2949PanelChunkRecoveryRoot: approvedTc2949PanelChunkRecoveryRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3873,6 +3897,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2936RestoreCommitRoot !== undefined &&
       (!value.tc2934RequestedAccountRoot || JSON.stringify(value.tc2936RestoreCommitRoot) !== JSON.stringify(approvedTc2936RestoreCommitRoot))) {
     throw new Error("Only Naomi's exact TC-2936 root admission is approved.");
+  }
+  if (value.tc2949PanelChunkRecoveryRoot !== undefined &&
+      (!value.tc2923EncryptionTeeOriginRoot ||
+        JSON.stringify(value.tc2949PanelChunkRecoveryRoot) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot))) {
+    throw new Error("Only Naomi's exact TC-2949 root admission is approved.");
   }
 }
 
@@ -4702,5 +4731,13 @@ export function validateTc2923EncryptionTeeOriginRootTransition(base?: LogoutRat
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2923EncryptionTeeOriginRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2923 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2949 panel chunk-recovery root admission is introduced once and immutable. */
+export function validateTc2949PanelChunkRecoveryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2949PanelChunkRecoveryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2949 root admission may be introduced once and cannot change later.");
   }
 }
