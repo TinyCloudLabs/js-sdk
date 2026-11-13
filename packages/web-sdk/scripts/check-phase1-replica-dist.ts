@@ -46,6 +46,7 @@ import { validateTc2657RegistryPublicationTransition } from "./replica-size-poli
 import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
 import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
 import { validateTc2234InvitationPolicyRootTransition, validateTc2773LazyRestoreRootTransition } from "./replica-size-policy";
+import { validateTc2872RenewalRootTransition } from "./replica-size-policy";
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
@@ -665,6 +666,13 @@ if (prBaseSha) {
   if (invitationPolicyRoot !== undefined && baseLedger.tc2234InvitationPolicyRoot === undefined &&
       (baseLedger.tc2773LazyRestoreRoot === undefined || !hasAncestor(repoRoot, invitationPolicyRoot.sourceCommits.at(-1)!))) {
     console.error("The TC-2234 root admission requires the merged TC-2773 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2872RenewalRootTransition(baseLedger.tc2872RenewalRoot, ledger.tc2872RenewalRoot);
+  const renewalRoot = ledger.tc2872RenewalRoot;
+  if (renewalRoot !== undefined && baseLedger.tc2872RenewalRoot === undefined &&
+      (baseLedger.tc2234InvitationPolicyRoot === undefined || !hasAncestor(repoRoot, renewalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 root budget requires the merged TC-2234 root row and its measured source ancestor.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

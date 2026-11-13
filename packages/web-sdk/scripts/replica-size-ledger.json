@@ -2938,5 +2938,25 @@
       }
     },
     "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
+  },
+  "tc2872RenewalRoot": {
+    "label": "renewal WASM exports root-only budget (TC-2872)",
+    "ruling": "Naomi: allow only +1561 ESM/+474 CJS gzip (-9) over TC-2234 for renewal Rust exports in monolithic web-sdk-wasm; verifier JS is lazy. No general ceiling change. budget-ruling: Naomi, TC-2872.",
+    "base": "3a073c10f503e1c7b5fcdd0d943e2c3611b58d9f",
+    "sourceCommits": [
+      "e71991a5802d6038d3b0e68b5becdd2c06c7af93"
+    ],
+    "measuredWith": "Bun 1.3.14; production web-sdk build; gzip -9 -c",
+    "root": {
+      "delta": {
+        "index.mjs": 1561,
+        "index.cjs": 474
+      },
+      "ceiling": {
+        "index.mjs": 1517070,
+        "index.cjs": 1451009
+      }
+    },
+    "reason": "The renewal verifier JavaScript is dynamically loaded only when renewal restore is invoked. The remaining eager root growth is the renewal Rust exports in the monolithic web-sdk-wasm. The local canonical Bun 1.3.14 production build measured these exact root ceilings; no worker ceiling or general bundle allowance is changed."
   }
 }

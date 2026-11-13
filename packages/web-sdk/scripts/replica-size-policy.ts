@@ -100,6 +100,16 @@ export type LogoutRatchet = {
   root: { delta: GzipSizes; ceiling: GzipSizes };
   reason: string;
 };
+/** Naomi's ticket-scoped root-only allowance for the compiled renewal WASM exports. */
+export type Tc2872RenewalRootBudget = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  measuredWith: string;
+  root: { delta: GzipSizes; ceiling: GzipSizes };
+  reason: string;
+};
 /**
  * One reviewed exact-delta admission of TC-1413 (js-sdk #574): typed node retry errors in sdk-services.
  * Same shape as the #565 hardening row, because the change moves the root, first-import, activation and
@@ -448,6 +458,7 @@ export type Ledger = {
   tc2691HostExpiry?: LogoutRatchet;
   tc2773LazyRestoreRoot?: LogoutRatchet;
   tc2234InvitationPolicyRoot?: LogoutRatchet;
+  tc2872RenewalRoot?: Tc2872RenewalRootBudget;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1066,6 +1077,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2773LazyRestoreReplicaWorker !== undefined) pins.push({ row: "tc2773LazyRestoreReplicaWorker", pin: root.tc2773LazyRestoreReplicaWorker.sourceCommits.at(-1)! });
   if (root.tc2773LazyRestoreRoot !== undefined) pins.push({ row: "tc2773LazyRestoreRoot", pin: root.tc2773LazyRestoreRoot.sourceCommits.at(-1)! });
   if (root.tc2234InvitationPolicyRoot !== undefined) pins.push({ row: "tc2234InvitationPolicyRoot", pin: root.tc2234InvitationPolicyRoot.sourceCommits.at(-1)! });
+  if (root.tc2872RenewalRoot !== undefined) pins.push({ row: "tc2872RenewalRoot", pin: root.tc2872RenewalRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1156,6 +1168,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
     ["tc2773LazyRestoreRoot", root.tc2773LazyRestoreRoot?.root.ceiling],
     ["tc2234InvitationPolicyRoot", root.tc2234InvitationPolicyRoot?.root.ceiling],
+    ["tc2872RenewalRoot", root.tc2872RenewalRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3068,6 +3081,19 @@ export const approvedTc2234InvitationPolicyRoot: LogoutRatchet = {
   "reason": "The share-envelope root exports POLICY_ROOT_MAX_LIFETIME_SECONDS and sdk-core's policy root signer imports that one definition (TC-2234, #922). Canonical Node 22 / Bun 1.3.14 / rustc 1.99.0 source-WASM CI measures the root at ESM 1515509 and CJS 1450516 on both SQLite and Postgres at 4395832d, 49 above the previous ESM ceiling; the CJS ceiling is unchanged. No dependencies are added."
 };
 
+export const approvedTc2872RenewalRoot: Tc2872RenewalRootBudget = {
+  "label": "renewal WASM exports root-only budget (TC-2872)",
+  "ruling": "Naomi: allow only +1561 ESM/+474 CJS gzip (-9) over TC-2234 for renewal Rust exports in monolithic web-sdk-wasm; verifier JS is lazy. No general ceiling change. budget-ruling: Naomi, TC-2872.",
+  "base": "3a073c10f503e1c7b5fcdd0d943e2c3611b58d9f",
+  "sourceCommits": ["e71991a5802d6038d3b0e68b5becdd2c06c7af93"],
+  "measuredWith": "Bun 1.3.14; production web-sdk build; gzip -9 -c",
+  "root": {
+    "delta": { "index.mjs": 1561, "index.cjs": 474 },
+    "ceiling": { "index.mjs": 1517070, "index.cjs": 1451009 }
+  },
+  "reason": "The renewal verifier JavaScript is dynamically loaded only when renewal restore is invoked. The remaining eager root growth is the renewal Rust exports in the monolithic web-sdk-wasm. The local canonical Bun 1.3.14 production build measured these exact root ceilings; no worker ceiling or general bundle allowance is changed."
+};
+
 const tc2481WebEvidence = [
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590555",
   "https://github.com/TinyCloudLabs/js-sdk/pull/872#issuecomment-6714590790",
@@ -3207,6 +3233,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2773LazyRestoreReplicaWorker: approvedTc2773LazyRestoreReplicaWorker,
   tc2773LazyRestoreRoot: approvedTc2773LazyRestoreRoot,
   tc2234InvitationPolicyRoot: approvedTc2234InvitationPolicyRoot,
+  tc2872RenewalRoot: approvedTc2872RenewalRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3595,6 +3622,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2773LazyRestoreRoot ||
         JSON.stringify(value.tc2234InvitationPolicyRoot) !== JSON.stringify(approvedTc2234InvitationPolicyRoot))) {
     throw new Error("Only Naomi's exact TC-2234 root admission is approved.");
+  }
+  if (value.tc2872RenewalRoot !== undefined &&
+      (!value.tc2234InvitationPolicyRoot ||
+        JSON.stringify(value.tc2872RenewalRoot) !== JSON.stringify(approvedTc2872RenewalRoot))) {
+    throw new Error("Only Naomi's exact TC-2872 root budget admission is approved.");
   }
 }
 
@@ -4338,6 +4370,17 @@ export function validateTc2234InvitationPolicyRootTransition(base?: LogoutRatche
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2234InvitationPolicyRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2234 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2872 root-only renewal budget is introduced once and immutable afterwards. */
+export function validateTc2872RenewalRootTransition(
+  base?: Tc2872RenewalRootBudget,
+  current?: Tc2872RenewalRootBudget,
+): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2872RenewalRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2872 root budget admission may be introduced once and cannot change later.");
   }
 }
 
