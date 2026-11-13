@@ -171,7 +171,7 @@ const artB = JSON.parse((await run(recipient.home, ['pair', 'accept', JSON.strin
 const artC = JSON.parse((await run(issuer.home, ['pair', 'accept', JSON.stringify(artB)])).stdout);
 await run(recipient.home, ['pair', 'accept', JSON.stringify(artC)]);
 
-test('many node calls in one process, across node instances and a peer reader: one v2 and one v1 lookup per owner', async () => {
+test('many node calls in one process, across node instances and a peer reader: reads share one lookup per owner; installing the peer\'s grant looks the peer\'s owner up afresh', async () => {
   installCourierRegistryFixture(HOST);
   process.env.TC_TEST_MOCK_REGISTRY_LOG = LOG;
   fs.rmSync(LOG, { force: true });
@@ -190,7 +190,12 @@ test('many node calls in one process, across node instances and a peer reader: o
   for (let i = 0; i < 10; i++) await kv.get(`${PREFIX}/to/${peer.theirHandleForMe}/threads/T/msg/M${i}.json`);
 
   assert.ok(invokes - before >= 35, `the node calls were made (${invokes - before})`);
-  assert.deepEqual(lookups(process.pid), onePairEach(recipient.owner, issuer.owner));
+  // The peer's ten reads share one lookup; installing its grant on the reader is routed with the grant's own accesses,
+  // which are not all reads, so it looks the peer's owner up afresh.
+  assert.deepEqual(lookups(process.pid), {
+    [`v2 ${recipient.owner}`]: 1, [`v1 ${recipient.owner}`]: 1,
+    [`v2 ${issuer.owner}`]: 2, [`v1 ${issuer.owner}`]: 2,
+  });
 });
 
 test('reads of an owner with no registry record share one lookup; every write looks it up afresh, and the next read again', async () => {
@@ -224,13 +229,19 @@ test('courier send: every write looks its owner up afresh; the peer\'s owner is 
   }
 });
 
-test('courier watch --once: one v2 and one v1 lookup per owner for the whole pass', async () => {
+test('courier watch --once: every write looks its owner up afresh, reads between writes share one lookup; the peer\'s owner once for reads and once for its grant', async () => {
   const pass = await run(recipient.home, ['watch', '--once', '--wake', 'none', '--notify', 'none']);
   assert.ok(pass.invokes > 2, `the pass made several node calls (${pass.invokes})`);
-  assert.deepEqual(pass.lookups, onePairEach(recipient.owner, issuer.owner));
+  // After the earlier sends, the pass imports, mirrors and records receipts and state: 9 writes to our space, each with its
+  // own lookup, and 4 runs of reads between them sharing one each. Any blow-up past that fails here.
+  assert.equal(pass.writes[recipient.owner], 9);
+  assert.deepEqual(pass.lookups, {
+    [`v2 ${recipient.owner}`]: 13, [`v1 ${recipient.owner}`]: 13,
+    [`v2 ${issuer.owner}`]: 2, [`v1 ${issuer.owner}`]: 2,
+  });
 });
 
-test('courier read of a 344-entry thread: bounded batched node calls, one lookup pair per owner, every entry shown', async () => {
+test('courier read of a 344-entry thread: bounded batched node calls, reads share one lookup per owner, installing the peer\'s grant looks its owner up afresh, every entry shown', async () => {
   const started = await run(recipient.home, ['send', 'to-issuer', '--new', 'Synthetic long thread', '--text', 'Synthetic opener']);
   const { threadId, messageId: opener } = JSON.parse(started.stdout);
   const profile = JSON.parse(fs.readFileSync(path.join(recipient.home, 'profile.json'), 'utf8'));
@@ -259,5 +270,9 @@ test('courier read of a 344-entry thread: bounded batched node calls, one lookup
   // Batches of 16 per side: ⌈172/16⌉ + ⌈172/16⌉ = 22, plus listings, the peer's renewal marker and the grant checks.
   const bound = Math.ceil(172 / 16) * 2 + 6;
   assert.ok(read.invokes <= bound, `read made ${read.invokes} node calls for 344 entries (bound ${bound})`);
-  assert.deepEqual(read.lookups, onePairEach(recipient.owner, issuer.owner));
+  assert.equal(read.writes[recipient.owner] ?? 0, 0, 'read writes nothing');
+  assert.deepEqual(read.lookups, {
+    [`v2 ${recipient.owner}`]: 1, [`v1 ${recipient.owner}`]: 1,
+    [`v2 ${issuer.owner}`]: 2, [`v1 ${issuer.owner}`]: 2,
+  });
 });
