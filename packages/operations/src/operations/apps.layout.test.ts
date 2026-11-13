@@ -470,6 +470,19 @@ describe("legacy personal records recovery", () => {
     });
   });
 
+  test("a catalog past the hosted result budget still lists every app and leaves kind catalogs as keys", async () => {
+    await fixture(async (_kv, context, legacy) => {
+      legacy.seed(appKey, booksApp);
+      const kindKeys = Array.from({ length: 40 }, (_, index) => `${appKey}/kind-${index}`);
+      for (const [index, key] of kindKeys.entries()) legacy.seed(key, { ...readKind, kind: `kind-${index}`, about: "x".repeat(2_500) });
+      const listed = (await definition("context").execute(withGrants(context, [legacyGrant]), {})).output;
+      expect(listed.apps).toEqual([{ app: "books", layout: "legacy", title: "Books", copy: "none" }]);
+      expect([...listed.catalog.keys].sort()).toEqual([appKey, ...kindKeys].sort());
+      expect(listed.catalog.records.map((entry) => entry.key)).toEqual([appKey]);
+      expect(JSON.stringify(listed).length).toBeLessThan(100_000);
+    });
+  });
+
   test("new discovery entries win over namesakes without hiding other authorized legacy apps", async () => {
     await fixture(async (kv, context, legacy) => {
       legacy.seed(appKey, booksApp);
