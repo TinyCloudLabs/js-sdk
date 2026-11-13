@@ -1,3 +1,4 @@
+import type { SharePlacement } from "../share-placement";
 /**
  * Zod schemas for SharingService types.
  *
@@ -35,7 +36,7 @@ import type { ICapabilityKeyRegistry } from "../authorization/CapabilityKeyRegis
  * This is the primary validation point for external share link data.
  * The link is base64-decoded and JSON-parsed, then validated against this schema.
  */
-export const EncodedShareDataSchema = z.object({
+const LegacyEncodedShareDataSchema = z.object({
   /** Private key in JWK format (must include d parameter) */
   key: JWKSchema.refine(
     (jwk) => typeof jwk.d === "string" && jwk.d.length > 0,
@@ -55,6 +56,10 @@ export const EncodedShareDataSchema = z.object({
   version: z.literal(1),
 });
 
+export const EncodedShareDataSchema = z.discriminatedUnion("version", [
+  LegacyEncodedShareDataSchema,
+  LegacyEncodedShareDataSchema.extend({ version: z.literal(2), placement: z.custom<SharePlacement>(value => value !== null && typeof value === "object") }),
+]);
 export type EncodedShareData = z.infer<typeof EncodedShareDataSchema>;
 
 // =============================================================================

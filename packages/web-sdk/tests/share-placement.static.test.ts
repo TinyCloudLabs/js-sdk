@@ -1,0 +1,66 @@
+import "./support/browserGlobalsShim";
+import "../../operations/test-support/test-bootstrap.mjs";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { TinyCloudNode } from "@tinycloud/node-sdk";
+import { createHermeticEncryptedNode } from "../../node-sdk/src/test-support/hermetic-encrypted-node";
+import { TinyCloudWeb } from "../src/modules/tcw";
+import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+
+const stops: Array<() => void> = [];
+afterEach(() => { for (const stop of stops.splice(0).reverse()) stop(); });
+const path = "vault/secrets/HERMETIC_DELEGATION_CANARY";
+async function fixture() {
+  const node = await createHermeticEncryptedNode(); stops.push(() => node.stop());
+  const sender = new TinyCloudNode({ host: node.host, tinycloudRegistryUrl: node.host, privateKey: node.ownerPrivateKey, autoBootstrapAccount: false });
+  await sender.restoreSession(node.ownerRestorableSession);
+  node.configureKv(node.ownerRestorableSession.spaceId, { [path]: { message: "private-placement browser smoke" } });
+  const made = await sender.sharing.generate({ path, expiry: new Date(Date.now() + 60_000), includePlacement: true });
+  if (!made.ok) throw new Error(JSON.stringify(made.error));
+  return { node, sender, share: made.data, decoded: sender.sharing.decodeLink(made.data.token) };
+}
+function encode(data: unknown) { return "tc1:" + Buffer.from(JSON.stringify(data)).toString("base64url"); }
+
+test("public browser receive uses owner placement and audience-binds its invocation", async () => {
+  const f = await fixture();
+  const native = globalThis.fetch;
+  let authorization: string | null = null;
+  let publications = 0;
+  const routed = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.hostname === "registry.tinycloud.xyz") return Promise.resolve(Response.json({ error: "location record not found" }, { status: 404 }));
+    if (url.pathname === "/invoke") authorization = new Headers(init?.headers).get("authorization");
+    if (init?.method === "PUT" && /\/locations\//.test(url.pathname)) publications++;
+    return native(input, init);
+  }, { preconnect: native.preconnect }));
+  stops.push(() => routed.mockRestore());
+  const result = await TinyCloudWeb.receiveShare(encode({ ...f.decoded, host: "https://evil.example" }), path);
+  expect(result).toMatchObject({ ok: true, data: { data: { message: "private-placement browser smoke" } } });
+  expect(publications).toBe(0);
+  expect(authorization).not.toBeNull();
+  const signed = parseSignedCompactUcanAttenuation(authorization!);
+  expect(signed.payload.aud).toBe(f.decoded.placement!.nodeDid);
+  // Independent audience gate for node B: verify the signed invocation before checking its node audience.
+  const nodeB = "did:key:z6MkrJVcY6xCzz6qGFmYwNwSuzyLkxEMWrbhtcRbXSRwV7Hn";
+  const gate = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const invocation = parseSignedCompactUcanAttenuation(request.headers.get("authorization")!);
+    return new Response(null, { status: invocation.payload.aud === nodeB ? 200 : 401 });
+  } });
+  stops.push(() => gate.stop(true));
+  expect((await native(new URL("/invoke", gate.url), { method: "POST", headers: { authorization: authorization! } })).status).toBe(401);
+});
+
+test("wrong destination identity refuses before credential I/O", async () => {
+  const f = await fixture();
+  const native = globalThis.fetch;
+  let credentialRequests = 0;
+  const routed = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (new Headers(init?.headers).has("authorization")) credentialRequests++;
+    if (url.hostname === "registry.tinycloud.xyz") return Promise.resolve(Response.json({ error: "location record not found" }, { status: 404 }));
+    if (url.origin === f.node.host && url.pathname === "/info") return Promise.resolve(Response.json({ nodeId: "did:key:wrong" }));
+    return native(input, init);
+  }, { preconnect: native.preconnect }));
+  stops.push(() => routed.mockRestore());
+  expect((await TinyCloudWeb.receiveShare(f.share.token, path)).ok).toBe(false);
+  expect(credentialRequests).toBe(0);
+});

@@ -32,6 +32,7 @@ const publicationCoreRoot: Plugin = {
 export default defineConfig({
   entry: [
     "src/index.ts",
+    "src/share-placement.ts",
     "src/bootstrap/index.ts",
     "src/policy/index.ts",
     "src/requester/index.ts",

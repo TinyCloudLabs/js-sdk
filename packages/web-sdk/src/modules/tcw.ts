@@ -196,6 +196,8 @@ export interface Config extends ClientConfig {
   tinycloudRegistryUrl?: string | null;
   /** Host hint for owners absent from both v2 and v1 registries. Default https://node.tinycloud.xyz; null disables onboarding. */
   newUserHost?: string | null;
+  /** Explicit wallet-owner signing for private share placement. */
+  sharePlacementSigner?: (message: string) => Promise<string>;
   /** Chain ID used to distinguish a v1-only owner from an owner with no registry entry. Default 1. */
   registryChainId?: number;
   /** Highest signed v2 sequence seen per owner. Default: a `localStorage`-backed store. */
@@ -565,6 +567,7 @@ export class TinyCloudWeb {
       host: this.config.tinycloudHosts?.[0],
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       newUserHost: this.config.newUserHost,
+      sharePlacementSigner: this.config.sharePlacementSigner,
       registryChainId: this.config.registryChainId,
       registrySequenceStore:
         this.config.registrySequenceStore ??
@@ -2064,7 +2067,7 @@ export class TinyCloudWeb {
       // receive() has verified the parent CID, signature, space and embedded key.
       // Its recorded host is never promoted to routing authority.
       let registeredHost: string | undefined;
-      const delegateResponse = await node.resourceTransport(
+      const delegateResponse = await (share.resourceTransport ?? node.resourceTransport)(
         [{ resource: share.spaceId, access: "read" }],
         async (target) => {
           const response = await target.fetch(`${target.url}/delegate`, {
