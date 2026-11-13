@@ -118,6 +118,18 @@
 
   Details: TC-2481
 
+## 3.11.1
+
+### Patch Changes
+
+- The feed listener's `once` option stops after the first delivered batch.
+
+  Details: TC-2205
+
+  This version was published from the hotfix branch `feat/tc-2205-cli-1.6.6-hotfix` (PR #937) as the exact tarball that was checked, so its npm entry has no `gitHead` field.
+
+Release record: published by Raw Publish runs 43358544813 (sdk-services) and 43360562991 (cli) from #937 at d914a90e. A stuck pre-queue Raw Publish run 43359468965 (cli, d914a90e) remains; any future enable of Raw Publish may start it, and its version-exists preflight will refuse it.
+
 ## 3.11.0
 
 ### Patch Changes
