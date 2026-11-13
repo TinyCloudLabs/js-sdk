@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.21
+
+### Patch Changes
+
+- 766d27a: Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
+
+  Details: TC-2872
+
 ## 3.12.0-beta.20
 
 ### Patch Changes

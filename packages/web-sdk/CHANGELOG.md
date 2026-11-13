@@ -1,5 +1,18 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.21
+
+### Patch Changes
+
+- 766d27a: Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
+
+  Details: TC-2872
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk@3.12.0-beta.21
+  - @tinycloud/web-sdk-wasm@1.7.8-beta.0
+
 ## 3.12.0-beta.20
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk-wasm
 
+## 1.7.9-beta.0
+
+### Patch Changes
+
+- 766d27a: Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
+
+  Details: TC-2872
+
 ## 1.7.8
 
 ### Patch Changes
