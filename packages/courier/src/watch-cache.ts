@@ -1,17 +1,13 @@
-import path from 'node:path';
 import { isRecord } from './a2a.js';
 import { agentId, PREFIX } from './keys.js';
-import { privateDir, stillPrivate } from './private-dir.js';
-import { readRegularFile, writeSecure, type StoredPeer } from './profile.js';
-import type { LocalWatchCache } from './watch.js';
+import { privateDir, readPrivateFile, writePrivateFile } from './private-dir.js';
+import type { StoredPeer } from './profile.js';
+import { peerIdentity, sameIdentity, type LocalWatchCache, type PeerIdentity } from './watch.js';
 
 const DIR = 'watch-cache';
 
-/** One peer's facts, kept only while the peer is still the same agent, space and session. */
-interface PeerFacts {
-  did: string;
-  space: string;
-  session: string | null;
+/** One peer's facts, with the identity they were learned under. */
+interface PeerFacts extends PeerIdentity {
   markerReadAt?: number;
   receipted: string[];
   metaMirrored: string[];
@@ -25,8 +21,6 @@ interface WatchCacheFile {
 }
 
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
-const samePeer = (facts: PeerFacts, peer: StoredPeer) =>
-  facts.did === peer.courierDid && facts.space === peer.spaceId && facts.session === (peer.sessionId ?? null);
 const metaPrefix = (peer: StoredPeer) => peer.theirHandleForMe ? `${PREFIX}/to/${peer.theirHandleForMe}/` : undefined;
 
 function parse(text: string | undefined): WatchCacheFile | undefined {
@@ -42,11 +36,14 @@ function parse(text: string | undefined): WatchCacheFile | undefined {
 }
 
 /**
- * `<COURIER_HOME>/watch-cache/<did:key id>.json`, owner-only: what this agent's watcher already learned from the node
- * (receipted message ids, mirrored meta keys, marker read times, the claim pruning time), so a restart or a `--once`
- * run need not fetch it again. It is bound to this agent's DID and space, and each peer's part to that peer's DID,
- * space and session: a mismatch, a removed peer, a bad file or an unsafe directory is the same as no file. Deleted
- * with the read cache (revoke, refusal, owner revocation, key rotation).
+ * `<COURIER_HOME>/watch-cache/<did:key id>.json`, owner-only, in a checked private directory: what this agent's watcher
+ * already learned from the node (receipted message ids, mirrored meta keys, marker read times, the claim pruning
+ * time), so a restart or a `--once` run need not fetch it again.
+ * - Bound to this agent's DID and space.
+ * - Each peer's facts carry the identity (DID, space, session) they were learned under. They are loaded and saved
+ *   only while the peer's current identity is the same; otherwise they are dropped, never re-stamped.
+ * - Only `peers()` (the eligible peers) are kept. A bad file, an old format or an unsafe directory is the same as no
+ *   file. Deleted with the read cache (revoke, refusal, owner revocation, key rotation).
  */
 export function fileWatchCache(agent: string, space: string, peers: () => StoredPeer[]) {
   const name = `${agentId(agent)}.json`;
@@ -54,13 +51,15 @@ export function fileWatchCache(agent: string, space: string, peers: () => Stored
     load(): LocalWatchCache | undefined {
       try {
         const dir = privateDir([DIR], false);
-        if (!dir || !stillPrivate(dir)) return undefined;
-        const file = parse(readRegularFile(path.join(dir.path, name)));
+        if (!dir) return undefined;
+        const file = parse(readPrivateFile(dir, name));
         if (!file || file.self.did !== agent || file.self.space !== space) return undefined;
-        const cache: LocalWatchCache = { v: 1, claimsPrunedAt: file.claimsPrunedAt, markerReadAt: {}, metaMirrored: [], receipted: {} };
+        const cache: LocalWatchCache = { v: 1, claimsPrunedAt: file.claimsPrunedAt, markerReadAt: {}, metaMirrored: [], receipted: {}, identities: {} };
         for (const peer of peers()) {
           const facts = Object.hasOwn(file.peers, peer.handle) ? file.peers[peer.handle] : undefined;
-          if (!facts || !samePeer(facts, peer)) continue;
+          const identity = peerIdentity(peer);
+          if (!facts || !sameIdentity({ did: facts.did, space: facts.space, session: facts.session }, identity)) continue;
+          cache.identities[peer.handle] = identity;
           if (facts.markerReadAt !== undefined) cache.markerReadAt[peer.handle] = facts.markerReadAt;
           cache.receipted[peer.handle] = facts.receipted;
           const prefix = metaPrefix(peer);
@@ -71,18 +70,21 @@ export function fileWatchCache(agent: string, space: string, peers: () => Stored
     },
     save(cache: LocalWatchCache): void {
       const dir = privateDir([DIR], true);
-      if (!dir || !stillPrivate(dir)) return;
+      if (!dir) return;
       const file: WatchCacheFile = { v: 2, self: { did: agent, space }, peers: {}, ...(cache.claimsPrunedAt !== undefined ? { claimsPrunedAt: cache.claimsPrunedAt } : {}) };
       for (const peer of peers()) {
+        const identity = peerIdentity(peer);
+        // Facts learned under another identity of this handle are dropped, never stamped with the current one.
+        if (!sameIdentity(Object.hasOwn(cache.identities, peer.handle) ? cache.identities[peer.handle] : undefined, identity)) continue;
         const prefix = metaPrefix(peer);
         file.peers[peer.handle] = {
-          did: peer.courierDid, space: peer.spaceId, session: peer.sessionId ?? null,
+          ...identity,
           ...(cache.markerReadAt[peer.handle] !== undefined ? { markerReadAt: cache.markerReadAt[peer.handle] } : {}),
           receipted: cache.receipted[peer.handle] ?? [],
           metaMirrored: prefix ? cache.metaMirrored.filter(key => key.startsWith(prefix)) : [],
         };
       }
-      writeSecure(path.join(dir.path, name), file);
+      writePrivateFile(dir, name, file);
     },
   };
 }

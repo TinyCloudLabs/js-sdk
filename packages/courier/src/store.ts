@@ -84,13 +84,18 @@ export async function getJson<T>(kv: KV, key: string): Promise<{ value: T; etag:
   return jsonResult<T>((await readRetry(() => kv.get(key, FULL))) as ResultLike<KVResponse<unknown>>, key);
 }
 
-/** The node's batch read limit: one invocation reads at most this many keys. */
-const BATCH_READ_KEYS = 100;
 /**
- * Asked of the node for each key of a batch (`x-tinycloud-max-response-bytes`): a larger value fails the batch with
- * KV_RESPONSE_TOO_LARGE instead of being sent. Courier's largest entries are 256 KB messages and tasks with artifacts.
+ * Batch reads are bounded per value and in total. The node is asked for a per-value cap (`x-tinycloud-max-response-bytes`;
+ * a larger value fails the batch with KV_RESPONSE_TOO_LARGE, "A KV batch value exceeds the requested response limit"),
+ * and chunks are sized so that keys × cap stays within 32 MiB per response:
+ * - messages, meta and every other entry: at most 2 MiB each (a 256 K-character message is at most 1 MiB of UTF-8),
+ *   16 keys per invocation;
+ * - tasks, which may carry artifacts: at most 8 MiB each, 4 keys per invocation.
  */
-const BATCH_READ_MAX_BYTES = 8 * 1024 * 1024;
+const BATCH_TOTAL_BYTES = 32 * 1024 * 1024;
+const ENTRY_VALUE_BYTES = 2 * 1024 * 1024;
+const TASK_VALUE_BYTES = 8 * 1024 * 1024;
+const isTaskKey = (key: string) => /\/task\/[^/]+\.json$/.test(key);
 
 /** A key read as `getJson` reads it: the value and its etag, or undefined if the key is missing. */
 export type JsonRead<T> = { value: T; etag: string | null } | undefined;
@@ -98,20 +103,23 @@ export type JsonRead<T> = { value: T; etag: string | null } | undefined;
 export type JsonReadOutcome<T> = { got: JsonRead<T> } | { error: unknown };
 
 /**
- * Each key read as `getJson` reads it, in one invocation per 100 keys (`tinycloud.kv/get` on each key, as one batch).
+ * Each key read as `getJson` reads it, in bounded batches (`tinycloud.kv/get` on each key of a batch, one invocation).
  * A failed batch call throws; one key's failure is only that key's outcome.
  */
 export async function readJsonMany<T>(kv: KV, keys: readonly string[]): Promise<Map<string, JsonReadOutcome<T>>> {
   const outcomes = new Map<string, JsonReadOutcome<T>>();
   const unique = [...new Set(keys)];
-  for (let start = 0; start < unique.length; start += BATCH_READ_KEYS) {
-    const chunk = unique.slice(start, start + BATCH_READ_KEYS);
-    const r = (await readRetry(() => kv.batchGet(chunk, { ...FULL, maxResponseBytes: BATCH_READ_MAX_BYTES }))) as ResultLike<{ results: Array<{ key: string; result: ResultLike<KVResponse<unknown>> }> }>;
-    const batch = unwrap(r, `batch get ${chunk.length} key(s)`);
-    if (batch.results.length !== chunk.length) throw new CourierError('kv', `batch get returned ${batch.results.length} of ${chunk.length} keys`);
-    for (const [index, item] of batch.results.entries()) {
-      if (item.key !== chunk[index]) throw new CourierError('kv', 'batch get answered a different key');
-      try { outcomes.set(item.key, { got: jsonResult<T>(item.result, item.key) }); } catch (error) { outcomes.set(item.key, { error }); }
+  for (const [group, valueBytes] of [[unique.filter(key => !isTaskKey(key)), ENTRY_VALUE_BYTES], [unique.filter(isTaskKey), TASK_VALUE_BYTES]] as const) {
+    const size = Math.floor(BATCH_TOTAL_BYTES / valueBytes);
+    for (let start = 0; start < group.length; start += size) {
+      const chunk = group.slice(start, start + size);
+      const r = (await readRetry(() => kv.batchGet(chunk, { ...FULL, maxResponseBytes: valueBytes }))) as ResultLike<{ results: Array<{ key: string; result: ResultLike<KVResponse<unknown>> }> }>;
+      const batch = unwrap(r, `batch get ${chunk.length} key(s)`);
+      if (batch.results.length !== chunk.length) throw new CourierError('kv', `batch get returned ${batch.results.length} of ${chunk.length} keys`);
+      for (const [index, item] of batch.results.entries()) {
+        if (item.key !== chunk[index]) throw new CourierError('kv', 'batch get answered a different key');
+        try { outcomes.set(item.key, { got: jsonResult<T>(item.result, item.key) }); } catch (error) { outcomes.set(item.key, { error }); }
+      }
     }
   }
   return outcomes;

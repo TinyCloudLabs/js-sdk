@@ -4,8 +4,8 @@ import path from 'node:path';
 import { messageView, oneLine, taskView } from './a2a.js';
 import type { KV } from './inbox.js';
 import { agentId, k, PREFIX } from './keys.js';
-import { profileDir, readRegularFile, writeSecure, type StoredPeer } from './profile.js';
-import { privateChild, privateDir, stillPrivate, type PrivateDir } from './private-dir.js';
+import { profileDir, type StoredPeer } from './profile.js';
+import { privateChild, privateDir, readPrivateFile, removePrivate, stillPrivate, unlinkPrivateFile, writePrivateFile, type PrivateDir } from './private-dir.js';
 import { getJsonMany, listAll } from './store.js';
 import { ULID } from './request.js';
 
@@ -41,11 +41,11 @@ function prepareCacheRoot(): void {
   if (!root) return;
   for (const name of fs.readdirSync(root.path)) {
     if (!stillPrivate(root)) return;
-    const entry = path.join(root.path, name);
     let child: fs.Stats;
-    try { child = fs.lstatSync(entry); } catch { continue; }
+    try { child = fs.lstatSync(path.join(root.path, name)); } catch { continue; }
     if (child.uid !== process.getuid?.()) continue;
-    if (child.isFile() && name.endsWith('.json') && ULID.test(name.slice(0, -5))) fs.rmSync(entry, { force: true });
+    // Only our own pre-upgrade thread files, unlinked after the chain and the entry are checked again.
+    if (child.isFile() && name.endsWith('.json') && ULID.test(name.slice(0, -5))) unlinkPrivateFile(root, name);
     else if (child.isDirectory()) privateChild(root, name);
   }
 }
@@ -63,15 +63,16 @@ function fresh(file: string, limits: CacheLimits): boolean {
 
 /** Keeps the agent's newest thread files within the byte bound and drops any older than the age bound. */
 function prune(dir: PrivateDir, limits: CacheLimits): void {
-  const files = fs.readdirSync(dir.path).filter(name => name.endsWith('.json')).map(name => {
-    const file = path.join(dir.path, name);
-    const stat = fs.lstatSync(file);
-    return { file, mtime: stat.mtimeMs, bytes: stat.size, keep: stat.isFile() && limits.now - stat.mtimeMs < limits.maxAgeMs };
+  const files = fs.readdirSync(dir.path).filter(name => name.endsWith('.json')).flatMap(name => {
+    try {
+      const stat = fs.lstatSync(path.join(dir.path, name));
+      return [{ name, mtime: stat.mtimeMs, bytes: stat.size, keep: stat.isFile() && limits.now - stat.mtimeMs < limits.maxAgeMs }];
+    } catch { return []; }
   }).sort((a, b) => b.mtime - a.mtime);
   let total = 0;
   for (const entry of files) {
     total += entry.bytes;
-    if ((!entry.keep || total > limits.maxBytes) && stillPrivate(dir)) fs.rmSync(entry.file, { force: true });
+    if (!entry.keep || total > limits.maxBytes) unlinkPrivateFile(dir, entry.name);
   }
 }
 
@@ -89,9 +90,9 @@ export function diskThreadCache(agent: string, threadId: string,
   const name = `${threadId}.json`;
   let entries: Record<string, unknown> = {};
   const existing = !full && SAFE_ID.test(threadId) ? privateDir(parts, false) : undefined;
-  if (existing && fresh(path.join(existing.path, name), limits) && stillPrivate(existing)) {
+  if (existing && fresh(path.join(existing.path, name), limits)) {
     try {
-      const parsed: unknown = JSON.parse(readRegularFile(path.join(existing.path, name)) ?? '{}');
+      const parsed: unknown = JSON.parse(readPrivateFile(existing, name) ?? '{}');
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) entries = parsed as Record<string, unknown>;
     } catch { /* an unreadable cache is rebuilt */ }
   }
@@ -102,19 +103,18 @@ export function diskThreadCache(agent: string, threadId: string,
     save() {
       if (!changed || !SAFE_ID.test(threadId)) return;
       const dir = privateDir(parts, true);
-      if (!dir || !stillPrivate(dir)) return;
-      const file = path.join(dir.path, name);
-      // writeSecure writes pretty JSON and a newline.
-      if (Buffer.byteLength(JSON.stringify(entries, null, 2)) + 1 > limits.maxBytes) fs.rmSync(file, { force: true });
-      else writeSecure(file, entries);
+      if (!dir) return;
+      // The file is pretty JSON and a newline.
+      if (Buffer.byteLength(JSON.stringify(entries, null, 2)) + 1 > limits.maxBytes) unlinkPrivateFile(dir, name);
+      else writePrivateFile(dir, name, entries);
       prune(dir, limits);
     },
   };
 }
 
-/** Only the read cache: every cached counterparty body on this machine. */
+/** Only the read cache: every cached counterparty body on this machine, removed through checked directories only. */
 export function clearReadCache(): void {
-  fs.rmSync(path.join(profileDir(), READ_CACHE), { recursive: true, force: true });
+  removePrivate(READ_CACHE);
   preparedRoot = undefined;
 }
 
@@ -124,7 +124,7 @@ export function clearReadCache(): void {
  */
 export function clearLocalCaches(): void {
   clearReadCache();
-  fs.rmSync(path.join(profileDir(), WATCH_CACHE), { recursive: true, force: true });
+  removePrivate(WATCH_CACHE);
 }
 
 /**
@@ -148,13 +148,12 @@ export function recordOwnerSpaceWrite(agent: string, spaceId: string | undefined
   try {
     prepareCacheRoot();
     const dir = privateDir(parts, true);
-    if (!dir || !stillPrivate(dir)) throw new Error('unsafe cache directory');
-    writeSecure(path.join(dir.path, ownerSpaceName('e', spaceId, key)), { space: spaceId, key });
+    if (!dir || !writePrivateFile(dir, ownerSpaceName('e', spaceId, key), { space: spaceId, key })) throw new Error('not recorded');
   } catch {
     try {
       const dir = privateDir(parts, false);
       if (!dir) return; // no safe directory: no listing marks to trust
-      for (const name of fs.readdirSync(dir.path)) if (name.startsWith('listed-') && stillPrivate(dir)) fs.rmSync(path.join(dir.path, name), { force: true });
+      for (const name of fs.readdirSync(dir.path)) if (name.startsWith('listed-')) unlinkPrivateFile(dir, name);
     } catch { /* no listing marks: the next read lists anyway */ }
   }
 }
@@ -170,8 +169,8 @@ export interface OwnerSpaceIndex {
 export function diskOwnerSpaceIndex(agent: string, spaceId: string, threadId: string, full = false, now = Date.now()): OwnerSpaceIndex {
   const parts = ownerSpaceParts(agent, threadId);
   const uid = process.getuid?.();
-  const regular = (file: string) => {
-    try { const stat = fs.lstatSync(file); return stat.isFile() && stat.uid === uid ? stat : undefined; } catch { return undefined; }
+  const regular = (dir: PrivateDir, name: string) => {
+    try { const stat = fs.lstatSync(path.join(dir.path, name)); return stat.isFile() && stat.uid === uid ? stat : undefined; } catch { return undefined; }
   };
   return {
     keys(root) {
@@ -180,9 +179,9 @@ export function diskOwnerSpaceIndex(agent: string, spaceId: string, threadId: st
       if (!dir) return undefined;
       let listedAt: number;
       try {
-        const file = path.join(dir.path, ownerSpaceName('listed', spaceId, root));
-        if (!regular(file) || !stillPrivate(dir)) return undefined;
-        const mark: unknown = JSON.parse(readRegularFile(file) ?? 'null');
+        const name = ownerSpaceName('listed', spaceId, root);
+        if (!regular(dir, name)) return undefined;
+        const mark: unknown = JSON.parse(readPrivateFile(dir, name) ?? 'null');
         if (!mark || typeof mark !== 'object') return undefined;
         const { space, root: markRoot, listedAt: at } = mark as { space?: unknown; root?: unknown; listedAt?: unknown };
         if (space !== spaceId || markRoot !== root || typeof at !== 'string') return undefined;
@@ -193,13 +192,13 @@ export function diskOwnerSpaceIndex(agent: string, spaceId: string, threadId: st
       try {
         for (const name of fs.readdirSync(dir.path)) {
           if (!name.startsWith('e-')) continue;
-          const file = path.join(dir.path, name);
-          const stat = regular(file);
+          const stat = regular(dir, name);
           if (!stat) continue;
-          if (!stillPrivate(dir)) return undefined;
           // Every listing re-records what it saw, so an entry this old is from before the current listing mark.
-          if (now - stat.mtimeMs >= CACHE_MAX_AGE_MS) { fs.rmSync(file, { force: true }); continue; }
-          const entry: unknown = JSON.parse(readRegularFile(file) ?? 'null');
+          if (now - stat.mtimeMs >= CACHE_MAX_AGE_MS) { unlinkPrivateFile(dir, name); continue; }
+          const text = readPrivateFile(dir, name);
+          if (text === undefined) return undefined;
+          const entry: unknown = JSON.parse(text);
           if (!entry || typeof entry !== 'object') return undefined;
           const { space, key } = entry as { space?: unknown; key?: unknown };
           if (typeof key !== 'string' || typeof space !== 'string') return undefined;
@@ -214,8 +213,10 @@ export function diskOwnerSpaceIndex(agent: string, spaceId: string, threadId: st
         prepareCacheRoot();
         const dir = privateDir(parts, true);
         if (!dir) return;
-        for (const key of keys) if (key.startsWith(`${root}/`) && stillPrivate(dir)) writeSecure(path.join(dir.path, ownerSpaceName('e', spaceId, key)), { space: spaceId, key });
-        if (stillPrivate(dir)) writeSecure(path.join(dir.path, ownerSpaceName('listed', spaceId, root)), { space: spaceId, root, listedAt: new Date(now).toISOString() });
+        for (const key of keys) {
+          if (key.startsWith(`${root}/`) && !writePrivateFile(dir, ownerSpaceName('e', spaceId, key), { space: spaceId, key })) return;
+        }
+        writePrivateFile(dir, ownerSpaceName('listed', spaceId, root), { space: spaceId, root, listedAt: new Date(now).toISOString() });
       } catch { /* without a mark, the next read lists again */ }
     },
   };

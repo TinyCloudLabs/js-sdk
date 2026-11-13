@@ -253,8 +253,9 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
   renewal marker was read, when wake claims were pruned) is kept in
   `<COURIER_HOME>/watch-cache/<agent did:key id>.json` (owner-only), so a
   restart or a `watch --once` run doesn't fetch it again. It is bound to this
-  agent's DID and space, and each peer's part to that peer's DID, space and
-  session. Only eligible peers' facts are kept.
+  agent's DID and space. Each peer's facts carry the DID, space and session they
+  were learned under, and are dropped, never relabelled, once that peer is a
+  different agent, space or session. Only eligible peers' facts are kept.
 
 Every step logs one JSON object per line on stdout (`start`, `hook-event`,
 `delivered` with `via` and `latencyMs`, `waking` with `wakeLatencyMs` (send to
@@ -312,8 +313,10 @@ catch-up covers those gaps.
 create-only) in `<COURIER_HOME>/read-cache/<agent did:key id>/<thread>.json`
 (owner-only). Reading the thread again lists only the peer's side and fetches
 only new entries and the tasks, which can change. Entries are fetched in
-batches of up to 100 keys per call (one `tinycloud.kv/get` invocation each);
-each entry is still checked on its own, and each value is limited to 8 MiB.
+bounded batches, each one `tinycloud.kv/get` invocation: up to 16 messages or
+meta of at most 2 MiB each, or 4 tasks of at most 8 MiB each, so no response
+exceeds 32 MiB. A larger value fails its batch with `KV_RESPONSE_TOO_LARGE`.
+Each entry is still checked on its own.
 Your own side comes from a local owner-space record of the writes made under
 your thread roots (`send`, the outbox, pause notices, `task`, `request`, a
 session's meta) in `read-cache/<agent>/owner-space/<thread>/`; that record
@@ -322,12 +325,17 @@ again. A peer's renewal marker is read at most every 5 minutes per thread.
 `courier read --full` lists both sides and fetches everything again. Messages
 are create-only; a later overwrite of the same key isn't shown. One agent's
 cache stays within 64 MiB, files older than 7 days are not used, and a missing
-or unreadable file is rebuilt. Nothing is read or written unless every
-directory from `COURIER_HOME` down is a real directory of yours (not a
-symlink). Each one is made owner-only, and the chain is checked again right
-before each read, write or delete. `courier revoke`, a recorded refusal, an
-owner revocation and `init --rotate-key` delete the cache and the watcher's
-local knowledge.
+or unreadable file is rebuilt. The local caches (`read-cache/`,
+`watch-cache/`) are used only if `COURIER_HOME` is a real directory of yours,
+not a symlink, and every directory above it up to `/` is owned by root or you
+and not writable by group or others. A sticky directory such as `/tmp` is
+allowed when the directory just below it is yours and owner-only. This is the
+rule ssh's StrictModes uses. Otherwise the caches are not used and everything
+is fetched. Each cache directory is opened without following a symlink, is
+made owner-only through that handle, and is checked again right before every
+read, write or delete. `courier revoke`, a recorded refusal, an owner
+revocation and `init --rotate-key` delete the cache and the watcher's local
+knowledge, through the same checked directories.
 
 ### Wake adapters
 

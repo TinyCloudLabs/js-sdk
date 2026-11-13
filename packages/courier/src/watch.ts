@@ -179,7 +179,16 @@ export interface LocalWatchCache {
   metaMirrored: string[];
   /** Per peer, `thread/message` ids its receipts already list (receipts only grow). */
   receipted: Record<string, string[]>;
+  /** Per peer, the identity (DID, space, session) its facts above were learned under; facts without one are dropped. */
+  identities: Record<string, PeerIdentity>;
 }
+
+export interface PeerIdentity { did: string; space: string; session: string | null }
+
+export const peerIdentity = (peer: StoredPeer): PeerIdentity =>
+  ({ did: peer.courierDid, space: peer.spaceId, session: peer.sessionId ?? null });
+export const sameIdentity = (a: PeerIdentity | undefined, b: PeerIdentity) =>
+  a !== undefined && a.did === b.did && a.space === b.space && a.session === b.session;
 
 /** `tries`: notification dispatch attempts (max 3), or failed inform attempts (max 8). */
 export type OutboxItem =
@@ -333,6 +342,8 @@ export class Watcher {
   private readonly metaMirrored: Set<string>;
   private readonly markerReadAt: Map<string, number>;
   private claimsPrunedAt: number;
+  /** Per peer, the identity the facts above were learned under: a peer that changed identity starts with none. */
+  private readonly factIdentity: Map<string, PeerIdentity>;
   /** The local cache changed since it was last saved. */
   private localDirty = false;
   private readonly syncing = new Map<string, { again: boolean; via: Via; listPaused: boolean }>();
@@ -362,6 +373,24 @@ export class Watcher {
     this.markerReadAt = new Map(Object.entries(cached?.markerReadAt ?? {}));
     this.receipted = new Map(Object.entries(cached?.receipted ?? {}).map(([peer, ids]) => [peer, new Set(ids)]));
     this.claimsPrunedAt = cached?.claimsPrunedAt ?? 0;
+    this.factIdentity = new Map(Object.entries(cached?.identities ?? {}));
+  }
+
+  /**
+   * Before using or learning facts about a peer: if the peer is now a different agent, space or session than the one
+   * the facts were learned under, they are dropped, so a new peer's delivery is never skipped on an old peer's facts.
+   */
+  private bindFacts(peer: StoredPeer): void {
+    const identity = peerIdentity(peer);
+    if (sameIdentity(this.factIdentity.get(peer.handle), identity)) return;
+    this.receipted.delete(peer.handle);
+    this.markerReadAt.delete(peer.handle);
+    if (peer.theirHandleForMe) {
+      const prefix = `${PREFIX}/to/${peer.theirHandleForMe}/`;
+      for (const key of [...this.metaMirrored]) if (key.startsWith(prefix)) this.metaMirrored.delete(key);
+    }
+    this.factIdentity.set(peer.handle, identity);
+    this.localDirty = true;
   }
 
   private saveLocal(): void {
@@ -371,6 +400,7 @@ export class Watcher {
       this.deps.localCache.save({
         v: 1, claimsPrunedAt: this.claimsPrunedAt, markerReadAt: Object.fromEntries(this.markerReadAt),
         metaMirrored: [...this.metaMirrored], receipted: Object.fromEntries([...this.receipted].map(([peer, ids]) => [peer, [...ids]])),
+        identities: Object.fromEntries(this.factIdentity),
       });
     } catch (error) {
       this.deps.log('sync-error', { source: 'local-cache', ...errInfo(error) });
@@ -726,12 +756,14 @@ export class Watcher {
     // The renewal marker is read on the same schedule, across runs: a `--once` loop does not read it every run.
     const at = this.now();
     for (const peer of this.deps.loadPeers()) {
+      this.bindFacts(peer);
       if (at - (this.markerReadAt.get(peer.handle) ?? -Infinity) >= AUTHORITY_CHECK_MS) this.renewalDue.add(peer.handle);
     }
   }
 
   private async syncPeer(peer: StoredPeer, via: Via, listPaused: boolean, renew: boolean): Promise<void> {
     if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) return;
+    this.bindFacts(peer);
     const { selfKv, log } = this.deps;
     const mailbox = peer.theirHandleForMe;
     const peerKv = await this.deps.kvFor(peer, renew);

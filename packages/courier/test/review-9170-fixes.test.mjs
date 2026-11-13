@@ -66,16 +66,53 @@ test('F1: a symlinked component is refused when checked, and a component swapped
   outside.cleanup();
 });
 
+test('F1: a COURIER_HOME under a group/other-writable non-sticky directory, or itself a symlink, gets no cache and is never chmodded', () => {
+  const saved = process.env.COURIER_HOME;
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'tc2917-strict-'));
+  try {
+    const loose = path.join(base, 'loose');
+    fs.mkdirSync(path.join(loose, 'home'), { recursive: true });
+    fs.chmodSync(loose, 0o777); // writable by anyone, not sticky
+    fs.chmodSync(path.join(loose, 'home'), 0o755);
+    process.env.COURIER_HOME = path.join(loose, 'home');
+    assert.equal(privateDir(['read-cache'], true), undefined, 'refused under a writable ancestor');
+    assert.equal(fs.statSync(path.join(loose, 'home')).mode & 0o777, 0o755, 'and COURIER_HOME was not touched');
+    const target = path.join(base, 'target');
+    fs.mkdirSync(target, { mode: 0o755 });
+    fs.chmodSync(target, 0o755);
+    fs.symlinkSync(target, path.join(base, 'linked'));
+    process.env.COURIER_HOME = path.join(base, 'linked');
+    assert.equal(privateDir(['read-cache'], true), undefined, 'refused when COURIER_HOME is a symlink');
+    assert.equal(fs.statSync(target).mode & 0o777, 0o755, 'and what it points at is never chmodded');
+    assert.deepEqual(fs.readdirSync(target), []);
+  } finally {
+    process.env.COURIER_HOME = saved;
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('F1: clearing the caches never deletes through a symlinked cache directory', () => {
+  const outside = outsideDir();
+  fs.writeFileSync(path.join(outside.dir, 'keep.json'), '{}');
+  fs.rmSync(path.join(profileDir(), 'read-cache'), { recursive: true, force: true });
+  fs.symlinkSync(outside.dir, path.join(profileDir(), 'read-cache'));
+  clearLocalCaches();
+  assert.ok(fs.existsSync(path.join(outside.dir, 'keep.json')), 'the target keeps its files');
+  assert.equal(fs.existsSync(path.join(profileDir(), 'read-cache')), false, 'only the link is removed');
+  outside.cleanup();
+});
+
 const peer = (handle, extra = {}) => ({
   handle, ownerDid: 'did:pkh:eip155:1:0x02', courierDid: `did:key:z${handle}`, spaceId: `space-${handle}`, theirHandleForMe: 'me',
   inbound: { delegation: 'wire', cid: `cid-${handle}`, expiresAt: new Date(Date.now() + 24 * HOUR).toISOString() }, outbound: [], status: 'paired',
   ...extra,
 });
-const facts = (handles) => ({
+const facts = (handles, identityOf = (h) => ({ did: `did:key:z${h}`, space: `space-${h}`, session: null })) => ({
   v: 1, claimsPrunedAt: 5,
   markerReadAt: Object.fromEntries(handles.map((h) => [h, 7])),
   receipted: Object.fromEntries(handles.map((h) => [h, [`T/${h}`]])),
   metaMirrored: [`${PREFIX}/to/me/threads/T/meta.json`],
+  identities: Object.fromEntries(handles.map((h) => [h, identityOf(h)])),
 });
 
 test("F3: the watcher's local knowledge is bound to our DID and space and to each peer's DID, space and session", () => {
@@ -111,11 +148,57 @@ test('F3: the local knowledge is cleared with the read cache and never written t
   outside.cleanup();
 });
 
-test('F4: every batch read asks the node to bound each value at 8 MiB', async () => {
+test('F4: batch reads ask the node to bound each value, and size batches to at most 32 MiB a response', async () => {
   const seen = [];
-  const kv = { async batchGet(keys, options) { seen.push(options); return { ok: true, data: { results: keys.map((key) => ({ key, result: { ok: false, error: { code: 'KV_NOT_FOUND', message: 'none' } } })), count: keys.length } }; } };
-  await readJsonMany(kv, ['a', 'b']);
-  assert.equal(seen[0].maxResponseBytes, 8 * 1024 * 1024);
+  const kv = { async batchGet(keys, options) { seen.push({ keys: keys.length, cap: options.maxResponseBytes }); return { ok: true, data: { results: keys.map((key) => ({ key, result: { ok: false, error: { code: 'KV_NOT_FOUND', message: 'none' } } })), count: keys.length } }; } };
+  const messages = Array.from({ length: 20 }, (_, i) => `x/threads/T/msg/${i}.json`);
+  const tasks = Array.from({ length: 5 }, (_, i) => `x/threads/T/task/${i}.json`);
+  await readJsonMany(kv, [...messages, ...tasks]);
+  assert.deepEqual(seen, [
+    { keys: 16, cap: 2 * 1024 * 1024 }, { keys: 4, cap: 2 * 1024 * 1024 },
+    { keys: 4, cap: 8 * 1024 * 1024 }, { keys: 1, cap: 8 * 1024 * 1024 },
+  ]);
+  for (const { keys, cap } of seen) assert.ok(keys * cap <= 32 * 1024 * 1024);
+});
+
+test("F3: facts learned for one peer are never saved, loaded or used under another identity of the same handle", async () => {
+  clearLocalCaches();
+  const peerA = peer('bob', { theirHandleForMe: 'alice' });
+  const peerB = peer('bob', { theirHandleForMe: 'alice', courierDid: 'did:key:zMallory', spaceId: 'space-mallory' });
+  // Saving: facts learned under A, saved while the handle is now B, are dropped, not stamped with B.
+  let current = peerB;
+  const cache = fileWatchCache(AGENT, 'space-mine', () => [current]);
+  cache.save(facts(['bob'], () => ({ did: peerA.courierDid, space: peerA.spaceId, session: null })));
+  assert.equal(cache.load().receipted.bob, undefined, 'saved for B: nothing');
+
+  // Using: a live watcher that learned A's message does not skip B's message under the same key.
+  clearLocalCaches();
+  current = peerA;
+  const peerKv = memoryKv();
+  const selfKv = memoryKv();
+  const events = [];
+  const watcher = new Watcher({
+    selfKv, agent: AGENT, spaceId: 'space-mine', selfHooks: {}, peerHooks: async () => ({}), loadPeers: () => [current], kvFor: async () => peerKv,
+    wake: async () => {}, log: (event, fields) => events.push({ event, ...fields }), localCache: cache,
+  }, { debounceMs: 0, pollMs: 60_000, ticketSeconds: 25, wakeBudget: 12 });
+  const thread = ulid();
+  const messageId = ulid();
+  const key = `${PREFIX}/to/alice/threads/${thread}/msg/${messageId}.json`;
+  const say = (text) => {
+    const message = buildMessage({ threadId: thread, text, role: 'ROLE_USER', intent: 'update', from: { owner: 'o', agent: 'a' } });
+    message.messageId = messageId;
+    peerKv.rows.set(key, { value: message, etag: text });
+  };
+  await watcher.loadState();
+  say('from A');
+  await watcher.pollOnce('poll');
+  assert.equal(events.filter((e) => e.event === 'delivered').length, 1, "A's message is delivered and receipted");
+  // The handle is re-paired to B. Its own records start fresh (no receipts or mirror for the new pairing yet).
+  current = peerB;
+  for (const row of [...selfKv.rows.keys()]) if (row.includes('/receipts') || row.includes('/mirror/')) selfKv.rows.delete(row);
+  say('from B');
+  await watcher.pollOnce('poll');
+  assert.equal(events.filter((e) => e.event === 'delivered').length, 2, "B's message under the same key is delivered, not skipped on A's facts");
 });
 
 test('F5: a positive verdict restarts an inform\'s 24 h clock, even when its post then fails', async () => {

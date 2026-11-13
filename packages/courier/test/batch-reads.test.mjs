@@ -1,5 +1,6 @@
-// TC-2917 (Naomi, from Orchard's finding): Courier reads N entries with the SDK's batch get, one invocation per 100
-// keys, instead of one get each. Every entry is still checked on its own, and a failure stays as narrow as before.
+// TC-2917 (Naomi, from Orchard's finding): Courier reads N entries with the SDK's batch get, in bounded batches (16 messages
+// or meta of ≤2 MiB, or 4 tasks of ≤8 MiB, per invocation: ≤32 MiB a response), instead of one get each. Every entry is still
+// checked on its own, and a failure stays as narrow as before.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -52,7 +53,7 @@ const peer = {
   inbound: { delegation: 'wire', cid: 'cid-bob', expiresAt: new Date(Date.now() + 86_400_000).toISOString() }, outbound: [], status: 'paired',
 };
 
-test('a 260-entry read is 2 listings and 4 batch calls, no single gets; every entry is still checked on its own', async () => {
+test('a 260-entry read is 2 listings and bounded batch calls, no single gets; every entry is still checked on its own', async () => {
   const mine = batchKv();
   const theirs = batchKv();
   const threadId = ulid();
@@ -67,7 +68,9 @@ test('a 260-entry read is 2 listings and 4 batch calls, no single gets; every en
   assert.equal(result.entries.length, 262);
   assert.deepEqual([mine.calls.list, theirs.calls.list], [1, 1]);
   assert.deepEqual([mine.calls.get, theirs.calls.get], [0, 0], 'no entry is read on its own');
-  assert.deepEqual([mine.calls.batchKeys, theirs.calls.batchKeys], [[100, 31], [100, 31]]);
+  const sixteens = (n) => [...Array(Math.floor(n / 16)).fill(16), ...(n % 16 ? [n % 16] : [])];
+  assert.deepEqual(mine.calls.batchKeys, sixteens(131), 'our meta and 130 messages, 16 per invocation');
+  assert.deepEqual(theirs.calls.batchKeys, sixteens(131), "the peer's 130 messages and the malformed one");
   assert.ok(result.entries.find((entry) => entry.id === malformed).invalid?.length, 'a malformed entry is still flagged');
 });
 
@@ -107,7 +110,7 @@ test('the watcher imports 130 messages with 2 batch calls; one failing message i
   await s.watcher.pollOnce('poll');
   const delivered = () => s.events.filter((e) => e.event === 'delivered').map((e) => e.messageId);
   assert.equal(s.peerKv.calls.get, 0);
-  assert.ok(s.peerKv.calls.batchKeys.includes(100));
+  assert.ok(s.peerKv.calls.batchKeys.every((n) => n <= 16) && s.peerKv.calls.batchKeys.length >= 9, '130 messages in batches of at most 16');
   assert.equal(delivered().length, 129, 'the others are delivered');
   assert.ok(!delivered().includes(ids[7]));
   s.peerKv.fail.delete(flaky);
@@ -134,7 +137,7 @@ test('courier inbox and intake read their messages in batches', async () => {
   const inbox = await collectInbound({ selfKv: batchKv(), peers: [peer], kvFor: async () => peerKv });
   assert.equal(inbox.items.length, 130);
   assert.equal(peerKv.calls.get, 0);
-  assert.deepEqual(peerKv.calls.batchKeys, [100, 30]);
+  assert.deepEqual(peerKv.calls.batchKeys, [16, 16, 16, 16, 16, 16, 16, 16, 2]);
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tc2917-batch-intake-'));
   const dirs = { queueRoot: path.join(root, 'queue'), stateDir: path.join(root, 'state'), doneRoot: path.join(root, 'done'), overflowRoot: path.join(root, 'overflow') };
@@ -148,6 +151,6 @@ test('courier inbox and intake read their messages in batches', async () => {
   });
   assert.equal(queued, 130);
   assert.equal(kv.calls.get, 0);
-  assert.deepEqual(kv.calls.batchKeys, [100, 30]);
+  assert.deepEqual(kv.calls.batchKeys, [16, 16, 16, 16, 16, 16, 16, 16, 2]);
   fs.rmSync(root, { recursive: true, force: true });
 });
