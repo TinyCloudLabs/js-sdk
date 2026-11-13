@@ -11,9 +11,9 @@ export function sameTinyCloudNode(left: string, right: string): boolean {
 
 /**
  * Origin for an end-to-end-encrypted operation: either exact production name
- * maps to the origin whose TLS terminates inside the node's TEE, so no proxy
- * sees the request. Every other host, including lookalikes, is returned
- * unchanged. Callers never fall back from the result to the proxied name.
+ * maps to the origin whose TLS terminates inside the node's TEE. Every other
+ * host, including lookalikes, is returned unchanged. Callers never fall back
+ * from the result to the other production name.
  */
 export function endToEndNodeHost(host: string): string {
   return PRODUCTION_NODE_ORIGINS.has(host) ? TEE_NODE_ORIGIN : host;

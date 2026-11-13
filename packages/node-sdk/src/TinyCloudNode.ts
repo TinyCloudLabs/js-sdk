@@ -2288,7 +2288,7 @@ export class TinyCloudNode {
     // Encryption-network traffic carries key material and public keys, so it
     // only uses the origin whose TLS terminates inside the node (TC-2923). The
     // identity check that follows runs against that origin; nothing retries on
-    // the proxied name.
+    // the other production name.
     return access === "encryption"
       ? destinations.map((destination) => ({ ...destination, url: endToEndNodeHost(destination.url) }))
       : destinations;
