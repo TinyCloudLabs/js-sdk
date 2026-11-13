@@ -26,7 +26,8 @@ export const crypto = {
     if (webCrypto && webCrypto.getRandomValues) {
       return webCrypto.getRandomValues(array);
     }
-    // Keys and nonces come from here: refuse rather than use a non-cryptographic source.
-    throw new Error("crypto.getRandomValues is unavailable: TinyCloud needs a secure random source");
+    // Keys and nonces come from here: refuse rather than use a non-cryptographic source. The message stays short
+    // because it ships in the root bundle.
+    throw new Error("crypto.getRandomValues is unavailable");
   }
 };
