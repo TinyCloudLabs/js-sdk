@@ -48,7 +48,7 @@ function persistedSession(overrides: Partial<PersistedSessionData> = {}): Persis
     tinycloudSession: {
       delegationHeader: { Authorization: "Bearer delegation" },
       delegationCid: "bafydelegation",
-      spaceId: "space://tinycloud/1/owner/default",
+      spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
       verificationMethod: "did:key:z6MkSession#z6MkSession",
     },
     expiresAt: new Date(now.getTime() + 60_000).toISOString(),
