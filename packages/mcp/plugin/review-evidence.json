@@ -48,7 +48,7 @@
       "js_sdk": "df64efa4 (origin/master at worktree creation)",
       "openkey": "dc68836fcf4e8bd19bc0636be88a4b00563c6b87"
     },
-    "state": "Feature-branch review candidate; OpenKey API and web changes are split into ordered draft PRs. No default-branch merge, deployment, package publication, archive rebuild/import or production grant revocation.",
+    "state": "Feature-branch release candidate; OpenKey API and web are separated for ordered integration. The owner authorized the normal release on 2026-11-13. This source evidence records pre-rollout checks, not a production deployment or current-revision live acceptance result.",
     "changes": [
       "Hosted MCP passes its configured public origin; ordinary OpenKey preparation binds the actual host and nondefault port into SIWE and displays MCP, CLI or custom-host attribution.",
       "Requester origin remains caller-reported, not verified identity. Unsigned-link/no-signed-manifest disclosure and existing callback/node policies are retained.",
@@ -145,8 +145,9 @@
   },
   "rollout_preflight": {
     "date": "2026-11-12",
-    "status": "HELD_BY_OWNER",
-    "reason": "After being informed of the inherited API release batch and MCP old-layout compatibility impact, the owner selected Hold production. Keep all three review PRs draft and unmerged; no package publication or production deployment is authorized while this hold remains.",
+    "authorization_date": "2026-11-13",
+    "status": "AUTHORIZED_NORMAL_RELEASE",
+    "reason": "The owner explicitly selected Lift hold; ship the normal release, including the disclosed API/authentication changes, passkey migration and MCP legacy-record cutoff. Use the existing protected integration and guarded deployment paths. The separate destructive TC-488/TC-492 cutover and any unrelated data deletion remain unauthorized.",
     "openkey": {
       "api_pr": "https://github.com/TinyCloudLabs/openkey/pull/493",
       "web_pr": "https://github.com/TinyCloudLabs/openkey/pull/494",
