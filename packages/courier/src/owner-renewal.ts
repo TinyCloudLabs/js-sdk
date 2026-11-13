@@ -3,20 +3,26 @@ import { assertOwnerRenewalNodeIdentity, RENEWAL_LEASE_MISMATCH, verifyOwnerRene
 import { parseApprovalRenewal, type ApprovalRenewal } from '@tinycloud/share-envelope/links';
 import { CourierError } from './errors.js';
 import type { GrantPayload } from './grant.js';
+import { cmd } from './program.js';
 
-function asCourierError(error: unknown): unknown {
+/** The shared verifier's messages are technical; the owner sees what happened and what to do next. */
+function asCourierError(error: unknown, message: string): unknown {
   return error instanceof Error && 'code' in error && error.code === RENEWAL_LEASE_MISMATCH
-    ? new CourierError('bad-grant', error.message)
+    ? new CourierError('bad-grant', message)
     : error;
 }
 
 /** Verify signed material before saving a receipt; live node admission is checked separately by renewal restore. */
 export async function verifyOwnerRenewal(payload: GrantPayload, ownerDid: string, renewal: ApprovalRenewal): Promise<void> {
   try { await verifyOwnerRenewalLease(payload, ownerDid, parseApprovalRenewal(renewal)); }
-  catch (error) { throw asCourierError(error); }
+  catch (error) {
+    throw asCourierError(error, `This renewal doesn't match the permission you approved, so it wasn't turned on. Run \`${cmd('init')}\` and approve again in OpenKey.`);
+  }
 }
 
 export function assertOwnerRenewalIdentity(renewal: ApprovalRenewal, live: RenewalNodeIdentity): void {
   try { assertOwnerRenewalNodeIdentity(renewal, live); }
-  catch (error) { throw asCourierError(error); }
+  catch (error) {
+    throw asCourierError(error, `This renewal names a different TinyCloud node than the one you approved, so it wasn't turned on. Run \`${cmd('init')}\` and approve again in OpenKey.`);
+  }
 }
