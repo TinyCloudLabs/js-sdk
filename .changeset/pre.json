@@ -100,6 +100,7 @@
     "tc-2931-signin-bootstrap-policy",
     "tc-2934-requested-account",
     "tc-2987-browser-registry-verdict",
+    "tc-3030-first-party-origins",
     "tc-712-issued-resource",
     "tc-712-proofless-revoke",
     "tc2234-cli-invite-approval",

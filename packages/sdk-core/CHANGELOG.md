@@ -1,5 +1,17 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- 163f986: Remove one non-public origin from `FIRST_PARTY_ORIGINS`. Pages served from that origin no longer receive implicit first-party bootstrap permissions at sign-in. All other first-party origins and Pages projects are unchanged.
+
+  Details: TC-3030
+
+- Updated dependencies [163f986]
+  - @tinycloud/bootstrap@2.9.0-beta.1
+  - @tinycloud/sdk-services@3.12.0-beta.34
+
 ## 3.12.0-beta.33
 
 ### Patch Changes
