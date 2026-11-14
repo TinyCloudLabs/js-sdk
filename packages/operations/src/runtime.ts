@@ -17,7 +17,7 @@ import {
 } from "./contract.js";
 import { canonicalizeCapabilities } from "./authority.js";
 import { activationRoutingOperationError, operationError, type OperationError } from "./errors.js";
-import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, resolvePosture, type InvocationProfileResolution } from "./profile.js";
+import { isLocalOwnerProfile, ownerSessionLacksProof, resolveInvocationProfile, resolvePosture, restoreStoredSession, type InvocationProfileResolution } from "./profile.js";
 import { migrationRecovery, signInRecovery } from "./recovery.js";
 import { operationSpaceResolver } from "./secrets.js";
 import {
@@ -196,7 +196,7 @@ export async function createInvocationRuntime(
       ));
     } else {
       try {
-        await node.restoreSession(activeSession);
+        await restoreStoredSession(node, activeSession, session ?? {});
       } catch (error) {
         // node-sdk refuses expired or otherwise unusable persisted authority
         // (`AUTH_EXPIRED`) while verifying it locally, before any node request.
@@ -361,7 +361,7 @@ async function createRestoredRuntime(
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
     });
     try {
-      await node.restoreSession(activeSession);
+      await restoreStoredSession(node, activeSession, session ?? {});
     } catch (error) {
       if (isRecord(error) && error.code === "AUTH_EXPIRED") {
         return failed(summary, operationError(

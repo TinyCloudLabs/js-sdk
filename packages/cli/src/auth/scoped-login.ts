@@ -1,6 +1,6 @@
 import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
-import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -132,9 +132,10 @@ export function pinnedOwner(profile: ProfileConfig | null | undefined): string |
 
 /**
  * Session fields that state authority. They are set only from a verified
- * proof, never copied from an OpenKey callback.
+ * proof, never copied from an OpenKey callback. `renewal` is the owner's
+ * renewal lease, saved only after the approval result's lease verified.
  */
-const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
+const TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime", "renewal"];
 
 /** A callback-supplied session with every authority claim removed. */
 export function withoutTrustFields(session: Record<string, unknown>): Record<string, unknown> {
@@ -182,12 +183,15 @@ export function sessionExpiresAt(session: Record<string, unknown> | null): strin
   return null;
 }
 
-export type StoredSessionState = "missing" | "expired" | "present" | "unknown-expiry" | "unverified";
+export type StoredSessionState = "missing" | "expired" | "present" | "renewed" | "unknown-expiry" | "unverified";
 
 /**
  * A stored session's state and expiry, judged the way commands restore it: a
  * signed SIWE `Expiration Time` wins over unsigned expiry metadata, otherwise
- * {@link sessionExpiresAt}. Local metadata only; never contacts the node.
+ * {@link sessionExpiresAt}. Past that, a session saved with an owner renewal
+ * lease is `renewed` until the lease's signed end, and that end is reported.
+ * Local metadata only; never contacts the node, so a stopped lease still shows
+ * as renewed until a command restores it.
  */
 export function storedSessionState(session: Record<string, unknown> | null, profile: Pick<ProfileConfig, "posture" | "authMethod"> | null): { state: StoredSessionState; expiresAt: string | null } {
   if (session === null) return { state: "missing", expiresAt: null };
@@ -197,12 +201,16 @@ export function storedSessionState(session: Record<string, unknown> | null, prof
     ? new Date(siweExpiry).toISOString()
     : sessionExpiresAt(session);
   if (expiresAt === null) return { state: "unknown-expiry", expiresAt };
-  return { state: Date.parse(expiresAt) <= Date.now() ? "expired" : "present", expiresAt };
+  if (Date.parse(expiresAt) > Date.now()) return { state: "present", expiresAt };
+  const lease = liveStoredLease(session);
+  return lease !== undefined
+    ? { state: "renewed", expiresAt: new Date(lease.expiresAt).toISOString() }
+    : { state: "expired", expiresAt };
 }
 
-/** Whether commands still use a session in this state: unexpired, or with no recorded expiry to check. */
+/** Whether commands still use a session in this state: unexpired, renewed, or with no recorded expiry to check. */
 export function sessionStateIsUsable(state: StoredSessionState): boolean {
-  return state === "present" || state === "unknown-expiry";
+  return state === "present" || state === "renewed" || state === "unknown-expiry";
 }
 
 /** Bind a logical space name (e.g. `default`) to the owner's space URI. */
