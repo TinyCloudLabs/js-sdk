@@ -1,5 +1,22 @@
 # @tinycloud/cli
 
+## 1.7.0-beta.55
+
+### Minor Changes
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/operations@0.9.0-beta.39
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
 ## 1.7.0-beta.54
 
 ### Patch Changes

@@ -92,6 +92,7 @@
     "tc-2746-interim-renewal",
     "tc-2748-courier-read-isolation",
     "tc-2872-proofless-status",
+    "tc-2904-cli-lease-adoption",
     "tc-2904-courier-owner-lease",
     "tc-2904-owner-direct-renewal",
     "tc-2904-renewal-approval-codec",
