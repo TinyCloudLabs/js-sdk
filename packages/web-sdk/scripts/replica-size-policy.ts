@@ -478,6 +478,7 @@ export type Ledger = {
   tc2913OpenKeyContinuationRoot?: LogoutRatchet;
   tc2987RegistryAbsentReadsRoot?: LogoutRatchet;
   tc2937SharePlacementRoot?: LogoutRatchet;
+  tc2927ShareApprovalRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1110,6 +1111,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2913OpenKeyContinuationRoot !== undefined) pins.push({ row: "tc2913OpenKeyContinuationRoot", pin: root.tc2913OpenKeyContinuationRoot.sourceCommits.at(-1)! });
   if (root.tc2987RegistryAbsentReadsRoot !== undefined) pins.push({ row: "tc2987RegistryAbsentReadsRoot", pin: root.tc2987RegistryAbsentReadsRoot.sourceCommits.at(-1)! });
   if (root.tc2937SharePlacementRoot !== undefined) pins.push({ row: "tc2937SharePlacementRoot", pin: root.tc2937SharePlacementRoot.sourceCommits.at(-1)! });
+  if (root.tc2927ShareApprovalRoot !== undefined) pins.push({ row: "tc2927ShareApprovalRoot", pin: root.tc2927ShareApprovalRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1212,6 +1214,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2913OpenKeyContinuationRoot", root.tc2913OpenKeyContinuationRoot?.root.ceiling],
     ["tc2987RegistryAbsentReadsRoot", root.tc2987RegistryAbsentReadsRoot?.root.ceiling],
     ["tc2937SharePlacementRoot", root.tc2937SharePlacementRoot?.root.ceiling],
+    ["tc2927ShareApprovalRoot", root.tc2927ShareApprovalRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3466,6 +3469,26 @@ export const approvedTc2937SharePlacementRoot: LogoutRatchet = {
   "reason": "Native sharing envelopes may carry an opt-in wallet-owner-signed placement that receivers verify before routing to its destination; the root carries the envelope fields, placement routing and the frozen bridge, while placement verification loads from the separate share-placement entry. Canonical Node 22/Bun 1.3.14 CI measured 1525878/1460319 gzip -9 bytes on 5a99f8b8, based on d4949e8c. This is +703/+690 over the TC-2987 ceilings 1525175/1459629, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2937"
 };
 
+/** Naomi's exact TC-2927 new-share approval root allowance from canonical CI (ESM cap +2800 B, CJS cap +1900 B). */
+export const approvedTc2927ShareApprovalRoot: LogoutRatchet = {
+  "label": "new-share approval root admission (TC-2927)",
+  "ruling": "Naomi's TC-2927 size ruling: exact canonical CI bytes of the final re-measure, capped at +2800 B ESM and +1900 B CJS over the newest root row when it merges. Immutable named row; no general, optional or worker allowance change. Details: TC-2927",
+  "base": "37d930ec31806b28ff83f0801bd35308d73a9e6d",
+  "sourceCommits": ["91fc7f21b1ce672022616150ea88e8fba2f0f055"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43544682854",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43544682854/job/132293112748",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43544682854/job/132293112388"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 2757, "index.cjs": 1772 },
+    "ceiling": { "index.mjs": 1528635, "index.cjs": 1462091 }
+  },
+  "reason": "The exact Share registration permission, the signed new-share approval verifier and the Web approveNewShare consumer ship in the root bundle. Canonical Node 22/Bun 1.3.14/source-WASM CI measured 1528635/1462091 gzip -9 bytes on 91fc7f21, based on master 37d930ec; both Replica jobs agree. This is +2757/+1772 over the TC-2937 ceilings 1525878/1460319, within Naomi's +2800 B ESM / +1900 B CJS caps. The root module set is unchanged by this branch (webpack stats, ESM and CJS); the ESM excess over CJS is gzip alignment against the inlined wasm payload: the same sources measure +1804 ESM / +1781 CJS when the wasm is built with a different rustc patch version. Other ceilings are unchanged. Details: TC-2927"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3565,6 +3588,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2913OpenKeyContinuationRoot: approvedTc2913OpenKeyContinuationRoot,
   tc2987RegistryAbsentReadsRoot: approvedTc2987RegistryAbsentReadsRoot,
   tc2937SharePlacementRoot: approvedTc2937SharePlacementRoot,
+  tc2927ShareApprovalRoot: approvedTc2927ShareApprovalRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4018,6 +4042,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2987RegistryAbsentReadsRoot ||
         JSON.stringify(value.tc2937SharePlacementRoot) !== JSON.stringify(approvedTc2937SharePlacementRoot))) {
     throw new Error("Only Naomi's exact TC-2937 root admission is approved.");
+  }
+  if (value.tc2927ShareApprovalRoot !== undefined &&
+      (!value.tc2937SharePlacementRoot ||
+        JSON.stringify(value.tc2927ShareApprovalRoot) !== JSON.stringify(approvedTc2927ShareApprovalRoot))) {
+    throw new Error("Only Naomi's exact TC-2927 root admission is approved.");
   }
 }
 
@@ -4887,5 +4916,13 @@ export function validateTc2937SharePlacementRootTransition(base?: LogoutRatchet,
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2937SharePlacementRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2937 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2927 new-share approval root admission is introduced once and immutable. */
+export function validateTc2927ShareApprovalRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2927ShareApprovalRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2927 root admission may be introduced once and cannot change later.");
   }
 }

@@ -29,7 +29,7 @@ test("TC-2987 records the exact canonical CI root bytes within its 250-byte caps
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(250);
-    expect(rootCeilingFor({ ...ledger, tc2937SharePlacementRoot: undefined }, format)).toEqual({ row: "tc2987RegistryAbsentReadsRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2937SharePlacementRoot: undefined, tc2927ShareApprovalRoot: undefined }, format)).toEqual({ row: "tc2987RegistryAbsentReadsRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({

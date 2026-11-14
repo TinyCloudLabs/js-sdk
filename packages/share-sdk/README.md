@@ -12,6 +12,22 @@ openerOrigin and completionOrigin must be https origins (openerOrigin defaults t
 
 ## Publishing an addressed share (path-bound content)
 
+`plan.registrationPermissions` requests only the current share's exact key. The separate `pathBoundSessionPermissions` helper returns a prefix grant for first-party static sessions; third-party apps use the exact share approval flow instead.
+
+With a TinyCloud Web client configured for OpenKey's new-share approval, start approval in the original Share click, before awaiting content or node lookups:
+
+```ts
+const approval = tcw.approveNewShare({
+  expiresAt, // Date, no later than the signed session's expiry
+  permissions: [{ service: "tinycloud.kv", space: "applications", path,
+    actions: ["tinycloud.kv/get", "tinycloud.kv/metadata"] }],
+});
+const { shareId, encryptionNetwork } = await approval;
+const plan = planPathBoundShare({ shareId, encryptionNetwork });
+```
+
+This installs the exact runtime registration grant. Signed-result activation uses the WASM session-grant verifier, or the cryptographic persisted-session verifier on compatible older bindings; if neither is available, approval is refused. Continue with encryption and publication below; do not ask for `plan.registrationPermissions` again. The ordinary storage `path` can be chosen separately from the returned share id. The new OpenKey client/server support is required; older clients do not provide this method. Consumers of the exact plan must adopt this approval flow or keep their previous working SDK graph. Do not use the static prefix helper for third-party apps.
+
 Every addressed share (a DID, an email address or an email domain) is encrypted under its own named key, `share/<shareId>` on the owner's default encryption network, and its content source registers that key and the digest of its wrapped key. The node registers and opens only that one key, never the whole network. The share-sdk owns the path, the digests and the stored bytes, so a consumer writes none of them:
 
 ```ts
@@ -23,9 +39,8 @@ import {
 // 1. Plan, before anything is written. The network must be the owner's default network with the EIP-55 checksummed address.
 const plan = planPathBoundShare({ shareId, encryptionNetwork: defaultEncryptionNetworkForOwner(ownerDid) });
 
-// 2. Hold decrypt under `<network>/share/` (`plan.registrationPermissions`, or `pathBoundSessionPermissions({ encryptionNetwork })` in the
-//    sign-in manifest, before any share exists): the node refuses to register the share unless the owner
-//    holds it; a bare-network decrypt never covers a share key. No capability is needed to encrypt: the share's key is deterministic and
+// 2. Hold decrypt on the exact `<network>/share/<shareId>` key (`plan.registrationPermissions`):
+//    the node refuses to register the share unless the owner holds it; a bare-network decrypt never covers a share key. No capability is needed to encrypt: the share's key is deterministic and
 //    `keys.encrypt` wraps to its public key, which the node serves without authentication. The node records the key when the share policy
 //    is registered (step 5), in the same transaction. Each published share adds one key record, which counts toward the network's key limit
 //    (shared with `apps/` keys); `planPathBoundShare` refuses a bad share id or network before anything is encrypted.

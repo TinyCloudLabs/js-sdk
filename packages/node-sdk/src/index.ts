@@ -216,6 +216,8 @@ export {
   type DelegateToOptions,
   type DelegateToResult,
   type RuntimePermissionGrantOptions,
+  type NewShareApprovalClient,
+  type ApproveNewShareOptions,
   type EnsureEncryptionNetworkOptions,
   type CreateOwnerDelegationParams,
   type OwnerDelegationReceipt,

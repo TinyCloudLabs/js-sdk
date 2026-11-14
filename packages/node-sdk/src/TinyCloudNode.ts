@@ -1,3 +1,4 @@
+import { verifyNewShareApproval, type NewShareApprovalIdentity, type NewShareApprovalResult } from "@tinycloud/sdk-core";
 import type { SharePlacement, SharePlacementParent } from "@tinycloud/sdk-core/share-placement";
 import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
@@ -1109,6 +1110,22 @@ export interface DelegateToResult {
 /**
  * Options for runtime permission escalation.
  */
+export interface NewShareApprovalClient {
+  beginShareApproval(intent: {
+    approvalNonce: string;
+    session: { siwe: string; signature: string; publicJwk: Record<string, unknown> };
+    expiresAt: string;
+    permissions: Array<{ service: "tinycloud.kv"; space: string; path: string; actions: Array<"tinycloud.kv/get" | "tinycloud.kv/metadata"> }>;
+  }, options: { verify: (input: { result: NewShareApprovalResult; identity: Omit<NewShareApprovalIdentity, "preparedSiwe"> & { prepared: { siwe: string } }; origin: string }) => Promise<boolean> }): {
+    cancel: () => void;
+    authorize: () => Promise<NewShareApprovalResult>;
+  };
+}
+export interface ApproveNewShareOptions {
+  expiresAt: Date;
+  permissions?: Array<{ service: "tinycloud.kv"; space: string; path: string; actions: Array<"tinycloud.kv/get" | "tinycloud.kv/metadata"> }>;
+}
+
 export interface RuntimePermissionGrantOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
@@ -1476,6 +1493,7 @@ export class TinyCloudNode {
   private _delegationManager?: DelegationManager;
   private _spaceService?: SpaceService;
   private runtimePermissionGrants: RuntimePermissionGrant[] = [];
+  private mintedShareGrants = new Map<string, { sessionCid: string; expiresAt: number }>();
   /**
    * Memoized `recapOperationsFromSession` result, keyed by the exact SIWE it
    * was parsed from. The primary session is stable for the life of a sign-in,
@@ -3187,6 +3205,7 @@ export class TinyCloudNode {
     this._delegationManager = undefined;
     this._spaceService = undefined;
     this.runtimePermissionGrants = [];
+    this.mintedShareGrants.clear();
     this._recapOperationsCache = undefined;
     this._restoredSpaceHosting = "unknown";
     this.confirmedHostedSpaceIds.clear();
@@ -3390,6 +3409,7 @@ export class TinyCloudNode {
     this._spaceService = undefined;
     this._serviceContext = undefined;
     this.runtimePermissionGrants = [];
+    this.mintedShareGrants.clear();
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
 
@@ -7550,6 +7570,72 @@ export class TinyCloudNode {
     };
   }
 
+  /** New-share approval is reserved synchronously; no provider is needed for a verified restored session. */
+  async approveNewShare(client: NewShareApprovalClient, options: ApproveNewShareOptions, origin: string) {
+    const graph = this._serviceGraph;
+    const session = this.currentTinyCloudSession();
+    if (!session || !session.siwe || !session.signature || !session.delegationCid || !session.verificationMethod) {
+      throw new Error("Creating a share requires a signed TinyCloud session.");
+    }
+    const permissions = structuredClone(options.permissions ?? []);
+    const expiry = options.expiresAt.getTime();
+    const sessionExpiry = extractSiweExpiration(session.siwe)?.getTime();
+    if (!Number.isFinite(expiry) || sessionExpiry === undefined || expiry <= Date.now() || expiry > sessionExpiry) {
+      throw new Error("Share expiry must be within the signed session.");
+    }
+    const baseCid = session.delegationCid;
+    const baseExpiry = sessionExpiry;
+    const epoch = this.sessionEpoch;
+    const assertCurrent = () => {
+      graph.assertActive();
+      const current = this.currentTinyCloudSession();
+      if (current !== session || this.sessionEpoch !== epoch || current.delegationCid !== baseCid ||
+        extractSiweExpiration(current.siwe)?.getTime() !== baseExpiry) throw new Error("Share session changed");
+    };
+    const approvalNonce = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
+    const fileGrants = permissions.map(entry => ({
+      resource: `${this.resolvePermissionSpace(entry.space, session)}/kv/${entry.path}`, actions: [...entry.actions],
+    }));
+    const expected = { approvalNonce, ownerAddress: session.address, chainId: session.chainId, sessionDid: this.sessionDid,
+      origin, sessionExpiresAt: sessionExpiry, requestedExpiresAt: expiry, fileGrants };
+    let verified: Awaited<ReturnType<typeof verifyNewShareApproval>> | undefined;
+    let consumed = false;
+    const publicJwk = { kty: session.jwk.kty, crv: session.jwk.crv, x: session.jwk.x };
+    // No await precedes beginShareApproval: this call preserves the browser's click gesture.
+    const handle = client.beginShareApproval({ approvalNonce, session: { siwe: session.siwe, signature: session.signature, publicJwk },
+      permissions, expiresAt: new Date(expiry).toISOString() }, { verify: async ({ result, identity, origin: observed }) => {
+        if (consumed) throw new Error("Share approval already consumed");
+        consumed = true;
+        assertCurrent();
+        if (observed !== origin) throw new Error("Share origin changed");
+        verified = await verifyNewShareApproval(result, { ...expected,
+          identity: { ...identity, preparedSiwe: identity.prepared.siwe } });
+        assertCurrent();
+        return true;
+      } });
+    try {
+      const result = await handle.authorize();
+      assertCurrent();
+      if (!verified || verified.expiresAt <= Date.now() || this.currentTinyCloudSession() !== session || result.prepared.siwe !== verified.signedMessage ||
+        result.signature !== verified.signature) throw new Error("Share approval changed");
+      const delegatedSession = this.wasmBindings.completeSessionSetup({ ...result.prepared,
+        siwe: verified.signedMessage, signature: verified.signature, jwk: session.jwk });
+      this.verifySessionGrant({ ...delegatedSession, address: session.address, chainId: session.chainId,
+        spaceId: session.spaceId, siwe: verified.signedMessage, signature: verified.signature });
+      const registrationPermissions: PermissionEntry[] = [{ service: "tinycloud.encryption", space: "encryption",
+        path: verified.resource, actions: ["tinycloud.encryption/decrypt"], skipPrefix: true }];
+      const entries = expandDelegationPermissionEntries([...permissions, ...registrationPermissions]);
+      const delegation = this.runtimeDelegationFromSession(delegatedSession, entries, session.spaceId, session,
+        new Date(verified.expiresAt), { siwe: verified.signedMessage, signature: verified.signature });
+      await this.useRuntimeDelegation(delegation);
+      assertCurrent();
+      if (this.currentTinyCloudSession() !== session || verified.expiresAt <= Date.now()) throw new Error("Share session changed or expired");
+      this.mintedShareGrants.set(verified.resource, { sessionCid: baseCid, expiresAt: verified.expiresAt });
+      return { shareId: verified.shareId, encryptionNetwork: verified.resource.slice(0, -(`/share/${verified.shareId}`.length)),
+        registrationPermissions, delegation };
+    } catch (error) { handle.cancel(); throw error; }
+  }
+
   /**
    * Check whether the current session or an approved runtime delegation covers
    * every requested permission.
@@ -7560,7 +7646,7 @@ export class TinyCloudNode {
       return false;
     }
 
-    const expanded = expandPermissionEntriesCore(permissions);
+    const expanded = this.expandPermissionEntries(permissions);
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return true;
     }
@@ -7590,7 +7676,7 @@ export class TinyCloudNode {
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return [];
     }
-    const expanded = expandPermissionEntriesCore(permissions);
+    const expanded = this.expandPermissionEntries(permissions);
     return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
       (grant) => grant.delegation,
     );
@@ -7892,7 +7978,7 @@ export class TinyCloudNode {
       }
     }
 
-    const expanded = expandPermissionEntriesCore(permissions);
+    const expanded = this.expandPermissionEntries(permissions);
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
@@ -9054,7 +9140,13 @@ export class TinyCloudNode {
   private expandPermissionEntries(
     permissions: PermissionEntry[],
   ): PermissionEntry[] {
-    return expandPermissionEntriesCore(permissions);
+    const session = this.currentTinyCloudSession();
+    return permissions.flatMap(entry => {
+      const minted = this.mintedShareGrants.get(entry.path);
+      if (session && minted && minted.sessionCid === session.delegationCid && minted.expiresAt > Date.now() &&
+        entry.service === "tinycloud.encryption") return expandDelegationPermissionEntries([entry]);
+      return expandPermissionEntriesCore([entry]);
+    });
   }
 
   /**

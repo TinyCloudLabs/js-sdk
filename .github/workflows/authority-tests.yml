@@ -107,7 +107,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: TinyCloudLabs/openkey
-          ref: a4c69aad09cfdc599359dd04f9595632dccc8d85
+          ref: ccbb83eb632373f1714021a045abeb374b58e5d3
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
@@ -144,6 +144,10 @@ jobs:
         working-directory: openkey
         run: bun install --frozen-lockfile
 
+      - name: Generate the OpenKey harness database client
+        working-directory: openkey
+        run: bun run --cwd packages/db db:generate
+
       - name: Build js-sdk authority packages
         working-directory: js-sdk
         run: |
@@ -164,6 +168,10 @@ jobs:
             ~/.cargo/git
             js-sdk/target
           key: cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('js-sdk/Cargo.lock') }}
+
+      - name: Build OpenKey capability-review input
+        working-directory: openkey
+        run: bun run --cwd packages/capability-review build
 
       - name: Run cross-repo Hono contract test
         working-directory: js-sdk
@@ -198,7 +206,7 @@ jobs:
         with:
           repository: TinyCloudLabs/openkey
           # Same immutable revision as the cross-repo-contract job above.
-          ref: a4c69aad09cfdc599359dd04f9595632dccc8d85
+          ref: ccbb83eb632373f1714021a045abeb374b58e5d3
           path: openkey
 
       - uses: oven-sh/setup-bun@v2
@@ -234,6 +242,10 @@ jobs:
       - name: Install OpenKey dependencies
         working-directory: openkey
         run: bun install --frozen-lockfile
+
+      - name: Generate the OpenKey harness database client
+        working-directory: openkey
+        run: bun run --cwd packages/db db:generate
       - name: Read Playwright version
         id: playwright-version
         working-directory: js-sdk

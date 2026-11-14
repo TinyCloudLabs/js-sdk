@@ -3237,5 +3237,23 @@
       "ceiling": { "index.mjs": 1525878, "index.cjs": 1460319 }
     },
     "reason": "Native sharing envelopes may carry an opt-in wallet-owner-signed placement that receivers verify before routing to its destination; the root carries the envelope fields, placement routing and the frozen bridge, while placement verification loads from the separate share-placement entry. Canonical Node 22/Bun 1.3.14 CI measured 1525878/1460319 gzip -9 bytes on 5a99f8b8, based on d4949e8c. This is +703/+690 over the TC-2987 ceilings 1525175/1459629, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2937"
+  },
+  "tc2927ShareApprovalRoot": {
+    "label": "new-share approval root admission (TC-2927)",
+    "ruling": "Naomi's TC-2927 size ruling: exact canonical CI bytes of the final re-measure, capped at +2800 B ESM and +1900 B CJS over the newest root row when it merges. Immutable named row; no general, optional or worker allowance change. Details: TC-2927",
+    "base": "37d930ec31806b28ff83f0801bd35308d73a9e6d",
+    "sourceCommits": ["91fc7f21b1ce672022616150ea88e8fba2f0f055"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43544682854",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43544682854/job/132293112748",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43544682854/job/132293112388"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 2757, "index.cjs": 1772 },
+      "ceiling": { "index.mjs": 1528635, "index.cjs": 1462091 }
+    },
+    "reason": "The exact Share registration permission, the signed new-share approval verifier and the Web approveNewShare consumer ship in the root bundle. Canonical Node 22/Bun 1.3.14/source-WASM CI measured 1528635/1462091 gzip -9 bytes on 91fc7f21, based on master 37d930ec; both Replica jobs agree. This is +2757/+1772 over the TC-2937 ceilings 1525878/1460319, within Naomi's +2800 B ESM / +1900 B CJS caps. The root module set is unchanged by this branch (webpack stats, ESM and CJS); the ESM excess over CJS is gzip alignment against the inlined wasm payload: the same sources measure +1804 ESM / +1781 CJS when the wasm is built with a different rustc patch version. Other ceilings are unchanged. Details: TC-2927"
   }
 }

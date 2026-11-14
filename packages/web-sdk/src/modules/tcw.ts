@@ -19,6 +19,8 @@ import {
   TinyCloudNodeConfig,
   wireOpenKeyAuthorize,
   type OpenKeyAuthorizeTinyCloud,
+  type NewShareApprovalClient,
+  type ApproveNewShareOptions,
   type PreparedOpenKeyAuthorization,
   type BootstrapWarning,
   type DelegateToOptions,
@@ -168,7 +170,7 @@ export interface Config extends ClientConfig {
    * >= 0.13.0 (beta: 0.13.0-beta.0) forwards it; it is inert on 0.12.x, so the expiry stays as requested.
    */
   openkey?: {
-    client: OpenKeyAuthorizeTinyCloud;
+    client: OpenKeyAuthorizeTinyCloud & Partial<NewShareApprovalClient>;
     mode?: "iframe" | "popup" | "redirect";
     expiryChangeable?: boolean;
     /**
@@ -1806,6 +1808,16 @@ export class TinyCloudWeb {
     if (this._node) {
       this._node.setCapabilityRequest(request);
     }
+  }
+
+  /** Open the new-share approval directly from the Share click. */
+  approveNewShare(options: ApproveNewShareOptions) {
+    const node = this._node;
+    const client = this.config.openkey?.client;
+    if (!node || !node.restorableSession) throw new Error("Sign in before creating a share.");
+    if (typeof client?.beginShareApproval !== "function") throw new Error("This OpenKey client does not support new-share approval.");
+    if (this.signOutInFlight > 0 || this.persistedRestoreBlocked) throw new Error("Share session has ended.");
+    return node.approveNewShare(client as NewShareApprovalClient, options, window.location.origin);
   }
 
   /**

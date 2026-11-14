@@ -198,6 +198,7 @@ beforeAll(async () => {
         HARNESS_PORT: "0",
         HARNESS_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
         OPENKEY_RUN_HARNESS: "1",
+        WEBAUTHN_ORIGIN: `http://localhost:${VITE_PORT}`,
       },
     },
   );
@@ -446,6 +447,9 @@ test(
     });
 
     const page: Page = await browser.newPage();
+    await page.addInitScript(({ widgetOrigin }) => {
+      if (location.origin === widgetOrigin) sessionStorage.setItem('openkey_session_token', 'token_vertical_harness');
+    }, { widgetOrigin: `http://localhost:${VITE_PORT}` });
     // Surface page errors so a failure inside the page is not silent.
     page.on("pageerror", (err) => {
       // eslint-disable-next-line no-console
@@ -555,11 +559,8 @@ test(
           address: init.address,
           keyType: "MANAGED",
         };
-        // Bearer token propagated to the widget in embed context so
-        // `isEmbedContext() && !!getSessionToken()` flips embedAuthenticated
-        // to true. The harness's session mock accepts any token — the value
-        // is opaque here.
-        (openkey as any).sessionToken = "token_vertical_harness";
+        // The widget's synthetic session is seeded only in its own origin above;
+        // the embedding app does not supply OpenKey session credentials.
         (window as any).openkey = openkey;
       },
       {
@@ -634,39 +635,9 @@ test(
         // Wait for the Approve button to render.
         await widgetFrame.waitForSelector("button.approve", { timeout: 30_000 });
 
-        // First click: requestPreview() → server narrows/echoes bytes,
-        // previewReady becomes true, button label flips to "Approve exact
-        // bytes".
-        await widgetFrame.click("button.approve");
-
-        // Poll for the label change. Playwright's built-in `hasText` selector
-        // is timing-sensitive here because the button's text is a derived
-        // Svelte $state; `waitForFunction` on the button's textContent is the
-        // reliable observation.
-        try {
-          await widgetFrame.waitForFunction(
-            () => {
-              const btn = document.querySelector("button.approve");
-              return btn?.textContent?.trim().includes("Approve exact bytes") ?? false;
-            },
-            { timeout: 30_000 },
-          );
-        } catch (e) {
-          const diag = await widgetFrame.evaluate(() => ({
-            buttonText: document.querySelector("button.approve")?.textContent ?? null,
-            buttonDisabled:
-              (document.querySelector("button.approve") as HTMLButtonElement | null)
-                ?.disabled ?? null,
-            errorText: document.querySelector(".error")?.textContent ?? null,
-            calloutText:
-              document.querySelector("p.sensitive-callout")?.textContent ?? null,
-            bodyLen: document.body?.innerText?.length ?? 0,
-            bodyPreview: document.body?.innerText?.slice(0, 500) ?? null,
-          }));
-          // eslint-disable-next-line no-console
-          console.error("[widget diagnostics on timeout]", diag);
-          throw e;
-        }
+        // The widget prepares the exact preview in the background; inspect it before the one approval.
+        await observed.previewBodyReady;
+        await widgetFrame.waitForSelector('button.approve:not([disabled])', { timeout: 30_000 });
 
         // Open the Advanced details disclosure so `pre.raw-bytes` and the
         // manifest identity/trust rows are rendered/visible.
@@ -719,9 +690,9 @@ test(
           (el) => el.textContent?.trim() ?? null,
         ).catch(() => null);
         // Enumerate every rendered `.grant` inside the exact-grants section.
-        // Each grant carries the service · space/path text in
-        // `code.grant-path`, a `data-severity` attribute on
-        // `.grant-severity`, and a `.verb` per action. Capture the two
+        // Exact service/resource titles remain available even when the displayed text is compact.
+        // Sensitive grants have an explicit badge; other grants inherit their displayed bucket.
+        // Every action retains a `.verb` row. Capture the two
         // structural grants we care about: the ordinary app-storage KV
         // grant on the applications space (classifier: `attention`
         // because defaults carry mutation verbs), and the exact
@@ -737,8 +708,8 @@ test(
             const sevEl = g.querySelector(".grant-severity");
             const verbEls = Array.from(g.querySelectorAll(".verb"));
             return {
-              path: pathEl?.textContent?.trim() ?? null,
-              severity: sevEl?.getAttribute("data-severity") ?? null,
+              path: pathEl ? `${pathEl.querySelector('.grant-service')?.getAttribute('title')} · ${pathEl.querySelector('.grant-target')?.getAttribute('title')}` : null,
+              severity: sevEl?.getAttribute('data-severity') ?? g.closest('.severity-bucket')?.getAttribute('data-severity') ?? null,
               actions: verbEls.map(
                 (v) => v.textContent?.trim() ?? "",
               ),
@@ -766,7 +737,7 @@ test(
           (g) =>
             typeof g.path === "string" &&
             g.path.startsWith("tinycloud.kv ") &&
-            g.path.includes(`applications/${APP_ID}/`),
+            g.path.includes(`applications/kv/${APP_ID}/`),
         );
         if (ordinary) {
           ordinaryStorageGrant = { path: ordinary.path, severity: ordinary.severity };
@@ -789,7 +760,7 @@ test(
         }
         secretGrantVisible = scopedSecretGrant !== null;
 
-        // Second click: final approve. Widget POSTs /authorize-sign and posts
+        // One final approval click. Widget POSTs /authorize-sign and posts
         // the result back to the SDK via the shared transport.
         await widgetFrame.click("button.approve");
 
@@ -902,34 +873,19 @@ test(
     // overstate what the widget can prove and would allow a dishonest
     // provenance to pass the vertical gate.
     expect(trustBadgeText).toBe("No signed manifest");
-    // Sensitive callout MUST render — the manifest secret produces a
-    // secrets-space grant that satisfies `grantReachesSecretDataOrDecryption`.
-    // Copy must match the contract exactly: `N exact grants reach secret
-    // data or decryption. You can review them below.` with a concrete
-    // positive integer count. A wildcard count would let a broken model
-    // that reports "0 exact grants ..." pass silently.
+    // The existing Sensitive banner must show its exact current copy and a positive count.
     expect(sensitiveCalloutRendered).not.toBeNull();
-    const calloutMatch = /^(\d+) exact grants reach secret data or decryption\. You can review them below\.$/.exec(
+    const calloutMatch = /^(\d+) permission(?: is|s are) marked Sensitive$/.exec(
       sensitiveCalloutRendered!,
     );
     expect(calloutMatch).not.toBeNull();
     expect(Number(calloutMatch![1])).toBeGreaterThan(0);
-    // Ordinary application-storage grant MUST render. The
-    // `defaults: true` manifest field expands into `tinycloud.kv/*`
-    // grants on the applications space under the manifest's `app_id`
-    // path prefix. The classifier lifts severity to `attention` because
-    // the default expansion includes mutation verbs (`put`, `del`) —
-    // that is the correct structural severity for a mutable app-storage
-    // grant (see capability-review/src/classify.ts
-    // `classifySeverityFromActions`). Assert BOTH the exact severity
-    // and the exact path shape so a broken manifest expansion (e.g. a
-    // grant that never landed on the applications space, or a fake
-    // origin-bind that lowered severity to `standard`) is caught.
+    // Own application data uses the Standard bucket; exact resource titles include the service segment.
     expect(ordinaryStorageGrant).not.toBeNull();
-    expect(ordinaryStorageGrant!.severity).toBe("attention");
+    expect(ordinaryStorageGrant!.severity).toBe("standard");
     expect(ordinaryStorageGrant!.path?.startsWith("tinycloud.kv ")).toBe(true);
     expect(
-      ordinaryStorageGrant!.path?.includes(`applications/${APP_ID}/`),
+      ordinaryStorageGrant!.path?.includes(`applications/kv/${APP_ID}/`),
     ).toBe(true);
     // Exact app-scoped secret grant: EXACT service, path, action, and
     // severity. Substring / any-match assertions would let a subtly-
@@ -942,19 +898,8 @@ test(
     // the exact vault path.
     expect(scopedSecretGrant!.path?.startsWith("tinycloud.kv ")).toBe(true);
     expect(scopedSecretGrant!.path?.endsWith(`/${EXACT_SECRET_PATH}`)).toBe(true);
-    // The secret grant MUST render at `attention` severity. Rationale:
-    //   * The classifier's baseline for `secret-read` is `attention`
-    //     (fail-closed elevation from `standard` — the vault contains
-    //     the operator's own secret bytes).
-    //   * The one place severity can move down to `standard` is
-    //     `annotateAppScopedGrants`, which requires the server to have
-    //     ORIGIN-BOUND the manifest (see app-scope.ts:645-659). This
-    //     fixture publishes no signed manifest and runs over localhost,
-    //     so origin-bind cannot succeed and the grant must remain at
-    //     `attention`. A rendered `standard` here would mean the widget
-    //     accepted a caller-supplied fake origin-bind for a scoped
-    //     secret — the exact security regression this test guards.
-    expect(scopedSecretGrant!.severity).toBe("attention");
+    // The exact secret must retain its Sensitive badge; caller-supplied metadata cannot lower it.
+    expect(scopedSecretGrant!.severity).toBe("sensitive");
     // Cross-check: the grant is also counted by the sensitive callout
     // (via `grantReachesSecretDataOrDecryption` — see
     // capability-review/src/statements.ts:270-297) because it lands on
