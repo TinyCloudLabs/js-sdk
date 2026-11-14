@@ -26,7 +26,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "test": "tsc -p tsconfig.json && node --import ./test/setup-home.mjs --test --test-timeout=120000 test/*.test.mjs",
+    "test": "tsc -p tsconfig.json && node --import ./test/setup-home.mjs --test --test-timeout=120000 test/*.test.mjs && bun test ./test/*.test.ts",
     "test:live": "tsc -p tsconfig.json && node scripts/happy-path.mjs"
   },
   "dependencies": {

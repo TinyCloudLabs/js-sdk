@@ -1,4 +1,5 @@
 import { assertEpisodeGrant } from './interim-owner.js';
+import { verifyOwnerRenewal } from './owner-renewal.js';
 import { randomUUID } from 'node:crypto';
 import {
   ackApprovalResult, checkApprovalResultBinding, collectApprovalResult, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, discoverApprovalResult, generateRelayKey,
@@ -271,7 +272,7 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     const opened = await openRelayResult(resultEnvelopeOf(pending), pending.requestId, pending.relayPrivateKey);
     const claimedCid = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
     delegationCid = typeof claimedCid === 'string' && claimedCid !== '' ? claimedCid : undefined;
-    const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request });
+    const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request, allowExpiredRenewal: true });
     const payload = parseGrantPayload(checked.delegation, key);
     assertBoundToKey(checked.delegation, key);
     if (`did:pkh:eip155:${payload.chainId}:${payload.address}`.toLowerCase() !== checked.ownerDid.toLowerCase()) {
@@ -288,6 +289,10 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     // A renewal stays with the owner that holds the grant: with no code to paste back, whoever approves the link first would win.
     if (profile.ownerDid && checked.ownerDid.toLowerCase() !== profile.ownerDid.toLowerCase()) {
       throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` it replaces the agent key, clears every pairing (peers must be re-paired by hand) and deletes grant.json.`);
+    }
+    if (checked.renewal) {
+      await verifyOwnerRenewal(payload, checked.ownerDid, checked.renewal);
+      payload.renewal = checked.renewal;
     }
     return payload;
   } catch (error) {

@@ -1,3 +1,4 @@
+import { assertOwnerRenewalIdentity, verifyOwnerRenewal } from './owner-renewal.js';
 import { TinyCloudNode, DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import { createRegistryVerdictCache } from '@tinycloud/sdk-core/registry-verdict-cache';
 import { createInMemoryRegistryCacheStore, createInMemoryRegistrySequenceStore, type RegistryCacheStore, type RegistrySequenceStore } from '@tinycloud/sdk-core';
@@ -65,14 +66,14 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
     throw new CourierError('profile-outdated', `Courier grant space is not ${COURIER_SPACE}; run \`${cmd('init --rotate-key')}\`, then re-pair peers.`);
   }
   const expiry = Date.parse(grant.expiresAt);
-  if (!Number.isFinite(expiry) || Date.now() >= expiry) {
+  if (!Number.isFinite(expiry) || (!grant.renewal && Date.now() >= expiry)) {
     throw new CourierError('grant-expired', `The Courier grant expired; run \`${cmd('init')}\` to renew (the OpenKey owner must approve).`);
   }
-  if (expiry - Date.now() < 3 * 24 * 3600 * 1000) {
+  if (!grant.renewal && expiry - Date.now() < 3 * 24 * 3600 * 1000) {
     console.error(`warning: Courier grant expires ${new Date(expiry).toISOString()}; renew with [1m${cmd('init')}[0m and owner approval.`);
   }
   const node = new TinyCloudNode(nodeOpts(profile.host));
-  await node.restoreSession({
+  const sessionData = {
     delegationHeader: grant.delegationHeader,
     delegationCid: grant.delegationCid,
     spaceId: grant.spaceId,
@@ -84,11 +85,21 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
     signature: grant.signature,
     expiresAt: grant.expiresAt,
     tinycloudHosts: [profile.host],
-  });
+  };
+  if (grant.renewal) {
+    await verifyOwnerRenewal(grant, grant.ownerDid, grant.renewal);
+    if (Date.now() < expiry) await node.restoreSession(sessionData);
+    else await node.restoreSessionWithRenewal(sessionData, grant.renewal.receipt.leaseAuthorization);
+    assertOwnerRenewalIdentity(grant.renewal, await node.renewalNodeIdentity());
+  } else {
+    await node.restoreSession(sessionData);
+  }
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }
-  assertAgentGrant(node.getVerifiedSessionCapabilities(), siweTimes(grant.siwe));
+  const times = siweTimes(grant.siwe);
+  // SDK renewal restore proved present liveness; retain the original signed scope and duration ceiling.
+  assertAgentGrant(node.getVerifiedSessionCapabilities(), times, grant.renewal && times.expiresAt ? Math.min(Date.now(), times.expiresAt.getTime() - 1) : Date.now());
   const restored = node.restorableSession;
   const owner = restored ? `did:pkh:eip155:${restored.chainId}:${restored.address}` : '';
   if (profile.ownerDid?.toLowerCase() !== owner.toLowerCase() || profile.spaceId?.toLowerCase() !== restored?.spaceId.toLowerCase()) {
