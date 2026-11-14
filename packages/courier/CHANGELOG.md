@@ -1,5 +1,47 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+
+## 0.6.0-beta.40
+
+### Patch Changes
+
+- d7e4062: `courier inbox` skips a message whose thread or message id, taken from the peer's key name, isn't a safe id (letters, digits, `-` and `_`, at most 64 characters), as the watcher already does. Such a message isn't fetched, listed or receipted; it is reported as `bad-message` with the id escaped, so no control or bidi character from a peer reaches the text or `--json` output. The ids in the `bad-message` and `message-too-large` errors are escaped too. Courier's `test` script now fails a test file that runs longer than 2 minutes instead of hanging.
+
+  Details: TC-2951
+
+## 0.6.0-beta.39
+
+### Patch Changes
+
+- ee93ac3: The agent's clean HOME is checked for links the agent planted there between wakes. Before Courier makes, removes or writes any path in it (`.claude`, `.config`, a `--home-file` directory such as `.codex`, `.gitconfig`, the agent identity files), each component is checked without following links: a link found is removed (the link only, never what it points at) and the wake logs `removed a symbolic link the agent left in its clean HOME: <path>`. A clean HOME that is itself a link is refused. Before, a planted link such as `.config -> ~/somewhere` could make the next wake delete or overwrite files outside the clean HOME.
+
+  The Claude login that a `--wake claude` wake copies automatically (`.claude/.credentials.json`) is now read the way `--home-file` sources are: a link on the file or above it fails the wake closed instead of being followed; a missing file is still skipped.
+
+  Details: TC-3014
+
+## 0.6.0-beta.38
+
+### Patch Changes
+
+- f956a87: `courier watch --home-file` now accepts only the known model-login file of a supported agent CLI, instead of refusing a short denylist: `.codex/auth.json` (codex), `.gemini/oauth_creds.json` (gemini), `.local/share/opencode/auth.json` (opencode), `.local/share/amp/secrets.json` (amp), `.config/goose/secrets.yaml` (goose) and `.aider/oauth-keys.env` (aider). `omp` and `cursor-agent` accept no file (omp keeps its login in a database with every account; Cursor does not publish where its credentials are): pass their login with `--env-pass` or run them under their own account. When `--exec` starts one of these CLIs only that CLI's file is accepted; for any other command any listed file is. Settings files, owner state (`.omp`, `.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`) and every other file are refused with a clear message, when the watcher starts and again on every wake. `--wake claude` takes no `--home-file`.
+
+  A `--home-file` source that is a symbolic link, or that sits behind one (a linked `.codex` directory, for example), is refused and its target is never copied; the check runs on every wake and the file is opened without following links.
+
+  The README now warns plainly that `--unguarded --agent-cli` puts outside message content into an agent that can act, and that it should only be used with an agent holding no credentials beyond its model login, in a sandbox.
+
+  Details: TC-3014
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+
 ## 0.6.0-beta.37
 
 ### Minor Changes

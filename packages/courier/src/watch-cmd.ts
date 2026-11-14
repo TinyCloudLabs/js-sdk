@@ -12,7 +12,7 @@ import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
 import { fileWatchCache } from './watch-cache.js';
 import { UNGUARDED_REFUSAL, agentCliRefusal, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
-import { startsAgentCli } from './guard/policy.js';
+import { agentCliStarted, startsAgentCli } from './guard/policy.js';
 import { homeFileRefusal } from './guard/cleanhome.js';
 import { guardArgv } from './guard/command.js';
 import { writeGuardSettings } from './guard/install.js';
@@ -100,7 +100,7 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   if (homeFiles.length && adapter !== 'exec' && adapter !== 'claude') throw new CourierError('usage', '--home-file only applies with --wake exec or --wake claude.');
   for (const rel of homeFiles) {
     if (rel === 'true' || rel === '') throw new CourierError('usage', '--home-file needs a value.');
-    const refused = homeFileRefusal(rel);
+    const refused = homeFileRefusal(rel, { adapter, agentCli: adapter === 'exec' && exec ? agentCliStarted(exec) : undefined });
     if (refused) throw new CourierError('usage', `${refused}.`);
   }
   return {

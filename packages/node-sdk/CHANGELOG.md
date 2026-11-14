@@ -1,5 +1,27 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/sdk-services@3.12.0-beta.34
+  - @tinycloud/replica@0.4.5-beta.10
+
+## 3.12.0-beta.33
+
+### Patch Changes
+
+- b00ad0b: Reuse confirmed absence for browser registry data reads for up to 60 seconds. Registered routes, writes, revocations, share delivery, node identity, sign-in and any other lookup not marked as a data read refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
+
+  Details: TC-2987
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/sdk-services@3.12.0-beta.33
+  - @tinycloud/replica@0.4.5-beta.9
+
 ## 3.12.0-beta.31
 
 ### Minor Changes
