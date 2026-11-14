@@ -31127,7 +31127,7 @@ function canonicalViewerUrl(viewerOrigin) {
 }
 async function createNativeShare(sharing, input) {
   if (!input.path || input.path.startsWith("/") || input.path.endsWith("/") || input.path.includes("..") || input.path.includes("//")) throw new TypeError("native share path must be one canonical TinyCloud KV key");
-  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt });
+  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt, ...input.includePlacement === void 0 ? {} : { includePlacement: input.includePlacement } });
   if (generated.ok !== true) {
     const error = new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
     if (typeof generated.error?.code === "string") Object.assign(error, { code: generated.error.code });

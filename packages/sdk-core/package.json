@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "3.12.0-beta.34",
+  "version": "3.12.0-beta.35",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -89,7 +89,7 @@
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
     "@tinycloud/share-envelope": "1.6.0-beta.1",
-    "@tinycloud/share-sdk": "1.5.0-beta.4",
+    "@tinycloud/share-sdk": "1.5.0-beta.5",
     "@tinycloud/bootstrap": "2.9.0-beta.1",
     "@tinycloud/sdk-services": "3.12.0-beta.34",
     "multiformats": "^13.4.1",

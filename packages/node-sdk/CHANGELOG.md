@@ -1,5 +1,19 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.35
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
 ## 3.12.0-beta.34
 
 ### Patch Changes
