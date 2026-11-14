@@ -33,6 +33,11 @@ const PRODUCTION_HOSTS = new Map([
   ["tee.node.tinycloud.xyz", "TinyCloud node (TEE)"],
   ["openkey.so", "OpenKey"],
   ["api.openkey.so", "OpenKey API"],
+  ["mcp.tinycloud.xyz", "hosted MCP server"],
+  ["share.tinycloud.xyz", "Share front end"],
+  ["courier.tinycloud.xyz", "Courier link viewer"],
+  ["bugs.tinycloud.xyz", "bug-report upload service"],
+  ["secrets.tinycloud.xyz", "secret manager front end"],
 ]);
 const ORIGIN_VARIABLES = ["TC_LINKS_API_ORIGIN", "COURIER_LINKS_API_ORIGIN"];
 

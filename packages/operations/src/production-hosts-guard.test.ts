@@ -8,6 +8,11 @@ const HOSTS = [
   { host: "tee.node.tinycloud.xyz", label: "TinyCloud node (TEE)" },
   { host: "openkey.so", label: "OpenKey" },
   { host: "api.openkey.so", label: "OpenKey API" },
+  { host: "mcp.tinycloud.xyz", label: "hosted MCP server" },
+  { host: "share.tinycloud.xyz", label: "Share front end" },
+  { host: "courier.tinycloud.xyz", label: "Courier link viewer" },
+  { host: "bugs.tinycloud.xyz", label: "bug-report upload service" },
+  { host: "secrets.tinycloud.xyz", label: "secret manager front end" },
 ] as const;
 
 function guarded(environment: Record<string, string | undefined> = {}) {
