@@ -16,13 +16,13 @@ const lazyIssued: Plugin = {
   },
 };
 
-// Publication is opt-in. Its shared helpers must use the root's validation-error
+// Publication and share placement are opt-in. Shared helpers use the root's validation-error
 // constructors, not another bundled copy. Source imports stay relative for tests and DTS.
 const publicationCoreRoot: Plugin = {
   name: "publication-core-root",
   setup(build) {
-    build.onResolve({ filter: /^\.\/registry-publication-helpers$/ }, (args) =>
-      args.kind === "import-statement" && /[\\/]registry-publication\.ts$/.test(args.importer)
+    build.onResolve({ filter: /^\.\/(registry-publication|share-placement)-helpers$/ }, (args) =>
+      args.kind === "import-statement" && /[\\/](registry-publication|share-placement)\.ts$/.test(args.importer)
         ? { path: "@tinycloud/sdk-core", external: true }
         : undefined,
     );
@@ -32,6 +32,7 @@ const publicationCoreRoot: Plugin = {
 export default defineConfig({
   entry: [
     "src/index.ts",
+    "src/share-placement.ts",
     "src/bootstrap/index.ts",
     "src/policy/index.ts",
     "src/requester/index.ts",

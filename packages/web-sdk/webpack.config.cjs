@@ -262,6 +262,10 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
     callback(null, `${type} ./registry-verdict-cache.${ext}`);
     return;
   }
+  if (request === "@tinycloud/sdk-core/share-placement" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./share-placement.${ext}`);
+    return;
+  }
   if (request === "./encryption-keys.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
     callback(null, `${type} ./encryption-keys.${ext}`);
     return;
@@ -354,6 +358,24 @@ const lazyCjsConfig = {
   output: { ...cjsConfig.output, filename: "[name].cjs" },
 };
 
+const sharePlacementConfig = (config, type, ext) => ({
+  ...config,
+  module: lazyModule,
+  entry: "./src/share-placement-entry.ts",
+  externals: ({ context, request }, callback) => {
+    if (request === "./index" && context === path.resolve(__dirname, "src")) {
+      callback(null, `${type} ./index.${ext}`);
+      return;
+    }
+    callback();
+  },
+  plugins: [...config.plugins, new webpack.NormalModuleReplacementPlugin(
+    /^@tinycloud\/sdk-core$/,
+    path.resolve(__dirname, "src/share-placement-core-bridge.ts")
+  )],
+  output: { ...config.output, filename: `share-placement.${ext}` },
+});
+
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
 // configs only: no replica externals or plugins, so index/replica are unchanged.
 // `@tinycloud/sdk-core` (every subpath) stays a package import here, not a second bundled copy: the held
@@ -390,4 +412,6 @@ module.exports = [
   lazyCjsConfig,
   credentialsEsmConfig,
   credentialsCjsConfig,
+  sharePlacementConfig(esmConfig, "module", "mjs"),
+  sharePlacementConfig(cjsConfig, "commonjs", "cjs"),
 ];

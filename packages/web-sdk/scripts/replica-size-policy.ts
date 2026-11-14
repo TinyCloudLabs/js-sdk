@@ -477,6 +477,7 @@ export type Ledger = {
   tc2970RegistryVerdictCacheRoot?: LogoutRatchet;
   tc2913OpenKeyContinuationRoot?: LogoutRatchet;
   tc2987RegistryAbsentReadsRoot?: LogoutRatchet;
+  tc2937SharePlacementRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1108,6 +1109,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2970RegistryVerdictCacheRoot !== undefined) pins.push({ row: "tc2970RegistryVerdictCacheRoot", pin: root.tc2970RegistryVerdictCacheRoot.sourceCommits.at(-1)! });
   if (root.tc2913OpenKeyContinuationRoot !== undefined) pins.push({ row: "tc2913OpenKeyContinuationRoot", pin: root.tc2913OpenKeyContinuationRoot.sourceCommits.at(-1)! });
   if (root.tc2987RegistryAbsentReadsRoot !== undefined) pins.push({ row: "tc2987RegistryAbsentReadsRoot", pin: root.tc2987RegistryAbsentReadsRoot.sourceCommits.at(-1)! });
+  if (root.tc2937SharePlacementRoot !== undefined) pins.push({ row: "tc2937SharePlacementRoot", pin: root.tc2937SharePlacementRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1209,6 +1211,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2970RegistryVerdictCacheRoot", root.tc2970RegistryVerdictCacheRoot?.root.ceiling],
     ["tc2913OpenKeyContinuationRoot", root.tc2913OpenKeyContinuationRoot?.root.ceiling],
     ["tc2987RegistryAbsentReadsRoot", root.tc2987RegistryAbsentReadsRoot?.root.ceiling],
+    ["tc2937SharePlacementRoot", root.tc2937SharePlacementRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3443,6 +3446,26 @@ export const approvedTc2987RegistryAbsentReadsRoot: LogoutRatchet = {
   "reason": "TinyCloudWeb selects the absent-reads registry verdict cache: a confirmed absence is reused for up to 60 s only by lookups marked as signed data reads, which the routing options, node-sdk forwarding and the sign-in resolver carry to the registry lookup; every unmarked lookup asks the registry. Canonical Node 22/Bun 1.3.14 CI measured 1525175/1459629 gzip -9 bytes on f6d8a996, based on d681e858. This is +115/+211 over the TC-2913 ceilings 1525060/1459418, within Naomi's +250-byte per-format cap for this row. Other ceilings are unchanged. Details: TC-2987"
 };
 
+/** Naomi's exact TC-2937 owner-signed share placement root allowance from canonical CI. */
+export const approvedTc2937SharePlacementRoot: LogoutRatchet = {
+  "label": "owner-signed share placement root admission (TC-2937)",
+  "ruling": "Naomi's TC-2937 size ruling: exact canonical CI bytes, capped at +800 B per format over the newest root row when it merges; re-stacked on TC-2987 after #966 merged. Details: TC-2937",
+  "base": "d4949e8c02990c0f1bb67da6b8879b0fe93cdadd",
+  "sourceCommits": ["5a99f8b8437e83593ba562f330a18ae32e5fd23a"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43531110930",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43531110930/job/132248767179",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43531110930/job/132248766860"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 703, "index.cjs": 690 },
+    "ceiling": { "index.mjs": 1525878, "index.cjs": 1460319 }
+  },
+  "reason": "Native sharing envelopes may carry an opt-in wallet-owner-signed placement that receivers verify before routing to its destination; the root carries the envelope fields, placement routing and the frozen bridge, while placement verification loads from the separate share-placement entry. Canonical Node 22/Bun 1.3.14 CI measured 1525878/1460319 gzip -9 bytes on 5a99f8b8, based on d4949e8c. This is +703/+690 over the TC-2987 ceilings 1525175/1459629, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2937"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3541,6 +3564,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2970RegistryVerdictCacheRoot: approvedTc2970RegistryVerdictCacheRoot,
   tc2913OpenKeyContinuationRoot: approvedTc2913OpenKeyContinuationRoot,
   tc2987RegistryAbsentReadsRoot: approvedTc2987RegistryAbsentReadsRoot,
+  tc2937SharePlacementRoot: approvedTc2937SharePlacementRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3989,6 +4013,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2913OpenKeyContinuationRoot ||
         JSON.stringify(value.tc2987RegistryAbsentReadsRoot) !== JSON.stringify(approvedTc2987RegistryAbsentReadsRoot))) {
     throw new Error("Only Naomi's exact TC-2987 root admission is approved.");
+  }
+  if (value.tc2937SharePlacementRoot !== undefined &&
+      (!value.tc2987RegistryAbsentReadsRoot ||
+        JSON.stringify(value.tc2937SharePlacementRoot) !== JSON.stringify(approvedTc2937SharePlacementRoot))) {
+    throw new Error("Only Naomi's exact TC-2937 root admission is approved.");
   }
 }
 
@@ -4850,5 +4879,13 @@ export function validateTc2987RegistryAbsentReadsRootTransition(base?: LogoutRat
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2987RegistryAbsentReadsRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2987 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2937 owner-signed share placement root admission is introduced once and immutable. */
+export function validateTc2937SharePlacementRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2937SharePlacementRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2937 root admission may be introduced once and cannot change later.");
   }
 }

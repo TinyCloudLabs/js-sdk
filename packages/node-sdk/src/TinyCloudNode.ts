@@ -1,3 +1,4 @@
+import type { SharePlacement, SharePlacementParent } from "@tinycloud/sdk-core/share-placement";
 import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
@@ -115,6 +116,7 @@ import {
   CapabilityKeyRegistry,
   ICapabilityKeyRegistry,
   SharingService,
+  type EncodedShareData,
   ISharingService,
   // v2 types
   SiweConfig,
@@ -932,6 +934,8 @@ export interface TinyCloudNodeConfig {
   registryPolicy?: RegistryPolicy;
   /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
   newUserHost?: string | null;
+  /** Explicit wallet-owner signing for share-only placement; never a session key. */
+  sharePlacementSigner?: (message: string) => Promise<string>;
   /** `fail-closed` only: chain ID of the v1 registry subject built from the signer address (never the session chain). Default 1. */
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
@@ -2141,6 +2145,9 @@ export class TinyCloudNode {
   private createReceiveOnlySharing(): SharingService {
     const receiveOnlyGraph = this._serviceGraph;
     return new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(receiveOnlyGraph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(receiveOnlyGraph, share),
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -2370,14 +2377,48 @@ export class TinyCloudNode {
     return this.createResourceTransport(this._serviceGraph, this._serviceContext?.session ?? undefined);
   }
 
-  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession): ResourceTransport {
+  private async createPlacementForShare(graph: ServiceGraphLifetime, share: EncodedShareData): Promise<SharePlacement> {
+    graph.assertActive();
+    const sign = this.config.sharePlacementSigner ?? (this.config.privateKey && this.signer
+      ? (message: string) => this.signer!.signMessage(message) : undefined);
+    if (!sign) throw new Error("Share placement requires an explicit wallet owner signer");
+    const node = await this.activeNodeIdentity();
+    graph.assertActive();
+    const { signSharePlacement } = await import("@tinycloud/sdk-core/share-placement");
+    const record = await signSharePlacement({ ...share.delegation, spaceId: share.spaceId }, { did: node.nodeDid, url: node.origin }, async message => {
+      graph.assertActive();
+      const signature = await sign(message);
+      graph.assertActive();
+      return signature;
+    });
+    graph.assertActive();
+    return record;
+  }
+
+  private async transportForPlacedShare(graph: ServiceGraphLifetime, share: EncodedShareData): Promise<ResourceTransport> {
+    if (this.config.tinycloudRegistryUrl === null) throw new Error("Share placement registry lookup is explicitly disabled");
+    const parent = { cid: share.delegation.cid, authHeader: share.delegation.authHeader, spaceId: share.spaceId };
+    const { verifySharePlacement } = await import("@tinycloud/sdk-core/share-placement");
+    const record = await verifySharePlacement(share.placement, parent);
+    graph.assertActive();
+    return this.createResourceTransport(graph, undefined, { record, parent });
+  }
+
+  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession,
+    placement?: { record: SharePlacement; parent: SharePlacementParent }): ResourceTransport {
     const rawFetch = this.fetchForGraph(graph);
     return async (resources, send, options) => {
       graph.assertActive();
       return routeResourceRequest(resources, {
         resolveResource: async (requestedResource, requestedAccess, dataRead) => {
           graph.assertActive();
-          const targets = await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
+          const targets = placement && requestedResource === placement.parent.spaceId && requestedAccess !== "encryption"
+            ? await (await import("@tinycloud/sdk-core/share-placement")).sharePlacementDestinations(placement.record, placement.parent, {
+              registryUrl: this.config.tinycloudRegistryUrl ?? undefined, sequenceStore: this.config.registrySequenceStore,
+              cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
+              fetch: rawFetch as typeof fetch,
+            })
+            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
           graph.assertActive();
           return targets;
         },
@@ -5400,6 +5441,9 @@ export class TinyCloudNode {
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
     const sharingService = new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(graph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
@@ -6602,6 +6646,9 @@ export class TinyCloudNode {
     // Recreate it for this graph instead of updating the receive-only instance
     // from the graph that was just retired during a subsequent sign-in.
     this._sharingService = new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(graph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: graph.invoke,
@@ -6751,6 +6798,7 @@ export class TinyCloudNode {
   async createOwnerDelegation(
     params: CreateOwnerDelegationParams,
     assertActive?: () => void,
+    onPrepared?: (delegation: Delegation) => Promise<void>,
   ): Promise<OwnerDelegationReceipt> {
     const graph = this._serviceGraph;
     const assertOwnerGraphActive = assertActive ?? graph.assertActive.bind(graph);
@@ -6794,14 +6842,6 @@ export class TinyCloudNode {
     const signature = await this.signer.signMessage(prepared.siwe);
     assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
-    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
-    assertOwnerGraphActive();
-    if (!activation.success) {
-      throw Object.assign(
-        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
-        { cause: activation },
-      );
-    }
     const delegation: Delegation = {
       cid: delegationSession.delegationCid,
       delegateDID: params.delegateDid,
@@ -6815,6 +6855,17 @@ export class TinyCloudNode {
       createdAt: now,
       authHeader: delegationSession.delegationHeader.Authorization,
     };
+    if (onPrepared) await onPrepared(delegation);
+    assertOwnerGraphActive();
+    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    assertOwnerGraphActive();
+    if (!activation.success) {
+      throw Object.assign(
+        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
+        { cause: activation },
+      );
+    }
+
     return {
       delegation,
       signedDagCbor: decodeAuthorizationBytes(delegationSession.delegationHeader.Authorization),
@@ -6988,6 +7039,7 @@ export class TinyCloudNode {
   }
 
   private async createRootDelegationForSharing(params: {
+    onPrepared?: (delegation: Delegation) => Promise<void>;
     shareKeyDID: string;
     spaceId: string;
     path: string;
@@ -7003,7 +7055,7 @@ export class TinyCloudNode {
         path: params.path,
         actions: params.actions,
         expiresAt: params.requestedExpiry,
-      }, assertActive)).delegation;
+      }, assertActive, params.onPrepared)).delegation;
     } catch {
       assertActive?.();
       return undefined;
