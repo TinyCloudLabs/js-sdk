@@ -21,14 +21,18 @@
 /** The environment marker the test bootstrap sets so a Bun child's bunfig preload knows it runs under test. */
 export const GUARD_MARKER = "TC_TEST_PRODUCTION_GUARD";
 
-/** The production origins a test must not reach unless it opts in, with what each one is (named in the refusal). */
-const PRODUCTION_ORIGINS = new Map([
-  ["https://api.tinycloud.xyz", "links API"],
-  ["https://registry.tinycloud.xyz", "location registry"],
-  ["https://node.tinycloud.xyz", "TinyCloud node"],
-  ["https://tee.node.tinycloud.xyz", "TinyCloud node (TEE)"],
-  ["https://openkey.so", "OpenKey"],
-  ["https://api.openkey.so", "OpenKey API"],
+/**
+ * The production hosts a test must not reach unless it opts in, with what each one is (named in the refusal). A request
+ * is refused by host name alone, whatever its scheme or port: plain `http://` and a non-default port reach production
+ * too (the live site redirects http to https, and the redirected request would not pass through this wrapper).
+ */
+const PRODUCTION_HOSTS = new Map([
+  ["api.tinycloud.xyz", "links API"],
+  ["registry.tinycloud.xyz", "location registry"],
+  ["node.tinycloud.xyz", "TinyCloud node"],
+  ["tee.node.tinycloud.xyz", "TinyCloud node (TEE)"],
+  ["openkey.so", "OpenKey"],
+  ["api.openkey.so", "OpenKey API"],
 ]);
 const ORIGIN_VARIABLES = ["TC_LINKS_API_ORIGIN", "COURIER_LINKS_API_ORIGIN"];
 
@@ -47,17 +51,19 @@ function classify(value) {
     return undefined;
   }
   const host = url.hostname.replace(/\.$/, "");
-  const label = PRODUCTION_ORIGINS.get(`${url.protocol}//${host}${url.port === "" ? "" : `:${url.port}`}`);
-  return label === undefined ? undefined : { host, label };
+  const label = PRODUCTION_HOSTS.get(host);
+  return label === undefined ? undefined : { host, label, url };
 }
 
-/** What production service `value` names ("links API", "location registry", ...), or undefined. */
+/** What production service `value` names by host ("links API", "location registry", ...), or undefined. */
 export function productionOriginLabel(value) {
   return classify(value)?.label;
 }
 
+/** The strict origin check for an origin variable: the links API over https on the default port. */
 export function isProductionLinksOrigin(value) {
-  return classify(value)?.label === "links API";
+  const found = classify(value);
+  return found?.label === "links API" && found.url.protocol === "https:" && found.url.port === "";
 }
 
 function optedIn(host, environment) {

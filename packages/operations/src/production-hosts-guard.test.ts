@@ -31,6 +31,10 @@ describe("every production host is refused however it is spelled", () => {
         `https://${host.toUpperCase()}/v1/anything`,
         `https://${host}./v1/anything`,
         `https://${host}:443/v1/anything`,
+        `https://${host}:8443/v1/anything`,
+        `http://${host}/v1/anything`,
+        `http://${host}:80/v1/anything`,
+        `http://${host}:8080/v1/anything`,
         `https://${host}`,
         new URL(`https://${host}/x`),
         new Request(`https://${host}/x`, { method: "POST", body: "{}" }),
@@ -54,13 +58,13 @@ describe("every production host is refused however it is spelled", () => {
 });
 
 describe("everything else passes through", () => {
-  test("lookalikes, plain http, other TinyCloud hosts and loopback fixtures are not production hosts for this guard", async () => {
+  test("lookalikes, other TinyCloud hosts and loopback fixtures are not production hosts for this guard", async () => {
     const { calls, fetch } = guarded();
     const urls = [
       "https://registry.tinycloud.xyz.evil.example/v1",
       "https://notregistry.tinycloud.xyz/v1",
       "https://api.openkey.so.evil.example/",
-      "http://openkey.so/",
+      "http://notopenkey.so/",
       "https://docs.tinycloud.xyz/",
       "https://127.0.0.1:4443/v1/locations/x",
       "http://localhost:9000/v2/locations/y",
