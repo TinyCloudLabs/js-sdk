@@ -23,10 +23,10 @@ for (const project of openkey.pagesProjects) test(`accepts only the owned ${proj
   expect(isFirstPartyOrigin(`https://branch-123.${project}.pages.dev`)).toBe(true);
   expect(isFirstPartyOrigin(`https://a.b.${project}.pages.dev`)).toBe(false);
 });
-for (const origin of [undefined, null, "", "http://localhost:3000", "http://127.0.0.1:3000", "https://notes.example", "https://tinycloud.chat.evil", "https://home.tinycloud.xyz:8443", "http://home.tinycloud.xyz", "https://home.tinycloud.xyz/", "https://unowned.pages.dev"]) test(`does not trust ${String(origin)}`, () => {
+for (const origin of [undefined, null, "", "http://localhost:3000", "http://127.0.0.1:3000", "https://notes.example", "https://tinycloud.chat.evil", "https://home.tinycloud.xyz:8443", "http://home.tinycloud.xyz", "https://home.tinycloud.xyz/", "https://unowned.pages.dev", "https://www.tinycloud.one", "https://app.tinycloud.one", "https://tinycloud.one:8443", "http://tinycloud.one", "https://tinycloud.one/", "https://tinycloud.one.evil.example", "https://evil-tinycloud.one"]) test(`does not trust ${String(origin)}`, () => {
   expect(isFirstPartyOrigin(origin)).toBe(false);
 });
 
-for (const origin of ["https://HOME.tinycloud.xyz", "HTTPS://home.tinycloud.xyz", "https://Branch.tinychat-4jq.pages.dev"]) test(`requires exact origin casing for ${origin}`, () => {
+for (const origin of ["https://HOME.tinycloud.xyz", "HTTPS://home.tinycloud.xyz", "https://TINYCLOUD.ONE", "https://Branch.tinychat-4jq.pages.dev"]) test(`requires exact origin casing for ${origin}`, () => {
   expect(isFirstPartyOrigin(origin)).toBe(false);
 });
