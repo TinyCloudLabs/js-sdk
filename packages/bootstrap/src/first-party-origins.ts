@@ -13,6 +13,9 @@ export const FIRST_PARTY_ORIGINS: ReadonlySet<string> = new Set([
   "http://tauri.localhost",
   "https://share.tinycloud.xyz",
   "https://secrets.tinycloud.xyz",
+  // Native webview origins of TinyChat's apps (Android, iOS). SDK-only: never on OpenKey's server list.
+  "https://app.tinycloud.one",
+  "tinycloudone://app.tinycloud.one",
 ]);
 
 export const FIRST_PARTY_PAGES_SUBDOMAINS: readonly string[] = [
