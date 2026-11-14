@@ -6,7 +6,7 @@ import openkey from "../test-fixtures/openkey-first-party-origins.json";
 const OPENKEY_ONLY_ORIGINS = ["https://lightning-node-1.gecko-snares.ts.net:8451"];
 // SDK entries OpenKey's pinned list does not have yet. tinycloud.one is added to OpenKey by
 // TinyCloudLabs/openkey#502; when the pin moves to a commit that includes it, the SDK-only test
-// below fails until the entry is removed here (the SDK list keeps it, in the same position).
+// below fails until the entry is removed here (TC-3042); the SDK list keeps it, in the same position.
 const SDK_ONLY_ORIGINS = ["https://tinycloud.one"];
 const publicOrigins = openkey.origins.filter((origin) => !OPENKEY_ONLY_ORIGINS.includes(origin));
 

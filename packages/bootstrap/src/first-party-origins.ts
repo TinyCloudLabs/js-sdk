@@ -1,6 +1,6 @@
 /**
  * First-party app origins, shared with OpenKey's first-party-origins.ts.
- * Reference: TinyCloudLabs/openkey@3e7bd5fc4328080028827f15a94555754e1f775d,
+ * Reference: TinyCloudLabs/openkey@c4bceb3e5eaf65704f384ff0d0dfade0b75b97b4,
  * apps/api/src/services/first-party-origins.ts. Update both contracts together;
  * the contract test names the entries the two lists do not share.
  * Match the actual page origin, never a caller-supplied SIWE domain.
