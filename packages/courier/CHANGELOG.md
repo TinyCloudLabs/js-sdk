@@ -1,5 +1,111 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.45
+
+### Patch Changes
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 0.6.0-beta.44
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 0.6.0-beta.43
+
+### Patch Changes
+
+- 271b73d: Courier keeps only a confirmed absence from the location registry, and only plain data reads use it. Reads of an owner with no registry record share one lookup per minute in a process, so `read`, `inbox` and an idle `watch` pass keep their lower registry traffic. Everything else looks the owner up when it runs:
+  - each write to a space (send, `watch` and `intake` imports, mirrors, receipts and state, `outbox serve`, pause and resume notices, tasks, requests, pairing);
+  - installing a peer's grant;
+  - an owner with a registry record, before every call.
+
+  A removed or changed registration is seen on the next such call.
+
+  Details: TC-2481, TC-2970
+
+## 0.6.0-beta.42
+
+### Minor Changes
+
+- e1ebdc4: Validate and persist owner-signed renewal lease approval proofs and restore admitted agent-grant renewals, including retrying a saved installation after the original grant expires. Renewal request emission requires the coordinated OpenKey producer rollout.
+
+  Details: TC-2904
+
+## 0.6.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+
+## 0.6.0-beta.40
+
+### Patch Changes
+
+- d7e4062: `courier inbox` skips a message whose thread or message id, taken from the peer's key name, isn't a safe id (letters, digits, `-` and `_`, at most 64 characters), as the watcher already does. Such a message isn't fetched, listed or receipted; it is reported as `bad-message` with the id escaped, so no control or bidi character from a peer reaches the text or `--json` output. The ids in the `bad-message` and `message-too-large` errors are escaped too. Courier's `test` script now fails a test file that runs longer than 2 minutes instead of hanging.
+
+  Details: TC-2951
+
+## 0.6.0-beta.39
+
+### Patch Changes
+
+- ee93ac3: The agent's clean HOME is checked for links the agent planted there between wakes. Before Courier makes, removes or writes any path in it (`.claude`, `.config`, a `--home-file` directory such as `.codex`, `.gitconfig`, the agent identity files), each component is checked without following links: a link found is removed (the link only, never what it points at) and the wake logs `removed a symbolic link the agent left in its clean HOME: <path>`. A clean HOME that is itself a link is refused. Before, a planted link such as `.config -> ~/somewhere` could make the next wake delete or overwrite files outside the clean HOME.
+
+  The Claude login that a `--wake claude` wake copies automatically (`.claude/.credentials.json`) is now read the way `--home-file` sources are: a link on the file or above it fails the wake closed instead of being followed; a missing file is still skipped.
+
+  Details: TC-3014
+
+## 0.6.0-beta.38
+
+### Patch Changes
+
+- f956a87: `courier watch --home-file` now accepts only the known model-login file of a supported agent CLI, instead of refusing a short denylist: `.codex/auth.json` (codex), `.gemini/oauth_creds.json` (gemini), `.local/share/opencode/auth.json` (opencode), `.local/share/amp/secrets.json` (amp), `.config/goose/secrets.yaml` (goose) and `.aider/oauth-keys.env` (aider). `omp` and `cursor-agent` accept no file (omp keeps its login in a database with every account; Cursor does not publish where its credentials are): pass their login with `--env-pass` or run them under their own account. When `--exec` starts one of these CLIs only that CLI's file is accepted; for any other command any listed file is. Settings files, owner state (`.omp`, `.tinycloud`, `.gnupg`, `.docker`, `.kube`, `.config/gcloud`, `.paseo`) and every other file are refused with a clear message, when the watcher starts and again on every wake. `--wake claude` takes no `--home-file`.
+
+  A `--home-file` source that is a symbolic link, or that sits behind one (a linked `.codex` directory, for example), is refused and its target is never copied; the check runs on every wake and the file is opened without following links.
+
+  The README now warns plainly that `--unguarded --agent-cli` puts outside message content into an agent that can act, and that it should only be used with an agent holding no credentials beyond its model login, in a sandbox.
+
+  Details: TC-3014
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+
+## 0.6.0-beta.37
+
+### Minor Changes
+
+- feb9f50: `courier watch --wake exec --unguarded` can now wake an agent CLI that has no guarded adapter (`codex`, `opencode`, `omp`, `gemini`, `cursor-agent`, `amp`, `aider`, `goose`) when the owner also passes `--agent-cli`. Without that flag such a command is refused as before, and the refusal names the flag. `claude` and `paseo` stay refused under `exec` with or without it: use `--wake claude` or `--wake paseo`, which install the guard.
+
+  `--agent-cli` installs no guard. Nothing checks what the woken agent does with a peer's message, and it can read whatever the watcher's OS user can read. Run such a watcher under an OS account that holds only what the agent may use.
+
+  `courier watch --home-file <path>` (repeatable, relative to your HOME, with `--wake exec` or `--wake claude`) copies one file into the woken agent's clean HOME on every wake, mode 0600, for a CLI that keeps its model login in a file. Shell start-up files, tool settings and the credential stores the clean HOME never holds (`.ssh`, `.aws`, `.npmrc`, `.netrc`, `.config/gh`, `.config/git`, Claude and MCP settings) are refused when the watcher starts.
+
+  Details: TC-712
+
+## 0.6.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+
 ## 0.6.0-beta.35
 
 ### Patch Changes

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import type { OperationContext } from "../contract.js";
 import { isOperationErrorCode, nodeRetryOperationError, OperationInvocationError, operationError, storageFullOperationError, type OperationError } from "../errors.js";
@@ -5,7 +6,7 @@ import { authorizationFailure } from "../kv-failure.js";
 import { evaluateOperationAuthority } from "../authority.js";
 import { operationSpaceResolver } from "../secrets.js";
 import { TC_APPS_CATALOG_READ_ACTIONS, TC_APPS_DISCOVERY_ENTRY_ACTIONS, TC_APPS_RECORDS_ACTIONS } from "../tc-apps.js";
-import { appRoot, discoveryKey, staleKey, TC_APPS_DISCOVERY_ROOT } from "./layout.js";
+import { appRoot, discoveryKey, staleKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type Layout } from "./layout.js";
 import { isObject, type JsonObject } from "./records.js";
 
 export interface KvError { readonly code?: string; readonly meta?: Readonly<Record<string, unknown>> }
@@ -19,22 +20,22 @@ export interface AppsKv {
 }
 export type ReadRecord = { key: string; value: JsonObject; etag: string } | { key: string; outcome: "NOT_FOUND" | "MALFORMED" };
 
-/** The owner's applications space: every personal app lives there. */
-export function appsSpace(context: OperationContext): string {
+/** Route each layout to its original owner space. */
+export function appsSpace(context: OperationContext, layout: Layout = "new"): string {
   if (!context.runtime) throw new TypeError("Authenticated operation runtime is unavailable.");
-  return operationSpaceResolver(context.runtime.node, context.summary.space)("applications");
+  return operationSpaceResolver(context.runtime.node, context.summary.space)(layout === "legacy" ? "default" : "applications");
 }
-export function appsKv(context: OperationContext): AppsKv {
-  return (context.runtime!.node as TinyCloudNode).kvForSpace(appsSpace(context)) as unknown as AppsKv;
+export function appsKv(context: OperationContext, layout: Layout = "new"): AppsKv {
+  return (context.runtime!.node as TinyCloudNode).kvForSpace(appsSpace(context, layout)) as unknown as AppsKv;
 }
 
 /** The connector's permission entries. Each is the whole grant for its scope, so one approval covers every later call. */
 export type AppsPermission = { service: string; space: string; path: string; actions: string[] };
-export function appRecordsPermission(context: OperationContext, app: string, actions: readonly string[] = TC_APPS_RECORDS_ACTIONS): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context), path: appRoot(app), actions: [...actions] };
+export function appRecordsPermission(context: OperationContext, app: string, actions: readonly string[] = TC_APPS_RECORDS_ACTIONS, layout: Layout = "new"): AppsPermission {
+  return { service: "tinycloud.kv", space: appsSpace(context, layout), path: layout === "legacy" ? TC_APPS_LEGACY_ROOT : appRoot(app), actions: [...actions] };
 }
-export function discoveryPermission(context: OperationContext): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context), path: TC_APPS_DISCOVERY_ROOT, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
+export function discoveryPermission(context: OperationContext, layout: Layout = "new"): AppsPermission {
+  return { service: "tinycloud.kv", space: appsSpace(context, layout), path: layout === "legacy" ? `${TC_APPS_LEGACY_ROOT}catalog/` : TC_APPS_DISCOVERY_ROOT, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
 }
 export function appDiscoveryPermission(context: OperationContext, app: string): AppsPermission {
   return { service: "tinycloud.kv", space: appsSpace(context), path: discoveryKey(app), actions: [...TC_APPS_DISCOVERY_ENTRY_ACTIONS] };
@@ -97,12 +98,14 @@ export function jsonBytes(value: JsonObject): Uint8Array {
 }
 
 /** Mark derived data stale; a caller with committed writes must retain their outcomes if this throws. */
-export async function markAppsKindStale(kv: AppsKv, app: string, kind: string, at: string): Promise<void> {
-  requireKv(await kv.put(staleKey(app, kind), jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp" }), {}));
+export async function markAppsKindStale(kv: AppsKv, app: string, kind: string, at: string, layout: Layout = "new"): Promise<void> {
+  // Content-derived ETags must change even when concurrent writes occur on the same day.
+  requireKv(await kv.put(staleKey(app, kind, layout), jsonBytes({ since: at.slice(0, 10), by: "tinycloud-mcp", revision: randomUUID() }), {}));
 }
 
 /** Whether the session already holds read access to the app list (a grant reported one action at a time counts); the check that needs it is skipped without it. */
-export function hasDiscoveryAccess(context: OperationContext): boolean {
+export function hasDiscoveryAccess(context: OperationContext, layout: Layout = "new", list = false): boolean {
   const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
-  return evaluateOperationAuthority(context.runtime!.granted as never, [{ ...discoveryPermission(context), actions: ["tinycloud.kv/get"] }] as never, resolve).satisfied;
+  const permission = discoveryPermission(context, layout);
+  return evaluateOperationAuthority(context.runtime!.granted as never, [{ ...permission, actions: list ? permission.actions : ["tinycloud.kv/get"] }] as never, resolve).satisfied;
 }

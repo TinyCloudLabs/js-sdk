@@ -198,6 +198,8 @@ export interface Config extends ClientConfig {
   tinycloudRegistryUrl?: string | null;
   /** Host hint for owners absent from both v2 and v1 registries. Default https://node.tinycloud.xyz; null disables onboarding. */
   newUserHost?: string | null;
+  /** Explicit wallet-owner signing for private share placement. */
+  sharePlacementSigner?: (message: string) => Promise<string>;
   /** Chain ID used to distinguish a v1-only owner from an owner with no registry entry. Default 1. */
   registryChainId?: number;
   /** Highest signed v2 sequence seen per owner. Default: a `localStorage`-backed store. */
@@ -523,7 +525,7 @@ export class TinyCloudWeb {
     }
 
     // Set up browser wallet signer if provider given
-    const providerDriver = config.provider ?? config.providers?.web3?.driver;
+    const providerDriver = config.provider ?? config.providers?.web3?.driver ?? config.openkey?.client.getContinuationProvider?.();
     if (providerDriver) {
       this.walletSigner = new BrowserWalletSigner(providerDriver);
       this.provider = this.walletSigner.getProvider();
@@ -551,6 +553,13 @@ export class TinyCloudWeb {
    */
   private async _init(): Promise<void> {
     await this.wasmBindings.ensureInitialized();
+    let registryVerdictCache: TinyCloudNodeConfig["registryVerdictCache"];
+    try {
+      const { createRegistryVerdictCache } = await import("../registry-verdict-cache-entry");
+      registryVerdictCache = createRegistryVerdictCache();
+    } catch {
+      console.warn("Registry cache unavailable; using uncached routing.");
+    }
     const loc = typeof window !== 'undefined' ? window.location : undefined;
 
     const nodeConfig: TinyCloudNodeConfig = {
@@ -560,11 +569,13 @@ export class TinyCloudWeb {
       host: this.config.tinycloudHosts?.[0],
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
       newUserHost: this.config.newUserHost,
+      sharePlacementSigner: this.config.sharePlacementSigner,
       registryChainId: this.config.registryChainId,
       registrySequenceStore:
         this.config.registrySequenceStore ??
         createLocalStorageRegistrySequenceStore(),
       registryCacheStore: this.config.registryCacheStore ?? createLocalStorageRegistryCacheStore(),
+      registryVerdictCache,
       onNodeNotFound: this.config.onNodeNotFound,
       onRegistryFallback: this.config.onRegistryFallback,
       autoDiscoverLocalNode: this.config.autoDiscoverLocalNode,
@@ -1312,13 +1323,42 @@ export class TinyCloudWeb {
 
   signIn = (options?: SignInOptions): Promise<ClientSession> => {
     if (!this.config.openkey) return this.performSignIn(options);
+    const client = this.config.openkey.client;
+    const state: {
+      handle?: ReturnType<NonNullable<OpenKeyAuthorizeTinyCloud["beginTinyCloudSignIn"]>>;
+      pending?: PreparedOpenKeyAuthorization;
+      node?: TinyCloudNode;
+    } = {};
+    if (!options && !this.preparedSignIn && (this.config.openkey.mode ?? "popup") === "popup" &&
+        client.beginTinyCloudSignIn && client.supportsTinyCloudSignIn) {
+      refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
+      state.handle = client.beginTinyCloudSignIn({
+        chainId: () => this.walletSigner?.getChainId() ?? Promise.resolve(1),
+        verify: async ({ result, identity, request, origin }) => {
+          const pending = state.pending;
+          const pinned = pending?.identity;
+          if (!pending || !pinned || !state.node || request.siwe !== pending.request.siwe ||
+              identity.address.toLowerCase() !== pinned.address.toLowerCase() || identity.chainId !== pinned.chainId ||
+              identity.keyId !== pinned.keyId || identity.keyType !== pinned.keyType || identity.requestId !== pinned.requestId ||
+              ["kty", "crv", "x"].some(field => request.jwk?.[field] !== pending.request.jwk[field]) ||
+              origin !== globalThis.location?.origin) throw new Error("OpenKey sign-in context changed");
+          await state.node.verifyPreparedOpenKeySignIn(pending, result, origin);
+          return true;
+        },
+      });
+    }
     this.openkeySignInInFlight++;
-    return this.performSignIn(options).finally(() => {
+    return this.performSignIn(options, state).finally(async () => {
       this.openkeySignInInFlight--;
+      await state.handle?.cancel();
     });
   };
 
-  private performSignIn = async (options?: SignInOptions): Promise<ClientSession> => {
+  private performSignIn = async (options?: SignInOptions, continuation?: {
+    handle?: ReturnType<NonNullable<OpenKeyAuthorizeTinyCloud["beginTinyCloudSignIn"]>>;
+    pending?: PreparedOpenKeyAuthorization;
+    node?: TinyCloudNode;
+  }): Promise<ClientSession> => {
     // Refuse a caveated manifest before any restore, signer or network call.
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
@@ -1333,6 +1373,11 @@ export class TinyCloudWeb {
     if (this.config.openkey && options) {
       throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
     }
+    if (continuation?.handle && !await this.config.openkey!.client.supportsTinyCloudSignIn!()) {
+      await continuation.handle.cancel();
+      continuation.handle = undefined;
+    }
+    assertNotSignedOut();
     const pending = this.preparedSignIn;
     this.invalidatePreparedSignIn();
     if (pending) {
@@ -1370,7 +1415,19 @@ export class TinyCloudWeb {
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
     try {
-      if (pending) {
+      if (continuation?.handle) {
+        continuation.node = node;
+        const result = await continuation.handle.authorize(async identity => {
+          assertNotSignedOut();
+          const prepared = await node.prepareOpenKeySignIn(this.openKeySignInOptions(), identity);
+          assertNotSignedOut();
+          continuation.pending = prepared;
+          return prepared.request;
+        });
+        assertNotSignedOut();
+        if (!continuation.pending) throw new Error("OpenKey sign-in was not prepared");
+        await node.signInWithPreparedOpenKey(continuation.pending, async () => result);
+      } else if (pending) {
         await node.signInWithPreparedOpenKey(
           pending.request,
           wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
@@ -2016,13 +2073,15 @@ export class TinyCloudWeb {
         autoSubdelegate: false,
         useSessionKey: false,
       });
-      if (received.ok === false) return received;
+      if (received.ok === false) return { ok: false, error: {
+        code: received.error.code, message: "Could not receive shared data.", service: "delegation",
+      } };
       const share = received.data;
 
       // receive() has verified the parent CID, signature, space and embedded key.
       // Its recorded host is never promoted to routing authority.
       let registeredHost: string | undefined;
-      const delegateResponse = await node.resourceTransport(
+      const delegateResponse = await (share.resourceTransport ?? node.resourceTransport)(
         [{ resource: share.spaceId, access: "read" }],
         async (target) => {
           const response = await target.fetch(`${target.url}/delegate`, {
@@ -2035,12 +2094,11 @@ export class TinyCloudWeb {
         },
       );
       if (!delegateResponse.ok) {
-        const errorText = await delegateResponse.text();
         return {
           ok: false,
           error: {
             code: "DELEGATION_FAILED",
-            message: `Failed to register delegation: ${delegateResponse.status} - ${errorText}`,
+            message: "Could not activate the shared delegation.",
             service: "delegation",
           },
         };
@@ -2063,27 +2121,24 @@ export class TinyCloudWeb {
       }
 
       const routed = routingFailure(kvResult.error);
-      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
-      const errorResult = kvResult;
+      if (routed) return { ok: false, error: { code: routed.code, message: "Could not access shared data.", service: "delegation" } };
       return {
         ok: false as const,
         error: {
           code: "DATA_FETCH_FAILED",
-          message: `Failed to fetch shared data: ${errorResult.error.message}`,
+          message: "Could not fetch shared data.",
           service: "delegation" as const,
-          cause: errorResult.error.cause,
         },
       };
     } catch (err) {
       const routed = routingFailure(err);
-      if (routed) return { ok: false, error: { ...routed, service: "delegation" } };
+      if (routed) return { ok: false, error: { code: routed.code, message: "Could not access shared data.", service: "delegation" } };
       return {
         ok: false,
         error: {
           code: "DECODE_FAILED",
-          message: `Failed to process share link: ${err instanceof Error ? err.message : String(err)}`,
+          message: "Could not process the sharing link.",
           service: "delegation",
-          cause: err instanceof Error ? err : undefined,
         },
       };
     }

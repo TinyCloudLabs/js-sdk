@@ -10,6 +10,10 @@ import { k, PREFIX } from '../dist/keys.js';
 
 const START = Date.parse('2026-11-13T12:00:00.000Z');
 const POLL_MS = 60_000;
+// Captured before any test enables mock timers.
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+const STOP_MS = 10_000;
 
 function category(name, op, key) {
   if (op === 'list') {
@@ -167,8 +171,12 @@ async function start(w) {
   return async () => {
     stop.abort();
     await flush();
-    await running;
+    // On a real timer, so a watcher that never settles after the abort fails the test instead of hanging the file.
+    let timer;
+    const stopped = await Promise.race([running.then(() => true), new Promise((resolve) => { timer = realSetTimeout(resolve, STOP_MS, false); })]);
+    realClearTimeout(timer);
     mock.timers.reset();
+    assert.ok(stopped, `watcher did not stop within ${STOP_MS} ms of the abort`);
   };
 }
 

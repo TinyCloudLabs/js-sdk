@@ -1,3 +1,4 @@
+import type { SharePlacement } from "../share-placement";
 /**
  * SharingService - v2 sharing link service with embedded private keys.
  *
@@ -246,7 +247,8 @@ export interface EncodedShareData {
   /** Space ID */
   spaceId: string;
   /** Schema version */
-  version: 1;
+  version: 1 | 2;
+  placement?: SharePlacement;
 }
 
 /**
@@ -273,6 +275,8 @@ export interface ReceiveOptions {
  * Result of receiving a sharing link.
  */
 export interface ShareAccess {
+  /** Transport verified for this received share, including private placement when present. */
+  resourceTransport?: ResourceTransport;
   /** The delegation that was received/created */
   delegation: Delegation;
   /** Key info for the received key */
@@ -333,6 +337,8 @@ export interface DelegatedShareAccess {
  * Configuration for SharingService.
  */
 export interface SharingServiceConfig {
+  createPlacement?: (share: EncodedShareData) => Promise<SharePlacement>;
+  receivedPlacementTransport?: (share: EncodedShareData) => Promise<ResourceTransport>;
   /** TinyCloud host URLs */
   hosts: string[];
   /**
@@ -406,6 +412,7 @@ export interface SharingServiceConfig {
    */
   onRootDelegationNeeded?: (params: {
     /** DID of the share key to delegate to */
+    onPrepared?: (delegation: Delegation) => Promise<void>;
     shareKeyDID: string;
     /** Space ID */
     spaceId: string;
@@ -539,6 +546,8 @@ export class SharingService implements ISharingService {
   private onRootDelegationNeeded?: SharingServiceConfig["onRootDelegationNeeded"];
   private assertActiveFn?: SharingServiceConfig["assertActive"];
   private readonly resourceTransport?: ResourceTransport;
+  private readonly createPlacement?: SharingServiceConfig["createPlacement"];
+  private readonly receivedPlacementTransport?: SharingServiceConfig["receivedPlacementTransport"];
 
   /**
    * Creates a new SharingService instance.
@@ -562,6 +571,8 @@ export class SharingService implements ISharingService {
     this.onRootDelegationNeeded = config.onRootDelegationNeeded;
     this.assertActiveFn = config.assertActive;
     this.resourceTransport = config.resourceTransport;
+    this.createPlacement = config.createPlacement;
+    this.receivedPlacementTransport = config.receivedPlacementTransport;
   }
 
   /**
@@ -641,6 +652,11 @@ export class SharingService implements ISharingService {
       };
     }
 
+    if (params.includePlacement && !this.createPlacement) {
+      return { ok: false, error: createError(DelegationErrorCodes.PERMISSION_DENIED,
+        "Share placement requires an explicit wallet owner signer") };
+    }
+
     // Validate path
     if (!params.path) {
       return {
@@ -714,6 +730,12 @@ export class SharingService implements ISharingService {
 
     // Step 2: Check if any existing key can satisfy this delegation
     // Only prompt for root delegation if NO existing key in the registry can handle it
+    let preparedPlacement: SharePlacement | undefined;
+    const preparePlacement = async (parent: Delegation) => {
+      if (!this.createPlacement) throw new Error("Share placement requires an explicit wallet owner signer");
+      preparedPlacement = await this.createPlacement({ key: keyJwk, keyDid, delegation: parent, path: fullPath, host: this.host, spaceId: this.session!.spaceId, version: 1 });
+      this.assertActiveFn?.();
+    };
     let delegation: Delegation;
     // Strip fragment from DID URL to get plain DID for UCAN audience
     // getDID() returns "did:key:z6Mk...#z6Mk..." but audience needs "did:key:z6Mk..."
@@ -742,7 +764,7 @@ export class SharingService implements ISharingService {
 
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
-      const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry, params.allowSubDelegation !== false);
+      const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry, params.allowSubDelegation !== false, params.includePlacement === true);
       if ('ok' in delegationResult && !delegationResult.ok && routingFailure(delegationResult.error)) return delegationResult;
       const childDelegationActiveError = this.retiredGraphError();
       if (childDelegationActiveError) return { ok: false, error: childDelegationActiveError };
@@ -755,6 +777,7 @@ export class SharingService implements ISharingService {
       // No existing key can satisfy the request - try root delegation
       try {
         const rootDelegation = await this.onRootDelegationNeeded({
+          ...(params.includePlacement ? { onPrepared: preparePlacement } : {}),
           shareKeyDID: plainDID,
           spaceId: this.session.spaceId,
           path: fullPath,
@@ -808,6 +831,12 @@ export class SharingService implements ISharingService {
       version: 1,
     };
 
+    if (params.includePlacement) {
+      if (!preparedPlacement) await preparePlacement(delegation);
+      shareData.placement = preparedPlacement;
+      this.assertActiveFn?.();
+      shareData.version = 2;
+    }
     // Step 4: Encode the link
     const encodedData = this.encodeLink(shareData, schema);
 
@@ -950,7 +979,8 @@ export class SharingService implements ISharingService {
     path: string,
     actions: string[],
     expiry: Date,
-    allowSubDelegation: boolean
+    allowSubDelegation: boolean,
+    deferActivation = false
   ): Promise<Delegation | Result<never, DelegationError>> {
     const activeError = this.retiredGraphError();
     if (activeError) return { ok: false, error: activeError };
@@ -1015,41 +1045,44 @@ export class SharingService implements ISharingService {
         const childSigningActiveError = this.retiredGraphError();
         if (childSigningActiveError) return { ok: false, error: childSigningActiveError };
 
-        // Register the delegation with the server
-        const register = (fetchFn: FetchFunction, host: string) => fetchFn(`${host}/delegate`, {
-          method: "POST",
-          headers: { Authorization: wasmResult.delegation },
-          redirect: "error",
-        });
-        const registerRes = this.resourceTransport
-          ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url))
-          : await register(this.fetchFn, this.host);
-        const registrationActiveError = this.retiredGraphError();
-        if (registrationActiveError) return { ok: false, error: registrationActiveError };
+        if (!deferActivation) {
+          // Register the delegation with the server
+          const register = (fetchFn: FetchFunction, host: string) => fetchFn(`${host}/delegate`, {
+            method: "POST",
+            headers: { Authorization: wasmResult.delegation },
+            redirect: "error",
+          });
+          const registerRes = this.resourceTransport
+            ? await this.resourceTransport([{ resource: this.session.spaceId, access: "write" }], (target) => register(target.fetch, target.url))
+            : await register(this.fetchFn, this.host);
+          const registrationActiveError = this.retiredGraphError();
+          if (registrationActiveError) return { ok: false, error: registrationActiveError };
 
-        if (!registerRes.ok) {
-          const errorText = await registerRes.text();
-          const registrationTextActiveError = this.retiredGraphError();
-          if (registrationTextActiveError) return { ok: false, error: registrationTextActiveError };
-          const message = `Failed to register delegation with server: ${registerRes.status} ${errorText}`;
-          if (registerRes.status === 401 || registerRes.status === 403) {
+          if (!registerRes.ok) {
+            const errorText = await registerRes.text();
+            const registrationTextActiveError = this.retiredGraphError();
+            if (registrationTextActiveError) return { ok: false, error: registrationTextActiveError };
+            const message = `Failed to register delegation with server: ${registerRes.status} ${errorText}`;
+            if (registerRes.status === 401 || registerRes.status === 403) {
+              return {
+                ok: false,
+                error: createError(
+                  DelegationErrorCodes.AUTH_UNAUTHORIZED,
+                  message,
+                  undefined,
+                  { status: registerRes.status },
+                ),
+              };
+            }
             return {
               ok: false,
               error: createError(
-                DelegationErrorCodes.AUTH_UNAUTHORIZED,
+                DelegationErrorCodes.CREATION_FAILED,
                 message,
-                undefined,
-                { status: registerRes.status },
               ),
             };
           }
-          return {
-            ok: false,
-            error: createError(
-              DelegationErrorCodes.CREATION_FAILED,
-              message,
-            ),
-          };
+
         }
 
         // Single-entry call → resources[0] is authoritative for the
@@ -1192,7 +1225,7 @@ export class SharingService implements ISharingService {
         ),
       };
     }
-    const resourceTransport = this.resourceTransport;
+    let resourceTransport = this.resourceTransport;
     if (!resourceTransport) return {
       ok: false,
       error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
@@ -1203,6 +1236,12 @@ export class SharingService implements ISharingService {
       } catch {
         return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "Sharing-link metadata does not match its parent delegation") };
       }
+    }
+
+    if (shareData.version === 2) {
+      if (!this.receivedPlacementTransport || !shareData.placement) throw new Error("Unsupported share placement envelope; update the receiver SDK");
+      await this.verifiedReceivedShareResource(shareData);
+      resourceTransport = await this.receivedPlacementTransport(shareData);
     }
 
     // Step 2: Create KeyInfo and ingest into registry
@@ -1262,6 +1301,7 @@ export class SharingService implements ISharingService {
     });
 
     const shareAccess: ShareAccess = {
+      resourceTransport,
       delegation: activeDelegation,
       key: activeKey,
       kv: kvService,
@@ -1380,7 +1420,8 @@ export class SharingService implements ISharingService {
         ),
       };
     }
-    const resourceTransport = this.resourceTransport;
+    const resourceTransport = shareData.version === 2 && this.receivedPlacementTransport
+      ? await this.receivedPlacementTransport(shareData) : this.resourceTransport;
     if (!resourceTransport) return {
       ok: false,
       error: createError(DelegationErrorCodes.NOT_INITIALIZED, "A resource transport is required for received shares"),
@@ -1608,6 +1649,9 @@ export class SharingService implements ISharingService {
    * @returns Result with decoded share data or validation error
    */
   private decodeLinkWithValidation(link: string): Result<EncodedShareData, DelegationError> {
+    const invalidLink = (message = "Invalid sharing link data"): Result<EncodedShareData, DelegationError> => ({
+      ok: false, error: { code: DelegationErrorCodes.INVALID_TOKEN, message, service: "delegation" },
+    });
     // Extract the encoded data from the link
     let encoded = link;
 
@@ -1623,25 +1667,13 @@ export class SharingService implements ISharingService {
         const url = new URL(link);
         encoded = url.searchParams.get("share") ?? encoded;
       } catch {
-        return {
-          ok: false,
-          error: createError(
-            DelegationErrorCodes.INVALID_TOKEN,
-            "Invalid URL format in sharing link"
-          ),
-        };
+        return invalidLink("Invalid URL format in sharing link");
       }
     }
 
     // Remove the schema prefix
     if (!encoded.startsWith(BASE64_PREFIX)) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`
-        ),
-      };
+      return invalidLink(`Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`);
     }
 
     const base64Data = encoded.slice(BASE64_PREFIX.length);
@@ -1649,29 +1681,15 @@ export class SharingService implements ISharingService {
     let jsonString: string;
     try {
       jsonString = base64UrlDecode(base64Data);
-    } catch (err) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Failed to decode base64 data: ${err instanceof Error ? err.message : String(err)}`,
-          err instanceof Error ? err : undefined
-        ),
-      };
+    } catch {
+      return invalidLink();
     }
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonString);
-    } catch (err) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          `Failed to parse share data JSON: ${err instanceof Error ? err.message : String(err)}`,
-          err instanceof Error ? err : undefined
-        ),
-      };
+    } catch {
+      return invalidLink();
     }
 
     // Convert delegation expiry to Date before validation if it's a string
@@ -1688,19 +1706,12 @@ export class SharingService implements ISharingService {
       (parsed.delegation as { expiry: Date }).expiry = new Date(parsed.delegation.expiry);
     }
 
+    if (parsed && typeof parsed === "object" && "version" in parsed && parsed.version !== 1 && parsed.version !== 2) {
+      return invalidLink("Unsupported sharing envelope version; update the receiver SDK");
+    }
     // Validate against schema
     const validationResult = validateEncodedShareData(parsed);
-    if (!validationResult.ok) {
-      return {
-        ok: false,
-        error: createError(
-          DelegationErrorCodes.INVALID_TOKEN,
-          validationResult.error.message,
-          undefined,
-          validationResult.error.meta
-        ),
-      };
-    }
+    if (!validationResult.ok) return invalidLink();
 
     return { ok: true, data: validationResult.data };
   }

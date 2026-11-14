@@ -1,5 +1,61 @@
 # @tinycloudlabs/sdk-core
 
+## 3.12.0-beta.36
+
+### Minor Changes
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+## 3.12.0-beta.35
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- 163f986: Remove one non-public origin from `FIRST_PARTY_ORIGINS`. Pages served from that origin no longer receive implicit first-party bootstrap permissions at sign-in. All other first-party origins and Pages projects are unchanged.
+
+  Details: TC-3030
+
+- Updated dependencies [163f986]
+  - @tinycloud/bootstrap@2.9.0-beta.1
+  - @tinycloud/sdk-services@3.12.0-beta.34
+
+## 3.12.0-beta.33
+
+### Patch Changes
+
+- b00ad0b: Reuse confirmed absence for browser registry data reads for up to 60 seconds. Registered routes, writes, revocations, share delivery, node identity, sign-in and any other lookup not marked as a data read refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
+
+  Details: TC-2987
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-services@3.12.0-beta.33
+
+## 3.12.0-beta.31
+
+### Patch Changes
+
+- 728b25c: Use OpenKey's advertised continuation API from the public signIn click to reserve one window before asynchronous preparation. Prepare, verify and complete the session with the request-pinned identity, preserving the configured manifest and validating the signed result before activation. Older clients and servers retain the existing authorization path.
+
+  Reject noncanonical SIWE and ReCap encodings during OpenKey verification. Custom WASM bindings must provide the strict parseVerifiedRecapFromSiwe verifier for ReCap sign-in.
+
+  Details: TC-2913
+
 ## 3.12.0-beta.30
 
 ### Minor Changes

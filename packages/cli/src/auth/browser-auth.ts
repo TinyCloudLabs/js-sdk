@@ -64,6 +64,11 @@ export interface AuthFlowOptions {
    * it must verify the signed result with the matching `expiryChangeable` expectation.
    */
   expiryChangeable?: boolean;
+  /**
+   * Ask the owner for a renewal lease of at most this many seconds with the signed approval request. The result's
+   * lease is verified and admitted at the node before the login saves it. No command sets this yet.
+   */
+  renewalLeaseSeconds?: number;
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */

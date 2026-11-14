@@ -55,6 +55,7 @@ import {
   EXPIRY,
   assertExpiryWithinTechnicalLimit,
   canonicalizeAddress,
+  verifyEip191MessageSignature,
   makePkhSpaceId,
   pkhDid,
   extractImmutableSiweFields,
@@ -98,12 +99,13 @@ import {
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
-import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
+import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn, OpenKeySignInIdentity } from "./openKeyBridge";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
 
 /** SIWE and session key prepared before an OpenKey approval click. */
 export interface PreparedOpenKeyAuthorization {
+  readonly identity?: OpenKeySignInIdentity;
   readonly request: OpenKeyAuthorizeInput;
   readonly prepared: PreparedOpenKeySession;
   readonly keyId: string;
@@ -762,7 +764,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /** Current registry routing; mutable restored hosts never supply no-entry authority. */
-  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts): Promise<ResourceDestination[]> {
+  async resolveResourceDestinations(resource: string, access: ResourceAccess, noEntryHosts: readonly string[] = this.registryNoEntryHosts, dataRead?: boolean): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid
       : parseSpaceUri(resource)?.owner ?? (() => {
@@ -779,6 +781,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           sequenceStore: this.registrySequenceStore,
           cacheStore: this.registryCacheStore,
           verdictCache: this.registryVerdictCache,
+          dataRead,
           onRegistryFallback: this.onRegistryFallback,
         });
         this.registryVerdict = resolved.verdict;
@@ -2025,7 +2028,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * const session = await auth.signInWithPreparedSession(prepared, signature, keyId, jwk);
    * ```
    */
-  async prepareSessionForSigning(): Promise<{
+  async prepareSessionForSigning(identity?: OpenKeySignInIdentity): Promise<{
     prepared: {
       siwe: string;
       jwk: Record<string, unknown>;
@@ -2038,8 +2041,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     chainId: number;
   }> {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
     if (this.requireExistingAccount) await this.resolveTinyCloudHostsForSignIn(address, chainId);
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
@@ -2082,6 +2085,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       spaceId,
       jwk,
       ...this.buildSiweOverrides(),
+      ...(identity ? { uri: this.sessionManager.getDID(keyId) } : {}),
     });
 
     return {
@@ -2125,6 +2129,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     keyId: string,
     jwk: Record<string, unknown>,
     generation: number,
+    identity?: OpenKeySignInIdentity,
   ): Promise<ClientSession> {
     this.assertSignInCurrent(generation);
     // Complete session setup with the prepared session + signature
@@ -2136,8 +2141,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Parse address and chainId from the prepared session
     // The SIWE message contains this info, but we need to extract it
     // For now, we'll get it from the signer since it should match
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
     this.assertSignInCurrent(generation);
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
@@ -2289,8 +2294,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /** Finish address, host and SIWE preparation before an approval click. */
   async prepareOpenKeySignIn(
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
+    identity?: OpenKeySignInIdentity,
   ): Promise<PreparedOpenKeyAuthorization> {
     const generation = this.sessionGeneration;
+    identity = identity ? Object.freeze({ ...identity, address: canonicalizeAddress(identity.address) }) : undefined;
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     assertMaxExpiresAt(options?.maxExpiresAt);
     // A per-call host override is the host this session will actually use,
@@ -2309,14 +2316,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // OpenKey binds the target host into its authorization context. Resolve
     // the same host activation will use before asking OpenKey to prepare or
     // sign anything; signInWithPreparedSession is intentionally too late.
-    const signingAddress = canonicalizeAddress(await this.signer.getAddress());
-    const signingChainId = await this.signer.getChainId();
+    const signingAddress = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const signingChainId = identity?.chainId ?? await this.signer.getChainId();
     this.assertSignInCurrent(generation);
     await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
     this.assertSignInCurrent(generation);
 
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
-    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning();
+    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning(identity);
     this.assertSignInCurrent(generation);
 
     // 2. Build the presentation envelope from the instance manifest (if
@@ -2344,12 +2351,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       jwk: publicJwk(jwk),
       verificationMethod: prepared.verificationMethod,
       host: hostHint,
-      keyId: options?.openkeyKeyId,
+      keyId: identity?.keyId ?? options?.openkeyKeyId,
       presentation,
       // Present only when set, so the default request shape is unchanged.
       ...(options?.expiryChangeable === true ? { expiryChangeable: true } : {}),
     };
     return {
+      ...(identity ? { identity } : {}),
       request: originalRequest,
       prepared,
       keyId,
@@ -2362,6 +2370,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
       // nothing here is persisted.
       ...(options?.maxExpiresAt === undefined ? {} : { maxExpiresAt: options.maxExpiresAt }),
     };
+  }
+
+  /** Verify the new continuation before OpenKey resolves and before any activation. */
+  async verifyPreparedOpenKeySignIn(
+    pending: PreparedOpenKeyAuthorization,
+    result: OpenKeyAuthorizationResultV1,
+    origin: string,
+  ): Promise<void> {
+    this.assertSignInCurrent(pending.generation);
+    if (!pending.identity || Date.now() - pending.createdAt > 5 * 60_000) throw new Error("OpenKey identity preparation expired");
+    const original = new SiweMessage(pending.request.siwe);
+    const key = publicJwk(pending.jwk);
+    if (!key || original.address.toLowerCase() !== pending.identity.address.toLowerCase() ||
+        original.chainId !== pending.identity.chainId || original.domain !== new URL(origin).host ||
+        original.uri !== this.sessionManager.getDID(pending.keyId)) throw new Error("OpenKey identity or session key changed");
+    const localKey = publicJwk(JSON.parse(this.sessionManager.jwk(pending.keyId) ?? "null"));
+    if (!localKey || ["kty", "crv", "x"].some(field => key[field] !== localKey[field] || key[field] !== pending.request.jwk[field])) {
+      throw new Error("OpenKey session JWK changed");
+    }
+    await this.verifyOpenKeyResult(result, pending.prepared, {
+      identity: pending.identity, allowExpirationChange: pending.request.expiryChangeable === true, maxExpiresAt: pending.maxExpiresAt,
+    });
+    this.assertSignInCurrent(pending.generation);
   }
 
   /** Complete a prepared approval. The caller starts authorization before awaiting this method. */
@@ -2388,6 +2419,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
           // Relax only for a request that actually carried the opt-in.
           allowExpirationChange: originalRequest.expiryChangeable === true,
           maxExpiresAt: pending.maxExpiresAt,
+          identity: pending.identity,
         });
         signature = result.signature;
         break;
@@ -2405,7 +2437,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     // Verification retries never repeat network activation or create a new SIWE.
     this.assertSignInCurrent(pending.generation);
-    return this.completePreparedSession(signed, signature, keyId, jwk, pending.generation);
+    return this.completePreparedSession(signed, signature, keyId, jwk, pending.generation, pending.identity);
   }
 
   /**
@@ -2524,7 +2556,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private async verifyOpenKeyResult(
     result: OpenKeyAuthorizationResultV1,
     prepared: PreparedOpenKeySession,
-    options?: { allowExpirationChange?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
+    options?: { allowExpirationChange?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt; identity?: OpenKeySignInIdentity },
   ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
@@ -2540,56 +2572,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Verify the signer matches what we expect. If the address that signed
     // does not match the address the local signer will present, refuse the
     // session — the widget returned bytes signed by someone else.
-    const expectedAddress = canonicalizeAddress(await this.signer.getAddress());
+    const expectedAddress = canonicalizeAddress(options?.identity?.address ?? await this.signer.getAddress());
     if (canonicalizeAddress(result.address) !== expectedAddress) {
       throw new Error(
         `OpenKey returned signature from ${result.address} but expected ${expectedAddress}`,
       );
     }
 
-    // (2) Recover the signer from the signature over the exact bytes we are
-    // about to complete the session with. SiweMessage.verify() calls
-    // ethers.verifyMessage(EIP4361Message, signature) internally and matches
-    // the recovered address (case-insensitive) against the message's address
-    // field. Any mismatch throws, which is exactly the failure mode we want.
+    // Verify the bytes returned by OpenKey before interpreting their fields.
+    if (!await verifyEip191MessageSignature(result.signedMessage, result.signature, expectedAddress)) {
+      throw new Error("OpenKey signature verification failed");
+    }
     let parsedSignedSiwe: SiweMessage;
     try {
       parsedSignedSiwe = new SiweMessage(result.signedMessage);
-    } catch (err) {
-      throw new Error(
-        `OpenKey signedMessage is not a parseable SIWE: ${(err as Error).message}`,
-      );
+    } catch {
+      throw new Error("OpenKey signedMessage is not a parseable SIWE");
     }
-    const verifyResult = await parsedSignedSiwe.verify(
-      { signature: result.signature },
-      { suppressExceptions: true },
-    );
-    if (!verifyResult.success) {
-      const errData = verifyResult.error;
-      const type =
-        errData && typeof errData === "object" && "type" in errData
-          ? (errData as { type?: string }).type
-          : undefined;
-      const details =
-        errData && typeof errData === "object" && "expected" in errData
-          ? ` (expected=${(errData as { expected?: unknown }).expected}, received=${(errData as { received?: unknown }).received})`
-          : "";
-      throw new Error(
-        `OpenKey signature verification failed${type ? `: ${type}` : ""}${details}`,
-      );
+    if (new SiweMessage(parsedSignedSiwe).prepareMessage() !== result.signedMessage) {
+      throw new Error("OpenKey signedMessage is not a canonical SIWE");
     }
-    // Belt-and-braces: the SIWE `address` field must match what OpenKey
-    // reported and what the local signer will present. verify() checks
-    // signature-vs-siwe-address; we additionally cross-check the caller's
-    // claim and the local signer.
-    if (
-      canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress
-    ) {
-      throw new Error(
-        `OpenKey signedMessage.address (${parsedSignedSiwe.address}) does not match local signer address (${expectedAddress})`,
-      );
+    if (canonicalizeAddress(parsedSignedSiwe.address) !== expectedAddress) {
+      throw new Error("OpenKey signedMessage owner does not match the expected signer");
     }
-
     // The expiry this code goes on to read (persisted `expiresAt`, the immutable-field comparison, the changed-expiry
     // check) comes from the message's `Expiration Time` LINES. The parsed message must have an expiry of its own, and it
     // must be the same instant as that line, so text inside the (ReCap-bearing, uncompared) statement can never stand in
@@ -2602,6 +2607,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const parsedExpiryMs = Date.parse(parsedExpiry);
     if (!Number.isFinite(parsedExpiryMs) || parsedExpiryMs !== Date.parse(lineExpiry)) {
       throw new Error("OpenKey signedMessage Expiration Time line does not match the message's own expiry");
+    }
+
+    const now = Date.now();
+    const clockSkew = 30_000;
+    const issuedAt = Date.parse(parsedSignedSiwe.issuedAt ?? "");
+    const expiresAt = Date.parse(parsedSignedSiwe.expirationTime ?? "");
+    const notBefore = parsedSignedSiwe.notBefore === undefined ? undefined : Date.parse(parsedSignedSiwe.notBefore);
+    if (!Number.isFinite(issuedAt) || issuedAt > now + clockSkew ||
+        !Number.isFinite(expiresAt) || expiresAt <= now || issuedAt >= expiresAt ||
+        (notBefore !== undefined && (!Number.isFinite(notBefore) || notBefore > now + clockSkew || notBefore >= expiresAt))) {
+      throw new Error("OpenKey signedMessage is outside its valid time range");
     }
 
     // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
@@ -2618,6 +2634,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // plain SIWE flows (no urn:recap: resource) the statement remains
     // byte-immutable.
     const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
+    if (originalHasRecap) {
+      try {
+        if (!this.wasm.parseVerifiedRecapFromSiwe) throw new Error("Strict ReCap verification unavailable");
+        this.wasm.parseVerifiedRecapFromSiwe(result.signedMessage);
+      } catch {
+        throw new Error("OpenKey signedMessage has an invalid ReCap");
+      }
+    }
     const originalFields = extractImmutableSiweFields(prepared.siwe);
     const signedFields = extractImmutableSiweFields(result.signedMessage);
     if (options?.allowExpirationChange === true) {

@@ -9,7 +9,7 @@ export interface NativeShareResult {
 }
 
 export interface NativeSharingService {
-  generate(params: { readonly path: string; readonly actions: string[]; readonly expiry: Date }): Promise<unknown>;
+  generate(params: { readonly path: string; readonly actions: string[]; readonly expiry: Date; readonly includePlacement?: boolean }): Promise<unknown>;
   receive(token: string, options: { readonly autoSubdelegate: false; readonly useSessionKey: false }): Promise<unknown>;
   decodeLink(token: string): { readonly spaceId: string; readonly path: string };
 }
@@ -23,9 +23,9 @@ export function canonicalViewerUrl(viewerOrigin: string): URL {
 }
 
 /** Generate exactly one read-only TinyCloud delegation and put its tc1 token in the fragment. */
-export async function createNativeShare(sharing: NativeSharingService, input: { readonly path: string; readonly expiresAt: Date; readonly viewerOrigin: string }): Promise<NativeShareResult> {
+export async function createNativeShare(sharing: NativeSharingService, input: { readonly path: string; readonly expiresAt: Date; readonly viewerOrigin: string; readonly includePlacement?: boolean }): Promise<NativeShareResult> {
   if (!input.path || input.path.startsWith("/") || input.path.endsWith("/") || input.path.includes("..") || input.path.includes("//")) throw new TypeError("native share path must be one canonical TinyCloud KV key");
-  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt }) as { readonly ok?: unknown; readonly data?: { readonly token?: unknown; readonly delegation?: { readonly cid?: unknown }; readonly expiresAt?: unknown }; readonly error?: { readonly code?: unknown; readonly message?: unknown } };
+  const generated = await sharing.generate({ path: input.path, actions: ["tinycloud.kv/get"], expiry: input.expiresAt, ...(input.includePlacement === undefined ? {} : { includePlacement: input.includePlacement }) }) as { readonly ok?: unknown; readonly data?: { readonly token?: unknown; readonly delegation?: { readonly cid?: unknown }; readonly expiresAt?: unknown }; readonly error?: { readonly code?: unknown; readonly message?: unknown } };
   if (generated.ok !== true) {
     const error = new Error(typeof generated.error?.message === "string" ? generated.error.message : "TinyCloud sharing service rejected delegation generation");
     if (typeof generated.error?.code === "string") Object.assign(error, { code: generated.error.code });

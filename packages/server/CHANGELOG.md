@@ -1,5 +1,45 @@
 # @tinycloud/server
 
+## 2.5.19-beta.32
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 2.5.19-beta.31
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+
+## 2.5.19-beta.30
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+
+## 2.5.19-beta.29
+
+### Patch Changes
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+
+## 2.5.19-beta.28
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+
 ## 2.5.19-beta.27
 
 ### Patch Changes

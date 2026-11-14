@@ -1,5 +1,63 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+
+## 3.12.0-beta.35
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/sdk-services@3.12.0-beta.34
+  - @tinycloud/replica@0.4.5-beta.10
+
+## 3.12.0-beta.33
+
+### Patch Changes
+
+- b00ad0b: Reuse confirmed absence for browser registry data reads for up to 60 seconds. Registered routes, writes, revocations, share delivery, node identity, sign-in and any other lookup not marked as a data read refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
+
+  Details: TC-2987
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/sdk-services@3.12.0-beta.33
+  - @tinycloud/replica@0.4.5-beta.9
+
+## 3.12.0-beta.31
+
+### Minor Changes
+
+- 728b25c: Use OpenKey's advertised continuation API from the public signIn click to reserve one window before asynchronous preparation. Prepare, verify and complete the session with the request-pinned identity, preserving the configured manifest and validating the signed result before activation. Older clients and servers retain the existing authorization path.
+
+  Reject noncanonical SIWE and ReCap encodings during OpenKey verification. Custom WASM bindings must provide the strict parseVerifiedRecapFromSiwe verifier for ReCap sign-in.
+
+  Details: TC-2913
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+
 ## 3.12.0-beta.30
 
 ### Minor Changes

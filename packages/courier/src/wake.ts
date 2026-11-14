@@ -8,7 +8,7 @@ import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { agentHome, courierEnvOverrides, courierOnlyEnv } from './guard/install.js';
 import { realpathBest } from './guard/paths.js';
-import { startsAgentCli } from './guard/policy.js';
+import { GUARDED_ADAPTER_CLIS, agentCliStarted } from './guard/policy.js';
 import { prepareCleanHome, prepareAgentProfile } from './guard/cleanhome.js';
 import { GUARD_LABEL, installProjectGuard, isClaudeProvider, paseoEnv, sameDir, verifyProjectGuard } from './guard/paseo.js';
 
@@ -196,8 +196,12 @@ export interface WakeConfig {
   guard?: { argv: string[]; entry: string };
   /** `--unguarded`: the operator accepts that the `exec` adapter runs without the Courier guard. */
   unguarded?: boolean;
+  /** `--agent-cli`: the operator accepts that the `exec` command starts an agent CLI no guarded adapter exists for. */
+  agentCli?: boolean;
   /** `--env-pass NAME`: extra variables of the watcher's environment a woken agent may inherit (default none). */
   envPass?: string[];
+  /** `--home-file REL`: files of the real HOME copied into the agent's clean HOME (a model login, for example). */
+  homeFiles?: string[];
   timeoutMs: number;
 }
 
@@ -228,6 +232,21 @@ export const UNGUARDED_REFUSAL =
   '--wake exec installs no Courier guard (no approval check on merge, deploy, publish or pushes to main), so it needs --unguarded. ' +
   'Use it only for commands that cannot merge, deploy or publish; for an agent that can, use --wake claude or --wake paseo --paseo-provider claude, which are guarded.';
 
+/**
+ * Why `exec` may not run this command, when it starts an agent CLI. Claude and Paseo have guarded adapters and are never
+ * started through `exec`. Any other agent CLI has no guard to install, so it runs only when the operator said so twice:
+ * `--unguarded` for the adapter and `--agent-cli` for the agent.
+ */
+export function agentCliRefusal(exec: string | undefined, allowed: boolean | undefined): string | undefined {
+  const name = exec ? agentCliStarted(exec) : undefined;
+  if (!name) return undefined;
+  if (GUARDED_ADAPTER_CLIS.has(name)) return `--unguarded exec cannot start the agent CLI ${name}; use the guarded --wake ${name} adapter.`;
+  if (allowed) return undefined;
+  return `--unguarded exec cannot start the agent CLI ${name} without --agent-cli. No Courier guard exists for ${name}: ` +
+    "nothing checks what it does with a peer's message, and it can read whatever this OS user can. " +
+    'Pass --agent-cli to accept that, and run the watcher under an OS account that holds no credentials the agent should not use.';
+}
+
 export function createWaker(
   config: WakeConfig,
   deps: { run: Runner; sessions: SessionStore; env?: NodeJS.ProcessEnv; prepareGuard?: () => void; prompt?: (request: WakeRequest) => string; notice?: (line: string) => void },
@@ -245,17 +264,21 @@ export function createWaker(
     const courier = realpathBest(config.home);
     const cwd = realpathBest(config.cwd);
     if (cwd === courier || cwd.startsWith(`${courier}${path.sep}`)) throw new Error('agent cwd must be outside the Courier tree');
-    prepareCleanHome({
+    const cleaned = prepareCleanHome({
       realHome: config.realHome ?? env.HOME ?? os.homedir(),
-      cleanHome: agentHome(config.home), claude: config.adapter !== 'exec',
+      cleanHome: agentHome(config.home), claude: config.adapter !== 'exec', files: config.homeFiles,
+      agentCli: config.adapter === 'exec' && config.exec ? agentCliStarted(config.exec) : undefined,
     });
-    prepareAgentProfile(config.home);
+    for (const link of [...cleaned.removedLinks, ...prepareAgentProfile(config.home)]) {
+      notice(`removed a symbolic link the agent left in its clean HOME: ${link}`);
+    }
   };
 
   const exec: Waker = async (request) => {
     // The exec adapter installs no guard. It runs only when the operator said so, and says so on every wake.
     if (!config.unguarded) throw new CourierError('usage', UNGUARDED_REFUSAL);
-    if (config.exec && startsAgentCli(config.exec)) throw new CourierError('usage', '--unguarded exec cannot start an agent CLI; use a guarded adapter.');
+    const refusal = agentCliRefusal(config.exec, config.agentCli);
+    if (refusal) throw new CourierError('usage', refusal);
     prepareHome();
     notice(`${UNGUARDED_NOTICE} (thread ${request.threadId}, peer ${label(request.peer)})`);
     const run = deadlineRunner(deps.run, config.timeoutMs);

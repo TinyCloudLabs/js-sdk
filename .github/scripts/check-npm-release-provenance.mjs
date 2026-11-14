@@ -85,6 +85,7 @@ import { pathToFileURL } from "node:url";
 
 const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
 const STABLE_RELEASE_COMMIT = /^chore: release stable packages\b/;
+const BETA_RELEASE_COMMIT = /^chore: beta version packages\b/;
 const MODES = ["unpublished-stable", "unfinished-stable", "pre-publish", "post-publish"];
 const ACCEPTED_MARKER = "tinycloud-npm-accepted:";
 const ACCEPTED_LINE = new RegExp(`(?:^|\\s)${ACCEPTED_MARKER} (@?[^\\s@]+)@(\\S+)\\s*$`, "gm");
@@ -444,6 +445,28 @@ export function unfinishedStableRelease({ repo, view = npmView, packageExists = 
   return { missing, problems, releaseCommit: problems.length ? undefined : commit };
 }
 
+// The beta version commit to finish publishing from, if any (the `resume: beta` Release run). A beta run versions and pushes
+// before it publishes, so a publish that stopped partway (npm slow to show a version, a failed layer) leaves a pushed
+// version commit whose versions npm lacks, and no pending changesets for a plain re-run to publish. Resume only from the
+// NEWEST release commit on HEAD's first-parent history, and only when it is a beta one: a later stable release has
+// superseded the betas. `missing` is every public package whose version at that commit npm does not show; publishing is
+// idempotent (`changeset publish` skips versions npm has, and the pre-publish check stops on accepted-but-not-visible ones).
+export function unfinishedBetaRelease({ repo, view = npmView }) {
+  const head = repo.revParse("HEAD");
+  const releaseCommit = repo.history(head, ".changeset/pre.json").find((commit) => RELEASE_COMMIT.test(repo.subject(commit)));
+  if (!releaseCommit) {
+    return { missing: [], problems: ["no beta version commit on HEAD's first-parent history"] };
+  }
+  const problems = [];
+  if (!BETA_RELEASE_COMMIT.test(repo.subject(releaseCommit))) {
+    problems.push(`the newest release commit ${releaseCommit} is not a beta version commit; a later stable release superseded the betas`);
+  }
+  const missing = publicPackages(repo, releaseCommit)
+    .filter((pkg) => !view(pkg.name, pkg.version).published)
+    .map((pkg) => ({ name: pkg.name, version: pkg.version, dir: pkg.dir }));
+  return { missing, problems, releaseCommit: problems.length ? undefined : releaseCommit };
+}
+
 export async function check({
   mode,
   repo,
@@ -681,6 +704,20 @@ async function main([mode, output, ...rest]) {
     if (output) appendFileSync(output, `sha=${releaseCommit}\n`);
     return;
   }
+  if (mode === "unfinished-beta" && rest.length === 0) {
+    const { missing, problems, releaseCommit } = unfinishedBetaRelease({ repo });
+    if (missing.length === 0 && problems.length === 0) return console.log("No beta version is missing from npm; nothing to resume.");
+    if (!releaseCommit) {
+      if (missing.length === 0) return console.log(`Nothing to resume: ${problems.join("; ")}.`);
+      console.error(`Cannot resume the beta release: ${problems.join("; ")}.`);
+      process.exitCode = 1;
+      return;
+    }
+    for (const pkg of missing) console.log(`${pkg.name}@${pkg.version} is missing from npm; set by ${releaseCommit}.`);
+    console.log(`Resuming the beta release ${releaseCommit}; nothing new is versioned in this run.`);
+    if (output) appendFileSync(output, `sha=${releaseCommit}\n`);
+    return;
+  }
   if (mode === "record-accepted" && output && rest.length === 0) {
     for (const id of [...acceptedFromPublishLog(readLog(output))].sort()) console.log(`${ACCEPTED_MARKER} ${id}`);
     return;
@@ -712,7 +749,7 @@ async function main([mode, output, ...rest]) {
   }
   if (MODES.includes(mode) && output === undefined) return report(await check({ mode, repo }), mode);
   console.error(
-    `usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>, post-publish an optional <publish-log>) | record-accepted <publish-log>`,
+    `usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>, post-publish an optional <publish-log>) | record-accepted <publish-log> | unfinished-beta [<output-file>]`,
   );
   process.exitCode = 2;
 }

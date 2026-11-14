@@ -1,5 +1,65 @@
 # @tinycloud/operations
 
+## 0.9.0-beta.39
+
+### Minor Changes
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 0.9.0-beta.38
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+
+## 0.9.0-beta.37
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/sdk-services@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+
+## 0.9.0-beta.36
+
+### Patch Changes
+
+- 09f6dbf: Restore discovery, reads, conditional writes and SQL queries for existing personal apps in `default/xyz.tinycloud.agent-data/`. Existing connections reuse their permissions and records in place instead of requiring approval for a new layout or silently creating replacement apps. Query layout selection is restored; the new-layout default, exact discovery-entry grants, and hosted/public tool sets remain unchanged.
+
+  Keep existing matching legacy record kinds in their original app, while retaining explicit Health Log and Recipes catalog routing. Give stale-copy markers a unique revision so concurrent same-day writes cannot be cleared by an older rebuild.
+
+  Details: TC-2416
+
+## 0.9.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/sdk-services@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+
+## 0.9.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+
 ## 0.9.0-beta.33
 
 ### Patch Changes

@@ -9,7 +9,7 @@ describe("TC-2924 exact node-alias allowance", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
       const row = ledger.tc2924NodeAliasesRoot;
       expect(row.root.ceiling[format] - ledger.tc2904OwnerDirectProofRoot.root.ceiling[format]).toBe(row.root.delta[format]);
-      expect(rootCeilingFor({ ...ledger, tc2934RequestedAccountRoot: undefined, tc2936RestoreCommitRoot: undefined, tc2931BootstrapScope: undefined, tc2923EncryptionTeeOriginRoot: undefined, tc2949PanelChunkRecoveryRoot: undefined, tc2970RegistryVerdictCacheRoot: undefined, tc2927ShareApprovalRoot: undefined }, format)).toMatchObject({ row: "tc2924NodeAliasesRoot", ceiling: row.root.ceiling[format] });
+      expect(rootCeilingFor({ ...ledger, tc2934RequestedAccountRoot: undefined, tc2936RestoreCommitRoot: undefined, tc2931BootstrapScope: undefined, tc2923EncryptionTeeOriginRoot: undefined, tc2949PanelChunkRecoveryRoot: undefined, tc2970RegistryVerdictCacheRoot: undefined, tc2913OpenKeyContinuationRoot: undefined, tc2987RegistryAbsentReadsRoot: undefined, tc2937SharePlacementRoot: undefined }, format)).toMatchObject({ row: "tc2924NodeAliasesRoot", ceiling: row.root.ceiling[format] });
     }
   });
   test("refuses changed, removed, or unstacked allowances", () => {

@@ -5,9 +5,11 @@ import { setTimeout as wait } from "node:timers/promises";
 import { tryOpenBrowser } from "../lib/browser.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
-import { buildShareInvitationApprovalSpec, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
+import { buildShareInvitationApprovalSpec, checkApprovalResultBinding, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type ApprovalRenewal, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { ProfileManager } from "../config/profiles.js";
 import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
@@ -57,6 +59,13 @@ export function trackApprovalResult(source: object, verified: object): void {
 const acquisitions = new WeakMap<object, PendingApproval>();
 /** The `--timeout` a request was acquired under; its acknowledgement is bounded by the same limit. */
 const approvalWaits = new WeakMap<PendingApproval, ApprovalWait>();
+/** The owner renewal lease that came with an acquired delegation, verified and admitted, until the login saves it. */
+const renewals = new WeakMap<object, ApprovalRenewal>();
+
+/** The verified renewal lease an approval result carried for this delegation, if it carried one. */
+export function approvalRenewalOf(delegation: object): ApprovalRenewal | undefined {
+  return renewals.get(delegation);
+}
 
 /** Remote results require the durable login commit before their delivery can be acknowledged. */
 export function approvalResultNeedsAck(delegation: object): boolean {
@@ -326,6 +335,7 @@ async function throwRemoteError(profile: string, entry: PendingApproval, respons
 function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
   delegation: Record<string, unknown>;
   session: ReturnType<typeof verifyScopedLogin>["session"];
+  renewal?: ApprovalRenewal;
 } {
   if (!entry.resultRef || !entry.resultEnvelope) throw invalid("No encrypted approval result is available.");
   // The result the owner approved, once opened: a refusal carries it so the caller can name the refused delegation.
@@ -363,11 +373,65 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
       });
     if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() ||
       verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid("Result owner or expiry differs from its signed delegation.");
-    return { delegation, session: verified.session };
+    // A renewal is accepted only when this request asked for one, and then only bound to it.
+    if (!entry.request.renewal) return { delegation, session: verified.session };
+    let renewal: ApprovalRenewal | undefined;
+    try {
+      renewal = checkApprovalResultBinding(opened, { requestId: entry.requestId, bodyCid: entry.bodyCid, request: entry.request }).renewal;
+    } catch {
+      // share-envelope's reasons are technical; the owner sees what to do next.
+      throw invalid("The approved renewal doesn't match this request. Sign in again for a new approval.");
+    }
+    return { delegation, session: verified.session, ...(renewal ? { renewal } : {}) };
   } catch (error) {
     // The binding checks raise APPROVAL_RESULT_INVALID, which is also raised before any result exists: only here is it a refusal of one.
     if (isPermanentRefusal(error) || (error instanceof CLIError && error.code === "APPROVAL_RESULT_INVALID")) carryRefusedDelegation(error, seen);
     throw error;
+  }
+}
+
+/**
+ * Check the owner's renewal lease against the grant it renews, then admit it at the node, before anything is saved.
+ * Admission replays the exact signed lease, so a rerun after a lost answer admits the same one. A lease that does not
+ * match its grant, or a grant too close to its end for the node to start renewing it, refuses the approval for good.
+ */
+async function admitApprovedRenewal(host: string, entry: PendingApproval, verified: ReturnType<typeof verifyPendingResult> & { renewal: ApprovalRenewal }): Promise<void> {
+  const { delegation, session, renewal } = verified;
+  const header = delegation.delegationHeader;
+  const original = {
+    delegationHeader: { Authorization: typeof header === "object" && header !== null && "Authorization" in header ? String(header.Authorization) : "" },
+    delegationCid: String(delegation.delegationCid),
+    verificationMethod: String(delegation.verificationMethod),
+  };
+  const refused = (message: string): CLIError => {
+    const error = invalid(message);
+    carryRefusedDelegation(error, delegation);
+    return error;
+  };
+  // The shared verifier's messages are technical; the owner sees what happened and what to do next.
+  let signed: { originalExpiresAt: string; leaseSignedExpiresAt: string };
+  try { signed = await verifyOwnerRenewalLease(original, session.ownerDid, renewal); }
+  catch { throw refused("This renewal doesn't match the permission you approved, so it wasn't turned on. Sign in again for a new approval."); }
+  if (Date.parse(signed.originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
+    throw refused("The approved session ends too soon for its renewal to start. Sign in again for a new approval.");
+  }
+  try {
+    await admitOwnerRenewalLease({
+      host: new URL(host).origin, originalAuthorization: original.delegationHeader.Authorization, originalCid: original.delegationCid,
+      ownerDid: session.ownerDid, agentDid: entry.request.targetDid, spaceId: String(delegation.spaceId),
+      nodeIdentity: renewal.receipt.nodeIdentity, leaseAuthorization: renewal.receipt.leaseAuthorization,
+      leaseCid: renewal.receipt.leaseCid, leaseExpiresAt: signed.leaseSignedExpiresAt,
+    });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
+      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
+    }
+    // admitOwnerRenewalLease raises this when the host no longer advertises the identity the lease was issued to.
+    if (error instanceof Error && error.message === "Renewal node identity changed") {
+      throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
+    }
+    throw Object.assign(new CLIError("NETWORK_ERROR", "The TinyCloud node didn't accept this session's renewal. Your approval is saved, so run the same command again.",
+      ExitCode.NETWORK_ERROR), { cause: error });
   }
 }
 
@@ -470,7 +534,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context, now: Date.now() })
     : { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
       targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
-      ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry) };
+      ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
+      ...(options.renewalLeaseSeconds === undefined ? {} : { renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds } }) };
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }
@@ -595,12 +660,16 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     }
   }
   let verified: ReturnType<typeof verifyPendingResult>;
-  try { verified = verifyPendingResult(entry, signingKey); } catch (error) {
+  try {
+    verified = verifyPendingResult(entry, signingKey);
+    if (verified.renewal) await admitApprovedRenewal(options.host, entry, { ...verified, renewal: verified.renewal });
+  } catch (error) {
     // A refused result is never served from this entry again: its result key and reference are dropped now, as for an
     // expired or unknown result. AUTH_EXPIRED and every other error keep the entry so the same command can resume.
     if (isPermanentRefusal(error)) await forgetApproval(profile, entry);
     throw error;
   }
+  if (verified.renewal) renewals.set(verified.delegation, verified.renewal);
   await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
   acquisitions.set(verified.delegation, entry);
   if (approvalWait) approvalWaits.set(entry, approvalWait);

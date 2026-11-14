@@ -1,4 +1,5 @@
 import { verifyNewShareApproval, type NewShareApprovalIdentity, type NewShareApprovalResult } from "@tinycloud/sdk-core";
+import type { SharePlacement, SharePlacementParent } from "@tinycloud/sdk-core/share-placement";
 import { decryptColumn, isKeyWrapV2, openKeyV2, sealKeyV2, type ColumnFormat } from "@tinycloud/sdk-services/encryption";
 import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
@@ -116,6 +117,7 @@ import {
   CapabilityKeyRegistry,
   ICapabilityKeyRegistry,
   SharingService,
+  type EncodedShareData,
   ISharingService,
   // v2 types
   SiweConfig,
@@ -933,6 +935,8 @@ export interface TinyCloudNodeConfig {
   registryPolicy?: RegistryPolicy;
   /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
   newUserHost?: string | null;
+  /** Explicit wallet-owner signing for share-only placement; never a session key. */
+  sharePlacementSigner?: (message: string) => Promise<string>;
   /** `fail-closed` only: chain ID of the v1 registry subject built from the signer address (never the session chain). Default 1. */
   registryChainId?: number;
   /** `fail-closed` only: highest registry sequence seen per owner. Default: in-memory for this client. */
@@ -2159,6 +2163,9 @@ export class TinyCloudNode {
   private createReceiveOnlySharing(): SharingService {
     const receiveOnlyGraph = this._serviceGraph;
     return new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(receiveOnlyGraph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(receiveOnlyGraph, share),
       hosts: [this.config.host!],
       // session: undefined - not needed for receive()
       invoke: receiveOnlyGraph.invoke,
@@ -2295,7 +2302,7 @@ export class TinyCloudNode {
         }
       },
       {
-        resolveResource: (resource, access) => this.routingDestinations(resource, access),
+        resolveResource: (resource, access, dataRead) => this.routingDestinations(resource, access, undefined, dataRead),
         bindAudience: (authorization, nodeDid) => this.bindRoutedAudience(authorization, nodeDid, session),
         verifyDestination: (target) => verifyResourceDestination(target, globalThis.fetch.bind(globalThis)),
       },
@@ -2312,8 +2319,8 @@ export class TinyCloudNode {
     );
   }
 
-  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
-    const destinations = await this.registryDestinations(resource, access, noEntryHosts);
+  private async routingDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
+    const destinations = await this.registryDestinations(resource, access, noEntryHosts, dataRead);
     // Encryption-network traffic carries key material and public keys, so it
     // only uses the origin whose TLS terminates inside the node (TC-2923). The
     // identity check that follows runs against that origin; nothing retries on
@@ -2323,7 +2330,7 @@ export class TinyCloudNode {
       : destinations;
   }
 
-  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[]): Promise<ResourceDestination[]> {
+  private async registryDestinations(resource: string, access: ResourceAccess, noEntryHosts?: readonly string[], dataRead?: boolean): Promise<ResourceDestination[]> {
     const owner = resource.startsWith("urn:tinycloud:encryption:")
       ? parseNetworkId(resource.split("/")[0]).ownerDid : parseSpaceUri(resource)?.owner ??
         (() => { const key = /^tinycloud:key:(z[^:]+):[^/]+$/.exec(resource); return key ? `did:key:${key[1]}` : undefined; })();
@@ -2334,7 +2341,7 @@ export class TinyCloudNode {
     if (session) this.refreshRegistryOwner(pkhDid(session.address, session.chainId));
     // Auth receives constructor-trusted hosts separately and may accept an
     // explicit code-supplied sign-in override, never a restored host list.
-    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts);
+    if (this.auth) return this.auth.resolveResourceDestinations(resource, access, noEntryHosts, dataRead);
     const candidates = noEntryHosts ?? this.trustedNoEntryHosts;
     const subject = owner.startsWith("did:pkh:") ? pkhDid(owner.slice(owner.lastIndexOf(":") + 1), this.config.registryChainId ?? 1) : owner;
     const resolved = await resolveRegistryResource(subject, resource, access, {
@@ -2343,6 +2350,7 @@ export class TinyCloudNode {
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
       verdictCache: this.config.registryVerdictCache,
+      dataRead,
       onRegistryFallback: this.config.onRegistryFallback,
     });
     if (resolved.verdict.status === "unregistered") {
@@ -2387,14 +2395,48 @@ export class TinyCloudNode {
     return this.createResourceTransport(this._serviceGraph, this._serviceContext?.session ?? undefined);
   }
 
-  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession): ResourceTransport {
+  private async createPlacementForShare(graph: ServiceGraphLifetime, share: EncodedShareData): Promise<SharePlacement> {
+    graph.assertActive();
+    const sign = this.config.sharePlacementSigner ?? (this.config.privateKey && this.signer
+      ? (message: string) => this.signer!.signMessage(message) : undefined);
+    if (!sign) throw new Error("Share placement requires an explicit wallet owner signer");
+    const node = await this.activeNodeIdentity();
+    graph.assertActive();
+    const { signSharePlacement } = await import("@tinycloud/sdk-core/share-placement");
+    const record = await signSharePlacement({ ...share.delegation, spaceId: share.spaceId }, { did: node.nodeDid, url: node.origin }, async message => {
+      graph.assertActive();
+      const signature = await sign(message);
+      graph.assertActive();
+      return signature;
+    });
+    graph.assertActive();
+    return record;
+  }
+
+  private async transportForPlacedShare(graph: ServiceGraphLifetime, share: EncodedShareData): Promise<ResourceTransport> {
+    if (this.config.tinycloudRegistryUrl === null) throw new Error("Share placement registry lookup is explicitly disabled");
+    const parent = { cid: share.delegation.cid, authHeader: share.delegation.authHeader, spaceId: share.spaceId };
+    const { verifySharePlacement } = await import("@tinycloud/sdk-core/share-placement");
+    const record = await verifySharePlacement(share.placement, parent);
+    graph.assertActive();
+    return this.createResourceTransport(graph, undefined, { record, parent });
+  }
+
+  private createResourceTransport(graph: ServiceGraphLifetime, session?: ServiceSession,
+    placement?: { record: SharePlacement; parent: SharePlacementParent }): ResourceTransport {
     const rawFetch = this.fetchForGraph(graph);
     return async (resources, send, options) => {
       graph.assertActive();
       return routeResourceRequest(resources, {
-        resolveResource: async (requestedResource, requestedAccess) => {
+        resolveResource: async (requestedResource, requestedAccess, dataRead) => {
           graph.assertActive();
-          const targets = await this.routingDestinations(requestedResource, requestedAccess);
+          const targets = placement && requestedResource === placement.parent.spaceId && requestedAccess !== "encryption"
+            ? await (await import("@tinycloud/sdk-core/share-placement")).sharePlacementDestinations(placement.record, placement.parent, {
+              registryUrl: this.config.tinycloudRegistryUrl ?? undefined, sequenceStore: this.config.registrySequenceStore,
+              cacheStore: this.config.registryCacheStore, registryChainId: this.config.registryChainId,
+              fetch: rawFetch as typeof fetch,
+            })
+            : await this.routingDestinations(requestedResource, requestedAccess, undefined, dataRead);
           graph.assertActive();
           return targets;
         },
@@ -2855,9 +2897,10 @@ export class TinyCloudNode {
       sequenceStore: this.config.registrySequenceStore,
       cacheStore: this.config.registryCacheStore,
     };
-    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one.
+    // With a verdict cache the prefetch is the lookup later routing joins, not an extra one. Its result is
+    // discarded, so it may keep an absence for data reads.
     void (this.config.registryVerdictCache
-      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache })
+      ? lookupOwnerRegistryVerdict(subject, { ...options, verdictCache: this.config.registryVerdictCache, dataRead: true })
       : refreshOwnerRegistry(subject, options)).catch(() => undefined);
   }
 
@@ -3250,6 +3293,7 @@ export class TinyCloudNode {
   /** Prepare the OpenKey request before the approval click. */
   async prepareOpenKeySignIn(
     options?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[0],
+    identity?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[1],
   ): Promise<PreparedOpenKeyAuthorization> {
     if (!this.signer || !this.tc || !this.auth) {
       throw new Error("Cannot prepare OpenKey sign-in in session-only mode. Provide a signer in config.");
@@ -3257,7 +3301,14 @@ export class TinyCloudNode {
     await this.signOutInFlight;
     await this.accountRegistryTail;
     await this.wasmBindings.ensureInitialized?.();
-    return this.auth.prepareOpenKeySignIn(options);
+    return this.auth.prepareOpenKeySignIn(options, identity);
+  }
+
+  verifyPreparedOpenKeySignIn(
+    ...args: Parameters<NodeUserAuthorization["verifyPreparedOpenKeySignIn"]>
+  ): Promise<void> {
+    if (!this.auth) throw new Error("OpenKey authorization unavailable");
+    return this.auth.verifyPreparedOpenKeySignIn(...args);
   }
 
   /** Start OpenKey authorization synchronously, then complete normal session setup. */
@@ -3283,10 +3334,10 @@ export class TinyCloudNode {
         throw new Error("OpenKey account changed after sign-in preparation");
       }
       return this.auth!.completeOpenKeySignIn(pending, authorization);
-    });
+    }, pending.identity);
   }
 
-  private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
+  private async signInWith(performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     // Refuse a caveated manifest before any signer, registry or host call.
     refuseCaveated(this.auth?.capabilityRequest?.manifests);
     // Read synchronously: a sign-out called after this sign-in started wins,
@@ -3295,7 +3346,7 @@ export class TinyCloudNode {
     const attempt = ++this.latestSessionAttempt;
     await this.signOutInFlight;
     try {
-      await this.establishSignIn(epoch, performSignIn);
+      await this.establishSignIn(epoch, performSignIn, identity);
     } catch (error) {
       // A sign-out during sign-in wins: end whatever this sign-in established,
       // unless a newer sign-in or restore has started since.
@@ -3306,7 +3357,7 @@ export class TinyCloudNode {
     }
   }
 
-  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>): Promise<void> {
+  private async establishSignIn(epoch: number, performSignIn: () => Promise<unknown>, identity?: PreparedOpenKeyAuthorization["identity"]): Promise<void> {
     if (!this.signer || !this.tc) {
       throw new Error("Not signed in. Call signIn() first.");
     }
@@ -3320,8 +3371,8 @@ export class TinyCloudNode {
     // Ensure WASM is ready (critical for browser where WASM loads asynchronously)
     await this.wasmBindings.ensureInitialized?.();
 
-    const address = canonicalizeAddress(await this.signer.getAddress());
-    const chainId = await this.signer.getChainId();
+    const address = canonicalizeAddress(identity?.address ?? await this.signer.getAddress());
+    const chainId = identity?.chainId ?? await this.signer.getChainId();
     this.assertSessionEpoch(epoch, "Sign-in");
     const nextPrincipal = pkhDid(address, chainId);
     const priorPrincipal = this.replicaSessionPrincipal
@@ -5410,6 +5461,9 @@ export class TinyCloudNode {
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
     const sharingService = new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(graph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
       hosts: [input.host],
       invoke: graph.invoke,
       fetch: graph.fetch,
@@ -6612,6 +6666,9 @@ export class TinyCloudNode {
     // Recreate it for this graph instead of updating the receive-only instance
     // from the graph that was just retired during a subsequent sign-in.
     this._sharingService = new SharingService({
+      createPlacement: this.config.sharePlacementSigner || this.config.privateKey
+        ? share => this.createPlacementForShare(graph, share) : undefined,
+      receivedPlacementTransport: share => this.transportForPlacedShare(graph, share),
       hosts: [this.config.host!],
       session: serviceSession,
       invoke: graph.invoke,
@@ -6761,6 +6818,7 @@ export class TinyCloudNode {
   async createOwnerDelegation(
     params: CreateOwnerDelegationParams,
     assertActive?: () => void,
+    onPrepared?: (delegation: Delegation) => Promise<void>,
   ): Promise<OwnerDelegationReceipt> {
     const graph = this._serviceGraph;
     const assertOwnerGraphActive = assertActive ?? graph.assertActive.bind(graph);
@@ -6804,14 +6862,6 @@ export class TinyCloudNode {
     const signature = await this.signer.signMessage(prepared.siwe);
     assertOwnerGraphActive();
     const delegationSession = this.wasmBindings.completeSessionSetup({ ...prepared, signature });
-    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
-    assertOwnerGraphActive();
-    if (!activation.success) {
-      throw Object.assign(
-        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
-        { cause: activation },
-      );
-    }
     const delegation: Delegation = {
       cid: delegationSession.delegationCid,
       delegateDID: params.delegateDid,
@@ -6825,6 +6875,17 @@ export class TinyCloudNode {
       createdAt: now,
       authHeader: delegationSession.delegationHeader.Authorization,
     };
+    if (onPrepared) await onPrepared(delegation);
+    assertOwnerGraphActive();
+    const activation = await this.activateSignedSession(delegationSession, prepared.siwe, graph.signal);
+    assertOwnerGraphActive();
+    if (!activation.success) {
+      throw Object.assign(
+        new Error(`Owner delegation import failed: ${activation.status} ${activation.error ?? ""}`.trim()),
+        { cause: activation },
+      );
+    }
+
     return {
       delegation,
       signedDagCbor: decodeAuthorizationBytes(delegationSession.delegationHeader.Authorization),
@@ -6998,6 +7059,7 @@ export class TinyCloudNode {
   }
 
   private async createRootDelegationForSharing(params: {
+    onPrepared?: (delegation: Delegation) => Promise<void>;
     shareKeyDID: string;
     spaceId: string;
     path: string;
@@ -7013,7 +7075,7 @@ export class TinyCloudNode {
         path: params.path,
         actions: params.actions,
         expiresAt: params.requestedExpiry,
-      }, assertActive)).delegation;
+      }, assertActive, params.onPrepared)).delegation;
     } catch {
       assertActive?.();
       return undefined;

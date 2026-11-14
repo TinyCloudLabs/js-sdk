@@ -1232,3 +1232,4 @@ export { verifyNewShareApproval, type NewShareApprovalExpected, type NewShareApp
   type NewShareApprovalResult } from "./authorization/new-share-approval";
 export { AccountSetupRequiredError } from "./account-setup";
 export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
+export { verifiedDelegationRouting, spaceIdsEqual } from "./delegations/portable";

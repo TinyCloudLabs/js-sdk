@@ -56,7 +56,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
-import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
+import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -85,6 +85,7 @@ import {
   sessionStateIsUsable,
   storedSessionState,
   type StoredSessionState,
+  defaultManifestLoginExpiry,
 } from "../auth/scoped-login.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
@@ -636,7 +637,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
-    .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
+    .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
@@ -767,7 +768,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             noPopup: options.popup === false,
             permissions: loginPermissions,
             replication: replicationOptions,
-            expiry: parseExpiryOption(options.expiry),
+            expiry: parseExpiryOption(options.expiry) ?? (options.manifest === undefined ? undefined : defaultManifestLoginExpiry(options.manifest)),
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
@@ -1647,6 +1648,7 @@ function describeSession(state: StoredSessionState, expiresAt: string | null): s
     case "missing": return "none";
     case "expired": return `expired ${expiresAt}`;
     case "present": return `active until ${expiresAt}`;
+    case "renewed": return `renews until ${expiresAt}`;
     case "unknown-expiry": return "active (no recorded expiry)";
     case "unverified": return "not usable (no signed OpenKey proof)";
   }
@@ -3131,6 +3133,9 @@ export async function refreshOpenKeySession(
     verifiedOwner = signed.ownerDid;
     sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
   }
+  // The owner's renewal lease is saved with the session only when the approval result's lease verified and was admitted.
+  const renewal = approvalRenewalOf(delegationData);
+  if (renewal) sanitizedSession = { ...sanitizedSession, renewal };
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
   // recorded only beside a verified owner.
