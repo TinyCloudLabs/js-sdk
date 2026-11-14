@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.46
+
+### Patch Changes
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+
 ## 0.6.0-beta.45
 
 ### Patch Changes

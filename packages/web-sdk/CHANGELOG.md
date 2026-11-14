@@ -1,5 +1,18 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.37
+
+### Patch Changes
+
+- c2fde3d: Treat `https://tinycloud.one` and two native webview origins, `https://app.tinycloud.one` and `tinycloudone://app.tinycloud.one`, as first-party origins. Pages served from those exact origins receive the implicit first-party bootstrap permissions at sign-in, like the other first-party app origins. Subdomains, other ports, `http://`, other schemes and other casings are still treated as third-party.
+
+  Details: TC-3030
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+  - @tinycloud/replica@0.4.5-beta.11
+
 ## 3.12.0-beta.36
 
 ### Patch Changes

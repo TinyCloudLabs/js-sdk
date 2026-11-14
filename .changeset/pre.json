@@ -105,6 +105,7 @@
     "tc-2937-share-only-placement",
     "tc-2987-browser-registry-verdict",
     "tc-3030-first-party-origins",
+    "tc-3030-tinycloud-one-origin",
     "tc-712-issued-resource",
     "tc-712-proofless-revoke",
     "tc2234-cli-invite-approval",
