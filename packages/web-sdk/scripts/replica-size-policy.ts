@@ -478,6 +478,7 @@ export type Ledger = {
   tc2913OpenKeyContinuationRoot?: LogoutRatchet;
   tc2987RegistryAbsentReadsRoot?: LogoutRatchet;
   tc2937SharePlacementRoot?: LogoutRatchet;
+  tc3030FirstPartyOriginsRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1110,6 +1111,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2913OpenKeyContinuationRoot !== undefined) pins.push({ row: "tc2913OpenKeyContinuationRoot", pin: root.tc2913OpenKeyContinuationRoot.sourceCommits.at(-1)! });
   if (root.tc2987RegistryAbsentReadsRoot !== undefined) pins.push({ row: "tc2987RegistryAbsentReadsRoot", pin: root.tc2987RegistryAbsentReadsRoot.sourceCommits.at(-1)! });
   if (root.tc2937SharePlacementRoot !== undefined) pins.push({ row: "tc2937SharePlacementRoot", pin: root.tc2937SharePlacementRoot.sourceCommits.at(-1)! });
+  if (root.tc3030FirstPartyOriginsRoot !== undefined) pins.push({ row: "tc3030FirstPartyOriginsRoot", pin: root.tc3030FirstPartyOriginsRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1212,6 +1214,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2913OpenKeyContinuationRoot", root.tc2913OpenKeyContinuationRoot?.root.ceiling],
     ["tc2987RegistryAbsentReadsRoot", root.tc2987RegistryAbsentReadsRoot?.root.ceiling],
     ["tc2937SharePlacementRoot", root.tc2937SharePlacementRoot?.root.ceiling],
+    ["tc3030FirstPartyOriginsRoot", root.tc3030FirstPartyOriginsRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3466,6 +3469,26 @@ export const approvedTc2937SharePlacementRoot: LogoutRatchet = {
   "reason": "Native sharing envelopes may carry an opt-in wallet-owner-signed placement that receivers verify before routing to its destination; the root carries the envelope fields, placement routing and the frozen bridge, while placement verification loads from the separate share-placement entry. Canonical Node 22/Bun 1.3.14 CI measured 1525878/1460319 gzip -9 bytes on 5a99f8b8, based on d4949e8c. This is +703/+690 over the TC-2987 ceilings 1525175/1459629, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2937"
 };
 
+/** Naomi's exact TC-3030 tinycloud.one first-party origins root allowance from canonical CI. */
+export const approvedTc3030FirstPartyOriginsRoot: LogoutRatchet = {
+  "label": "tinycloud.one first-party origins (TC-3030)",
+  "ruling": "Naomi's ruling (a), 2026-11-15: one add-only row for #987's exact canonical CI bytes; index.mjs +12 B over the TC-2937 ceiling, index.cjs measured under its ceiling and left unchanged (the 10-24 practice).",
+  "base": "37d930ec31806b28ff83f0801bd35308d73a9e6d",
+  "sourceCommits": ["a7b59fa11333d7efa65a9993f3ebb026c47baf76"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539/job/132389214068",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539/job/132389213878"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 12, "index.cjs": 0 },
+    "ceiling": { "index.mjs": 1525890, "index.cjs": 1460319 }
+  },
+  "reason": "The bootstrap first-party origin list gains tinycloud.one and TinyChat's native webview origins as SDK-only entries, which the web-sdk root bundles. Canonical Node 22/Bun 1.3.14 CI on the master merge of #987 (47b18bde, first parent 37d930ec) measured index.mjs 1525890 and index.cjs 1460232 gzip -9 bytes: +12 over the TC-2937 ceiling 1525878 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3030"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3565,6 +3588,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2913OpenKeyContinuationRoot: approvedTc2913OpenKeyContinuationRoot,
   tc2987RegistryAbsentReadsRoot: approvedTc2987RegistryAbsentReadsRoot,
   tc2937SharePlacementRoot: approvedTc2937SharePlacementRoot,
+  tc3030FirstPartyOriginsRoot: approvedTc3030FirstPartyOriginsRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4018,6 +4042,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2987RegistryAbsentReadsRoot ||
         JSON.stringify(value.tc2937SharePlacementRoot) !== JSON.stringify(approvedTc2937SharePlacementRoot))) {
     throw new Error("Only Naomi's exact TC-2937 root admission is approved.");
+  }
+  if (value.tc3030FirstPartyOriginsRoot !== undefined &&
+      (!value.tc2937SharePlacementRoot ||
+        JSON.stringify(value.tc3030FirstPartyOriginsRoot) !== JSON.stringify(approvedTc3030FirstPartyOriginsRoot))) {
+    throw new Error("Only Naomi's exact TC-3030 root admission is approved.");
   }
 }
 
@@ -4887,5 +4916,13 @@ export function validateTc2937SharePlacementRootTransition(base?: LogoutRatchet,
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2937SharePlacementRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2937 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3030 tinycloud.one first-party origins root admission is introduced once and immutable. */
+export function validateTc3030FirstPartyOriginsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3030FirstPartyOriginsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3030 root admission may be introduced once and cannot change later.");
   }
 }
