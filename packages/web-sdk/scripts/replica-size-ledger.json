@@ -3237,5 +3237,23 @@
       "ceiling": { "index.mjs": 1525878, "index.cjs": 1460319 }
     },
     "reason": "Native sharing envelopes may carry an opt-in wallet-owner-signed placement that receivers verify before routing to its destination; the root carries the envelope fields, placement routing and the frozen bridge, while placement verification loads from the separate share-placement entry. Canonical Node 22/Bun 1.3.14 CI measured 1525878/1460319 gzip -9 bytes on 5a99f8b8, based on d4949e8c. This is +703/+690 over the TC-2987 ceilings 1525175/1459629, within Naomi's +800-byte per-format cap. Other ceilings are unchanged. Details: TC-2937"
+  },
+  "tc3030FirstPartyOriginsRoot": {
+    "label": "tinycloud.one first-party origins (TC-3030)",
+    "ruling": "Naomi's ruling (a), 2026-11-15: one add-only row for #987's exact canonical CI bytes; index.mjs +12 B over the TC-2937 ceiling, index.cjs measured under its ceiling and left unchanged (the 10-24 practice).",
+    "base": "37d930ec31806b28ff83f0801bd35308d73a9e6d",
+    "sourceCommits": ["a7b59fa11333d7efa65a9993f3ebb026c47baf76"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539/job/132389214068",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43575663539/job/132389213878"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 12, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1525890, "index.cjs": 1460319 }
+    },
+    "reason": "The bootstrap first-party origin list gains tinycloud.one and TinyChat's native webview origins as SDK-only entries, which the web-sdk root bundles. Canonical Node 22/Bun 1.3.14 CI on the master merge of #987 (47b18bde, first parent 37d930ec) measured index.mjs 1525890 and index.cjs 1460232 gzip -9 bytes: +12 over the TC-2937 ceiling 1525878 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3030"
   }
 }
