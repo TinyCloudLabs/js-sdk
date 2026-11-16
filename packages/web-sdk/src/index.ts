@@ -1,4 +1,5 @@
 export { SessionAccountMismatchError } from "./modules/restoreAccount";
+export { sharePlacementCore as __sharePlacementCore } from "./share-placement-core";
 // Main class and config
 export {
   TinyCloudWeb,

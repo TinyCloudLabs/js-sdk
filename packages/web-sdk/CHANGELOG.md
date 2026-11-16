@@ -1,5 +1,65 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.38
+
+### Patch Changes
+
+- 711903b: A session or delegation made under a parent that expires on a fractional second now ends at the parent's whole second. `useDelegation` activates its session, `createSubDelegation` defaults and caps its delegation, and `grantRuntimePermissions` ends its grants at the session, each rounded down to the whole second, so a node that reads the parent's expiry in whole seconds accepts them (it refused them as outliving the parent). A delegation with less than a second left is refused with a clear message.
+
+  Details: TC-3076
+
+- Updated dependencies [711903b]
+  - @tinycloud/node-sdk@3.12.0-beta.38
+
+## 3.12.0-beta.37
+
+### Patch Changes
+
+- c2fde3d: Treat `https://tinycloud.one` and two native webview origins, `https://app.tinycloud.one` and `tinycloudone://app.tinycloud.one`, as first-party origins. Pages served from those exact origins receive the implicit first-party bootstrap permissions at sign-in, like the other first-party app origins. Subdomains, other ports, `http://`, other schemes and other casings are still treated as third-party.
+
+  Details: TC-3030
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+  - @tinycloud/replica@0.4.5-beta.11
+
+## 3.12.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 3.12.0-beta.35
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- 163f986: Remove one non-public origin from `FIRST_PARTY_ORIGINS`. Pages served from that origin no longer receive implicit first-party bootstrap permissions at sign-in. All other first-party origins and Pages projects are unchanged.
+
+  Details: TC-3030
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+  - @tinycloud/replica@0.4.5-beta.10
+
 ## 3.12.0-beta.33
 
 ### Patch Changes

@@ -56,7 +56,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
-import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
+import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -1648,6 +1648,7 @@ function describeSession(state: StoredSessionState, expiresAt: string | null): s
     case "missing": return "none";
     case "expired": return `expired ${expiresAt}`;
     case "present": return `active until ${expiresAt}`;
+    case "renewed": return `renews until ${expiresAt}`;
     case "unknown-expiry": return "active (no recorded expiry)";
     case "unverified": return "not usable (no signed OpenKey proof)";
   }
@@ -3132,6 +3133,9 @@ export async function refreshOpenKeySession(
     verifiedOwner = signed.ownerDid;
     sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
   }
+  // The owner's renewal lease is saved with the session only when the approval result's lease verified and was admitted.
+  const renewal = approvalRenewalOf(delegationData);
+  if (renewal) sanitizedSession = { ...sanitizedSession, renewal };
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
   // recorded only beside a verified owner.

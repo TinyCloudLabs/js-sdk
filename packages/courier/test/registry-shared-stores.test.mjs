@@ -22,7 +22,7 @@ await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const HOST = `http://127.0.0.1:${stub.address().port}`;
 test.after(() => stub.close());
 
-test('two Courier nodes of one process look a registered owner up once: they share the cache and the registry stores', async () => {
+test('Courier nodes of one process re-read a registered owner on every call and share its rollback floor', async () => {
   const home = fs.mkdtempSync(path.join(process.env.COURIER_TEST_HOME, 'shared-stores-'));
   const signer = new PrivateKeySigner(randomBytes(32).toString('hex'));
   const address = await signer.getAddress();
@@ -45,11 +45,13 @@ test('two Courier nodes of one process look a registered owner up once: they sha
   for (const [file, body] of [['profile.json', profile], ['key.json', key], ['grant.json', grant]]) fs.writeFileSync(path.join(home, file), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
 
   const { nodeId } = await (await fetch(`${HOST}/info`)).json();
-  const record = await signLocationRecordV2({
+  const signed = (sequence) => signLocationRecordV2({
     version: 2, subject: registryOwnerSubjectV1(address), nodes: [{ did: nodeId, url: HOST }],
     spaces: [{ space: spaceId, nodes: [{ did: nodeId, mode: 'read-write' }] }], encryptionNode: null,
-    updated_at: now.toISOString(), sequence: 1,
+    updated_at: now.toISOString(), sequence,
   }, { type: 'did:pkh', signMessage: (message) => signer.signMessage(message) });
+  const [current, older] = [await signed(2), await signed(1)];
+  let served = current;
 
   // The registry: this owner's signed record on v2, no record for anyone else. Nothing else leaves the loopback host.
   const registry = new URL(DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL).origin;
@@ -62,7 +64,7 @@ test('two Courier nodes of one process look a registered owner up once: they sha
       const owner = decodeURIComponent(url.pathname.slice(url.pathname.lastIndexOf('/') + 1)).split(':').at(-1).toLowerCase();
       if (owner === address.toLowerCase()) lookups[version]++;
       return version === 'v2' && owner === address.toLowerCase()
-        ? Response.json({ record })
+        ? Response.json({ record: served })
         : Response.json({ error: 'location record not found' }, { status: 404 });
     }
     if (url.origin !== HOST) throw new Error(`Non-fixture origin refused: ${url.origin}`);
@@ -75,7 +77,17 @@ test('two Courier nodes of one process look a registered owner up once: they sha
     for (let i = 0; i < 5; i++) await first.kv.get(`${PREFIX}/me/probe/a${i}.json`);
     const second = await courierNode(loaded, home);
     for (let i = 0; i < 5; i++) await second.kv.get(`${PREFIX}/me/probe/b${i}.json`);
-    assert.deepEqual(lookups, { v2: 1, v1: 0 });
+    assert.equal(lookups.v2, 12, 'ten calls and one owner prefetch per node: a registered owner is re-read on every call');
+    assert.equal(lookups.v1, 0, 'v1 is never asked when v2 has the record');
+
+    // The registry now serves an older signed record. A third node of the process refuses it: the floor the first two
+    // learned (sequence 2) is in the store all of them share.
+    served = older;
+    const third = await courierNode(loaded, home);
+    const outcome = await third.kv.get(`${PREFIX}/me/probe/c.json`).then((result) => result, (error) => ({ ok: false, error }));
+    // With a store of its own, the third node would accept sequence 1 and reach the node (KV_NOT_FOUND).
+    assert.equal(outcome.error?.code, 'registry_unavailable');
+    assert.match(String(outcome.error?.message), /sequence 1 is below remembered sequence 2/);
   } finally {
     globalThis.fetch = real;
   }

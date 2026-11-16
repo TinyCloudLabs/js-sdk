@@ -1,5 +1,52 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.38
+
+### Patch Changes
+
+- 711903b: A session or delegation made under a parent that expires on a fractional second now ends at the parent's whole second. `useDelegation` activates its session, `createSubDelegation` defaults and caps its delegation, and `grantRuntimePermissions` ends its grants at the session, each rounded down to the whole second, so a node that reads the parent's expiry in whole seconds accepts them (it refused them as outliving the parent). A delegation with less than a second left is refused with a clear message.
+
+  Details: TC-3076
+
+## 3.12.0-beta.37
+
+### Patch Changes
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/sdk-services@3.12.0-beta.37
+  - @tinycloud/replica@0.4.5-beta.11
+
+## 3.12.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+
+## 3.12.0-beta.35
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/sdk-services@3.12.0-beta.34
+  - @tinycloud/replica@0.4.5-beta.10
+
 ## 3.12.0-beta.33
 
 ### Patch Changes

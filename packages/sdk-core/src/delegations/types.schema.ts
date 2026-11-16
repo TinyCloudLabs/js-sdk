@@ -532,6 +532,7 @@ export type IngestOptions = z.infer<typeof IngestOptionsSchema>;
  * Parameters for generating a share link.
  */
 export const GenerateShareParamsSchema = z.object({
+  includePlacement: z.boolean().optional(),
   /** Resource path to share */
   path: z.string(),
   /** Actions to authorize */

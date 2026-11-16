@@ -42,6 +42,7 @@ export interface InboundCollection {
 }
 
 const MSG_KEY = /\/threads\/([^/]+)\/msg\/([^/]+)\.json$/;
+const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
 export function selectUndelivered(msgKeys: string[], receipts: Receipts): { key: string; threadId: string; messageId: string }[] {
   const selected: { key: string; threadId: string; messageId: string }[] = [];
@@ -72,10 +73,16 @@ export async function collectInbound(input: {
       const receipts = (await getJson<Receipts>(input.selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
       receipts.threads ??= {};
       const deliveries: PendingDelivery[] = [];
-      const selected = selectUndelivered(keys, receipts);
+      // Ids come from the peer's key names. An unsafe one is never fetched, listed or receipted, and is reported
+      // escaped, so no control or bidi character from a peer reaches the text or `--json` output.
+      const selected = selectUndelivered(keys, receipts).filter(item => {
+        if (SAFE_ID.test(item.threadId) && SAFE_ID.test(item.messageId)) return true;
+        errors.push({ peer: peer.handle, code: 'bad-message', message: `message ${oneLine(item.messageId, 80)} in thread ${oneLine(item.threadId, 80)}: ignored, unsafe id` });
+        return false;
+      });
       const fetched = await getJsonMany<unknown>(peerKv, selected.map(item => item.key));
       for (const item of selected.filter(item => fetched.tooLarge.includes(item.key))) {
-        errors.push({ peer: peer.handle, code: 'message-too-large', message: `message ${item.messageId} in thread ${item.threadId}: too large to read` });
+        errors.push({ peer: peer.handle, code: 'message-too-large', message: `message ${oneLine(item.messageId, 80)} in thread ${oneLine(item.threadId, 80)}: too large to read` });
       }
       for (const item of selected) {
         const result = fetched.values.get(item.key);
@@ -87,7 +94,7 @@ export async function collectInbound(input: {
           errors.push({
             peer: peer.handle,
             code: 'bad-message',
-            message: `message ${item.messageId} in thread ${item.threadId}: ignored malformed ${view.invalid.join(', ')}`,
+            message: `message ${oneLine(item.messageId, 80)} in thread ${oneLine(item.threadId, 80)}: ignored malformed ${view.invalid.join(', ')}`,
           });
         }
         items.push({

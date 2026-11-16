@@ -1,5 +1,80 @@
 # @tinycloud/courier
 
+## 0.6.0-beta.47
+
+### Patch Changes
+
+- Updated dependencies [711903b]
+  - @tinycloud/node-sdk@3.12.0-beta.38
+
+## 0.6.0-beta.46
+
+### Patch Changes
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+
+## 0.6.0-beta.45
+
+### Patch Changes
+
+- f3df7de: A CLI sign-in whose approval returns an owner-signed renewal lease now checks the lease against the grant it renews, admits it at the node and saves it with the session. After the original grant ends, CLI commands and the MCP server's stdio mode restore that session through the node while the lease is live, and `tc auth status` shows that it renews until the lease ends. A lease that ended or was stopped asks for a new sign-in; a node that can't be reached is reported as a network error, not as an expired session. The CLI does not ask for a renewal yet.
+
+  `@tinycloud/sdk-core/delegations/renewal-receipt` exports the lease verifier that Courier and the CLI share, and `@tinycloud/operations/profile` exports `restoreStoredSession` and `liveStoredLease`. Courier's renewal mismatch errors now say what didn't match and tell the owner to run `courier init` and approve again.
+
+  Details: TC-2904
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 0.6.0-beta.44
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 0.6.0-beta.43
+
+### Patch Changes
+
+- 271b73d: Courier keeps only a confirmed absence from the location registry, and only plain data reads use it. Reads of an owner with no registry record share one lookup per minute in a process, so `read`, `inbox` and an idle `watch` pass keep their lower registry traffic. Everything else looks the owner up when it runs:
+  - each write to a space (send, `watch` and `intake` imports, mirrors, receipts and state, `outbox serve`, pause and resume notices, tasks, requests, pairing);
+  - installing a peer's grant;
+  - an owner with a registry record, before every call.
+
+  A removed or changed registration is seen on the next such call.
+
+  Details: TC-2481, TC-2970
+
+## 0.6.0-beta.42
+
+### Minor Changes
+
+- e1ebdc4: Validate and persist owner-signed renewal lease approval proofs and restore admitted agent-grant renewals, including retrying a saved installation after the original grant expires. Renewal request emission requires the coordinated OpenKey producer rollout.
+
+  Details: TC-2904
+
+## 0.6.0-beta.41
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+
+## 0.6.0-beta.40
+
+### Patch Changes
+
+- d7e4062: `courier inbox` skips a message whose thread or message id, taken from the peer's key name, isn't a safe id (letters, digits, `-` and `_`, at most 64 characters), as the watcher already does. Such a message isn't fetched, listed or receipted; it is reported as `bad-message` with the id escaped, so no control or bidi character from a peer reaches the text or `--json` output. The ids in the `bad-message` and `message-too-large` errors are escaped too. Courier's `test` script now fails a test file that runs longer than 2 minutes instead of hanging.
+
+  Details: TC-2951
+
 ## 0.6.0-beta.39
 
 ### Patch Changes

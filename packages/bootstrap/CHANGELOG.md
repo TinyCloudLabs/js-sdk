@@ -1,5 +1,21 @@
 # @tinycloud/bootstrap
 
+## 2.9.0-beta.2
+
+### Patch Changes
+
+- c2fde3d: Treat `https://tinycloud.one` and two native webview origins, `https://app.tinycloud.one` and `tinycloudone://app.tinycloud.one`, as first-party origins. Pages served from those exact origins receive the implicit first-party bootstrap permissions at sign-in, like the other first-party app origins. Subdomains, other ports, `http://`, other schemes and other casings are still treated as third-party.
+
+  Details: TC-3030
+
+## 2.9.0-beta.1
+
+### Patch Changes
+
+- 163f986: Remove one non-public origin from `FIRST_PARTY_ORIGINS`. Pages served from that origin no longer receive implicit first-party bootstrap permissions at sign-in. All other first-party origins and Pages projects are unchanged.
+
+  Details: TC-3030
+
 ## 2.9.0-beta.0
 
 ### Minor Changes
