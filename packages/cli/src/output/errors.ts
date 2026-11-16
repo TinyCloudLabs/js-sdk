@@ -30,22 +30,29 @@ export function setActiveProfileName(name: string): void {
 /** Every command that reports `GRANT_REVOKED` exits with this (documented: 5, a refused grant). */
 export const GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
 
-/** What an agent needs while an OpenKey approval is still outstanding: the link to send and when it stops working. */
+/**
+ * What an agent needs while an OpenKey approval is still outstanding: the link to send and when it stops working.
+ * `renewalLeaseSeconds` is the longest renewal the request asks the owner for, present only when it asks.
+ */
 export interface ApprovalPending {
   readonly step: number;
   readonly of: number;
   readonly approvalUrl: string;
   readonly expiresAt: string;
+  readonly renewalLeaseSeconds?: number;
 }
 
 /** The `pending` object of an APPROVAL_PENDING error, rebuilt field by field, or undefined for any other error. */
 export function approvalPendingOf(error: { code: string; metadata?: Record<string, unknown> }): ApprovalPending | undefined {
   const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : undefined;
   if (typeof pending !== "object" || pending === null) return undefined;
-  const { step, of, approvalUrl, expiresAt } = pending as Record<string, unknown>;
+  const { step, of, approvalUrl, expiresAt, renewalLeaseSeconds } = pending as Record<string, unknown>;
   if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) ||
     typeof approvalUrl !== "string" || typeof expiresAt !== "string") return undefined;
-  return { step, of, approvalUrl, expiresAt };
+  const renewal = typeof renewalLeaseSeconds === "number" && Number.isSafeInteger(renewalLeaseSeconds) && renewalLeaseSeconds > 0
+    ? { renewalLeaseSeconds }
+    : {};
+  return { step, of, approvalUrl, expiresAt, ...renewal };
 }
 
 export class CLIError extends Error {

@@ -63,6 +63,8 @@ import {
   resolveDeviceApiHost,
 } from "../auth/device-auth.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
+import { parseRenewLifetimeSeconds } from "../auth/renewal-option.js";
+import { liveStoredLease } from "@tinycloud/operations/profile";
 import {
   expectedOwnerFor,
   declinedPermissions,
@@ -638,6 +640,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
     .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
+    .option("--renew <duration>", "Ask the owner to let the node keep this login working past its expiry, for up to this long (such as 90d or 1y, at most 1y); the owner chooses the length in OpenKey. Not with --paste, --device or --keys")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
@@ -660,6 +663,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.USAGE_ERROR,
           );
         }
+        if (options.renew !== undefined && (options.device || options.paste || options.keys !== undefined)) {
+          throw new CLIError("INVALID_ARGUMENT", "--renew can't be used with --device, --paste or --keys: those sign-ins can't carry a renewal.", ExitCode.USAGE_ERROR);
+        }
+        if (options.renew !== undefined && options.method === "local") {
+          throw new CLIError("INVALID_ARGUMENT", "--renew requires OpenKey login.", ExitCode.USAGE_ERROR);
+        }
+        const renewalLeaseSeconds = options.renew === undefined ? undefined : parseRenewLifetimeSeconds(options.renew);
         if (options.keys !== undefined && (options.device || options.manifest)) {
           throw new CLIError("INVALID_ARGUMENT", "`--keys` can't be used with `--device` or `--manifest`.", ExitCode.USAGE_ERROR);
         }
@@ -737,7 +747,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else if (options.keys !== undefined) {
           method = (profileConfig?.authMethod === "openkey" || options.paste || options.owner) ? "openkey" : "local";
         } else {
-          method = scoped ? "openkey" : await promptAuthMethod();
+          method = scoped || renewalLeaseSeconds !== undefined ? "openkey" : await promptAuthMethod();
         }
         if (method === "openkey" && (options.keys !== undefined || replicationOptions.prefixes.length > 0) &&
           !options.paste && options.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
@@ -774,6 +784,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persistHost,
             force: options.force === true,
             keys: options.keys,
+            ...(renewalLeaseSeconds === undefined ? {} : { renewalLeaseSeconds }),
             ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
@@ -2645,12 +2656,14 @@ async function handleOpenKeyAuth(
 
   reportDeclined(declined, legacyNested);
   await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
+  const lease = liveStoredLease(delegationData);
   outputJson({
     authenticated: true,
     profile: profileName,
     did: profile.did,
     spaceId: delegationData.spaceId,
     ownerDid: profile.ownerDid ?? null,
+    ...(lease === undefined ? {} : { renewalEndsAt: lease.expiresAt }),
     authMethod: "openkey",
     ...(options.permissions
       ? {
@@ -2717,6 +2730,8 @@ interface OpenKeyLoginOptions {
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
   keys?: string;
+  /** Ask the owner for a renewal lease of at most this many seconds (`--renew`); only the signed-request login can carry one. */
+  renewalLeaseSeconds?: number;
   /** This command created the profile (and its key) just before asking OpenKey: a permanent refusal removes them. */
   createdProfile?: CreatedProfile;
   /** `auth rotate`: the new session key; key.json keeps the old key until the approval is verified and committed. */
@@ -3033,6 +3048,9 @@ export async function refreshOpenKeySession(
   const openKeyExpiry = expiry === undefined ? undefined : openKeyExpiryParam(expiry);
   const expectedOwner = expectedOwnerFor(profileName, profile, options.expectedOwner);
   const replication = options.replication ?? profile.replication ?? { prefixes: [] };
+  if (options.renewalLeaseSeconds !== undefined && (options.paste === true || options.keys !== undefined || replication.prefixes.length > 0)) {
+    throw new CLIError("INVALID_ARGUMENT", "--renew can't be used with --paste, --keys or a replica sign-in: those sign-ins can't carry a renewal.", ExitCode.USAGE_ERROR);
+  }
   const previousSession = options.replication === undefined && profile.replication?.prefixes.length
     ? await ProfileManager.getSession(profileName) as Record<string, unknown> | null
     : null;
@@ -3102,6 +3120,7 @@ export async function refreshOpenKeySession(
     // owner is verified below.
     permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
+    ...(options.renewalLeaseSeconds === undefined ? {} : { renewalLeaseSeconds: options.renewalLeaseSeconds }),
     // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
     ...(plainPasteLink ? { expiryChangeable: true } : {}),
     ...(permissions && options.reason ? { reason: options.reason } : {}),

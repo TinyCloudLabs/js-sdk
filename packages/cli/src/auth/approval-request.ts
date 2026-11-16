@@ -24,6 +24,7 @@ import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
 import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, firstCheckTimeoutMs, type ApprovalWait } from "./approval-wait.js";
 import { verifyInvitationGrant, type VerifiedInvitationGrant } from "./invitation-key-grant.js";
+import { renewalLine } from "./renewal-option.js";
 
 interface PendingApproval {
   version: 1;
@@ -437,7 +438,11 @@ async function admitApprovedRenewal(host: string, entry: PendingApproval, verifi
 
 /** The wait ended with the owner's approval still outstanding: nothing is lost, the same link stays pending. */
 function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait, created = false): CLIError {
-  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt }, created);
+  const renewalLeaseSeconds = entry.request.renewal?.leaseLifetimeSeconds;
+  return approvalPendingError({
+    step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt,
+    ...(renewalLeaseSeconds === undefined ? {} : { renewalLeaseSeconds }),
+  }, created);
 }
 
 /**
@@ -590,7 +595,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
     options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\n`);
+    if (!options.onApprovalRequest) {
+      const renewal = entry.request.renewal === undefined ? "" : `${renewalLine(entry.request.renewal.leaseLifetimeSeconds)}\n`;
+      console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\n${renewal}`);
+    }
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }

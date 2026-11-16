@@ -307,3 +307,31 @@ test("a lease attached to the sign-in result outside the verified approval is ne
   expect(await session()).not.toHaveProperty("renewal");
   expect(admitted).toEqual([]);
 });
+
+test("a login that asks for a renewal hands the ask to the approval request", async () => {
+  const asked: unknown[] = [];
+  const stop = new Error("stop after the request is built");
+  await expect(refreshOpenKeySession("renewal", host, {
+    renewalLeaseSeconds: 90 * 86_400,
+    openKeyAcquisition: (async (_did: string, flow: Record<string, unknown>) => { asked.push(flow.renewalLeaseSeconds); throw stop; }) as never,
+  })).rejects.toBe(stop);
+  expect(asked).toEqual([90 * 86_400]);
+});
+
+test("a login without --renew never asks for a renewal", async () => {
+  const asked: unknown[] = [];
+  const stop = new Error("stop after the request is built");
+  await expect(refreshOpenKeySession("renewal", host, {
+    openKeyAcquisition: (async (_did: string, flow: Record<string, unknown>) => { asked.push("renewalLeaseSeconds" in flow); throw stop; }) as never,
+  })).rejects.toBe(stop);
+  expect(asked).toEqual([false]);
+});
+
+test.each([["paste", { paste: true }], ["keys", { keys: "qa" }]])("--renew is refused before any approval with %s", async (_name, extra) => {
+  let reached = false;
+  await expect(refreshOpenKeySession("renewal", host, {
+    renewalLeaseSeconds: 86_400, ...extra,
+    openKeyAcquisition: (async () => { reached = true; throw new Error("should not be reached"); }) as never,
+  })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  expect(reached).toBe(false);
+});
