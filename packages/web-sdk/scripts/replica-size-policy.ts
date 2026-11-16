@@ -423,6 +423,7 @@ export type Ledger = {
   tc2691HostExpiry?: LogoutRatchet;
   tc2934RequestedAccountRoot?: LogoutRatchet;
   tc2949StablePanelChunkRecoveryRoot?: LogoutRatchet;
+  tc3114StatusSchemaRoot?: LogoutRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1026,6 +1027,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   }
   if (root.tc2934RequestedAccountRoot !== undefined) pins.push({ row: "tc2934RequestedAccountRoot", pin: root.tc2934RequestedAccountRoot.sourceCommits.at(-1)! });
   if (root.tc2949StablePanelChunkRecoveryRoot !== undefined) pins.push({ row: "tc2949StablePanelChunkRecoveryRoot", pin: root.tc2949StablePanelChunkRecoveryRoot.sourceCommits.at(-1)! });
+  if (root.tc3114StatusSchemaRoot !== undefined) pins.push({ row: "tc3114StatusSchemaRoot", pin: root.tc3114StatusSchemaRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1103,6 +1105,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2691HostExpiry", root.tc2691HostExpiry?.root.ceiling],
     ["tc2934RequestedAccountRoot", root.tc2934RequestedAccountRoot?.root.ceiling],
     ["tc2949StablePanelChunkRecoveryRoot", root.tc2949StablePanelChunkRecoveryRoot?.root.ceiling],
+    ["tc3114StatusSchemaRoot", root.tc3114StatusSchemaRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2732,6 +2735,26 @@ export const approvedTc2949StablePanelChunkRecoveryRoot: LogoutRatchet = {
   "reason": "Panel chunk-load recovery logs a fixed failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI at 8617af604c2ba3a23006105e2f43c49e21ad9ab8 measures 1479756/1424008 gzip -9 bytes, +144/+112 over the TC-2934 stable root 1479612/1423896, within Naomi's +150-byte per-format cap. Workers and gated bundles remain unchanged. Details: TC-2949"
 };
 
+/** Naomi's stable-line TC-3114 root admission from canonical CI: sdk-core's delegation-status schema change reaches the web-sdk root. */
+export const approvedTc3114StatusSchemaRoot: LogoutRatchet = {
+  "label": "stable delegation-status schema root admission (TC-3114)",
+  "ruling": "Naomi's stable TC-3114 size ruling: exact canonical CI bytes for this line, add-only. Run 43902342085 measured 1479872/1424085 on PR head 1a4ebaf7 over base 3b8fad5e. Details: TC-3114",
+  "base": "3b8fad5e6004ccde79d0e0f3e9369c2e5f59460c",
+  "sourceCommits": ["1a4ebaf7de1e805187b3020d3efc1e5ae55deb82"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43902342085",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43902342085/job/133422005409",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43902342085/job/133422006018"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 116, "index.cjs": 77 },
+    "ceiling": { "index.mjs": 1479872, "index.cjs": 1424085 }
+  },
+  "reason": "sdk-core's delegation-status schema accepts the optional effective_expiry and renewal_history that node 1.26 adds, and the web-sdk root bundles it. Canonical Node 22/Bun 1.3.14 CI at 1a4ebaf7de1e805187b3020d3efc1e5ae55deb82 measures 1479872/1424085 gzip -9 bytes, +116/+77 over the TC-2949 stable root 1479756/1424008. Workers and gated bundles remain unchanged. Details: TC-3114"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -2801,6 +2824,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2691HostExpiry: approvedTc2691HostExpiry,
   tc2934RequestedAccountRoot: approvedTc2934RequestedAccountRoot,
   tc2949StablePanelChunkRecoveryRoot: approvedTc2949StablePanelChunkRecoveryRoot,
+  tc3114StatusSchemaRoot: approvedTc3114StatusSchemaRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3120,6 +3144,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2934RequestedAccountRoot ||
         JSON.stringify(value.tc2949StablePanelChunkRecoveryRoot) !== JSON.stringify(approvedTc2949StablePanelChunkRecoveryRoot))) {
     throw new Error("Only Naomi's exact stable TC-2949 root admission is approved.");
+  }
+  if (value.tc3114StatusSchemaRoot !== undefined &&
+      (!value.tc2949StablePanelChunkRecoveryRoot ||
+        JSON.stringify(value.tc3114StatusSchemaRoot) !== JSON.stringify(approvedTc3114StatusSchemaRoot))) {
+    throw new Error("Only Naomi's exact stable TC-3114 root admission is approved.");
   }
 }
 
@@ -3761,5 +3790,13 @@ export function validateTc2949StablePanelChunkRecoveryRootTransition(base?: Logo
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2949StablePanelChunkRecoveryRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The stable TC-2949 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact stable TC-3114 delegation-status schema root admission is introduced once and immutable afterwards. */
+export function validateTc3114StatusSchemaRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3114StatusSchemaRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The stable TC-3114 root admission may be introduced once and cannot change later.");
   }
 }

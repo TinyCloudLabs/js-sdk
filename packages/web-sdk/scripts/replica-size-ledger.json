@@ -2633,5 +2633,23 @@
       "ceiling": { "index.mjs": 1479756, "index.cjs": 1424008 }
     },
     "reason": "Panel chunk-load recovery logs a fixed failure class and offers a user-triggered page reload. Canonical Node 22/Bun 1.3.14 CI at 8617af604c2ba3a23006105e2f43c49e21ad9ab8 measures 1479756/1424008 gzip -9 bytes, +144/+112 over the TC-2934 stable root 1479612/1423896, within Naomi's +150-byte per-format cap. Workers and gated bundles remain unchanged. Details: TC-2949"
+  },
+  "tc3114StatusSchemaRoot": {
+    "label": "stable delegation-status schema root admission (TC-3114)",
+    "ruling": "Naomi's stable TC-3114 size ruling: exact canonical CI bytes for this line, add-only. Run 43902342085 measured 1479872/1424085 on PR head 1a4ebaf7 over base 3b8fad5e. Details: TC-3114",
+    "base": "3b8fad5e6004ccde79d0e0f3e9369c2e5f59460c",
+    "sourceCommits": ["1a4ebaf7de1e805187b3020d3efc1e5ae55deb82"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43902342085",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43902342085/job/133422005409",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43902342085/job/133422006018"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 116, "index.cjs": 77 },
+      "ceiling": { "index.mjs": 1479872, "index.cjs": 1424085 }
+    },
+    "reason": "sdk-core's delegation-status schema accepts the optional effective_expiry and renewal_history that node 1.26 adds, and the web-sdk root bundles it. Canonical Node 22/Bun 1.3.14 CI at 1a4ebaf7de1e805187b3020d3efc1e5ae55deb82 measures 1479872/1424085 gzip -9 bytes, +116/+77 over the TC-2949 stable root 1479756/1424008. Workers and gated bundles remain unchanged. Details: TC-3114"
   }
 }

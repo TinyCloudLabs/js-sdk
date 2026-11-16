@@ -25,7 +25,7 @@ test("stable TC-2949 records the exact canonical CI root bytes within its 150-by
     const delta = row.root.ceiling[format] - predecessor.root.ceiling[format];
     expect(row.root.delta[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(150);
-    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc2949StablePanelChunkRecoveryRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3114StatusSchemaRoot: undefined }, format)).toEqual({ row: "tc2949StablePanelChunkRecoveryRoot", ceiling: row.root.ceiling[format] });
   }
   expect(ancestryPins(ledger, false)).toContainEqual({
     row: "tc2949StablePanelChunkRecoveryRoot",
