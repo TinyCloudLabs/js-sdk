@@ -7,3 +7,5 @@ The hosted server serves its restricted personal-record surface at three more ad
 `/mcp` and `/chatgpt/mcp` are unchanged: their tool lists, schemas, descriptions, annotations, instructions and discovery documents are byte-identical to the previous release.
 
 A new address serves requests only after the matching OpenKey release issues tokens for its audience and accepts its approval callback, and the server's token-status client is registered for the new resources. This changeset performs no deployment.
+
+Details: TC-2416
