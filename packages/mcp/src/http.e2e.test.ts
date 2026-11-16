@@ -170,6 +170,32 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   });
 }, 60_000);
 
+test("a hosted tool refuses a bad input by naming the field, with the same code, shape and isError as before", async () => {
+  const { client } = await startHostedMcp({
+    nodeHost: "https://node.tinycloud.test",
+    ownerDids: ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"],
+    resourcePath: "/chatgpt/mcp",
+  });
+  const refused = await client.callTool({ name: "tinycloud_apps_context", arguments: { timezone: "Mars/Olympus" } });
+  expect(refused.isError).toBeUndefined();
+  expect(record(refused.structuredContent).status).toBe("error");
+  expect(record(refused.structuredContent).error).toEqual({
+    code: "INPUT_INVALID",
+    message: "The operation input is invalid. timezone: An IANA timezone is required.",
+    retryable: false,
+    details: { issues: [{ code: "custom" }] },
+  });
+  expect(JSON.stringify(refused.content)).toContain("timezone: An IANA timezone is required.");
+  const query = await client.callTool({
+    name: "tinycloud_apps_query",
+    arguments: { kinds: [{ app: "todos", kind: "todo" }], sql: "DELETE FROM entries" },
+  });
+  expect(record(record(query.structuredContent).error)).toMatchObject({
+    code: "INPUT_INVALID",
+    message: "The operation input is invalid. sql: SQL must be one SELECT or WITH query.",
+  });
+}, 60_000);
+
 test("public plugin enforces its tools, OAuth audience and separate approval state", async () => {
   const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
   const { app, client, createClient } = await startHostedMcp({
