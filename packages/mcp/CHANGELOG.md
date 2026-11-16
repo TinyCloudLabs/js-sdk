@@ -1,5 +1,16 @@
 # @tinycloud/mcp
 
+## 0.10.0-beta.46
+
+### Patch Changes
+
+- 166e3a3: Keep `tinycloud_apps_context` inside the hosted 100,000-character result limit for owners with large `default/xyz.tinycloud.agent-data/` catalogs. Past a 60,000-character budget the context inlines only the app catalogs and leaves kind catalogs listed in `catalog.keys` for `tinycloud_apps_read`; every existing app is still listed with its title.
+
+  Details: TC-2416
+
+- Updated dependencies [166e3a3]
+  - @tinycloud/operations@0.9.0-beta.42
+
 ## 0.10.0-beta.45
 
 ### Patch Changes
