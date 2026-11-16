@@ -230,15 +230,15 @@ test("invoke-level invalid input diagnostics omit attacker-controlled issue deta
 test("a refused input names the field and its rule; code, retryable and issue codes are unchanged", async () => {
   definitions = [
     createDefinition({
-      input: z.object({ zone: z.string().refine((zone) => zone === "UTC", "An IANA timezone is required.") }).strict(),
+      input: z.object({ name: z.string().refine((name) => name.includes("/"), "An IANA timezone is required.") }).strict(),
     }),
   ];
 
-  const result = await invokeOperation("tinycloud.test.get", 1, {}, { zone: "Mars/Olympus" });
+  const result = await invokeOperation("tinycloud.test.get", 1, {}, { name: "Mars" });
 
   expect(errorOf(result)).toEqual({
     code: "INPUT_INVALID",
-    message: "The operation input is invalid. zone: An IANA timezone is required.",
+    message: "The operation input is invalid. name: An IANA timezone is required.",
     retryable: false,
     details: { issues: [{ code: "custom" }] },
   });
