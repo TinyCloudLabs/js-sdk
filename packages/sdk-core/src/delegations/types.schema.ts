@@ -194,7 +194,18 @@ export const DelegationSchema = z.object({
 
 export type Delegation = z.infer<typeof DelegationSchema>;
 
-/** Node-confirmed lifecycle state for one delegation. */
+/** A node-signed renewal stamp returned as untrusted status evidence (node 1.26.0 and later). */
+const RenewalStampHistorySchema = z.object({
+  cid: z.string().min(1),
+  lease_cid: z.string().min(1),
+  generation: z.number().int().nonnegative().safe(),
+  previous_stamp_cid: z.string().min(1),
+  new_end: z.number().int().nonnegative().safe(),
+  signed_bytes: z.string().min(1),
+  signature: z.string().min(1),
+}).strict();
+
+/** Node-confirmed lifecycle state, plus the optional renewal fields node 1.26.0 and later add. */
 export const DelegationStatusSchema = z.object({
   cid: z.string().min(1),
   status: z.enum(["active", "revoked", "expired", "unavailable", "not_found"]),
@@ -202,6 +213,8 @@ export const DelegationStatusSchema = z.object({
   active: z.boolean(),
   revoked: z.boolean(),
   expired: z.boolean(),
+  effective_expiry: z.number().int().nullable().optional(),
+  renewal_history: z.array(RenewalStampHistorySchema).optional(),
 }).strict().superRefine((value, context) => {
   const valid = value.status === "active"
     ? value.exists && value.active && !value.revoked && !value.expired

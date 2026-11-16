@@ -292,6 +292,55 @@ describe("DelegationManager.status", () => {
     });
   });
 
+  const statusManager = (body: unknown) => new DelegationManager({
+    hosts: ["https://node.tinycloud.xyz"],
+    session: { spaceId: "space" } as ServiceSession,
+    invoke: mock(() => ({ Authorization: "unused" })),
+    invokeAny: mock(() => ({ Authorization: "TinyCloudStatus fixture" })),
+    fetch: mock(async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })),
+  });
+  const activeStatus = { cid: "bafy-child", status: "active", exists: true, active: true, revoked: false, expired: false };
+  const stamp = {
+    cid: "bafy-stamp", lease_cid: "bafy-lease", generation: 1, previous_stamp_cid: "bafy-prev",
+    new_end: 1_800_000_000, signed_bytes: "c2lnbmVk", signature: "c2ln",
+  };
+
+  test("accepts a node 1.26 response that carries effective_expiry and renewal_history", async () => {
+    const result = await statusManager({ ...activeStatus, effective_expiry: 1_800_000_000, renewal_history: [stamp] }).status("bafy-child");
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({ status: "active", effective_expiry: 1_800_000_000, renewal_history: [stamp] }),
+    });
+  });
+
+  test("accepts a null effective_expiry and an empty renewal_history", async () => {
+    const result = await statusManager({ ...activeStatus, effective_expiry: null, renewal_history: [] }).status("bafy-child");
+    expect(result).toEqual({ ok: true, data: expect.objectContaining({ effective_expiry: null, renewal_history: [] }) });
+  });
+
+  test("still accepts a response without the renewal fields (older nodes)", async () => {
+    const result = await statusManager(activeStatus).status("bafy-child");
+    expect(result).toEqual({ ok: true, data: expect.objectContaining({ status: "active" }) });
+    if (result.ok) {
+      expect(result.data.effective_expiry).toBeUndefined();
+      expect(result.data.renewal_history).toBeUndefined();
+    }
+  });
+
+  test("keeps refusing what is not the schema: an unknown extra field, a malformed stamp, an inconsistent status", async () => {
+    for (const body of [
+      { ...activeStatus, surprise: true },
+      { ...activeStatus, renewal_history: [{ ...stamp, extra: 1 }] },
+      { ...activeStatus, renewal_history: [{ ...stamp, generation: -1 }] },
+      { ...activeStatus, effective_expiry: 1.5 },
+      { ...activeStatus, status: "revoked" },
+    ]) {
+      const result = await statusManager(body).status("bafy-child");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.message).toContain("invalid delegation status response");
+    }
+  });
+
   test("returns an indistinguishable not-found status and rejects CID mismatch", async () => {
     const responses = [
       new Response(JSON.stringify({
