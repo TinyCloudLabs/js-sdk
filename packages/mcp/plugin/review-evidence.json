@@ -204,7 +204,7 @@
   },
   "policy_findings": [
     "The live privacy page checked on 2026-11-16 is dated November 13, 2026. An authorized operator has not confirmed that it covers hosted MCP records, timezone, derived SQL, delegates, logs, recipients, retention and deletion.",
-    "https://tinycloud.xyz/terms serves the homepage, and the package supplies no terms-of-service URL.",
+    "https://tinycloud.xyz/terms was published on 2026-11-16 on the publisher's instruction. It is a cut-down of the in-house draft limited to services that are live. Counsel has not reviewed it, and it sets no governing law, court or arbitration.",
     "An authorized operator must confirm retention and backup/history behavior, deletion versus access revocation, processor/hosting recipients, support ownership and launch countries. Do not invent these facts or promise physical erasure."
   ],
   "oauth": {
@@ -222,7 +222,7 @@
     "Provide authorized independent reviewer login without owner intervention, MFA approvals, email/SMS codes, magic links or private networking; credentials only in private portal fields.",
     "Repeat the eight cases with the reviewer account once the independent reviewer login exists.",
     "Obtain approved privacy disclosures covering hosted plaintext processing, recipients, retention, deletion and derived copies; existing privacy URL is not proof of adequacy.",
-    "Supply a verified HTTPS terms-of-service URL and approve listing, branding, support route and country availability.",
+    "Approve listing, branding, support route and country availability. The terms-of-service URL is supplied; counsel review of that page is still open.",
     "Provide a real accessible walkthrough recording URL; none is supplied by this package.",
     "Validate the exact archive, complete actual portal import, verify OAuth discovery/settings, domain challenge, tool scan and required findings.",
     "Authorized publisher completes identity, permissions and policy attestations; obtain actual review approval before explicit publication.",

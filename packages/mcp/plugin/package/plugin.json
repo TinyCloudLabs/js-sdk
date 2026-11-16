@@ -19,6 +19,7 @@
         "websiteURL": "https://tinycloud.xyz",
         "supportURL": "https://tinycloud.xyz/support",
         "privacyPolicyURL": "https://tinycloud.xyz/privacy",
+        "termsOfServiceURL": "https://tinycloud.xyz/terms",
         "defaultPrompt": ["Show my personal records.", "Add a todo called Review release checklist, then show it to me.", "Summarize my workouts using a searchable copy."],
         "composerIcon": "./assets/logo.png",
         "logo": "./assets/logo.png"
