@@ -58,6 +58,8 @@ type ReadInput = z.infer<typeof ReadInputSchema>;
 export type ReadOutput = z.infer<typeof ReadOutputSchema>;
 export type WriteOutput = z.infer<typeof WriteOutputSchema>;
 type OpOutcome = z.infer<typeof OpOutcomeSchema>;
+/** Hosted results stop at 100,000 serialized characters (packages/mcp/src/results.ts); the rules take about 26,000 of them. */
+const CONTEXT_CATALOG_BUDGET = 60_000;
 const POSTURES: readonly TinyCloudPosture[] = ["owner-openkey", "delegate-session", "local-owner-key"];
 const EXPOSURE: OperationExposure = {
   cli: { status: "excluded", reason: "Personal apps use the hosted connector; the CLI skill keeps its existing commands." },
@@ -170,14 +172,15 @@ async function executeContext(context: OperationContext, input: ContextInput): P
     const legacy = hasDiscoveryAccess(context, "legacy", true);
     const discovery = hasDiscoveryAccess(context, "new", true);
     const keys = legacy ? (await listAppsKeys(appsKv(context, "legacy"), `${TC_APPS_LEGACY_ROOT}catalog/`)).filter((key) => parseKey(key)?.area === "catalog") : [];
-    const records: ReadRecord[] = [];
-    for (let offset = 0; offset < keys.length; offset += 100) records.push(...await readAppsRecords(appsKv(context, "legacy"), keys.slice(offset, offset + 100)));
+    const read: ReadRecord[] = [];
+    for (let offset = 0; offset < keys.length; offset += 100) read.push(...await readAppsRecords(appsKv(context, "legacy"), keys.slice(offset, offset + 100)));
+    const appCatalogs = read.filter((record) => { const parts = keyParts(record.key); return parts.area === "catalog" && parts.kind === undefined; });
+    // Past the budget only app catalogs are inlined; kind catalogs stay listed in keys for tinycloud_apps_read.
+    const records = JSON.stringify(read).length <= CONTEXT_CATALOG_BUDGET ? read : appCatalogs;
     const apps = new Map<string, { layout: Layout; title?: string }>();
-    for (const record of records) {
-      const parts = keyParts(record.key);
-      if (parts.area !== "catalog" || parts.kind !== undefined) continue;
+    for (const record of appCatalogs) {
       const title = "value" in record ? record.value.title : undefined;
-      apps.set(parts.app, { layout: "legacy", ...(typeof title === "string" ? { title } : {}) });
+      apps.set(keyParts(record.key).app, { layout: "legacy", ...(typeof title === "string" ? { title } : {}) });
     }
     if (discovery) for (const [app, title] of await discoveredApps(appsKv(context))) {
       apps.set(app, { layout: "new", ...(title === undefined ? {} : { title }) });
