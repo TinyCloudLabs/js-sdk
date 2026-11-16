@@ -479,6 +479,7 @@ export type Ledger = {
   tc2987RegistryAbsentReadsRoot?: LogoutRatchet;
   tc2937SharePlacementRoot?: LogoutRatchet;
   tc3030FirstPartyOriginsRoot?: LogoutRatchet;
+  tc3076ChildExpiryRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1112,6 +1113,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2987RegistryAbsentReadsRoot !== undefined) pins.push({ row: "tc2987RegistryAbsentReadsRoot", pin: root.tc2987RegistryAbsentReadsRoot.sourceCommits.at(-1)! });
   if (root.tc2937SharePlacementRoot !== undefined) pins.push({ row: "tc2937SharePlacementRoot", pin: root.tc2937SharePlacementRoot.sourceCommits.at(-1)! });
   if (root.tc3030FirstPartyOriginsRoot !== undefined) pins.push({ row: "tc3030FirstPartyOriginsRoot", pin: root.tc3030FirstPartyOriginsRoot.sourceCommits.at(-1)! });
+  if (root.tc3076ChildExpiryRoot !== undefined) pins.push({ row: "tc3076ChildExpiryRoot", pin: root.tc3076ChildExpiryRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1215,6 +1217,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2987RegistryAbsentReadsRoot", root.tc2987RegistryAbsentReadsRoot?.root.ceiling],
     ["tc2937SharePlacementRoot", root.tc2937SharePlacementRoot?.root.ceiling],
     ["tc3030FirstPartyOriginsRoot", root.tc3030FirstPartyOriginsRoot?.root.ceiling],
+    ["tc3076ChildExpiryRoot", root.tc3076ChildExpiryRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3489,6 +3492,26 @@ export const approvedTc3030FirstPartyOriginsRoot: LogoutRatchet = {
   "reason": "The bootstrap first-party origin list gains tinycloud.one and TinyChat's native webview origins as SDK-only entries, which the web-sdk root bundles. Canonical Node 22/Bun 1.3.14 CI on the master merge of #987 (47b18bde, first parent 37d930ec) measured index.mjs 1525890 and index.cjs 1460232 gzip -9 bytes: +12 over the TC-2937 ceiling 1525878 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3030"
 };
 
+/** Naomi's exact TC-3076 child-expiry root allowance from canonical CI. */
+export const approvedTc3076ChildExpiryRoot: LogoutRatchet = {
+  "label": "child expiry held to the parent's whole second (TC-3076)",
+  "ruling": "Naomi's TC-3076 ruling: a ratchet row in the #990 pattern for #993's exact canonical CI bytes; index.mjs +76 B over the TC-3030 ceiling, index.cjs measured under its ceiling and left unchanged. Details: TC-3076",
+  "base": "ef1c9d3b4c628ad6214e3e10e3ed18d21f90bda2",
+  "sourceCommits": ["711903b39d7ac6ba79b35bb788603d51c7f1d71b"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449/job/133015588807",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449/job/133015588980"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 76, "index.cjs": 0 },
+    "ceiling": { "index.mjs": 1525966, "index.cjs": 1460319 }
+  },
+  "reason": "useDelegation, createSubDelegation and grantRuntimePermissions hold a child's expiry to its parent's whole second, through one rounding helper and a refusal for a delegation with under a second left; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #993 (711903b3, based on master ef1c9d3b) measured index.mjs 1525966 and index.cjs 1460286 gzip -9 bytes: +76 over the TC-3030 ceiling 1525890 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3076"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3589,6 +3612,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2987RegistryAbsentReadsRoot: approvedTc2987RegistryAbsentReadsRoot,
   tc2937SharePlacementRoot: approvedTc2937SharePlacementRoot,
   tc3030FirstPartyOriginsRoot: approvedTc3030FirstPartyOriginsRoot,
+  tc3076ChildExpiryRoot: approvedTc3076ChildExpiryRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4047,6 +4071,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2937SharePlacementRoot ||
         JSON.stringify(value.tc3030FirstPartyOriginsRoot) !== JSON.stringify(approvedTc3030FirstPartyOriginsRoot))) {
     throw new Error("Only Naomi's exact TC-3030 root admission is approved.");
+  }
+  if (value.tc3076ChildExpiryRoot !== undefined &&
+      (!value.tc3030FirstPartyOriginsRoot ||
+        JSON.stringify(value.tc3076ChildExpiryRoot) !== JSON.stringify(approvedTc3076ChildExpiryRoot))) {
+    throw new Error("Only Naomi's exact TC-3076 root admission is approved.");
   }
 }
 
@@ -4924,5 +4953,13 @@ export function validateTc3030FirstPartyOriginsRootTransition(base?: LogoutRatch
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3030FirstPartyOriginsRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3030 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3076 child-expiry root admission is introduced once and immutable. */
+export function validateTc3076ChildExpiryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3076ChildExpiryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3076 root admission may be introduced once and cannot change later.");
   }
 }

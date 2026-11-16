@@ -262,6 +262,7 @@ import {
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
   extractSiweExpiration,
+  wholeSecondExpiry,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -7930,7 +7931,8 @@ export class TinyCloudNode {
     const requestedExpiryMs = resolveExpiryMs(options?.expiry);
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
-      expiresAt = sessionExpiry;
+      // At the session's expiry, to the whole second: the node compares a child's expiry with its parent's.
+      expiresAt = wholeSecondExpiry(sessionExpiry);
     }
     assertExpiryWithinTechnicalLimit(expiresAt, "siwe");
 
@@ -10153,8 +10155,12 @@ export class TinyCloudNode {
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
-    // The activated session lasts as long as the delegation it is proven by.
-    const expirationTime = delegation.expiry;
+    // The activated session lasts as long as the delegation it is proven by, to the whole second: the node
+    // compares a child's expiry with its parent's, and a child at the parent's milliseconds can read as later.
+    const expirationTime = wholeSecondExpiry(delegation.expiry);
+    if (expirationTime.getTime() <= now.getTime()) {
+      throw new Error("The delegation expires within a second; ask for a new one.");
+    }
     assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
 
     // Prepare the session with:
@@ -10321,14 +10327,16 @@ export class TinyCloudNode {
       );
     }
 
-    // Default to the longest a sub-delegation may last: its parent's expiry.
+    // Default to the longest a sub-delegation may last: its parent's expiry, to the whole second (the node
+    // compares a child's expiry with its parent's, and a child at the parent's milliseconds can read as later).
     const now = new Date();
+    const parentExpiry = wholeSecondExpiry(parentDelegation.expiry);
     const requestedExpiry = params.expiryMs === undefined
-      ? parentDelegation.expiry
+      ? parentExpiry
       : new Date(now.getTime() + params.expiryMs);
     // Sub-delegation cannot outlive parent, so cap at parent's expiry
     const actualExpiry =
-      requestedExpiry > parentDelegation.expiry ? parentDelegation.expiry : requestedExpiry;
+      requestedExpiry > parentExpiry ? parentExpiry : requestedExpiry;
     assertExpiryWithinTechnicalLimit(actualExpiry, "siwe");
 
     // Build abilities for the sub-delegation
