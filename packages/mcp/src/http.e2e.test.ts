@@ -225,6 +225,41 @@ test("public plugin enforces its tools, OAuth audience and separate approval sta
   expect((await hostedFetch(app, privateApproval)).status).toBe(400);
 }, 60_000);
 
+test("each assistant's address serves the plugin's exact tools under its own audience, approval route and state", async () => {
+  const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
+  const { app, client, createClient, stateDir } = await startHostedMcp({
+    nodeHost: "https://node.tinycloud.test",
+    ownerDids,
+    resourcePath: "/chatgpt/mcp",
+  });
+  const pluginTools = (await client.listTools()).tools;
+  for (const prefix of ["claude", "grok", "muse"]) {
+    const path = `/${prefix}/mcp`;
+    const assistant = await createClient("openkey-user-1", ownerDids, { path });
+    expect((await assistant.listTools()).tools).toEqual(pluginTools);
+    // A token issued for one address opens no other, in either direction.
+    for (const [target, audience] of [
+      [path, "https://mcp.test/mcp"],
+      [path, "https://mcp.test/chatgpt/mcp"],
+      ["/mcp", `https://mcp.test${path}`],
+      ["/chatgpt/mcp", `https://mcp.test${path}`],
+    ]) {
+      await expect(createClient("openkey-user-1", ownerDids, { path: target!, audience })).rejects.toThrow();
+    }
+    const status = record((await assistant.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+    expect(status.connected).toBe(false);
+    const approval = new URL(String(status.approvalUrl));
+    expect(approval.pathname).toBe(`/${prefix}/connect`);
+    const redirect = await openKeyRedirect(app, approval.toString());
+    expect(new URL(redirect.searchParams.get("callback")!).pathname).toBe(`/${prefix}/connect/callback`);
+    // An approval link belongs to the address that issued it.
+    approval.pathname = "/chatgpt/connect";
+    expect((await hostedFetch(app, approval)).status).toBe(400);
+    expect(await readdir(join(stateDir, prefix, "tenants"))).toHaveLength(1);
+  }
+  expect(await readdir(join(stateDir, "chatgpt", "tenants"))).toHaveLength(1);
+}, 60_000);
+
 test("a signed bootstrap and a signed delegation approval let a hosted tool use the stored authority", async () => {
   // The loopback node lives in node-sdk's test sources, outside this package's
   // build graph; stdio.test.ts loads the same fixtures the same way.
@@ -1287,7 +1322,7 @@ test(`/mcp apps approvals Health Log ${namedApp ? "bundled" : "per-call"} save t
 }, 60_000);
 }
 
-for (const resourcePath of ["/mcp", "/chatgpt/mcp"]) {
+for (const resourcePath of ["/mcp", "/chatgpt/mcp", "/claude/mcp"]) {
 for (const namedApp of [true, false]) {
 test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persist records and recover an expired session without losing grants`, async () => {
   // This loopback fixture is outside MCP's package build graph.
@@ -1303,7 +1338,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
   const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
   expect(first).toMatchObject({ status: "error", error: { code: "SESSION_NOT_FOUND" } });
   const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
-  const tenantsDir = join(stateDir, ...(resourcePath === "/chatgpt/mcp" ? ["chatgpt"] : []), "tenants");
+  const tenantsDir = join(stateDir, resourcePath.slice(1, -"/mcp".length), "tenants");
   const [tenantId] = await readdir(tenantsDir);
   const tenantStateRoot = join(tenantsDir, tenantId!);
   const bootstrap = await openKeyApprovalBody({
