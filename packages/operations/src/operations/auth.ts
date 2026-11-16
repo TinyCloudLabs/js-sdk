@@ -36,6 +36,7 @@ import type {
 } from "../contract.js";
 import { activationRoutingOperationError, operationError } from "../errors.js";
 import { inspectStoredDelegation } from "../delegation-binding.js";
+import { invalidInputMessage } from "../invalid-input.js";
 import { lookupOperation } from "../registry.js";
 import {
   readAdditionalDelegations,
@@ -277,7 +278,7 @@ async function requestExactAuthority(
   }
 
   const parsed = target.definition.input.safeParse(input.input);
-  if (!parsed.success) return invalidInput("The operation input is invalid.");
+  if (!parsed.success) return invalidInput(invalidInputMessage(target.definition.input, parsed.error));
 
   try {
     const planned = await target.definition.authority(context, parsed.data);
