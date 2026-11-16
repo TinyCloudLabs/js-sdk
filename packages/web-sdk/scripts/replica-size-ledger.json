@@ -3255,5 +3255,23 @@
       "ceiling": { "index.mjs": 1525890, "index.cjs": 1460319 }
     },
     "reason": "The bootstrap first-party origin list gains tinycloud.one and TinyChat's native webview origins as SDK-only entries, which the web-sdk root bundles. Canonical Node 22/Bun 1.3.14 CI on the master merge of #987 (47b18bde, first parent 37d930ec) measured index.mjs 1525890 and index.cjs 1460232 gzip -9 bytes: +12 over the TC-2937 ceiling 1525878 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3030"
+  },
+  "tc3076ChildExpiryRoot": {
+    "label": "child expiry held to the parent's whole second (TC-3076)",
+    "ruling": "Naomi's TC-3076 ruling: a ratchet row in the #990 pattern for #993's exact canonical CI bytes; index.mjs +76 B over the TC-3030 ceiling, index.cjs measured under its ceiling and left unchanged. Details: TC-3076",
+    "base": "ef1c9d3b4c628ad6214e3e10e3ed18d21f90bda2",
+    "sourceCommits": ["711903b39d7ac6ba79b35bb788603d51c7f1d71b"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449/job/133015588807",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43780256449/job/133015588980"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 76, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1525966, "index.cjs": 1460319 }
+    },
+    "reason": "useDelegation, createSubDelegation and grantRuntimePermissions hold a child's expiry to its parent's whole second, through one rounding helper and a refusal for a delegation with under a second left; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #993 (711903b3, based on master ef1c9d3b) measured index.mjs 1525966 and index.cjs 1460286 gzip -9 bytes: +76 over the TC-3030 ceiling 1525890 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3076"
   }
 }
