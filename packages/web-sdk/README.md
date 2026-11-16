@@ -501,8 +501,8 @@ const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
 
 TinyCloud is built on these fundamental principles:
 
-- **Sovereignty** - You approve capability-based scopes for application access to your data.
-- **Privacy** - Ordinary hosted data is plaintext at rest. Capability-based access does not provide general stored-data end-to-end encryption or remove trust in the host. See [Security and trust](https://docs.tinycloud.xyz/concepts/security-and-trust) for storage, key-management, and access boundaries.
+- **Sovereignty** - Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned.
+- **Privacy** - Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored. See [Security and trust](https://docs.tinycloud.xyz/concepts/security-and-trust).
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
 

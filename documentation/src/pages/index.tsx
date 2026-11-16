@@ -235,12 +235,12 @@ function CoreValues() {
     { 
       title: "Sovereignty", 
       icon: "🔒",
-      desc: "You approve capability-based scopes for application access to your data."
+      desc: "Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned." 
     },
     { 
       title: "Privacy", 
       icon: "🛡️",
-      desc: "Ordinary hosted data is plaintext at rest. Capability-based access does not provide general stored-data end-to-end encryption or remove trust in the host."
+      desc: "Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored."
     },
     { 
       title: "Interoperability", 
