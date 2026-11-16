@@ -180,6 +180,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   canonical write outcomes must not be truncated. Package/review state lives
   under `packages/mcp/plugin`. Default-branch merges and deployment require
   explicit owner approval; never enable auto-merge or bypass that gate.
+- `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are the same restricted surface as
+  `/chatgpt/mcp`, one address per assistant directory (`RESTRICTED_ADDRESS_PREFIXES`
+  in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
+  approval route and tenant state. A new prefix needs the matching OpenKey
+  audience and exact callback, and the connector's token-status client
+  registered for the new resource, before it can serve a request.
 - TC-2393's hosted-client requirements and source/live evidence are in
   `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
   separate from official-directory acceptance; metadata is not authenticated QA.
