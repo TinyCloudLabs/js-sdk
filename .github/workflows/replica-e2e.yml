@@ -343,7 +343,8 @@ jobs:
 
   browser-e2e:
     name: Replica (Chromium, browser worker + IndexedDB)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is now Ubuntu 26.04, which `playwright install chromium` does not support. Unpin with a Playwright bump.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

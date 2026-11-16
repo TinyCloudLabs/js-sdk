@@ -184,7 +184,8 @@ jobs:
   # browser test as local development so the contract is captured
   # end-to-end in CI.
   cross-repo-vertical-browser:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is now Ubuntu 26.04, which `playwright install chromium` does not support. Unpin with a Playwright bump.
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out js-sdk
         uses: actions/checkout@v4
