@@ -17,7 +17,7 @@
         "category": "Productivity",
         "capabilities": ["Read personal records", "Create, update and delete personal records", "Query an optional derived copy"],
         "websiteURL": "https://tinycloud.xyz",
-        "supportURL": "https://t.me/+-_2ufE0JgIcyMjYx",
+        "supportURL": "https://tinycloud.xyz/support",
         "privacyPolicyURL": "https://tinycloud.xyz/privacy",
         "defaultPrompt": ["Show my personal records.", "Add a todo called Review release checklist, then show it to me.", "Summarize my workouts using a searchable copy."],
         "composerIcon": "./assets/logo.png",
@@ -74,10 +74,12 @@
               "expected_behavior": "Secret retrieval is absent from discovery and excluded-tool invocation fails. Explain the unsupported capability without asking for secrets in chat."
             }
           ]
-        }
+        },
+        "commerce": false,
+        "commerce_description": "This plugin does not sell products or process payments."
       },
       "publication": {
-        "release_notes": "0.1.0 candidate: MCP-only personal records and optional derived-copy queries through the separate public endpoint. Review cases are definitions, not passing evidence. Deployment, ChatGPT acceptance, portal import, review and publication must be verified separately."
+        "release_notes": "0.1.0: first release. Read, create, update and delete your own TinyCloud personal records such as todos, goals and workouts, and run optional queries over a separately approved searchable copy. Sign in with OpenKey and approve each permission yourself."
       }
     }
   }
