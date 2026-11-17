@@ -50,6 +50,8 @@ Approval request context: OpenKey displays the requested permissions in its plai
 
 A resumed approval completes at least one status check of OpenKey whatever the `--timeout`, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that check it exits 6 instead of reporting the approval as pending.
 
+`auth retry --last` re-checks the permission requests that `auth request` stores when it runs WITHOUT `--grant`. It does not find a stopped `auth request ... --grant` (`REQUEST_NOT_FOUND`, exit 4): run that same command again, with the same flags and profile, and it resumes the saved approval request.
+
 `context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
 
 | `auth login` flag | Description |
