@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
-  CHECK_INTERVAL_MS, REEXEC_ENV, WAKE_CHILD_ENV, checkForUpdate, compareSemver, detectInstall, installCommand, isStable, stripOptOutFlag,
+  CHECK_INTERVAL_MS, REEXEC_ENV, WAKE_CHILD_ENV, checkForUpdate, compareSemver, detectInstall, installCommand, isStable, runOnNewVersion, stripOptOutFlag,
 } from '../dist/auto-update.js';
 import { courierEnvOverrides, courierOnlyEnv } from '../dist/guard/install.js';
 
@@ -399,4 +399,57 @@ test('--no-auto-update is removed before the command sees its arguments, except 
   assert.deepEqual(stripOptOutFlag(['watch', '--no-auto-update', '--once']), { argv: ['watch', '--once'], optOut: true });
   assert.deepEqual(stripOptOutFlag(['send', 'bob', '--', '--no-auto-update']), { argv: ['send', 'bob', '--', '--no-auto-update'], optOut: false });
   assert.deepEqual(stripOptOutFlag(['inbox']), { argv: ['inbox'], optOut: false });
+});
+
+// The re-executed child: records every signal it gets and exits 42 on SIGINT, 43 on SIGTERM, 44 on SIGHUP.
+function signalChild() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'au-sig-'));
+  const entry = path.join(dir, 'child.js');
+  fs.writeFileSync(entry, `
+    const fs = require('node:fs');
+    const log = ${JSON.stringify(path.join(dir, 'signals'))};
+    fs.writeFileSync(${JSON.stringify(path.join(dir, 'pid'))}, String(process.pid));
+    for (const [name, code] of [['SIGINT', 42], ['SIGTERM', 43], ['SIGHUP', 44]]) {
+      process.on(name, () => { fs.appendFileSync(log, name + '\\n'); process.exit(code); });
+    }
+    fs.writeFileSync(${JSON.stringify(path.join(dir, 'ready'))}, '');
+    setInterval(() => {}, 1000);
+  `);
+  fs.renameSync(entry, `${entry}.cjs`);
+  const read = () => (fs.existsSync(path.join(dir, 'signals')) ? fs.readFileSync(path.join(dir, 'signals'), 'utf8').trim().split('\n') : []);
+  const ready = async () => { while (!fs.existsSync(path.join(dir, 'ready'))) await new Promise((r) => setTimeout(r, 10)); };
+  return { entry: `${entry}.cjs`, signals: read, ready, pid: () => Number(fs.readFileSync(path.join(dir, 'pid'), 'utf8')) };
+}
+
+test('the re-executed child gets SIGINT, SIGTERM and SIGHUP sent to the parent, once each', async () => {
+  for (const [signal, code] of [['SIGINT', 42], ['SIGTERM', 43], ['SIGHUP', 44]]) {
+    const child = signalChild();
+    const done = runOnNewVersion(child.entry, ['watch'], process.env, { interactive: false });
+    await child.ready();
+    process.kill(process.pid, signal);
+    assert.equal(await done, code);
+    assert.deepEqual(child.signals(), [signal]);
+  }
+});
+
+test('with a terminal attached, Ctrl-C that already reached the child is not sent to it a second time', async () => {
+  const child = signalChild();
+  const done = runOnNewVersion(child.entry, ['watch'], process.env, { interactive: true, graceMs: 300 });
+  await child.ready();
+  // The terminal signals the whole foreground group: the parent and the child.
+  process.kill(process.pid, 'SIGINT');
+  process.kill(child.pid(), 'SIGINT');
+  assert.equal(await done, 42);
+  await new Promise((r) => setTimeout(r, 500));
+  assert.deepEqual(child.signals(), ['SIGINT']);
+});
+
+test('with a terminal attached, a SIGINT sent to the parent alone still stops the child, once', async () => {
+  const child = signalChild();
+  const done = runOnNewVersion(child.entry, ['watch'], process.env, { interactive: true, graceMs: 200 });
+  await child.ready();
+  process.kill(process.pid, 'SIGINT');
+  assert.deepEqual(child.signals(), []);
+  assert.equal(await done, 42);
+  assert.deepEqual(child.signals(), ['SIGINT']);
 });

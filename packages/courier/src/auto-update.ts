@@ -460,23 +460,46 @@ function runProcess(command: string, args: string[], opts: { cwd?: string; timeo
   });
 }
 
-/** Run `entry` with `argv` as a child that owns this process's stdio, forward stop signals to it, and give back its exit code. */
-export function runOnNewVersion(entry: string, argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<number> {
+export interface RerunOptions {
+  /** Stdin is a terminal: a Ctrl-C reaches the child itself, so SIGINT is forwarded only if the child outlasts `graceMs`. */
+  interactive?: boolean;
+  graceMs?: number;
+}
+
+/**
+ * Run `entry` with `argv` as a child that owns this process's stdio, forward stop signals to it, and give back its exit code.
+ * SIGTERM and SIGHUP are forwarded at once. SIGINT is too, unless a terminal is attached: then Ctrl-C has already
+ * interrupted the child (same foreground group), and forwarding it as well would be a second SIGINT, which `watch` takes
+ * as "stop now". In that case the child gets one SIGINT only if it is still running after `graceMs`, so a `kill -INT` sent to
+ * this process alone never leaves the child behind.
+ */
+export function runOnNewVersion(entry: string, argv: string[], env: NodeJS.ProcessEnv = process.env, opts: RerunOptions = {}): Promise<number> {
+  const interactive = opts.interactive ?? Boolean(process.stdin.isTTY);
+  const graceMs = opts.graceMs ?? 5_000;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, ...argv], { stdio: 'inherit', env: { ...env, [REEXEC_ENV]: '1' } });
-    // SIGINT from a terminal already reaches the child (same foreground group); forwarding it too would interrupt it twice.
-    const forward = (signal: NodeJS.Signals) => () => { child.kill(signal); };
-    const handlers = (['SIGTERM', 'SIGHUP'] as const).map((s) => [s, forward(s)] as const);
-    for (const [s, h] of handlers) process.on(s, h);
-    process.on('SIGINT', () => { /* the child handles it */ });
+    let pendingInt: NodeJS.Timeout | undefined;
+    const onInt = () => {
+      if (!interactive) { child.kill('SIGINT'); return; }
+      pendingInt ??= setTimeout(() => { child.kill('SIGINT'); }, graceMs);
+    };
+    const onTerm = () => { child.kill('SIGTERM'); };
+    const onHup = () => { child.kill('SIGHUP'); };
+    process.on('SIGINT', onInt);
+    process.on('SIGTERM', onTerm);
+    process.on('SIGHUP', onHup);
+    const done = (code: number) => {
+      clearTimeout(pendingInt);
+      process.off('SIGINT', onInt);
+      process.off('SIGTERM', onTerm);
+      process.off('SIGHUP', onHup);
+      resolve(code);
+    };
     child.once('error', (e) => {
       process.stderr.write(`${PACKAGE}: could not start the updated copy (${e.message}); run the command again\n`);
-      resolve(1);
+      done(1);
     });
-    child.once('close', (code, signal) => {
-      for (const [s, h] of handlers) process.off(s, h);
-      resolve(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1));
-    });
+    child.once('close', (code, signal) => { done(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1)); });
   });
 }
 
