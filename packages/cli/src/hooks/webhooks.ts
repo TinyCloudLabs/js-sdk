@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { HookServiceName, HookWebhookRecord } from "@tinycloud/sdk-services";
 import { cliErrorFromService } from "../output/errors.js";
 import {
-  invalidInput, readWebhookHeaders, registerWebhookChecked, webhookCallbackUrl,
+  invalidInput, readWebhookHeaders, registerWebhookChecked, shownVariable, webhookCallbackUrl,
   type WebhookHeaderFlags, type WebhookHeaderReaders, type WebhookRegistrar,
 } from "../lib/webhook-headers.js";
 
@@ -49,7 +49,7 @@ export async function resolveHooksRegister(
     secretGenerated = true;
   } else {
     const fromEnv = (readers?.env ?? env)[options.secretEnv];
-    if (fromEnv === undefined || fromEnv.trim().length === 0) invalidInput(`Environment variable ${options.secretEnv} for the signing secret is not set`);
+    if (fromEnv === undefined || fromEnv.trim().length === 0) invalidInput(`Environment variable ${shownVariable(options.secretEnv)} for the signing secret is not set`);
     secret = fromEnv.trim();
   }
   return { service, pathPrefix: options.pathPrefix, callbackUrl, headers, secret, secretGenerated };

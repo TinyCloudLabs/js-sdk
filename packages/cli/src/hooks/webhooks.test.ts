@@ -146,3 +146,22 @@ describe("tinycloud hooks list and remove", () => {
     expect(await messageOf(() => removeHookWebhook(hooks, SPACE, "wh-3", { pathPrefix: "x" }))).toContain("--service");
   });
 });
+
+describe("a credential typed where a name goes is never echoed", () => {
+  const base = { service: "sql", url: "https://a.example/h" };
+  const typo = "Bearer wake-key-DO-NOT-LEAK";
+
+  test("header names, environment variable names and the secret variable name are shown only when valid", async () => {
+    const messages = await Promise.all([
+      messageOf(() => resolveHooksRegister({ ...base, headerEnv: [`${typo}=NOPE`] }, readers())),
+      messageOf(() => resolveHooksRegister({ ...base, headerEnv: [`Authorization=${typo}`] }, readers())),
+      messageOf(() => resolveHooksRegister({ ...base, headerFile: [`${typo}=/missing`] }, readers({ readFile: async () => { throw new Error(typo); } }))),
+      messageOf(() => resolveHooksRegister({ ...base, headerFile: [`${typo}=/empty`] }, readers({ readFile: async () => "  " }))),
+      messageOf(() => resolveHooksRegister({ ...base, headerStdin: [typo] }, readers({ readStdin: async () => "" }))),
+      messageOf(() => resolveHooksRegister({ ...base, header: [`X-A: 1`, `x-a: 2`, `${typo}: 3`] }, readers()).then(() => resolveHooksRegister({ ...base, header: [`${typo}: 1`, `${typo}: 2`] }, readers()))),
+      messageOf(() => resolveHooksRegister({ ...base, secretEnv: typo }, readers())),
+    ]);
+    for (const message of messages) expect(message).not.toContain(typo);
+    expect(messages[0]).toContain("(not a valid");
+  });
+});

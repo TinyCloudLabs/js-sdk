@@ -38,6 +38,19 @@ export function invalidInput(message: string): never {
   throw cliErrorFromService({ code: "INVALID_INPUT", message });
 }
 
+const HEADER_NAME_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]{1,64}$/;
+const ENV_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+/** A header name for an error message, only when it is a valid one: a mistyped flag can put a credential where a name goes. */
+export function shownName(name: string): string {
+  return HEADER_NAME_TOKEN.test(name) ? `"${name}"` : "(not a valid header name)";
+}
+
+/** Likewise for an environment variable name. */
+export function shownVariable(variable: string): string {
+  return ENV_VARIABLE.test(variable) ? variable : "(not a valid variable name)";
+}
+
 async function readStdinText(): Promise<string> {
   if (process.stdin.isTTY) invalidInput("stdin is a terminal: pipe the header value in");
   const chunks: Buffer[] = [];
@@ -74,7 +87,7 @@ export async function readWebhookHeaders(
   const headers: Record<string, string> = {};
   const add = (name: string, value: string) => {
     const key = name.toLowerCase();
-    if (Object.keys(headers).some((existing) => existing.toLowerCase() === key)) invalidInput(`Header "${name}" is given more than once`);
+    if (Object.keys(headers).some((existing) => existing.toLowerCase() === key)) invalidInput(`Header ${shownName(name)} is given more than once`);
     headers[name] = value.trim();
   };
   const pair = (entry: string, flag: string, shape: string): [string, string] => {
@@ -91,15 +104,15 @@ export async function readWebhookHeaders(
   for (const entry of flags.headerEnv ?? []) {
     const [name, variable] = pair(entry, names.env, "Name=ENV_VAR");
     const fromEnv = readers.env[variable];
-    if (fromEnv === undefined || fromEnv.trim().length === 0) invalidInput(`Environment variable ${variable} for header "${name}" is not set`);
+    if (fromEnv === undefined || fromEnv.trim().length === 0) invalidInput(`Environment variable ${shownVariable(variable)} for header ${shownName(name)} is not set`);
     add(name, fromEnv);
   }
   for (const entry of flags.headerFile ?? []) {
     const [name, path] = pair(entry, names.file, "Name=path");
     let content: string;
     // The reader's own error can quote the path or part of the content; say only which header.
-    try { content = await readers.readFile(path); } catch { return invalidInput(`Could not read the file for header "${name}"`); }
-    if (content.trim().length === 0) invalidInput(`The file for header "${name}" is empty`);
+    try { content = await readers.readFile(path); } catch { return invalidInput(`Could not read the file for header ${shownName(name)}`); }
+    if (content.trim().length === 0) invalidInput(`The file for header ${shownName(name)} is empty`);
     add(name, content);
   }
   const fromStdin = flags.headerStdin ?? [];
@@ -107,7 +120,7 @@ export async function readWebhookHeaders(
   for (const name of fromStdin) {
     if (name.trim().length === 0) invalidInput(`${names.stdin} needs a header name`);
     const content = await readers.readStdin();
-    if (content.trim().length === 0) invalidInput(`Nothing was piped in for header "${name.trim()}"`);
+    if (content.trim().length === 0) invalidInput(`Nothing was piped in for header ${shownName(name.trim())}`);
     add(name.trim(), content);
   }
 
