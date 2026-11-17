@@ -1,23 +1,28 @@
 import { ed25519 } from "@noble/curves/ed25519";
-import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
-import { createLink, isLinkError, linkIssuerPublicKey, resolveLink, signerFromSeed, verifyEd25519Strict, type LinkTransportOptions } from "@tinycloud/share-envelope/links";
+import { canonicalize, didKeyFromEd25519PublicKey, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
+import { createLink, isLinkError, linkIssuerPublicKey, resolveLink, verifyEd25519Strict, type LinkSigner, type LinkTransportOptions } from "@tinycloud/share-envelope/links";
 
 /**
  * Short links for TinyCloud's own shares (TC-3194): `https://<app>/s/<id>#v=4&k=…&c=…`, a links-API record of
  * type `share` whose sealed body carries a SharingService `tc1:` token (the per-share key and its root
  * delegation) and the display fields the app shows before sign-in. The node enforces access; this module only
- * moves the token. The body is signed by a throwaway issuer key, so nobody can delete the record early: it
- * lives until `expiresAt` (at most 30 days), and stopping a share revokes the root delegation instead.
+ * moves the token. The record's issuer is a throwaway key, dropped after publishing (best effort: the runtime
+ * may keep copies until garbage collection), so nobody can delete the record early: it lives until `expiresAt`
+ * (at most 30 days), and stopping a share revokes the root delegation instead.
+ *
+ * The display fields are whatever the link's maker wrote: the owner does not sign them, and anyone holding a
+ * token can publish it again under other display fields. The body's own signature is by the throwaway issuer
+ * (the links reader requires a `share` body to name its issuer), so it proves nothing about the owner. Check the
+ * token with sdk-core `inspectShareToken` before showing who shared it, and show display fields as untrusted text.
  */
 
-/** Body format tag, and the domain separator its signature covers. */
+/** Body format tag, and the domain separator the issuer's body signature covers. */
 export const NATIVE_SHARE_LINK_FORMAT = "tinycloud.native-share/v1";
 const SIGNATURE_DOMAIN = `${NATIVE_SHARE_LINK_FORMAT}\0`;
 /** Most bytes the display object may take as canonical JSON. */
 export const NATIVE_SHARE_DISPLAY_MAX_BYTES = 8 * 1024;
 const KIND_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const TOKEN_PREFIX = "tc1:";
-const SPACE_ID_PATTERN = /^tinycloud:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):[^/\s]+$/;
 const BODY_KEYS = ["display", "format", "kind", "share", "signature"];
 const SIGNATURE_KEYS = ["algorithm", "signerDid", "value"];
 
@@ -45,7 +50,7 @@ export interface PublishNativeShareLinkInput extends LinkTransportOptions {
   readonly token: string;
   /** What is shared, e.g. `recording`. Lowercase letters, digits and `-`. */
   readonly kind: string;
-  /** App-defined display fields (sender name, title, …), shown before sign-in. JSON only. */
+  /** App-defined display fields (title, …), shown before sign-in. JSON only, and not signed by the owner. */
   readonly display: Readonly<Record<string, unknown>>;
   /** Origin the link points at, e.g. `https://tinycloud.one`. */
   readonly linkOrigin: string;
@@ -73,12 +78,14 @@ export interface OpenNativeShareLinkInput extends LinkTransportOptions {
 
 export interface OpenedNativeShareLink {
   readonly kind: string;
+  /** As the link's maker wrote it: not signed by the owner. Show it as untrusted text. */
   readonly display: Readonly<Record<string, unknown>>;
-  /** The `tc1:` token: a bearer secret. Keep it in memory and pass it to `SharingService.delegateReceivedShare`. */
+  /**
+   * The `tc1:` token: a bearer secret. Keep it in memory. Check it with sdk-core `inspectShareToken` for the
+   * owner and the access end, then pass it to `SharingService.delegateReceivedShare`.
+   */
   readonly token: string;
   readonly linkExpiresAt: Date;
-  /** The sharing account, read from the token's space id. The node checks the delegation itself on claim. */
-  readonly owner: { readonly address: string; readonly chainId: number; readonly spaceId: string };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -94,21 +101,20 @@ function signingBytes(unsigned: Readonly<Record<string, unknown>>): Uint8Array {
   return new TextEncoder().encode(SIGNATURE_DOMAIN + canonicalize(unsigned));
 }
 
-/** The owner a `tc1:` token's space id names, or `undefined` when the token is not a well-formed share token. */
-function tokenOwner(token: string): OpenedNativeShareLink["owner"] | undefined {
-  if (!token.startsWith(TOKEN_PREFIX)) return undefined;
-  let data: unknown;
+/** Whether `token` has the shape of a `tc1:` share token. Its signatures are checked by `inspectShareToken`. */
+function isShareToken(token: string): boolean {
+  if (!token.startsWith(TOKEN_PREFIX)) return false;
   try {
-    data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(token.slice(TOKEN_PREFIX.length))));
+    const data: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromBase64Url(token.slice(TOKEN_PREFIX.length))));
+    return isPlainObject(data) && typeof data.spaceId === "string";
   } catch {
-    return undefined;
+    return false;
   }
-  if (!isPlainObject(data) || typeof data.spaceId !== "string") return undefined;
-  const match = SPACE_ID_PATTERN.exec(data.spaceId);
-  if (match === null) return undefined;
-  const chainId = Number(match[1]);
-  if (!Number.isSafeInteger(chainId)) return undefined;
-  return { address: match[2]!, chainId, spaceId: data.spaceId };
+}
+
+/** A link signer over `seed` itself (no copy), so zeroing `seed` afterwards drops the key this module holds. */
+function signerOverSeed(seed: Uint8Array): LinkSigner {
+  return { did: didKeyFromEd25519PublicKey(ed25519.getPublicKey(seed)), sign: (digest) => ed25519.sign(digest, seed) };
 }
 
 function checkKind(kind: unknown): asserts kind is string {
@@ -133,10 +139,10 @@ function checkDisplay(display: unknown): asserts display is Record<string, unkno
 export async function publishNativeShareLink(input: PublishNativeShareLinkInput): Promise<PublishedNativeShareLink> {
   checkKind(input.kind);
   checkDisplay(input.display);
-  if (tokenOwner(input.token) === undefined) throw new NativeShareLinkError("invalid", "token is not a TinyCloud share token");
+  if (!isShareToken(input.token)) throw new NativeShareLinkError("invalid", "token is not a TinyCloud share token");
   const seed = ed25519.utils.randomPrivateKey();
   try {
-    const issuerKey = signerFromSeed(seed);
+    const issuerKey = signerOverSeed(seed);
     const unsigned = { format: NATIVE_SHARE_LINK_FORMAT, kind: input.kind, share: input.token, display: input.display };
     const body = {
       ...unsigned,
@@ -164,7 +170,7 @@ export async function publishNativeShareLink(input: PublishNativeShareLinkInput)
   }
 }
 
-/** Check the opened body: exact fields, a valid signature by the record's issuer, a share token and display. */
+/** Check the opened body: exact fields, the record issuer's signature over it, a share token and display. */
 function parseBody(value: Record<string, unknown>, issuer: string): Omit<OpenedNativeShareLink, "linkExpiresAt"> {
   if (!hasExactKeys(value, BODY_KEYS) || value.format !== NATIVE_SHARE_LINK_FORMAT) throw new NativeShareLinkError("invalid", "not a TinyCloud share link");
   const signature = value.signature;
@@ -184,15 +190,14 @@ function parseBody(value: Record<string, unknown>, issuer: string): Omit<OpenedN
   }
   checkKind(value.kind);
   checkDisplay(value.display);
-  if (typeof value.share !== "string") throw new NativeShareLinkError("invalid", "share link carries no token");
-  const owner = tokenOwner(value.share);
-  if (owner === undefined) throw new NativeShareLinkError("invalid", "share link carries no TinyCloud share token");
-  return { kind: value.kind, display: value.display, token: value.share, owner };
+  if (typeof value.share !== "string" || !isShareToken(value.share)) throw new NativeShareLinkError("invalid", "share link carries no TinyCloud share token");
+  return { kind: value.kind, display: value.display, token: value.share };
 }
 
 /**
- * Fetch, check and open a short share link (or a full `share` link) with the links module's reader pipeline,
- * then check the body. Nothing is read from the owner's node.
+ * Fetch, check and open a short share link with the links module's reader pipeline, then check the body. A full
+ * link (the whole record in the fragment) is refused: only a short link has a record the links API expires.
+ * Nothing is read from the owner's node.
  */
 export async function openNativeShareLink(link: string, input: OpenNativeShareLinkInput): Promise<OpenedNativeShareLink> {
   let resolved;
@@ -209,6 +214,7 @@ export async function openNativeShareLink(link: string, input: OpenNativeShareLi
     throw toNativeShareLinkError(cause);
   }
   if (resolved.type !== "share") throw new NativeShareLinkError("invalid", "not a share link");
+  if (resolved.form !== "short") throw new NativeShareLinkError("invalid", "not a short share link");
   return { ...parseBody(resolved.value, resolved.header.issuer), linkExpiresAt: new Date(resolved.header.expiresAt) };
 }
 

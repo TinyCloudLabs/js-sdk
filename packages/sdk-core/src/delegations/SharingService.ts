@@ -55,6 +55,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import type { ShareAccessV2, ShareRecipientClientOptions } from "./recipient-types";
 import { spaceIdsEqual, verifiedDelegationRouting } from "./portable";
+import { parseSignedSiweCacao } from "./cacao";
 
 // ---------------------------------------------------------------------------
 // Local helpers
@@ -230,10 +231,24 @@ function base64UrlDecode(encoded: string): string {
 // Types
 // =============================================================================
 
-/** One resource of a share: a full path and the actions granted on it. */
+/**
+ * One resource of a share: a full path and the actions granted on it. The node treats a KV path without a
+ * trailing slash as covering its subkeys too (`a/b` covers `a/b/…`), so do not share a key that is also used as
+ * a prefix of other data.
+ */
 export interface ShareResource {
   path: string;
   actions: string[];
+}
+
+/** A share token as its owner signed it: what `inspectShareToken` returns. */
+export interface InspectedShareToken {
+  /** The account that signed the share's root delegation. */
+  owner: { address: string; chainId: number; spaceId: string };
+  /** Every shared resource with its actions, exactly as the root grants them. */
+  resources: ShareResource[];
+  /** When the root delegation ends: anyone holding the token can claim it until then. */
+  accessExpiresAt: Date;
 }
 
 /** Most resources one share may carry (the owner-delegation bound). */
@@ -299,8 +314,10 @@ export interface ShareAccess {
   kv: IKVService;
   /** The space ID */
   spaceId: string;
-  /** The path prefix for this share */
+  /** The path prefix for this share (the first resource when there are several) */
   path: string;
+  /** Every resource, `path` first, when the share carries more than one. */
+  resources?: ShareResource[];
 }
 
 /**
@@ -795,6 +812,16 @@ export class SharingService implements ISharingService {
         if (rootDelegationActiveError) return { ok: false, error: rootDelegationActiveError };
 
         if (rootDelegation) {
+          // A share of several resources must be backed, resource by resource, by the root the callback signed.
+          if (resources.length > 1 && (await verifyShareRoot(rootDelegation, this.session.spaceId, keyDid, resources)) === null) {
+            return {
+              ok: false,
+              error: createError(
+                DelegationErrorCodes.PERMISSION_DENIED,
+                "The signed root delegation does not grant every shared resource",
+              ),
+            };
+          }
           delegation = rootDelegation;
           expiry = requestedExpiry;
         } else {
@@ -1363,6 +1390,7 @@ export class SharingService implements ISharingService {
       kv: kvService,
       spaceId: shareData.spaceId,
       path: shareData.path,
+      ...(shareData.resources ? { resources: shareData.resources.map((resource) => ({ path: resource.path, actions: [...resource.actions] })) } : {}),
     };
 
     return { ok: true, data: shareAccess };
@@ -1705,94 +1733,9 @@ export class SharingService implements ISharingService {
     return result.data;
   }
 
-  /**
-   * Decode and validate a link string into sharing data.
-   *
-   * Internal method that returns a Result instead of throwing.
-   * Used by receive() for proper error handling.
-   *
-   * @param link - The encoded link string (may include URL prefix)
-   * @returns Result with decoded share data or validation error
-   */
+  /** Decode and validate a link string into sharing data, as a Result (used by receive()). */
   private decodeLinkWithValidation(link: string): Result<EncodedShareData, DelegationError> {
-    const invalidLink = (message = "Invalid sharing link data"): Result<EncodedShareData, DelegationError> => ({
-      ok: false, error: { code: DelegationErrorCodes.INVALID_TOKEN, message, service: "delegation" },
-    });
-    // Extract the encoded data from the link
-    let encoded = link;
-
-    // Handle full URL format: https://share.example.com/share/tc1:...
-    if (link.includes("/share/")) {
-      const parts = link.split("/share/");
-      encoded = parts[parts.length - 1];
-    }
-
-    // Handle query parameter format: ?share=tc1:...
-    if (link.includes("?share=")) {
-      try {
-        const url = new URL(link);
-        encoded = url.searchParams.get("share") ?? encoded;
-      } catch {
-        return invalidLink("Invalid URL format in sharing link");
-      }
-    }
-
-    // Remove the schema prefix
-    if (!encoded.startsWith(BASE64_PREFIX)) {
-      return invalidLink(`Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`);
-    }
-
-    const base64Data = encoded.slice(BASE64_PREFIX.length);
-
-    let jsonString: string;
-    try {
-      jsonString = base64UrlDecode(base64Data);
-    } catch {
-      return invalidLink();
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonString);
-    } catch {
-      return invalidLink();
-    }
-
-    // Convert delegation expiry to Date before validation if it's a string
-    // This is needed because JSON.parse doesn't restore Date objects
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "delegation" in parsed &&
-      parsed.delegation &&
-      typeof parsed.delegation === "object" &&
-      "expiry" in parsed.delegation &&
-      typeof parsed.delegation.expiry === "string"
-    ) {
-      (parsed.delegation as { expiry: Date }).expiry = new Date(parsed.delegation.expiry);
-    }
-
-    if (parsed && typeof parsed === "object" && "version" in parsed && parsed.version !== 1 && parsed.version !== 2) {
-      return invalidLink("Unsupported sharing envelope version; update the receiver SDK");
-    }
-    // Validate against schema
-    const validationResult = validateEncodedShareData(parsed);
-    if (!validationResult.ok) return invalidLink();
-    const data = validationResult.data;
-    // A share of several resources lists `path` first, with the root's flat actions,
-    // and every other path once, in canonical form.
-    if (data.resources) {
-      const [first] = data.resources;
-      const paths = new Set(data.resources.map((resource) => resource.path));
-      if (
-        first.path !== data.path ||
-        !sortedEqual(first.actions, data.delegation.actions) ||
-        paths.size !== data.resources.length ||
-        data.resources.some((resource) => canonicalCapabilityPath(resource.path) === null || resource.path.includes("*"))
-      ) return invalidLink("Sharing-link resources do not match its parent delegation");
-    }
-
-    return { ok: true, data };
+    return decodeShareToken(link);
   }
 }
 
@@ -1801,6 +1744,170 @@ export class SharingService implements ISharingService {
  */
 export function createSharingService(config: SharingServiceConfig): ISharingService {
   return new SharingService(config);
+}
+
+/**
+ * Decode and validate a link string (a `tc1:` token, or a URL carrying one) into sharing data.
+ *
+ * @param link - The encoded link string (may include URL prefix)
+ * @returns Result with decoded share data or validation error
+ */
+function decodeShareToken(link: string): Result<EncodedShareData, DelegationError> {
+  const invalidLink = (message = "Invalid sharing link data"): Result<EncodedShareData, DelegationError> => ({
+    ok: false, error: { code: DelegationErrorCodes.INVALID_TOKEN, message, service: "delegation" },
+  });
+  // Extract the encoded data from the link
+  let encoded = link;
+
+  // Handle full URL format: https://share.example.com/share/tc1:...
+  if (link.includes("/share/")) {
+    const parts = link.split("/share/");
+    encoded = parts[parts.length - 1];
+  }
+
+  // Handle query parameter format: ?share=tc1:...
+  if (link.includes("?share=")) {
+    try {
+      const url = new URL(link);
+      encoded = url.searchParams.get("share") ?? encoded;
+    } catch {
+      return invalidLink("Invalid URL format in sharing link");
+    }
+  }
+
+  // Remove the schema prefix
+  if (!encoded.startsWith(BASE64_PREFIX)) {
+    return invalidLink(`Invalid sharing link format. Expected prefix '${BASE64_PREFIX}'`);
+  }
+
+  const base64Data = encoded.slice(BASE64_PREFIX.length);
+
+  let jsonString: string;
+  try {
+    jsonString = base64UrlDecode(base64Data);
+  } catch {
+    return invalidLink();
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonString);
+  } catch {
+    return invalidLink();
+  }
+
+  // Convert delegation expiry to Date before validation if it's a string
+  // This is needed because JSON.parse doesn't restore Date objects
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    "delegation" in parsed &&
+    parsed.delegation &&
+    typeof parsed.delegation === "object" &&
+    "expiry" in parsed.delegation &&
+    typeof parsed.delegation.expiry === "string"
+  ) {
+    (parsed.delegation as { expiry: Date }).expiry = new Date(parsed.delegation.expiry);
+  }
+
+  if (parsed && typeof parsed === "object" && "version" in parsed && parsed.version !== 1 && parsed.version !== 2) {
+    return invalidLink("Unsupported sharing envelope version; update the receiver SDK");
+  }
+  // Validate against schema
+  const validationResult = validateEncodedShareData(parsed);
+  if (!validationResult.ok) return invalidLink();
+  const data = validationResult.data;
+  // A share of several resources lists `path` first, with the root's flat actions,
+  // and every other path once, in canonical form.
+  if (data.resources) {
+    const [first] = data.resources;
+    const paths = new Set(data.resources.map((resource) => resource.path));
+    if (
+      first.path !== data.path ||
+      !sortedEqual(first.actions, data.delegation.actions) ||
+      paths.size !== data.resources.length ||
+      data.resources.some((resource) => canonicalCapabilityPath(resource.path) === null || resource.path.includes("*"))
+    ) return invalidLink("Sharing-link resources do not match its parent delegation");
+  }
+
+  return { ok: true, data };
+}
+
+/**
+ * Check a share's root delegation against what the share claims: a wallet-signed SIWE CACAO (verified signature
+ * and CID) by the owner of `spaceId`, to the share key, granting exactly `resources` with exactly their actions.
+ * Returns the owner and the root's end, or `null`. A root signed by a session key (a compact UCAN) cannot be
+ * tied to its owner without the session's own proof, so it is `null` too.
+ */
+async function verifyShareRoot(
+  delegation: Delegation,
+  spaceId: string,
+  keyDid: string,
+  resources: readonly ShareResource[],
+): Promise<{ chainId: number; address: string; expiresAt: Date } | null> {
+  const owner = ownerFromSpaceId(spaceId);
+  const authorization = delegation.authHeader;
+  if (!owner || !authorization || authorization.includes(".")) return null;
+  let root: Awaited<ReturnType<typeof parseSignedSiweCacao>>;
+  try {
+    root = await parseSignedSiweCacao(authorization, delegation.cid);
+  } catch {
+    return null;
+  }
+  if (root.issuer.toLowerCase() !== `did:pkh:eip155:${owner.chainId}:${owner.address}`.toLowerCase()) return null;
+  if (principalDid(root.audience) !== principalDid(keyDid)) return null;
+  const expiresAt = root.expiresAt === undefined ? null : new Date(root.expiresAt);
+  if (!expiresAt || Number.isNaN(expiresAt.getTime())) return null;
+  const entries = Object.entries(root.attenuation);
+  if (entries.length !== resources.length) return null;
+  const matched = new Set<ShareResource>();
+  for (const [uri, abilities] of entries) {
+    if (uri.length <= spaceId.length || !spaceIdsEqual(uri.slice(0, spaceId.length), spaceId)) return null;
+    const wanted = resources.find((resource) => !matched.has(resource)
+      && uri.slice(spaceId.length) === `/${inferShortServiceFromActionUrns(resource.actions)}/${resource.path}`);
+    if (!wanted || !sortedEqual(Object.keys(abilities), wanted.actions)) return null;
+    matched.add(wanted);
+  }
+  return { chainId: owner.chainId, address: owner.address, expiresAt };
+}
+
+/**
+ * Read a share token (a `tc1:` token, as a sharing link or a native share link carries it) and check it against
+ * the owner's signature, offline: the root delegation must be signed by the wallet that owns the shared space,
+ * to the token's share key, and grant exactly the token's resources. Use the result, not the token's own fields,
+ * for anything shown to a person before they claim the share. The node still decides every claim and read.
+ *
+ * Refuses (`INVALID_TOKEN`) a malformed token, one whose root does not match, one whose root was signed by a
+ * session key rather than the owner's wallet (it cannot be checked offline), and (`AUTH_EXPIRED`) an ended root.
+ */
+export async function inspectShareToken(
+  token: string,
+  options: { now?: Date } = {},
+): Promise<Result<InspectedShareToken, DelegationError>> {
+  const decoded = decodeShareToken(token);
+  if (!decoded.ok) return decoded;
+  const data = decoded.data;
+  const invalid = (): Result<never, DelegationError> => ({
+    ok: false,
+    error: createError(DelegationErrorCodes.INVALID_TOKEN, "The share token is not backed by its owner's signature"),
+  });
+  if (!spaceIdsEqual(data.delegation.spaceId, data.spaceId)
+    || principalDid(data.delegation.delegateDID) !== principalDid(data.keyDid)
+    || !shareKeyMatchesDid(data.key, data.keyDid)) return invalid();
+  const resources = data.resources ?? [{ path: data.path, actions: data.delegation.actions }];
+  const root = await verifyShareRoot(data.delegation, data.spaceId, data.keyDid, resources);
+  if (!root) return invalid();
+  if (root.expiresAt <= (options.now ?? new Date())) {
+    return { ok: false, error: createError(DelegationErrorCodes.AUTH_EXPIRED, "The share has expired") };
+  }
+  return {
+    ok: true,
+    data: {
+      owner: { address: root.address, chainId: root.chainId, spaceId: data.spaceId },
+      resources: resources.map((resource) => ({ path: resource.path, actions: [...resource.actions] })),
+      accessExpiresAt: root.expiresAt,
+    },
+  };
 }
 
 function ownerFromSpaceId(spaceId: string): { chainId: number; address: string } | null {
@@ -1920,10 +2027,11 @@ function childRegistrationRefusal(status: number, body: string): DelegationError
     // Not a JSON refusal: no code to read.
   }
   if (status === 401 || status === 403) {
-    if (/revoked/i.test(code)) {
+    if (/^(delegation|parent|ancestor)_revoked$/.test(code)) {
       return createError(DelegationErrorCodes.REVOKED, "The owner stopped sharing this", undefined, { status });
     }
-    if (/expired/i.test(code)) {
+    // The node refuses an ended (or not yet valid) chain with this plain-text reason.
+    if (body.startsWith("Delegation expired or not yet valid")) {
       return createError(DelegationErrorCodes.AUTH_EXPIRED, "The share has expired", undefined, { status });
     }
   }

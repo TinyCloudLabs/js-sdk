@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { Wallet } from "ethers";
-import { PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
+import { inspectShareToken, PrivateKeySigner, TinyCloudNode, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { checkServerHealth, SERVER_URL } from "./setup";
 
 /**
@@ -70,6 +70,23 @@ describe("native recording share (live)", () => {
     rootCid = generated.data.delegation.cid;
     expect(owner.sharing.decodeLink(token).resources?.map((resource) => resource.path)).toEqual([TRANSCRIPT, AUDIO]);
   }, 60_000);
+
+  test("the token checks out offline against the owner's signature, and a token naming another owner does not", async () => {
+    const inspected = await inspectShareToken(token);
+    expect(inspected.ok).toBe(true);
+    if (!inspected.ok) return;
+    expect(inspected.data.owner.address.toLowerCase()).toBe((await ownerSigner.getAddress()).toLowerCase());
+    expect(inspected.data.resources).toEqual([{ path: TRANSCRIPT, actions: READ }, { path: AUDIO, actions: READ }]);
+    expect(inspected.data.accessExpiresAt.getTime()).toBeGreaterThan(Date.now() + 364 * DAY);
+
+    const data = JSON.parse(Buffer.from(token.slice("tc1:".length), "base64url").toString("utf8"));
+    const other = Wallet.createRandom().address;
+    const swap = (space: string) => space.replace(/0x[0-9a-fA-F]{40}/, other);
+    const forged = `tc1:${Buffer.from(JSON.stringify({ ...data, spaceId: swap(data.spaceId), delegation: { ...data.delegation, spaceId: swap(data.delegation.spaceId) } })).toString("base64url")}`;
+    const refused = await inspectShareToken(forged);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.code).toBe("INVALID_TOKEN");
+  });
 
   test("a recipient claims it to their account DID without an approval", async () => {
     const recipient = new TinyCloudNode({ ...config, signer: recipientSigner, autoCreateSpace: true });

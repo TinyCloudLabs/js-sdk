@@ -143,10 +143,18 @@ export class DelegatedAccess {
   }
 
   /**
-   * The path this access is scoped to.
+   * The path this access is scoped to: the first resource when the delegation carries several
+   * (see `resources`).
    */
   get path(): string {
     return this._delegation.path;
+  }
+
+  /**
+   * Every resource the delegation grants, when it lists them.
+   */
+  get resources(): PortableDelegation["resources"] {
+    return this._delegation.resources;
   }
 
   /**

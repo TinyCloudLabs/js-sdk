@@ -137,7 +137,9 @@ function recordingShare(service: SharingService, overrides: Partial<EncodedShare
 }
 
 describe("SharingService.generate with several resources", () => {
-  test("asks the owner once for every resource and carries them in the link", async () => {
+  test("asks the owner once for every resource, and refuses a root that is not the owner's signature over them", async () => {
+    // The callback's root here is signed by a session-style key, not the space owner's wallet: the link would
+    // advertise resources nobody can check, so generate refuses it. The live node test covers a wallet root.
     const onRootDelegationNeeded = mock(async (_params: unknown) => rootDelegation());
     const { service } = makeService({ onRootDelegationNeeded });
     const result = await service.generate({
@@ -145,8 +147,6 @@ describe("SharingService.generate with several resources", () => {
       expiry: PARENT_EXPIRY,
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
     expect(onRootDelegationNeeded).toHaveBeenCalledTimes(1);
     expect(onRootDelegationNeeded.mock.calls[0][0]).toMatchObject({
       spaceId: SPACE,
@@ -154,12 +154,8 @@ describe("SharingService.generate with several resources", () => {
       actions: READ,
       resources: [{ path: TRANSCRIPT, actions: READ }, { path: AUDIO, actions: ["tinycloud.kv/get"] }],
     });
-    const decoded = service.decodeLink(result.data.token);
-    expect(decoded.path).toBe(TRANSCRIPT);
-    expect(decoded.resources).toEqual([
-      { path: TRANSCRIPT, actions: READ },
-      { path: AUDIO, actions: ["tinycloud.kv/get"] },
-    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe(DelegationErrorCodes.PERMISSION_DENIED);
   });
 
   test("signs one session child over every resource when the session covers them", async () => {
@@ -265,7 +261,8 @@ describe("SharingService.delegateReceivedShare refusals", () => {
       JSON.stringify({ code: "ancestor_revoked", error: "delegation-ancestor-revoked: ancestor=bafy-root parent=bafy-child" }),
       DelegationErrorCodes.REVOKED,
     ],
-    ["an expired chain as AUTH_EXPIRED", 401, JSON.stringify({ code: "delegation_expired", error: "expired" }), DelegationErrorCodes.AUTH_EXPIRED],
+    ["an expired chain as AUTH_EXPIRED", 401, "Delegation expired or not yet valid", DelegationErrorCodes.AUTH_EXPIRED],
+    ["a code that only mentions revocation as CREATION_FAILED", 401, JSON.stringify({ code: "lease_revoked" }), DelegationErrorCodes.CREATION_FAILED],
     ["any other refusal as CREATION_FAILED", 401, JSON.stringify({ code: "unauthorized", error: "no" }), DelegationErrorCodes.CREATION_FAILED],
     ["a server failure as CREATION_FAILED", 500, "ancestor_revoked", DelegationErrorCodes.CREATION_FAILED],
   ] as const) {

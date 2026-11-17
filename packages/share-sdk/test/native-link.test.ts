@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
-import { buildShortLink, prepareLinkRecord, signerFromSeed, type LinkRecord } from "@tinycloud/share-envelope/links";
+import { buildFullLink, buildShortLink, prepareLinkRecord, signerFromSeed, type LinkRecord } from "@tinycloud/share-envelope/links";
 import { NATIVE_SHARE_LINK_FORMAT, NativeShareLinkError, openNativeShareLink, publishNativeShareLink } from "../src/native-link.js";
 
 const API = "https://api.tinycloud.xyz";
@@ -49,7 +50,7 @@ async function refusal(promise: Promise<unknown>): Promise<NativeShareLinkError>
 }
 
 describe("native share links", () => {
-  it("round-trips the token, kind and display, and names the sharing account", async () => {
+  it("round-trips the token, kind and display, and claims no owner of its own", async () => {
     const service = linksService();
     const created = await publish(service);
     expect(created.link).toStartWith(`${APP}/s/${ID}#v=4&k=`);
@@ -58,8 +59,22 @@ describe("native share links", () => {
     expect(opened.kind).toBe("recording");
     expect(opened.display).toEqual(DISPLAY);
     expect(opened.token).toBe(TOKEN);
-    expect(opened.owner).toEqual({ address: OWNER, chainId: 1, spaceId: SPACE });
+    expect(opened).not.toHaveProperty("owner");
     expect(opened.linkExpiresAt.toISOString()).toBe("2026-10-31T12:00:00.000Z");
+  });
+
+  it("refuses a full link, which has no record for the links service to expire", async () => {
+    const service = linksService();
+    const seed = Uint8Array.from({ length: 32 }, (_, index) => index + 5);
+    const issuerKey = signerFromSeed(seed);
+    const unsigned = { format: NATIVE_SHARE_LINK_FORMAT, kind: "recording", share: TOKEN, display: DISPLAY };
+    // A correctly signed body, so the refusal is the link's form and nothing else.
+    const value = toBase64Url(ed25519.sign(new TextEncoder().encode(`${NATIVE_SHARE_LINK_FORMAT}\0${canonicalize(unsigned)}`), seed));
+    const body = { ...unsigned, signature: { signerDid: issuerKey.did, algorithm: "Ed25519", value } };
+    const prepared = await prepareLinkRecord({ type: "share", plaintext: new TextEncoder().encode(canonicalize(body)), issuerKey, apiOrigin: API, expiresAt: new Date(NOW + 86_400_000), now: NOW });
+    const link = buildFullLink({ origin: APP, key: prepared.key, record: prepared.record });
+    expect((await refusal(open(link, service))).code).toBe("invalid");
+    expect(service.seen).toEqual([]);
   });
 
   it("sends the links service only sealed bytes: no token, share key, display or content key", async () => {
