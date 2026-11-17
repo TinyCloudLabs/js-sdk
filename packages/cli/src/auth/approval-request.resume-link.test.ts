@@ -315,3 +315,33 @@ describe("a grant over two approvals that stopped at the second resumes both on 
     expect((await entries()).map((item) => item.requestId)).toEqual([(await entries())[0]!.requestId, secondRequest!.requestId]);
   });
 });
+
+describe("a withheld link is never handed out another way", () => {
+  test("--timeout runs out while OpenKey cannot be asked: exit 3, no pending object, no link offered; the request is kept inside the retention", async () => {
+    const saved = await createPending();
+    await expireLocally(30_000);
+    networkFault = (url) => url.pathname.endsWith("/result");
+    offered = [];
+    const error = await pendingOf(() => acquireApprovalRequest(did, { ...options(), ...wait(Date.now() + 1_000) }));
+    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(error.metadata?.pending).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain(saved.approvalUrl);
+    expect(offered).toEqual([]);
+    expect((await entries()).map((item) => item.requestId)).toEqual([saved.requestId]);
+  });
+
+  test("without a link the run says it is checking with OpenKey, on stderr, and the line holds no link", async () => {
+    const saved = await createPending();
+    await approve();
+    await expireLocally(30_000);
+    const lines: string[] = [];
+    const quiet = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(" ")); });
+    try {
+      await acquireApprovalRequest(did, { ...options(), onApprovalRequest: undefined });
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(lines).toEqual(["Checking the saved request with OpenKey..."]);
+    expect(lines.join("\n")).not.toContain(saved.approvalUrl);
+  });
+});

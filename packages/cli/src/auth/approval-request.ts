@@ -630,6 +630,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
     if (!linkWithheld) await showApprovalLink(options, entry);
+    // No link: the saved one is past its expiry. Say what the wait is, without a link nobody can approve.
+    else if (!options.onApprovalRequest) console.error("Checking the saved request with OpenKey...");
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
