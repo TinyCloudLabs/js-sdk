@@ -4,11 +4,11 @@
 "@tinycloud/courier": patch
 ---
 
-Courier looks each owner up in the location registry once per command instead of once per node call. A `watch --once` pass made 28 to 34 registry lookups for one owner, and `read` of a 344-entry thread made 698; each now makes one lookup per owner (for an owner with no registry record, one v2 and one v1).
+Courier makes far fewer location-registry lookups for an owner with no registry record. A `watch --once` pass made 28 to 34 registry lookups for one owner, and `read` of a 344-entry thread made 698. Data reads of such an owner now share one lookup (one v2 and one v1) per minute in a process. An owner with a registry record, and every write, is still looked up on each call (see the absent-reads entry).
 
-sdk-core adds an opt-in `verdictCache` option on `lookupOwnerRegistryVerdict`, `resolveRegistryResource` and `resolveFailClosedTinyCloudHosts`, and the entry point `@tinycloud/sdk-core/registry-verdict-cache` with `createRegistryVerdictCache()`, `REGISTRY_VERDICT_REGISTERED_TTL_MS`, `REGISTRY_VERDICT_UNREGISTERED_TTL_MS` and `REGISTRY_VERDICT_CACHE_MAX_ENTRIES`. node-sdk adds the `registryVerdictCache` option on `TinyCloudNode`.
+sdk-core adds an opt-in `verdictCache` option on `lookupOwnerRegistryVerdict`, `resolveRegistryResource` and `resolveFailClosedTinyCloudHosts`, and the entry point `@tinycloud/sdk-core/registry-verdict-cache` with `createRegistryVerdictCache()`, `REGISTRY_VERDICT_REGISTERED_TTL_MS`, `REGISTRY_VERDICT_UNREGISTERED_TTL_MS` and `REGISTRY_VERDICT_CACHE_MAX_ENTRIES`. `createRegistryVerdictCache({ mode: "absent-reads" })` keeps only confirmed absences, and only for lookups marked as data reads. node-sdk adds the `registryVerdictCache` option on `TinyCloudNode`.
 
-How the cache behaves:
+How the cache behaves by default (without `mode`):
 - It is keyed by owner DID and by the registry base the lookup fetches (host case and a default port don't matter), and concurrent lookups of one owner share one request. A registry URL with `?`, `#`, `@`, `\` or whitespace is refused.
 - It keeps a registered record and a confirmed absence (v2 and v1 both not found) for 60 seconds each, on a monotonic clock, so a revoked registration stops routing and a new one is seen within a minute. It holds at most 256 owners.
 - It never keeps an unavailable verdict, an outage fallback from saved settings or a failed lookup.
@@ -17,6 +17,6 @@ How the cache behaves:
 
 Without the option, every lookup asks the registry, as before.
 
-Courier gives every node it creates the same cache, registry sequence store and saved-settings store, so `send`, `read`, `inbox`, `watch`, `intake` and `outbox serve` share one lookup per owner. A long-running `watch`, `intake` or `outbox serve` looks an owner up again after those bounds.
+Courier gives every node it creates one shared cache in `absent-reads` mode, plus the same registry sequence store and saved-settings store. Plain data reads in `read`, `inbox` and an idle `watch` pass share the lookup of an owner with no registry record. A long-running `watch`, `intake` or `outbox serve` looks that owner up again after a minute.
 
 Details: TC-2970
