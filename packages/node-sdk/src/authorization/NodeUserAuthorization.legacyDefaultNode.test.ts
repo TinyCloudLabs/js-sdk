@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { REGISTRY_NOT_FOUND_BODY, registryOwnerSubjectV1, signLocationRecord } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, registryOwnerSubjectV1, signLocationRecord, type RegisteredRegistryVerdict } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
@@ -43,5 +43,19 @@ test("a v1-only owner on any other node is refused, not sent to the new-user hos
     await expect(auth.resolveResourceDestinations(spaceId, "read")).rejects.toMatchObject({
       code: "registry_unavailable", verdict: { reason: "unsupported-format" },
     });
+  });
+});
+
+test("automatic setup without a v2 record needs the explicit legacy marker", async () => {
+  await withV1Registry(["/dns4/node.tinycloud.xyz/tcp/443/https"], async (auth, spaceId) => {
+    const recordless: RegisteredRegistryVerdict = {
+      status: "registered", subject: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001", source: "offchain",
+      sequence: 0, hosts: [{ urls: ["https://node.tinycloud.xyz"], source: "offchain" }],
+    };
+    // The verdict is private and only the registry lookup sets it; inject the unmarked shape no lookup produces.
+    Reflect.set(auth, "registryVerdict", recordless);
+    expect(auth.allowsAutomaticSetup(spaceId)).toBe(false);
+    Reflect.set(auth, "registryVerdict", { ...recordless, legacy: "v1-default-node" });
+    expect(auth.allowsAutomaticSetup(spaceId)).toBe(true);
   });
 });

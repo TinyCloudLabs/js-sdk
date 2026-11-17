@@ -288,8 +288,6 @@ interface OwnerRegistryResult {
 const cacheAuthorities = new WeakMap<RegistryCacheStore, Map<string, { sequence: number; invalidated: boolean; invalidationAttempt: number }>>();
 // The accepted decision's origin generation authorizes any later route-denial drop.
 const verdictRevisions = new WeakMap<RegistryVerdict, number>();
-// Verified v1-only records naming only the default node (TC-3168). Never v2 sequence evidence.
-const legacyDefaultNodeVerdicts = new WeakSet<RegistryVerdict>();
 
 function namesOnlyDefaultNode(hosts: readonly RegistryHost[]): boolean {
   const origins = new Set<string>();
@@ -372,7 +370,7 @@ async function refreshCachedOwnerRegistry(
     return verified;
   }
   if (verdict.status === "unavailable") return verdict;
-  if (legacyDefaultNodeVerdicts.has(verdict)) {
+  if (verdict.status === "registered" && verdict.legacy === "v1-default-node") {
     // Signed-v2 evidence from another caller outranks a legacy-only answer.
     if (highWater >= 0 || latestRegistration?.kind === "signed-v2") return {
       status: "unavailable", subject, source: "offchain", reason: "unsupported-format",
@@ -517,8 +515,8 @@ async function fetchOwnerRegistry(
         source: "offchain",
         sequence: v1.sequence,
         hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }],
+        legacy: "v1-default-node",
       };
-      legacyDefaultNodeVerdicts.add(verdict);
       return { verdict, revision, invalidationAttempt };
     }
     return { verdict: {
@@ -876,8 +874,10 @@ export async function resolveRegistryResource(
   const verdict = await lookupOwnerRegistryVerdict(subject, { ...options, dataRead: access === "read" && options.dataRead });
   if (verdict.status === "unregistered") return { verdict, hosts: [] };
   if (verdict.status === "unavailable") throw new RegistryUnavailableError(subject, verdict);
-  // TC-3168: every resource of a v1-only owner on the default node goes there.
-  if (legacyDefaultNodeVerdicts.has(verdict)) return { verdict, hosts: [...verdict.hosts] };
+  // TC-3168: every resource of a v1-only owner on the default node goes there, and nowhere else.
+  if (verdict.legacy === "v1-default-node") {
+    return { verdict, hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }] };
+  }
   const record = verdict.record;
   if (record === undefined) {
     throw new RegistryUnavailableError(subject, undefined, {

@@ -44,7 +44,7 @@ test("a v1-only owner on the default node routes there for every access, with or
   const fetchFn = registry(await v1Record(["/dns4/node.tinycloud.xyz/tcp/443/https"]));
   for (const stores of [{}, { cacheStore: createInMemoryRegistryCacheStore(), sequenceStore: createInMemoryRegistrySequenceStore() }]) {
     const verdict = await resolveOwnerHosts(subject, { ...stores, fetch: fetchFn });
-    expect(verdict).toMatchObject({ status: "registered", subject, hosts: [{ urls: [DEFAULT_NODE] }] });
+    expect(verdict).toMatchObject({ status: "registered", subject, legacy: "v1-default-node", hosts: [{ urls: [DEFAULT_NODE] }] });
     expect(verdict.status === "registered" && verdict.record).toBeUndefined();
     for (const access of ["read", "write", "host", "encryption"] as const) {
       const { hosts } = await resolveRegistryResource(subject, space, access, { ...stores, fetch: fetchFn });
