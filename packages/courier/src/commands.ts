@@ -507,8 +507,10 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, arti
 }
 
 async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
-  const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true });
+  const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
   if (result.reason === 'no-extension') {
+    const limit = peerLimitNote(peer);
+    if (artifact && limit) fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs as long as the peer accepts (${limit}), so there is no longer renewal to hand over. Nothing was exported.`);
     if (artifact) fail('renew-throttled', `Courier can't extend this access under your current approval. Run \`${cmd('init --request')}\` to request a new one.`);
     console.error(`Courier couldn't extend access for ${oneLine(peer.handle)} yet. Their current access is unchanged.`);
     return undefined;

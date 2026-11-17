@@ -244,7 +244,7 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
 }
 
 /** Issue only our own child. The caller holds withProfileTransaction across every awaited boundary. */
-export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean } = {}): Promise<InterimResult> {
+export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
   const save = () => { profile.version = 4; persist(); };
   const local = interimLocalState(peer);
   if (local !== 'live') return { state: local };
@@ -262,7 +262,8 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   const limitMs = peerRenewalLimitMs(peer, now);
   const lastAttempt = state.lastAttemptAt ? Date.parse(state.lastAttemptAt) : tip.issuedAt?.getTime();
   // A current delegation longer than the peer accepts is replaced at once by a shorter one: waiting for its half-life would leave the peer unable to read it.
-  const overlong = outlivesPeerLimit(peer, end, now);
+  // `extendOnly` (artifact export) never replaces a grant with a shorter one: the receiving `pair accept` refuses it as stale.
+  const overlong = !options.extendOnly && outlivesPeerLimit(peer, end, now);
   if (!options.force && ((!options.manual && !overlong && now < started + (end - started) / 2)
     || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
   if (!overlong && Math.floor(Math.min(now + limitMs, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: 'no-extension' };

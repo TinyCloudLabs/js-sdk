@@ -257,3 +257,14 @@ test('a renewal that does not extend is skipped now and issued, extending, on a 
     assert.equal(f.peer.interim?.shortenedAt, undefined, 'the shorter-grant exception was not used');
   } finally { Date.now = realNow; }
 });
+
+test('artifact export never replaces an over-long grant with a shorter one', async () => {
+  const f = fixture({ inboundLifetime: undefined, tipEndsAt: 30 * DAY });
+  assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true, extendOnly: true }), { state: 'live', reason: 'no-extension' });
+  assert.equal(f.counts.sign, 0);
+  assert.equal(f.peer.interim?.shortenedAt, undefined);
+  // The same peer through the publishing path (the 0.5.x reader) does get the shorter 7-day grant.
+  const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true });
+  assert.equal(outcome.state, 'renewed');
+  assert.deepEqual(f.counts.expiries, [7 * DAY]);
+});
