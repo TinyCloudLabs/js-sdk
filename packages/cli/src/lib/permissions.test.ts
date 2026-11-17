@@ -7,8 +7,6 @@ import * as realSdkServices from "@tinycloud/sdk-services";
 
 const OWNER_DID = "did:pkh:eip155:1:0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const OWNER_ADDRESS = "0xd559ccd9eb87c530a9a349262669386de93cf412";
-/** One shared file: the only decrypt a device sign-in can carry (TC-3204). */
-const SHARE_LEAF = "share/3f9c1a7e5b2d48a09c6e1f7a2b4d8c03";
 let activeProfile: Record<string, unknown>;
 
 mock.module("../config/profiles.js", () => ({
@@ -502,51 +500,34 @@ describe("loadManifestPermissions", () => {
       .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
   });
 
-  test("a device manifest keeps decrypt on one shared file as OpenKey's device flow takes it", async () => {
-    activeProfile = {
-      name: "agent", host: "https://node.tinycloud.test", chainId: 1,
-      spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
-    };
-    const kv = { service: "tinycloud.kv", path: "notes/", skipPrefix: true, actions: ["get"] };
-    const decrypt = { service: "tinycloud.encryption", path: SHARE_LEAF, skipPrefix: true, actions: ["decrypt"] };
-    const permissions = await loadManifestPermissions(
-      manifestSource({ app_id: "xyz.tinycloud.agent", space: "default", permissions: [kv, decrypt] }),
-      "agent", { allowLogicalSpaces: true, device: true },
-    );
-    expect(permissions.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
-      { service: "tinycloud.encryption", space: "default", path: SHARE_LEAF, actions: ["tinycloud.encryption/decrypt"] },
-    ]);
-  });
-
-  // The app prefix never applies to an encryption entry (as in sdk-core resolveManifest), and its network is its own
-  // `space`, else the manifest's. TC-2550 spellings, on one shared file since TC-3204.
+  // TC-3204: device sign-in can't decrypt, so every shape of the default-network decrypt entry is refused, including
+  // the first manifest from the #880 live QA.
   test.each([
-    ["no skipPrefix, entry space default",
-      { app_id: "qa.p17.device", space: "default", permissions: [{ service: "tinycloud.encryption", space: "default", path: SHARE_LEAF, actions: ["tinycloud.encryption/decrypt"] }] }],
+    ["the #880 live-QA manifest verbatim (no skipPrefix, entry space default)",
+      { app_id: "qa.p17.device", space: "default", permissions: [{ service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] }] }],
+    ["no path and no skipPrefix", { app_id: "xyz.tinycloud.agent", space: "default", permissions: [{ service: "tinycloud.encryption", actions: ["decrypt"] }] }],
     ["the entry's own space default under a manifest space applications",
-      { app_id: "xyz.tinycloud.agent", space: "applications", permissions: [{ service: "tinycloud.encryption", space: "default", path: SHARE_LEAF, actions: ["decrypt"] }] }],
-    ["short service and action names, skipPrefix", { app_id: "xyz.tinycloud.agent", space: "default", permissions: [{ service: "encryption", path: SHARE_LEAF, skipPrefix: true, actions: ["decrypt"] }] }],
-  ])("--device accepts %s and sends OpenKey the one entry it takes", async (_name, manifest) => {
+      { app_id: "xyz.tinycloud.agent", space: "applications", permissions: [{ service: "tinycloud.encryption", space: "default", path: "", actions: ["decrypt"] }] }],
+    ["short service and action names, skipPrefix", { app_id: "xyz.tinycloud.agent", space: "default", permissions: [{ service: "encryption", path: "", skipPrefix: true, actions: ["decrypt"] }] }],
+  ])("--device refuses %s", async (_name, manifest) => {
     activeProfile = {
       name: "agent", host: "https://node.tinycloud.test", chainId: 1,
       spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
     };
-    const permissions = await loadManifestPermissions(manifestSource(manifest), "agent", { allowLogicalSpaces: true, device: true });
-    expect(permissions.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
-      { service: "tinycloud.encryption", space: "default", path: SHARE_LEAF, actions: ["tinycloud.encryption/decrypt"] },
-    ]);
+    await expect(loadManifestPermissions(manifestSource(manifest), "agent", { allowLogicalSpaces: true, device: true }))
+      .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
   });
 
   test.each([
-    ["the manifest's space is another network", { space: "other", permissions: [{ path: SHARE_LEAF }] }],
-    ["the entry names another network under a default manifest (was silently sent as default)", { space: "default", permissions: [{ space: "other", path: SHARE_LEAF, skipPrefix: true }] }],
-    ["the entry names the owner's full default space id", { space: "default", permissions: [{ space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:default`, path: SHARE_LEAF }] }],
+    ["the manifest's space is another network", { space: "other", permissions: [{ path: "" }] }],
+    ["the entry names another network under a default manifest (was silently sent as default)", { space: "default", permissions: [{ space: "other", path: "", skipPrefix: true }] }],
+    ["the entry names the owner's full default space id", { space: "default", permissions: [{ space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:default`, path: "" }] }],
     ["path \"/\"", { space: "default", permissions: [{ path: "/" }] }],
     ["a nested path", { space: "default", permissions: [{ path: "share/" }] }],
-    ["encrypt", { space: "default", permissions: [{ path: SHARE_LEAF, actions: ["encrypt"] }] }],
-    ["decrypt and encrypt", { space: "default", permissions: [{ path: SHARE_LEAF, actions: ["decrypt", "encrypt"] }] }],
+    ["encrypt", { space: "default", permissions: [{ path: "", actions: ["encrypt"] }] }],
+    ["decrypt and encrypt", { space: "default", permissions: [{ path: "", actions: ["decrypt", "encrypt"] }] }],
     ["the network URN", { space: "default", permissions: [{ path: `urn:tinycloud:encryption:${OWNER_DID}:default` }] }],
-    ["the secrets space", { space: "secrets", permissions: [{ path: SHARE_LEAF }] }],
+    ["the secrets space", { space: "secrets", permissions: [{ path: "" }] }],
   ])("--device refuses an encryption entry when %s", async (_name, { space, permissions }) => {
     activeProfile = {
       name: "agent", host: "https://node.tinycloud.test", chainId: 1,
@@ -557,15 +538,17 @@ describe("loadManifestPermissions", () => {
       .rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
   });
 
-  test("the --device refusal says what is allowed and what the manifest asked for", async () => {
+  test("the --device refusal says what the manifest asked for and how to decrypt instead", async () => {
     activeProfile = {
       name: "agent", host: "https://node.tinycloud.test", chainId: 1,
       spaceName: "default", did: "did:key:z6MkSession", createdAt: "2026-06-01T00:00:00.000Z",
     };
     const source = manifestSource({ app_id: "xyz.tinycloud.agent", space: "default", permissions: [{ service: "tinycloud.encryption", path: "share/", actions: ["decrypt"] }] });
     const error = await loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true }).catch((caught: Error) => caught);
-    expect((error as Error).message).toContain("can't ask for tinycloud.encryption/decrypt on space \"default\", path \"share/\".");
-    expect((error as Error).message).toContain("The only encryption permission --device can ask for is tinycloud.encryption/decrypt on one shared file (space \"default\", path \"share/<id>\"), at most 4 per request.");
+    expect((error as Error).message).toBe(
+      "--device can't ask for tinycloud.encryption/decrypt on space \"default\", path \"share/\", because device sign-in can't decrypt. " +
+      "Run the command without --device to approve in a browser, or remove the tinycloud.encryption entry from the manifest.",
+    );
   });
 
   test("outside --device an unprefixed app-manifest decrypt resolves to the owner's default network, not a path under the app", async () => {

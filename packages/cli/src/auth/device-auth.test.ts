@@ -189,61 +189,7 @@ describe("OpenKey device authorization", () => {
     expect(new Set(requested.map((permission) => permission.space))).toEqual(new Set(["default"]));
   });
 
-  const SHARE_PATH = "share/3f9c1a7e5b2d48a09c6e1f7a2b4d8c03";
-  const defaultDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: SHARE_PATH, actions: ["tinycloud.encryption/decrypt"] };
-
-  test("sends OpenKey decrypt on one shared file of the owner's default network, alone or with other scopes", async () => {
-    for (const permissions of [[defaultDecrypt], [...requested, defaultDecrypt]]) {
-      const openkey = openKeyRelayStub(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
-      await expect(acquire(openkey, { permissions })).rejects.toMatchObject({ code: expect.not.stringMatching(/^DEVICE_AUTH_UNSUPPORTED_SCOPE$/) });
-      expect(openkey.startBodies.map((body) => body.permissions)).toEqual([permissions]);
-    }
-  });
-
-  test("accepts OpenKey's approval of decrypt on the shared file and returns it as granted", async () => {
-    const network = `urn:tinycloud:encryption:${ownerDid}:default/${SHARE_PATH}`;
-    const signedDecrypt: PermissionEntry = { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] };
-    const permissions = [...requested, defaultDecrypt];
-    // OpenKey signs the shared-file entry as that key on the approving owner's network; its binding repeats the approved request entries.
-    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...requested, signedDecrypt], binding: permissions }));
-    const result = await acquire(openkey, { permissions });
-
-    expect(result.declined).toEqual([]);
-    expect(result.approved).toContainEqual({ service: "tinycloud.encryption", space: "encryption", path: network.toLowerCase(), actions: ["tinycloud.encryption/decrypt"] });
-    expect(result.session.permissions).toContainEqual(expect.objectContaining({ path: network, actions: ["tinycloud.encryption/decrypt"] }));
-  });
-
-  test("an approval that leaves out the shared-file decrypt reports it declined", async () => {
-    const permissions = [...requested, defaultDecrypt];
-    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: requested }));
-    const result = await acquire(openkey, { permissions });
-
-    expect(result.declined).toEqual([{ ...defaultDecrypt, space: spaceId }]);
-    expect(result.approved.some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
-  });
-
-  test.each([
-    ["decrypt and encrypt on the shared file", (network: string) => ({ service: "encryption", space: "encryption", path: `${network}/${SHARE_PATH}`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/encrypt"] })],
-    ["decrypt on the shared file in another of the owner's networks", (network: string) => ({ service: "encryption", space: "encryption", path: `${network.replace(/:default$/, ":other")}/${SHARE_PATH}`, actions: ["tinycloud.encryption/decrypt"] })],
-    ["decrypt on the shared file in another owner's default network", (network: string) => ({ service: "encryption", space: "encryption", path: `${network.replace(ownerDid, "did:pkh:eip155:1:0x00000000000000000000000000000000000000bb")}/${SHARE_PATH}`, actions: ["tinycloud.encryption/decrypt"] })],
-    ["decrypt on the whole default network", (network: string) => ({ service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] })],
-    ["decrypt on the share/ prefix", (network: string) => ({ service: "encryption", space: "encryption", path: `${network}/share/`, actions: ["tinycloud.encryption/decrypt"] })],
-    ["decrypt nested inside the owner's space (unusable on the node)", () => ({ service: "tinycloud.encryption", space: spaceId, path: SHARE_PATH, actions: ["tinycloud.encryption/decrypt"] })],
-  ])("refuses an approval that signs %s for the shared-file decrypt request", async (_name, signedEntry) => {
-    const permissions = [...requested, defaultDecrypt];
-    const signedDecrypt = signedEntry(`urn:tinycloud:encryption:${ownerDid}:default`) as PermissionEntry;
-    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...requested, signedDecrypt], binding: permissions }));
-    await expect(acquire(openkey, { permissions })).rejects.toMatchObject({
-      code: expect.stringMatching(/^(OPENKEY_GRANT_BROADENED|OPENKEY_SCOPE_MISMATCH|DEVICE_AUTH_BINDING_MISMATCH)$/),
-    });
-  });
-
-  test("refuses a decrypt nested inside the owner's space even when OpenKey's binding and relay report it the same way", async () => {
-    const permissions = [...requested, defaultDecrypt];
-    const nested: PermissionEntry = { service: "tinycloud.encryption", space: spaceId, path: SHARE_PATH, actions: ["tinycloud.encryption/decrypt"] };
-    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...requested, nested], binding: [...requested, nested] }));
-    await expect(acquire(openkey, { permissions })).rejects.toMatchObject({ code: "OPENKEY_GRANT_BROADENED" });
-  });
+  const defaultDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
 
   test("refuses encryption or secrets-space device scopes before starting the device API", async () => {
     const forbidden: PermissionEntry[][] = [
@@ -514,24 +460,6 @@ describe("device login persistence", () => {
       expect((await stat(join(PROFILES_DIR, "agent", file))).mode & 0o777).toBe(0o600);
     }
     expect((await stat(join(PROFILES_DIR, "agent"))).mode & 0o777).toBe(0o700);
-  });
-
-  test("stores a device session that holds decrypt on a shared file of the owner's default network", async () => {
-    await ProfileManager.setKey("agent", key);
-    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
-    const network = `urn:tinycloud:encryption:${ownerDid}:default/share/3f9c1a7e5b2d48a09c6e1f7a2b4d8c03`;
-    const defaultDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "share/3f9c1a7e5b2d48a09c6e1f7a2b4d8c03", actions: ["tinycloud.encryption/decrypt"] };
-    const permissions = [...requested, defaultDecrypt];
-    const openkey = openKeyRelayStub((start, id) => approved(start, id, {
-      signed: [...requested, { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] }],
-      binding: permissions,
-    }));
-
-    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions, fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
-
-    const stored = await ProfileManager.getSession("agent") as { permissions?: PermissionEntry[] } | null;
-    expect(stored?.permissions?.filter((permission) => permission.path.toLowerCase() === network.toLowerCase()))
-      .toEqual([expect.objectContaining({ actions: ["tinycloud.encryption/decrypt"] })]);
   });
 
   test("records whether the approving key is the account's primary key and warns on stderr when it is not (TC-705)", async () => {

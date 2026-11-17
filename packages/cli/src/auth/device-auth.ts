@@ -433,12 +433,12 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  // OpenKey's device flow admits decrypt only on exact shared files of the owner's default network (TC-3204).
+  // OpenKey's device flow grants no encryption ability (TC-3204).
   const refused = deviceRefusal(input.permissions);
   if (refused !== undefined) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      deviceRefusalMessage(refused, "this request", "Use another OpenKey approval method for this request."),
+      deviceRefusalMessage(refused, "this request"),
       ExitCode.USAGE_ERROR,
     );
   }

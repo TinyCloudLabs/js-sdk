@@ -40,7 +40,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { deviceRefusal, deviceRefusalMessage, isDefaultNetworkDecrypt, isDeviceShareDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage, isDefaultNetworkDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -481,8 +481,8 @@ export async function loadManifestPermissions(
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
-  // OpenKey's device sign-in refuses decrypt on the `share/` prefix (it grants only exact `share/<id>` files, TC-3204),
-  // so the built-in Share publishing manifest goes through it without its prefix decrypt entry. A paste sign-in keeps it.
+  // OpenKey's device sign-in grants no decrypt (TC-3204), so the built-in Share publishing manifest goes through it
+  // without its prefix decrypt entry. A paste sign-in keeps it.
   if (options.device && source === SHARE_PUBLISHING_MANIFEST_REF && Array.isArray(manifest.permissions)) {
     manifest.permissions = manifest.permissions.filter((entry: unknown) =>
       !(entry !== null && typeof entry === "object" &&
@@ -496,7 +496,7 @@ export async function loadManifestPermissions(
       ? "secrets"
       : deviceRefusal(appManifestEntries(manifest));
     if (refused !== undefined) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest"), ExitCode.USAGE_ERROR);
     }
   }
 
@@ -504,7 +504,7 @@ export async function loadManifestPermissions(
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
     const refused = options.device ? deviceRefusal(resolved.resources) : undefined;
     if (refused !== undefined) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest"), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
@@ -521,8 +521,6 @@ export async function loadManifestPermissions(
     ExitCode.USAGE_ERROR,
   );
 }
-
-const DEVICE_MANIFEST_NEXT = "Use browser or --paste login for this manifest.";
 
 /** An app manifest's permissions, each as it will be requested (see `appManifestEntry`). */
 function appManifestEntries(manifest: Record<string, unknown>): PermissionEntry[] {
@@ -694,12 +692,6 @@ export async function resolvePermissionSpaces(
     // this entry cannot publish email shares.
     if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: `${await defaultSecretsNetworkId(profile, options.ownerDid)}/share/`, actions });
-      continue;
-    }
-    // OpenKey's device flow takes a shared-file decrypt as written and signs that key on the approving owner's own
-    // default network (TC-3204).
-    if (options.device && isDeviceShareDecrypt({ ...entry, service, actions })) {
-      resolved.push({ service, space: "default", path: entry.path, actions });
       continue;
     }
     if (isDefaultNetworkDecrypt({ ...entry, service, actions })) {

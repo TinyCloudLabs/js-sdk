@@ -35,50 +35,30 @@ export function isDefaultNetworkDecrypt(permission: Pick<PermissionEntry, "servi
     !permission.caveats?.length;
 }
 
-/** Most shared files one device request may ask to decrypt (openkey DEVICE_AUTH_MAX_SHARE_DECRYPTS). */
-export const DEVICE_MAX_SHARE_DECRYPTS = 4;
-
 /**
- * Decrypt on one shared file of the owner's default network, as OpenKey's device flow takes it (TC-3204): space
- * `default`, path `share/<id>` with a network-safe share id (share-sdk `NETWORK_SAFE_SHARE_ID`), decrypt only.
- */
-export function isDeviceShareDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
-  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" &&
-    /^share\/[a-z0-9][a-z0-9-]{15,35}$/.test(permission.path) &&
-    permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
-    !permission.caveats?.length;
-}
-
-/**
- * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), any encryption entry other
- * than decrypt on one shared file, or the shared file past DEVICE_MAX_SHARE_DECRYPTS
- * (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
+ * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry in
+ * any spelling. Device sign-in grants no encryption ability (TC-3204;
+ * openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
-  let shareDecrypts = 0;
   for (const entry of entries) {
     if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
-    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) continue;
-    if (!isDeviceShareDecrypt(entry)) return entry;
-    shareDecrypts += 1;
-    if (shareDecrypts > DEVICE_MAX_SHARE_DECRYPTS) return entry;
+    if (/^(?:tinycloud\.)?encryption$/i.test(entry.service)) return entry;
   }
   return undefined;
 }
 
-const DEVICE_DECRYPT_ALLOWED = `tinycloud.encryption/decrypt on one shared file (space "default", path "share/<id>"), at most ${DEVICE_MAX_SHARE_DECRYPTS} per request`;
-
 /**
- * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what was refused, what --device allows, and `next` ("Use … for this
- * manifest."). `subject` ("this manifest", "this request") names who asked for the secrets space. Request text is
- * escaped and clipped.
+ * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what was refused and how to approve it instead. `subject` ("this
+ * manifest", "this request") names who asked for the secrets space. Request text is escaped and clipped.
  */
-export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subject: string, next: string): string {
-  const allowed = `The only encryption permission --device can ask for is ${DEVICE_DECRYPT_ALLOWED}.`;
+export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subject: string): string {
   if (refused === "secrets") {
-    return `--device can't authorize the secrets space, and ${subject} asks for it. ${allowed} ${next}`;
+    return `--device can't authorize the secrets space, and ${subject} asks for it. ` +
+      "Run the command without --device to approve in a browser, or use --paste.";
   }
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"` +
-    `${refused.caveats?.length ? " with extra limits" : ""}. ${allowed} ${next}`;
+    `${refused.caveats?.length ? " with extra limits" : ""}, because device sign-in can't decrypt. ` +
+    "Run the command without --device to approve in a browser, or remove the tinycloud.encryption entry from the manifest.";
 }
