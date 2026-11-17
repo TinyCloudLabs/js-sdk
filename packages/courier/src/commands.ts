@@ -1,6 +1,6 @@
 import { adviceFor, deriveState, heldApproval, recoverInterrupted, rotateKey } from './state.js';
 import { createRuntimeNode, maintainPeerSet } from './interim-runtime.js';
-import { interimLocalState, maintainOutbound } from './interim-renewal.js';
+import { interimLocalState, maintainOutbound, peerLimitNote } from './interim-renewal.js';
 import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -478,16 +478,22 @@ async function pairRenew(args: ParsedArgs) {
     if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
     const delegation = await renewOutbound(active, peer, args.has('force'), true);
     if (!delegation) fail('renew-throttled', `Access for ${oneLine(peer.handle)} was renewed in the last 24 hours. Use --force to renew it again now.`);
+    noteLimit(peer);
     printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
     return;
   }
   const renewed: string[] = [];
   for (const peer of peers) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
-    if (await renewOutbound(active, peer, args.has('force'))) renewed.push(peer.handle);
+    if (await renewOutbound(active, peer, args.has('force'))) { renewed.push(peer.handle); noteLimit(peer); }
     await installInbound(active, peer);
   }
   printJson({ ok: true, renewed });
+}
+
+function noteLimit(peer: StoredPeer): void {
+  const note = peerLimitNote(peer);
+  if (note) console.error(`Renewed access for ${oneLine(peer.handle)} (${note}).`);
 }
 
 async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, artifact = false): Promise<PortableDelegation | undefined> {
