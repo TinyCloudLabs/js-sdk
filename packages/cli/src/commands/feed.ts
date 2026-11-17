@@ -21,9 +21,7 @@ import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runne
 import { connectFeedAgent } from "../feed/connection.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
-
-const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
-const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
+import { FEED_PREFIX, FEED_REGISTRY as REGISTRY } from "../feed/resources.js";
 
 function value<T>(result: Result<T>): T {
   if (!result.ok) throw cliErrorFromService(result.error);

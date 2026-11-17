@@ -15,6 +15,7 @@ import { CLIError, handleError } from "../output/errors.js";
 import { output } from "../output/formatter.js";
 import { ensureDelegationAuthority, refreshOpenKeySession, type OpenKeyAcquisition } from "./auth.js";
 import { createKeyOnlyProfile } from "./init.js";
+import { FEED_PRESET, FEED_PRESET_ASKS, FEED_PRESET_EXPIRY, FEED_PRESET_PERMISSIONS } from "../lib/feed-preset.js";
 
 /** Lifetime of every onboarding approval: OpenKey's maximum. */
 const ONBOARD_EXPIRY = "30d";
@@ -51,6 +52,17 @@ export const ONBOARD_STEPS: ReadonlyArray<{
   },
 ];
 
+type OnboardStep = (typeof ONBOARD_STEPS)[number];
+
+/** `--preset feed` is one approval for the agent feed alone; no preset is the default starting grant. */
+export function onboardSteps(preset: unknown): ReadonlyArray<OnboardStep> {
+  if (preset === undefined) return ONBOARD_STEPS;
+  if (preset !== FEED_PRESET) {
+    throw new CLIError("INVALID_ARGUMENT", `Unknown --preset "${String(preset).slice(0, 40)}". Available: ${FEED_PRESET}.`, ExitCode.USAGE_ERROR);
+  }
+  return [{ space: "applications", asks: FEED_PRESET_ASKS, permissions: [...FEED_PRESET_PERMISSIONS] }];
+}
+
 
 export function registerOnboardCommand(program: Command): void {
   program
@@ -58,8 +70,10 @@ export function registerOnboardCommand(program: Command): void {
     .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
+    .option("--preset <name>", `Ask only for what a feature needs instead of the default starting grant: ${FEED_PRESET} is one approval for the agent feed (its tables and webhooks, not your apps' data), ${FEED_PRESET_EXPIRY}`)
     .action(async (options, cmd) => {
       try {
+        const steps = onboardSteps(options.preset);
         // Refused before anything is created or contacted. One deadline bounds the whole command, every approval in it.
         const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         if (options.timeout !== undefined && typeof options.code === "string" && options.code.trim() !== "") {
@@ -91,14 +105,14 @@ export function registerOnboardCommand(program: Command): void {
           }
           return startAuthFlow(did, {
             ...flow, profileName: ctx.profile, noPopup: true,
-            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } }),
+            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: steps.length } }),
             onApprovalRequest: ({ approvalUrl }) => {
               console.error(`Approve in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
             },
           });
         };
 
-        for (const [index, step] of ONBOARD_STEPS.entries()) {
+        for (const [index, step] of steps.entries()) {
           currentStep = index + 1;
           const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
@@ -111,7 +125,7 @@ export function registerOnboardCommand(program: Command): void {
             });
             // A new account's space can take OpenKey a minute or two to host; under --timeout the wait ends with the call's bound.
             await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,
-              deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }));
+              deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: steps.length }));
             profile = await ProfileManager.getProfile(ctx.profile);
             continue;
           }
@@ -133,9 +147,9 @@ export function registerOnboardCommand(program: Command): void {
           profile: ctx.profile,
           ownerDid: profile.ownerDid ?? null,
           host: ctx.host,
-          granted: ONBOARD_STEPS.map(({ space, asks }) => ({ space, asks })),
+          granted: steps.map(({ space, asks }) => ({ space, asks })),
           expiresAt: storedSessionState(session, profile).expiresAt,
-        }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${ONBOARD_STEPS.map(({ asks }) => `  ${asks}`).join("\n")}`);
+        }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${steps.map(({ asks }) => `  ${asks}`).join("\n")}`);
       } catch (error) {
         return handleError(error);
       }
