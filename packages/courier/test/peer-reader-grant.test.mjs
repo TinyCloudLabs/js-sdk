@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE, PREFIX } from '../dist/keys.js';
 import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
+import { pairAsUnpatched06 } from './support/pair-as-unpatched-06.mjs';
 import { peerKv, courierNode } from '../dist/node.js';
 import { loadProfile } from '../dist/profile.js';
 
@@ -90,10 +91,7 @@ async function approveLater(fixture) {
 test('after a peer renews its grant to us, reads in the same process use the new grant, never the superseded one', async () => {
   const issuer = await makeHome('issuer', 'issuer', randomBytes(32).toString('hex'));
   const recipient = await makeHome('recipient', 'recipient', randomBytes(32).toString('hex'));
-  const artA = await run(issuer.home, ['pair', 'start', 'to-recipient', '--call-me', 'to-issuer']);
-  const artB = await run(recipient.home, ['pair', 'accept', JSON.stringify(artA)]);
-  const artC = await run(issuer.home, ['pair', 'accept', JSON.stringify(artB)]);
-  await run(recipient.home, ['pair', 'accept', JSON.stringify(artC)]);
+  const { artC } = await pairAsUnpatched06(HOST, issuer, 'to-recipient', recipient, 'to-issuer');
 
   process.env.COURIER_HOME = recipient.home;
   const profile = loadProfile();

@@ -17,6 +17,7 @@ export function durationMs(value: string): number | undefined {
 }
 
 export const AGENT_GRANT_MAX_MS = durationMs(AGENT_GRANT_EXPIRY)!;
+/** What Courier accepts from a peer: up to {@link PEER_DELEGATION_EXPIRY}, whatever a first-time pairing here signs. */
 export const PEER_DELEGATION_MAX_MS = durationMs(PEER_DELEGATION_EXPIRY)!;
 export const CLOCK_SKEW_MS = 5 * 60 * 1000;
 

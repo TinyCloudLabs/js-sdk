@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
+import { pairAsUnpatched06 } from './support/pair-as-unpatched-06.mjs';
 import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -221,7 +222,7 @@ test('an exporter whose grant expired gets [grant-expired], exit 1, empty stdout
 test('a second export inside 24 h is [renew-throttled] and stamps nothing; an aged stamp or --force exports and stamps', async () => {
   const issuer = await makeHome('throttle-issuer', 'throttle-issuer', owners.sam);
   const recipient = await makeHome('throttle-recipient', 'throttle-recipient', owners.mira);
-  await pairAll(issuer, 'issuer-thr', recipient, 'recipient-thr');
+  await pairAsUnpatched06(HOST, issuer, 'issuer-thr', recipient, 'recipient-thr');
   // Pairing itself issued the delegation just now: that issuance is the stamp.
   const stamped = () => profileAt(issuer.home).peers['issuer-thr'].outbound;
   assert.equal(stamped().length, 1);
@@ -304,10 +305,10 @@ function receiver() {
     const forger = await makeHome('recv-forger', 'recv-forger', owners.sam);
     const recipient = await makeHome('recv-recipient', 'recv-recipient', owners.mira);
     const stranger = await makeHome('recv-stranger', 'recv-stranger', owners.mira);
-    await pairAll(issuer, 'issuer-recv', recipient, 'recipient-recv');
+    await pairAsUnpatched06(HOST, issuer, 'issuer-recv', recipient, 'recipient-recv');
     // The forger pairs with the same recipient under the same issuer-side handle, so its delegation covers the
     // identical mailbox tuples as the issuer's.
-    await pairAll(forger, 'issuer-recv', recipient, 'recipient-forger');
+    await pairAsUnpatched06(HOST, forger, 'issuer-recv', recipient, 'recipient-forger');
     backdateOutbound(issuer.home, 'issuer-recv');
     backdateOutbound(forger.home, 'issuer-recv');
     await new Promise((resolve) => setTimeout(resolve, 1100)); // renewals expire after the installed delegations

@@ -23,7 +23,7 @@ import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSp
 import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
-  artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
+  artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_ISSUE, validateArtifactIdentity,
 } from './pairing.js';
 import {
   authRequiredTask, buildMessage, buildTask, COUNTERPARTY_NOTICE, isRecord, messageView, oneLine, safeText,
@@ -368,7 +368,7 @@ async function pairAccept(args: ParsedArgs) {
   if (art.step === 'A') {
     const handle = art.callMe;
     assertNotPaired(profile, handle); // before delegateTo: a refusal after it would leave a live delegation nothing records
-    const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
+    const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_ISSUE });
     const peer: StoredPeer = {
       handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
       spaceId: art.spaceId, outbound: [], theirHandleForMe: art.peer, status: 'awaiting-C', pairedAt: new Date().toISOString(),
@@ -395,7 +395,7 @@ async function pairAccept(args: ParsedArgs) {
     const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
     Object.assign(peer, candidate);
     peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
-    const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
+    const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_ISSUE });
     recordOutbound(peer, outgoing.delegation);
     peer.status = 'paired';
     saveAfterDelegation(profile, outgoing.delegation);

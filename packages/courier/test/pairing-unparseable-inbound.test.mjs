@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
 import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
+import { pairAsUnpatched06 } from './support/pair-as-unpatched-06.mjs';
 
 import { peerKv, courierNode } from '../dist/node.js';
 import { loadProfile } from '../dist/profile.js';
@@ -163,7 +164,7 @@ async function runFail(home, args) {
 test('unparseable inbound: the export is refused with a clear message rather than handing a 0.6 peer a shorter C it would refuse (TC-3159)', async () => {
   const issuer = await makeHome('issuer', 'issuer', owners.sam);
   const recipient = await makeHome('recipient', 'recipient', owners.mira);
-  await pairAll(issuer, 'to-recipient', recipient, 'to-issuer');
+  await pairAsUnpatched06(HOST, issuer, 'to-recipient', recipient, 'to-issuer');
   const corrupt = profileAt(issuer.home);
   corrupt.peers['to-recipient'].inbound.delegation = 'not-a-valid-delegation';
   writeProfile(issuer.home, corrupt);

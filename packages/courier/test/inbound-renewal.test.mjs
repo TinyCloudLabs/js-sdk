@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
 import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
+import { pairAsUnpatched06 } from './support/pair-as-unpatched-06.mjs';
 
 import { peerKv, courierNode } from '../dist/node.js';
 import { loadProfile } from '../dist/profile.js';
@@ -152,7 +153,7 @@ await import('./support/registry-fixture.mjs').then(m => m.installCourierRegistr
 test('peer reads collect a newer signed grant without a receiving pair renew; preserve binding and outbound history', async () => {
   const issuer = await makeHome('issuer', 'issuer', owners.sam);
   const recipient = await makeHome('recipient', 'recipient', owners.mira);
-  await pairAll(issuer, 'to-recipient', recipient, 'to-issuer');
+  await pairAsUnpatched06(HOST, issuer, 'to-recipient', recipient, 'to-issuer');
   await new Promise(resolve => setTimeout(resolve, 1100));
   await approveLater(issuer);
   const artifact = await run(issuer.home, ['pair', 'renew', 'to-recipient', '--renew-artifact', '--force']);
@@ -210,7 +211,7 @@ test('absent renewal keeps current access; failed collection is surfaced; saved 
 test('replacement with changed mailbox is not saved', async () => {
   const issuer = await makeHome('other-issuer', 'other-issuer', owners.sam);
   const recipient = { home: path.join(root, 'inbound-renewal', 'recipient') };
-  await pairAll(issuer, 'elsewhere', recipient, 'other-side');
+  await pairAsUnpatched06(HOST, issuer, 'elsewhere', recipient, 'other-side');
   await new Promise(resolve => setTimeout(resolve, 1100));
   await approveLater(issuer);
   const artifact = await run(issuer.home, ['pair', 'renew', 'elsewhere', '--renew-artifact', '--force']);
@@ -246,7 +247,7 @@ test('expiry reached during the replacement read leaves the saved grant untouche
 test('another signed issuer with the same owner and exact mailbox cannot replace the paired issuer', async () => {
   const issuer = await makeHome('forger', 'forger', owners.sam);
   const recipient = { home: path.join(root, 'inbound-renewal', 'recipient') };
-  await pairAll(issuer, 'to-recipient', recipient, 'forger-side');
+  await pairAsUnpatched06(HOST, issuer, 'to-recipient', recipient, 'forger-side');
   await new Promise(resolve => setTimeout(resolve, 1100));
   fixtureApi.seed(profileAt(issuer.home).peers['to-recipient'].outbound.at(-1).delegation);
   await approveLater(issuer);
