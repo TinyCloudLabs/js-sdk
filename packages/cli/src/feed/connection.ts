@@ -7,10 +7,17 @@ function value<T>(result: Result<T>): T {
   return result.data;
 }
 
+/** A DID has a method and an identifier. Shape only: the node rejects a DID it cannot use when the grant is issued. */
+const DID_SHAPE = /^did:[a-z0-9]+:[^\s]+$/;
+
 /** Reserve identity before any grant activation; registry provenance follows activation only. */
 export async function connectFeedAgent<TGrant extends object>(
   registry: FeedDatabase, source: FeedSource, activate: () => Promise<TGrant>,
 ): Promise<TGrant> {
+  // Before any write: a token must never be reserved for an identity that cannot receive a grant.
+  if (!DID_SHAPE.test(source.agentDid)) {
+    throw new Error(`Invalid agent DID "${source.agentDid}": pass the agent's DID with --to (for example did:key:...). No token was reserved.`);
+  }
   value(await registry.execute(`CREATE TABLE IF NOT EXISTS feed_agents (
     agent_id TEXT PRIMARY KEY, agent_did TEXT NOT NULL, label TEXT NOT NULL,
     output_resource TEXT NOT NULL UNIQUE, response_resource TEXT NOT NULL UNIQUE,
@@ -20,6 +27,9 @@ export async function connectFeedAgent<TGrant extends object>(
     agent_id TEXT PRIMARY KEY, agent_did TEXT NOT NULL,
     output_resource TEXT NOT NULL UNIQUE, response_resource TEXT NOT NULL UNIQUE
   )`));
+  // Reservations written by older CLIs for an empty DID could never have reached activation (the grant would have
+  // been refused), so they hold no grant and block the token for nothing. Release them.
+  value(await registry.execute("DELETE FROM feed_agent_bindings WHERE agent_id = ? AND agent_did = ''", [source.sourceId]));
   // Existing provenanced registry entries also reserve their immutable binding.
   value(await registry.execute(`INSERT INTO feed_agent_bindings
     (agent_id, agent_did, output_resource, response_resource)
