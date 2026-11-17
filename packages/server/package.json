@@ -28,8 +28,8 @@
     "test": "bun test src/"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.11.0",
-    "@tinycloud/sdk-core": "3.11.0",
+    "@tinycloud/node-sdk": "3.11.5",
+    "@tinycloud/sdk-core": "3.11.5",
     "viem": "^2.21.53"
   },
   "devDependencies": {
