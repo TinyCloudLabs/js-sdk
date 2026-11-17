@@ -94,8 +94,8 @@
     "check:generated": "bun scripts/generate.ts --check"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.11.0",
-    "@tinycloud/sdk-core": "3.11.0",
+    "@tinycloud/node-sdk": "3.11.5",
+    "@tinycloud/sdk-core": "3.11.5",
     "@tinycloud/sdk-services": "3.11.0",
     "node-sql-parser": "5.4.0",
     "zod": "^3.22.0",
