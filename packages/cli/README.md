@@ -191,9 +191,9 @@ the signed grants determine access.
 
 A short-lived agent cannot hold `feed watch` open. Add `--notify-url` and the node
 calls that https URL whenever the owner saves an answer or message, so the agent
-wakes at once. `--notify-header "Name: value"` (repeatable) and
-`--notify-header-env Name=ENV_VAR` add headers to each call, for receivers that need
-their own credential:
+wakes at once. `--notify-header "Name: value"`, `--notify-header-env Name=ENV_VAR`,
+`--notify-header-file Name=path` (repeatable) and `--notify-header-stdin Name` (one
+header) add headers to each call, for receivers that need their own credential:
 
 ```bash
 GROK_KEY="Bearer ..." tinycloud --profile owner feed connect --agent writer --to "$AGENT_DID" \
@@ -202,13 +202,39 @@ GROK_KEY="Bearer ..." tinycloud --profile owner feed connect --agent writer --to
 ```
 
 Header values are stored encrypted by the node, are never shown or listed again (only
-the names), and are never printed in errors. Prefer `--notify-header-env`: command
+the names), and are never printed in errors, logs or saved profile files. Prefer
+`--notify-header-env`, `--notify-header-file` or `--notify-header-stdin`: command
 lines are visible to other local users. Host, Content-Length, Content-Type, Cookie,
-`X-TinyCloud-*` and other transport headers are refused. The output's `notify` object
-carries the webhook id, header names and a one-time HMAC secret for
-`X-TinyCloud-Signature`; the node does not return it. The call's body is the write
-event, including the response and card IDs. Running `connect` again with the same
-flags re-registers the webhook.
+`X-TinyCloud-*` and other transport headers, and any value with a line break, are
+refused before anything is sent. The output's `notify` object carries the webhook id,
+header names and a one-time HMAC secret for `X-TinyCloud-Signature`; the node does not
+return it. Running `connect` again with the same flags re-registers the webhook.
+
+The call's body is the write event (ids only, no row content). For a write to the
+response database it names the table and, when the node can prove it, `rowId`: the
+inserted row's `sequence`. A response with a private payload also writes the payload
+table, so use the event whose `tableName` is `feed_responses`. The woken agent runs
+
+```bash
+tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runtime --drain
+```
+
+which hands off every response it has not yet had, once, and exits: one JSON line per
+answer or owner message with its `cardId`, `responseId` and `kind`. A repeat wake
+delivers nothing twice. With a `rowId`, `feed responses --after <rowId - 1> --limit 1`
+reads just that row.
+
+The general command is `tinycloud hooks`, for any service and prefix:
+
+```bash
+tinycloud hooks register --service sql --path-prefix <database> --url https://example.com/wake \
+  --header-env Authorization=WAKE_AUTH --space applications
+tinycloud hooks list --space applications     # header names only
+tinycloud hooks remove <id> --space applications
+```
+
+`register` prints a generated signing secret once; pass `--secret-env NAME` to use your
+own (never echoed). To change a webhook's headers, remove it and register again.
 
 Publish `card.json` from the agent profile:
 

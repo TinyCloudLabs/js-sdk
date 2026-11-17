@@ -2,7 +2,46 @@ import { ErrorCodes } from "../types";
 import { initializeFeedHandoff, deliverFeedResponse } from "./handoff";
 import { listFeedResponseDeliveries } from "./delivery-policy";
 import { isDispatchDeadlineFailure } from "./dispatch";
-import type { FeedApi } from "./types";
+import type { FeedApi, FeedListenerOptions } from "./types";
+
+export type FeedDrainOptions = Pick<FeedListenerOptions, "responses" | "handoff" | "recipient" | "deliver" | "signal">;
+
+/** One pass over every response this recipient has not yet handed off, in order. */
+async function deliverPendingFeedResponses(
+  options: FeedDrainOptions,
+  deliver: FeedListenerOptions["deliver"],
+): Promise<void> {
+  const { signal } = options;
+  let afterSequence = 0;
+  while (!signal.aborted) {
+    const page = await listFeedResponseDeliveries(options.responses, { recipient: options.recipient, afterSequence, limit: 100, signal });
+    if (!page.ok) {
+      if (signal.aborted && page.error.code === ErrorCodes.ABORTED) return;
+      throw page.error;
+    }
+    for (const response of page.data.responses) {
+      if (signal.aborted) return;
+      const handoff = await deliverFeedResponse({
+        handoff: options.handoff, recipient: options.recipient, response, deliver,
+      });
+      if (!handoff.ok && !isDispatchDeadlineFailure(handoff.error)) throw handoff.error;
+    }
+    if (page.data.hasMore && page.data.nextSequence <= afterSequence) throw new Error("Delivery page did not advance a verified cursor");
+    afterSequence = page.data.nextSequence;
+    if (!page.data.hasMore) break;
+  }
+}
+
+/**
+ * Hand off every pending response once and return, without opening a hook stream. For a process a webhook wakes:
+ * the handoff ledger makes it exactly-once per recipient, so a repeat wake delivers nothing twice.
+ */
+export async function drainFeedResponses(options: FeedDrainOptions): Promise<void> {
+  if (options.signal.aborted) return;
+  const initialized = await initializeFeedHandoff(options.handoff);
+  if (!initialized.ok) throw initialized.error;
+  await deliverPendingFeedResponses(options, options.deliver);
+}
 
 export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (options) => {
   const { signal } = options;
@@ -31,24 +70,7 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
   const drain = async (): Promise<void> => {
     do {
       dirty = false;
-      let afterSequence = 0;
-      while (!signal.aborted) {
-        const page = await listFeedResponseDeliveries(options.responses, { recipient: options.recipient, afterSequence, limit: 100, signal });
-        if (!page.ok) {
-          if (signal.aborted && page.error.code === ErrorCodes.ABORTED) return;
-          throw page.error;
-        }
-        for (const response of page.data.responses) {
-          if (signal.aborted) return;
-          const handoff = await deliverFeedResponse({
-            handoff: options.handoff, recipient: options.recipient, response, deliver,
-          });
-          if (!handoff.ok && !isDispatchDeadlineFailure(handoff.error)) throw handoff.error;
-        }
-        if (page.data.hasMore && page.data.nextSequence <= afterSequence) throw new Error("Delivery page did not advance a verified cursor");
-        afterSequence = page.data.nextSequence;
-        if (!page.data.hasMore) break;
-      }
+      await deliverPendingFeedResponses(options, deliver);
     } while (dirty && !signal.aborted && !attempted);
   };
   const schedule = (): void => {

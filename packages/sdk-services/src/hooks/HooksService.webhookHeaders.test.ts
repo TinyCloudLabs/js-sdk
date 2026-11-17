@@ -145,3 +145,40 @@ describe("webhookHeadersProblem", () => {
     expect(webhookHeadersProblem({ "X-A": `${BEARER}\n` })).not.toContain(BEARER);
   });
 });
+
+describe("SQL write events carry the node's row id", () => {
+  const base = {
+    space: "space-123", service: "sql", ability: "tinycloud.sql/write", path: "db/feed/table/feed_responses",
+    actor: "did:key:a", epoch: "e", timestamp: "2026-11-17T13:00:00Z",
+  };
+
+  test("tableName and a valid rowId pass through; an absent or unprovable one is omitted, never guessed", async () => {
+    const bodies = [
+      { ...base, id: "e0:0", eventIndex: 0, tableName: "feed_responses", rowId: 42 },
+      { ...base, id: "e1:0", eventIndex: 0, tableName: "feed_responses" },
+      { ...base, id: "e2:0", eventIndex: 0, tableName: "feed_responses", rowId: "7" },
+      { ...base, id: "e3:0", eventIndex: 0, tableName: "feed_responses", rowId: -1 },
+      { ...base, id: "e4:0", eventIndex: 0, tableName: "feed_responses", rowId: 1.5 },
+    ];
+    const abort = new AbortController();
+    const hooks = service(async (url, init) => {
+      if (String(url).includes("/hooks/tickets")) return Response.json({ ticket: "t", expiresAt: "x" });
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const body of bodies) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(body)}\n\n`));
+          init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        },
+      });
+      return new Response(stream, { status: 200 });
+    });
+    const seen: Array<{ id: string; tableName?: string; rowId?: number }> = [];
+    for await (const event of hooks.subscribe([{ space: "space-123", service: "sql" }], { signal: abort.signal })) {
+      seen.push({ id: event.id, tableName: event.tableName, rowId: event.rowId });
+      if (seen.length === bodies.length) abort.abort();
+    }
+    hooks.onSignOut();
+    expect(seen.map((event) => event.rowId)).toEqual([42, undefined, undefined, undefined, undefined]);
+    expect(seen.every((event) => event.tableName === "feed_responses")).toBe(true);
+    expect(seen[1]).not.toHaveProperty("responseId");
+  });
+});

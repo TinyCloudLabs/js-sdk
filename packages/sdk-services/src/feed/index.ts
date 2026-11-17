@@ -9,7 +9,8 @@ export {
   listFeedResponses, readFeedResponsePayload, recordFeedHandling, readFeedResponseHandling, getFeedCardState, resolveFeedCard,
 } from "./store";
 export { initializeFeedHandoff, getFeedHandoff, deliverFeedResponse } from "./handoff";
-export { listenFeedResponses } from "./listener";
+export { listenFeedResponses, drainFeedResponses } from "./listener";
+export type { FeedDrainOptions } from "./listener";
 export { feedResourceNames } from "./resources";
 export { feedCardSchema, newFeedResponseSchema, newFeedMessageSchema, feedHandlingSchema, feedResponsePayloadSchema } from "./schemas";
 export { projectFeedResponseNotification } from "./notification";

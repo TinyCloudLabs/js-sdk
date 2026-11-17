@@ -1203,8 +1203,8 @@ function parseHookEvent(message: HookStreamEvent): HookEvent {
     epoch: parsed.epoch ?? "",
     eventIndex: parsed.eventIndex ?? 0,
     timestamp: parsed.timestamp ?? "",
-    ...(typeof parsed.responseId === "string" ? { responseId: parsed.responseId } : {}),
-    ...(typeof parsed.cardId === "string" ? { cardId: parsed.cardId } : {}),
+    ...(typeof parsed.tableName === "string" ? { tableName: parsed.tableName } : {}),
+    ...(typeof parsed.rowId === "number" && Number.isSafeInteger(parsed.rowId) && parsed.rowId >= 0 ? { rowId: parsed.rowId } : {}),
   };
 }
 

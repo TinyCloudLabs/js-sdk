@@ -58,10 +58,14 @@ export interface HookEvent {
   epoch: string;
   eventIndex: number;
   timestamp: string;
-  /** Feed response this write recorded (SQL writes to a feed response database), so a receiver need not scan for it. */
-  responseId?: string;
-  /** Feed card the response is about. */
-  cardId?: string;
+  /** SQL events: the table this write changed. */
+  tableName?: string;
+  /**
+   * SQL events: the node-derived SQLite rowid of the one row an INSERT added, for `feed_responses` its `sequence`.
+   * Omitted whenever the node cannot prove it (multi-row writes, updates, deletes, ignored inserts), and never
+   * present on DuckDB events. Read the row by this id when present; otherwise scan.
+   */
+  rowId?: number;
 }
 
 export interface HookStreamEvent {

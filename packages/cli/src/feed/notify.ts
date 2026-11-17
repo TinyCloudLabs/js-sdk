@@ -1,14 +1,15 @@
 import { randomBytes } from "node:crypto";
-import type {
-  HookWebhookListOptions, HookWebhookRecord, HookWebhookRegistration, HookWebhookUnregisterOptions, Result,
-} from "@tinycloud/sdk-services";
-import { webhookHeadersProblem } from "@tinycloud/sdk-services";
-import { cliErrorFromService } from "../output/errors.js";
+import {
+  givesWebhookHeaders, readWebhookHeaders, registerWebhookChecked, webhookCallbackUrl, invalidInput,
+  type WebhookHeaderReaders, type WebhookRegistrar,
+} from "../lib/webhook-headers.js";
 
 export interface FeedNotifyOptions {
   notifyUrl?: string;
   notifyHeader?: string[];
   notifyHeaderEnv?: string[];
+  notifyHeaderFile?: string[];
+  notifyHeaderStdin?: string[];
 }
 
 export interface FeedNotify {
@@ -16,52 +17,24 @@ export interface FeedNotify {
   readonly headers: Record<string, string>;
 }
 
-function invalid(message: string): never {
-  throw cliErrorFromService({ code: "INVALID_INPUT", message });
-}
+const NAMES = {
+  header: "--notify-header", env: "--notify-header-env", file: "--notify-header-file", stdin: "--notify-header-stdin",
+} as const;
 
-/** Header values come from the command line or the environment and are never echoed in an error. */
-export function parseFeedNotify(options: FeedNotifyOptions, env: NodeJS.ProcessEnv = process.env): FeedNotify | undefined {
-  const given = (options.notifyHeader?.length ?? 0) + (options.notifyHeaderEnv?.length ?? 0);
+/** Header values come from a flag, the environment, a file or stdin and are never echoed in an error. */
+export async function resolveFeedNotify(
+  options: FeedNotifyOptions, readers?: WebhookHeaderReaders,
+): Promise<FeedNotify | undefined> {
+  const flags = {
+    header: options.notifyHeader, headerEnv: options.notifyHeaderEnv,
+    headerFile: options.notifyHeaderFile, headerStdin: options.notifyHeaderStdin,
+  };
   if (options.notifyUrl === undefined) {
-    if (given > 0) invalid("--notify-header and --notify-header-env need --notify-url");
+    if (givesWebhookHeaders(flags)) invalidInput("--notify-header, --notify-header-env, --notify-header-file and --notify-header-stdin need --notify-url");
     return undefined;
   }
-  let url: URL;
-  try { url = new URL(options.notifyUrl); } catch { return invalid("--notify-url must be an absolute https URL"); }
-  if (url.protocol !== "https:") invalid("--notify-url must be an https URL");
-  // A credential belongs in --notify-header: a URL is listed and logged, a header value is not.
-  if (url.username !== "" || url.password !== "") invalid("--notify-url must not contain credentials; pass them with --notify-header");
-
-  const headers: Record<string, string> = {};
-  const add = (name: string, headerValue: string) => {
-    const key = name.toLowerCase();
-    if (Object.keys(headers).some((existing) => existing.toLowerCase() === key)) invalid(`Notify header "${name}" is given more than once`);
-    headers[name] = headerValue;
-  };
-  for (const entry of options.notifyHeader ?? []) {
-    const split = entry.indexOf(":");
-    if (split <= 0) invalid("--notify-header must be Name:value");
-    add(entry.slice(0, split).trim(), entry.slice(split + 1).trim());
-  }
-  for (const entry of options.notifyHeaderEnv ?? []) {
-    const split = entry.indexOf("=");
-    if (split <= 0) invalid("--notify-header-env must be Name=ENV_VAR");
-    const name = entry.slice(0, split).trim();
-    const variable = entry.slice(split + 1).trim();
-    const fromEnv = env[variable];
-    if (fromEnv === undefined || fromEnv.trim().length === 0) invalid(`Environment variable ${variable} for notify header "${name}" is not set`);
-    add(name, fromEnv.trim());
-  }
-  const problem = webhookHeadersProblem(headers);
-  if (problem !== undefined) invalid(problem);
-  return { callbackUrl: url.toString(), headers };
-}
-
-interface WebhookRegistrar {
-  register(webhook: HookWebhookRegistration): Promise<Result<HookWebhookRecord>>;
-  list(options?: HookWebhookListOptions): Promise<Result<HookWebhookRecord[]>>;
-  unregister(id: string, options?: HookWebhookUnregisterOptions): Promise<Result<void>>;
+  const callbackUrl = webhookCallbackUrl(options.notifyUrl, "--notify-url", "--notify-header");
+  return { callbackUrl, headers: await readWebhookHeaders(flags, NAMES, readers) };
 }
 
 export interface FeedNotifyReceipt {
@@ -86,35 +59,27 @@ export async function registerFeedNotify(
   hooks: WebhookRegistrar, space: string, responseResource: string, notify: FeedNotify,
 ): Promise<FeedNotifyReceipt> {
   const secret = randomBytes(32).toString("hex");
-  const result = await hooks.register({
+  const record = await registerWebhookChecked(hooks, {
     space, service: "sql", pathPrefix: responseResource,
     callbackUrl: notify.callbackUrl, secret,
     ...(Object.keys(notify.headers).length === 0 ? {} : { headers: notify.headers }),
   });
-  if (!result.ok) throw cliErrorFromService(result.error);
-  // A node without header support ignores the field and registers a webhook that would call the agent
-  // unauthenticated, failing silently. It must confirm every name back, or the webhook is withdrawn.
-  const stored = (result.data.headerNames ?? []).map((name) => name.toLowerCase());
-  if (Object.keys(notify.headers).some((name) => !stored.includes(name.toLowerCase()))) {
-    await hooks.unregister(result.data.id, { target: { space, service: "sql", pathPrefix: responseResource } });
-    throw new Error("The node did not store the notify headers (it may predate webhook headers); the webhook was removed");
-  }
   const replaced: string[] = [];
   let staleRemaining = 0;
   const existing = await hooks.list({ space, service: "sql", pathPrefix: responseResource });
   if (existing.ok) {
-    const stale = existing.data.filter((record) =>
-      record.id !== result.data.id && record.callbackUrl === result.data.callbackUrl &&
-      record.pathPrefix === responseResource && record.space === space);
-    for (const record of stale) {
-      const removed = await hooks.unregister(record.id, { target: { space, service: "sql", pathPrefix: responseResource } });
-      if (removed.ok) replaced.push(record.id); else staleRemaining += 1;
+    const stale = existing.data.filter((other) =>
+      other.id !== record.id && other.callbackUrl === record.callbackUrl &&
+      other.pathPrefix === responseResource && other.space === space);
+    for (const other of stale) {
+      const removed = await hooks.unregister(other.id, { target: { space, service: "sql", pathPrefix: responseResource } });
+      if (removed.ok) replaced.push(other.id); else staleRemaining += 1;
     }
   }
   return {
-    id: result.data.id,
-    callbackUrl: result.data.callbackUrl,
-    headerNames: result.data.headerNames ?? Object.keys(notify.headers),
+    id: record.id,
+    callbackUrl: record.callbackUrl,
+    headerNames: record.headerNames ?? Object.keys(notify.headers),
     secret,
     replaced,
     ...(staleRemaining === 0 ? {} : { staleRemaining }),
