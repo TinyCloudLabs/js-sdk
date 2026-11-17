@@ -2,6 +2,7 @@ import type { ParsedArgs } from './args.js';
 import { requireFlag } from './args.js';
 import { CourierError } from './errors.js';
 import { loadOwnerEpisode } from './interim-owner.js';
+import { peerLimitNote } from './interim-renewal.js';
 import { getPeer, loadProfile, type StoredPeer } from './profile.js';
 import { cmd } from './program.js';
 import { oneLine } from './a2a.js';
@@ -41,6 +42,7 @@ export function peerExpiryStatus(peer: StoredPeer, now = Date.now()) {
     peer: peer.handle, pairing: peer.status, inbound, outbound,
     remoteReadability: 'not-checked' as const,
     renewal: { state: stopped ? 'revoked' : peer.interim?.unavailableAt ? 'unavailable' : peer.interim ? 'automatic' : 'unknown', command: renewalCommand },
+    ...(peerLimitNote(peer, now) ? { peerLimit: peerLimitNote(peer, now)!.replace(/^peer limit /, '') } : {}),
     warnings,
   };
 }
@@ -81,6 +83,7 @@ export function cmdStatus(args: ParsedArgs): void {
       }
       console.log(`  Warning: ${text}`);
     }
+    if ('peerLimit' in peer) console.log(`  Renewals: peer limit ${peer.peerLimit}`);
     if (peer.renewal.command) console.log(`  To renew before it expires, run: ${peer.renewal.command}`);
   }
 }

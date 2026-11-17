@@ -1,5 +1,48 @@
 # @tinycloud/vfs
 
+## 0.2.21-beta.0
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+
+## 0.2.20
+
+### Patch Changes
+
+- 171ee63: VFS worker bridge calls now stop waiting after a bounded time and throw a typed `TinyCloudVfsBridgeTimeoutError` (code `ETIMEDOUT`).
+
+  Details: TC-2608
+
+- Updated dependencies [85095e8]
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [ccf3347]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [d4366f9]
+- Updated dependencies [728b25c]
+- Updated dependencies [56df81d]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [711903b]
+- Updated dependencies [88a5f28]
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0
+
 ## 0.2.19-beta.35
 
 ### Patch Changes
