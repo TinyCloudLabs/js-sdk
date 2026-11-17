@@ -6,6 +6,6 @@
 
 `--agent-cli` installs no guard. Nothing checks what the woken agent does with a peer's message, and it can read whatever the watcher's OS user can read. Run such a watcher under an OS account that holds only what the agent may use.
 
-`courier watch --home-file <path>` (repeatable, relative to your HOME, with `--wake exec` or `--wake claude`) copies one file into the woken agent's clean HOME on every wake, mode 0600, for a CLI that keeps its model login in a file. Shell start-up files, tool settings and the credential stores the clean HOME never holds (`.ssh`, `.aws`, `.npmrc`, `.netrc`, `.config/gh`, `.config/git`, Claude and MCP settings) are refused when the watcher starts.
+`courier watch --wake exec --home-file <path>` (repeatable, relative to your HOME) copies an agent CLI's model-login file into the woken agent's clean HOME on every wake, mode 0600. Only the known login file of a supported agent CLI is accepted, and a symbolic link is never followed; the `--home-file` entry below lists the files. `--wake claude` takes no `--home-file`: it copies the Claude login itself.
 
 Details: TC-712
