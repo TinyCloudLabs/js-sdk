@@ -36193,6 +36193,7 @@ function parseNativeShareUrl(value4) {
 
 // src/share/adapters.ts
 import {
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
   LocationRecordValidationError,
   LocationRegistryHttpError,
   parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation2,
@@ -38764,7 +38765,7 @@ ${scope.text}
       if (!artifact) {
         throw new CLIError(
           "REQUEST_NOT_FOUND",
-          options2.last ? `No stored permission requests exist for profile "${ctx.profile}".` : "Provide a requestId or use --last.",
+          `${options2.last ? `No stored permission requests exist for profile "${ctx.profile}".` : "Provide a requestId or use --last."} A stopped \`auth request ... --grant\` is not stored here: run the same command again (same flags, same profile) and it resumes the saved approval request instead of starting over.`,
           ExitCode.NOT_FOUND
         );
       }
