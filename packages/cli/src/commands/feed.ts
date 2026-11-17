@@ -161,8 +161,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .addHelpText("after", `
 Reads the grant ID from the owner registry and revokes it with this profile's own key, so no OpenKey approval is
 needed. Run it with the profile that ran feed connect: a profile can revoke only grants its own key issued. The registry
-row is removed only after the revoke succeeds; the token stays reserved for the same agent DID. A webhook registered by
-feed connect --notify-url is a separate record: remove it with \`hooks remove\`.
+row is removed only after the revoke succeeds; the token stays reserved for the same agent DID.
 `)
     .action(async (options, command) => {
       try {
