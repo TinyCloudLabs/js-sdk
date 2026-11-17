@@ -192,7 +192,9 @@ the signed grants determine access.
 To take an agent off the feed, run `tinycloud --profile owner feed disconnect --agent writer`
 with the profile that ran `connect`. It reads the grant's ID from the owner registry, revokes the
 grant with that profile's own key (no OpenKey approval and no `delegation revoke <cid>` lookup),
-and only then removes the registry row, so a failed revoke can be retried. The token stays
+and only then removes the registry row, so a failed revoke can be retried. If the node answers that it
+has no delegation with that ID (never activated, or pruned), there is nothing left to revoke: the row
+is removed and the result says `"revoked": false, "nodeHadNoGrant": true`. The token stays
 reserved for the same agent DID.
 
 Publish `card.json` from the agent profile:

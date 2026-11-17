@@ -4,9 +4,12 @@ import { CLIError, cliErrorFromService } from "../output/errors.js";
 
 export interface FeedDisconnectResult {
   agentId: string;
-  /** The delegation `feed connect` issued to the agent, now revoked on the node. */
+  /** The delegation `feed connect` issued to the agent. */
   cid: string;
-  revoked: true;
+  /** True when the node revoked it now; false when the node had no such delegation (see `nodeHadNoGrant`). */
+  revoked: boolean;
+  /** The node answered that it has no delegation with this ID (never activated, or pruned): nothing is left to revoke. */
+  nodeHadNoGrant?: true;
   /** The owner's registry row for the agent is gone. */
   removed: true;
 }
@@ -41,10 +44,18 @@ export async function disconnectFeedAgent(
     throw new CLIError("FEED_GRANT_UNREADABLE", `The registry row for "${agentId}" has no readable grant ID, so the grant can't be revoked from it. Nothing was changed.`, ExitCode.ERROR);
   }
 
-  await revoke(cid);
+  // Only the node's "no such delegation" counts as already gone: there is nothing left to revoke and the row would otherwise
+  // stay for good. Every other failure (refused, unreachable, timeout, bad receipt) leaves the row for a retry.
+  let nodeHadNoGrant = false;
+  try {
+    await revoke(cid);
+  } catch (error) {
+    if (!(error instanceof CLIError) || error.code !== "TARGET_NOT_FOUND") throw error;
+    nodeHadNoGrant = true;
+  }
 
   // Delete exactly the row that was revoked: a reconnect in between wrote a different authorization and keeps its row.
   const removed = await registry.execute("DELETE FROM feed_agents WHERE agent_id = ? AND authorization_json = ?", [agentId, authorization]);
   if (!removed.ok) throw cliErrorFromService(removed.error);
-  return { agentId, cid, revoked: true, removed: true };
+  return nodeHadNoGrant ? { agentId, cid, revoked: false, nodeHadNoGrant: true, removed: true } : { agentId, cid, revoked: true, removed: true };
 }

@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { connectFeedAgent } from "./connection";
 import { disconnectFeedAgent } from "./disconnect";
+import { ExitCode } from "../config/constants";
+import { CLIError } from "../output/errors";
 import { sqliteHandle, unwrap } from "../../../sdk-services/src/feed/sqlite.test-helper";
 import type { FeedSource } from "../../../sdk-services/src/feed";
 
@@ -80,6 +82,29 @@ test("a registry row with no readable grant ID is reported and left alone", asyn
     unwrap(await handle.execute("UPDATE feed_agents SET authorization_json = ? WHERE agent_id = ?", ["not json", "demo"]));
     await expect(disconnectFeedAgent(handle, "demo", async () => { throw new Error("revoke must not run"); }))
       .rejects.toMatchObject({ code: "FEED_GRANT_UNREADABLE" });
+    expect(await rows(handle, "feed_agents")).toEqual([["demo"]]);
+  } finally { close(); }
+});
+
+test("a node that has no such delegation means there is nothing left to revoke: the row is removed and the result says so", async () => {
+  const { handle, close } = sqliteHandle();
+  try {
+    await connectFeedAgent(handle, source, async () => ({ cid: "bafy-grant-1" }));
+    const result = await disconnectFeedAgent(handle, "demo", async (cid) => {
+      throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
+    });
+    expect(result).toEqual({ agentId: "demo", cid: "bafy-grant-1", revoked: false, nodeHadNoGrant: true, removed: true });
+    expect(await rows(handle, "feed_agents")).toEqual([]);
+  } finally { close(); }
+});
+
+test("any other node refusal, including an unauthorized revoke, still leaves the row", async () => {
+  const { handle, close } = sqliteHandle();
+  try {
+    await connectFeedAgent(handle, source, async () => ({ cid: "bafy-grant-1" }));
+    await expect(disconnectFeedAgent(handle, "demo", async () => {
+      throw new CLIError("REVOKE_UNAUTHORIZED", "The node refused this revocation.", ExitCode.PERMISSION_DENIED);
+    })).rejects.toMatchObject({ code: "REVOKE_UNAUTHORIZED" });
     expect(await rows(handle, "feed_agents")).toEqual([["demo"]]);
   } finally { close(); }
 });
