@@ -28,27 +28,45 @@ export function isSharePublishingPrefixDecrypt(permission: Pick<PermissionEntry,
     !permission.caveats?.length;
 }
 
-/** Legacy manifest spelling for an owner's default network root. */
-export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+/** Legacy manifest spelling for an owner's default network root; only a browser or paste sign-in can carry it. */
+export function isDefaultNetworkDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
   return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" &&
     permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
     !permission.caveats?.length;
 }
 
+/** Most shared files one device request may ask to decrypt (openkey DEVICE_AUTH_MAX_SHARE_DECRYPTS). */
+export const DEVICE_MAX_SHARE_DECRYPTS = 4;
+
 /**
- * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry
- * other than decrypt on the owner's default network. OpenKey admits exactly that one encryption entry
+ * Decrypt on one shared file of the owner's default network, as OpenKey's device flow takes it (TC-3204): space
+ * `default`, path `share/<id>` with a network-safe share id (share-sdk `NETWORK_SAFE_SHARE_ID`), decrypt only.
+ */
+export function isDeviceShareDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" &&
+    /^share\/[a-z0-9][a-z0-9-]{15,35}$/.test(permission.path) &&
+    permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
+    !permission.caveats?.length;
+}
+
+/**
+ * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), any encryption entry other
+ * than decrypt on one shared file, or the shared file past DEVICE_MAX_SHARE_DECRYPTS
  * (openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
+  let shareDecrypts = 0;
   for (const entry of entries) {
     if (entry.space === "secrets" || entry.space?.endsWith(":secrets") === true) return "secrets";
-    if (entry.service === ENCRYPTION_PERMISSION_SERVICE && !isDeviceDefaultDecrypt(entry)) return entry;
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) continue;
+    if (!isDeviceShareDecrypt(entry)) return entry;
+    shareDecrypts += 1;
+    if (shareDecrypts > DEVICE_MAX_SHARE_DECRYPTS) return entry;
   }
   return undefined;
 }
 
-const DEVICE_DECRYPT_ALLOWED = "tinycloud.encryption/decrypt on the default network (space \"default\", path \"\")";
+const DEVICE_DECRYPT_ALLOWED = `tinycloud.encryption/decrypt on one shared file (space "default", path "share/<id>"), at most ${DEVICE_MAX_SHARE_DECRYPTS} per request`;
 
 /**
  * The DEVICE_AUTH_UNSUPPORTED_SCOPE message: what was refused, what --device allows, and `next` ("Use … for this

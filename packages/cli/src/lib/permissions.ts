@@ -40,7 +40,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage, isDefaultNetworkDecrypt, isDeviceShareDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -696,12 +696,13 @@ export async function resolvePermissionSpaces(
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: `${await defaultSecretsNetworkId(profile, options.ownerDid)}/share/`, actions });
       continue;
     }
-    if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
-      // OpenKey's device flow takes this entry as written and signs the approving owner's own network.
-      if (options.device) {
-        resolved.push({ service, space: "default", path: "", actions });
-        continue;
-      }
+    // OpenKey's device flow takes a shared-file decrypt as written and signs that key on the approving owner's own
+    // default network (TC-3204).
+    if (options.device && isDeviceShareDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: "default", path: entry.path, actions });
+      continue;
+    }
+    if (isDefaultNetworkDecrypt({ ...entry, service, actions })) {
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }

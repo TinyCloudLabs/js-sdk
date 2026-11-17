@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 
 // builtin:share-publishing asks a paste sign-in for the owner's default/share/ decrypt prefix.
-// OpenKey's device sign-in admits one encryption grant, decrypt on the owner's default network (space default, empty path),
-// so --device and `enable share` request the same manifest without the share-prefix decrypt.
+// OpenKey's device sign-in admits decrypt only on exact shared files of the owner's default network (space default,
+// path share/<id>, TC-3204), so --device and `enable share` request the same manifest without the share-prefix decrypt.
 const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-device-decrypt-"));
 process.env.TC_HOME = home;
@@ -30,7 +30,7 @@ const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
 const DECRYPT = "tinycloud.encryption/decrypt";
-const wire: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: [DECRYPT] };
+const wire: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "share/3f9c1a7e5b2d48a09c6e1f7a2b4d8c03", actions: [DECRYPT] };
 
 afterAll(async () => {
   if (originalTcHome === undefined) delete process.env.TC_HOME;
@@ -66,7 +66,7 @@ describe("share publishing and the default-key decrypt", () => {
     expect(sharePublishingPermissions().some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
   });
 
-  test("device sign-in sends OpenKey the default-network decrypt as OpenKey takes it", async () => {
+  test("device sign-in sends OpenKey a shared-file decrypt as OpenKey takes it", async () => {
     let contacted = 0;
     const fetchFn = (async () => { contacted += 1; return new Response(null, { status: 500 }); }) as unknown as typeof globalThis.fetch;
     await expect(acquireDeviceDelegation({

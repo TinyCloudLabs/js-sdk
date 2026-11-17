@@ -8,7 +8,7 @@ import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
-import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
+import { isDeviceShareDecrypt, isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { markClockDependent } from "./refusal.js";
@@ -241,9 +241,9 @@ export function isRawCidRevocationPermission(permission: PermissionEntry): boole
     permission.actions.includes("tinycloud.delegation/revoke");
 }
 function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
-  // A device request's default decrypt entry is what OpenKey signs as the owner's own default network.
-  if (isDeviceDefaultDecrypt({ ...permission, space: permission.space ?? "" })) {
-    return [JSON.stringify([permission.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default`), permission.actions[0]])];
+  // A device request's shared-file decrypt is what OpenKey signs as that key on the owner's own default network.
+  if (isDeviceShareDecrypt({ ...permission, space: permission.space ?? "" })) {
+    return [JSON.stringify([permission.service, ENCRYPTION_MANIFEST_SPACE, normalizePkhIdentifier(`urn:tinycloud:encryption:${ownerDid}:default/${permission.path}`), permission.actions[0]])];
   }
   const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
   // Only a top-level network entry is a raw grant. A legacy OpenKey signed

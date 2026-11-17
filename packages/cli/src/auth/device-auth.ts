@@ -433,7 +433,7 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  // OpenKey's device flow admits one encryption entry, decrypt on the owner's own default network.
+  // OpenKey's device flow admits decrypt only on exact shared files of the owner's default network (TC-3204).
   const refused = deviceRefusal(input.permissions);
   if (refused !== undefined) {
     throw new CLIError(
