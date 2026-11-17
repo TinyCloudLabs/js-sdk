@@ -145,26 +145,26 @@ export function detectInstall(packageRoot: string, platform: NodeJS.Platform = p
 
 /**
  * The argv that installs `spec` the way `install` was made. With `work` (the private directory that holds the empty npm
- * config files) it is the form Courier runs: scripts off, the npm registry named, and for npm the user and global
+ * config files) it is the form Courier runs, npm only: a file, scripts off, the npm registry named, and the user and global
  * configuration replaced by those files so no scoped-registry override applies. Without it, the command a person would run.
  */
 export function installCommand(install: Install, spec: string, work?: string): { command: string; args: string[] } {
   const global = install.scope === 'global';
-  const own = work !== undefined;
   const registry = ['--registry', `${REGISTRY}/`];
-  const scripts = own ? ['--ignore-scripts'] : [];
+  if (work !== undefined) {
+    if (install.manager !== 'npm') throw new Error(`${install.manager} installs are not updated from a file`);
+    // A file installed into an app directory is not recorded in its package.json or lockfile.
+    return { command: 'npm', args: ['install', global ? '--global' : '--no-save', '--prefix', install.root, spec, '--ignore-scripts', '--no-audit', '--no-fund', ...npmConfigArgs(work)] };
+  }
   switch (install.manager) {
-    case 'npm': {
-      // A file installed into an app directory is not recorded in its package.json or lockfile.
-      const mode = global ? ['--global'] : own ? ['--no-save'] : [];
-      return { command: 'npm', args: ['install', ...mode, '--prefix', install.root, spec, ...scripts, ...(work === undefined ? registry : ['--no-audit', '--no-fund', ...npmConfigArgs(work)])] };
-    }
+    case 'npm':
+      return { command: 'npm', args: ['install', ...(global ? ['--global'] : []), '--prefix', install.root, spec, ...registry] };
     case 'pnpm':
-      return { command: 'pnpm', args: global ? ['add', '--global', spec, ...scripts, ...registry] : ['add', '--dir', install.root, spec, ...scripts, ...registry] };
+      return { command: 'pnpm', args: global ? ['add', '--global', spec, ...registry] : ['add', '--dir', install.root, spec, ...registry] };
     case 'yarn':
-      return { command: 'yarn', args: global ? ['global', 'add', spec, ...scripts, ...registry] : ['--cwd', install.root, 'add', spec, ...scripts, ...registry] };
+      return { command: 'yarn', args: global ? ['global', 'add', spec, ...registry] : ['--cwd', install.root, 'add', spec, ...registry] };
     case 'bun':
-      return { command: 'bun', args: global ? ['add', '--global', spec, ...scripts, ...registry] : ['add', '--cwd', install.root, spec, ...scripts, ...registry] };
+      return { command: 'bun', args: global ? ['add', '--global', spec, ...registry] : ['add', '--cwd', install.root, spec, ...registry] };
   }
 }
 

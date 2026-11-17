@@ -538,16 +538,15 @@ test('install detection: global prefix, app directory, and each package manager'
   });
 });
 
-test('each package manager installs the verified file, scripts off, where it was installed; the hand-run form names the version', () => {
+test('npm installs the verified file, scripts off, where it was installed; the hand-run form names the version for each manager', () => {
   const at = (manager, scope, spec, work) => installCommand({ manager, scope, root: '/r', modulesDir: '/r/node_modules' }, spec, work);
   const reg = ['--registry', 'https://registry.npmjs.org/'];
   const file = '/w/courier-0.6.1.tgz';
   const npmConfig = ['--userconfig', '/w/user.npmrc', '--globalconfig', '/w/global.npmrc', ...reg, '--@tinycloud:registry=https://registry.npmjs.org/', '--no-update-notifier', '--loglevel', 'error'];
   assert.deepEqual(at('npm', 'global', file, '/w'), { command: 'npm', args: ['install', '--global', '--prefix', '/r', file, '--ignore-scripts', '--no-audit', '--no-fund', ...npmConfig] });
   assert.deepEqual(at('npm', 'local', file, '/w'), { command: 'npm', args: ['install', '--no-save', '--prefix', '/r', file, '--ignore-scripts', '--no-audit', '--no-fund', ...npmConfig] });
-  assert.deepEqual(at('pnpm', 'global', file, '/w'), { command: 'pnpm', args: ['add', '--global', file, '--ignore-scripts', ...reg] });
-  assert.deepEqual(at('yarn', 'global', file, '/w'), { command: 'yarn', args: ['global', 'add', file, '--ignore-scripts', ...reg] });
-  assert.deepEqual(at('bun', 'global', file, '/w'), { command: 'bun', args: ['add', '--global', file, '--ignore-scripts', ...reg] });
+  // No other manager installs a file: asking for one is an error, never a by-name install.
+  for (const manager of ['pnpm', 'yarn', 'bun']) assert.throws(() => at(manager, 'global', file, '/w'), /not updated from a file/);
 
   const spec = '@tinycloud/courier@0.6.1';
   assert.deepEqual(at('npm', 'global', spec), { command: 'npm', args: ['install', '--global', '--prefix', '/r', spec, ...reg] });
