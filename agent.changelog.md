@@ -11,6 +11,9 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   the tiny-app link instead of an approval request for access no tool on those
   addresses can use. `/mcp` is unchanged. The rules keep their catalog section
   on every address.
+- TC-2416: `/claude/mcp` repeats each tool's title as `annotations.title`, as
+  Anthropic's directory portal suggests. It is the first per-address difference
+  among the restricted addresses; the other four addresses are unchanged.
 
 ## 2026-11-13
 
