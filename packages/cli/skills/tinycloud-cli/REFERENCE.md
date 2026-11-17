@@ -43,6 +43,7 @@ tinycloud onboard                         # once; every later task reuses this p
 tinycloud onboard --timeout 60s           # same, bounded: 0 done, 8 pending (JSON on stdout), 3 request expired
 tinycloud auth request --cap SPEC --grant --no-popup   # more access: ask once, send the owner the link
 tinycloud auth request --cap SPEC --grant --no-popup --timeout 60s   # same, bounded: 0 done, 8 pending (link in JSON on stdout; run it again to resume), 3 request expired
+tinycloud auth request --cap SPEC --grant --fresh --no-popup   # grant already covers it but ends soon: ask for a new one beside it (old grant kept; JSON lists both CIDs)
 tinycloud context --json
 ```
 Approval request context: OpenKey displays the requested permissions in its plain-language list. The CLI does not accept `--reason` and sends no generated free-text reason. Never put serialized capability strings in an approval reason.
