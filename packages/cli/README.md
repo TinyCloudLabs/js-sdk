@@ -208,12 +208,20 @@ lines are visible to other local users. Host, Content-Length, Content-Type, Cook
 `X-TinyCloud-*` and other transport headers, and any value with a line break, are
 refused before anything is sent. The output's `notify` object carries the webhook id,
 header names and a one-time HMAC secret for `X-TinyCloud-Signature`; the node does not
-return it. Running `connect` again with the same flags re-registers the webhook.
+return it. Running `connect` again with the same flags registers a new webhook first and
+then removes the earlier ones for that URL, so no write is missed; for a moment both
+deliver, so the receiver must ignore a repeated `X-TinyCloud-Event-Id` (it is the same
+for every subscription to one write; the delivery id is not). The node allows a few
+webhooks per space; at its limit `connect` has to remove the old one first, and its
+`notify` object then carries `missedWhileReplacing` and `next`: run
+`tinycloud feed watch --drain` once to pick up anything written in between.
 
 The call's body is the write event (ids only, no row content). For a write to the
-response database it names the table and, when the node can prove it, `rowId`: the
-inserted row's `sequence`. A response with a private payload also writes the payload
-table, so use the event whose `tableName` is `feed_responses`. The woken agent runs
+response database it names the table (`tableName`) and, when the node can prove it,
+`rowId`: the inserted row's `sequence`. A response with a private payload also writes
+the payload table, whose event carries that table's own rowid, not a `sequence`: act
+only on the event whose `tableName` is `feed_responses`. The card id is not in the
+body; it is one indexed read away (rowId → `feed_responses`). The woken agent runs
 
 ```bash
 tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runtime --drain
@@ -221,8 +229,16 @@ tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runti
 
 which hands off every response it has not yet had, once, and exits: one JSON line per
 answer or owner message with its `cardId`, `responseId` and `kind`. A repeat wake
-delivers nothing twice. With a `rowId`, `feed responses --after <rowId - 1> --limit 1`
-reads just that row.
+delivers nothing twice, and a wake the node coalesced or dropped is covered by the next
+drain. With a `rowId`, `feed responses --after <rowId - 1> --limit 1` reads just that row.
+
+`rowId` is **absent** (not null, not zero) whenever the node cannot prove one row was
+inserted, so never require it; fall back to `--drain` (or a `feed responses` scan) when
+it is missing. It is absent for: a multi-row INSERT; an UPDATE or DELETE; an upsert that
+updated an existing row; an INSERT that was ignored; a WITHOUT ROWID table; a statement
+that touches more than one table; a write that came through the query path rather than
+a single-statement execute; any statement after which the last-inserted rowid did not
+move; DuckDB databases; and KV writes (which carry `path`, not a table).
 
 The general command is `tinycloud hooks`, for any service and prefix:
 
