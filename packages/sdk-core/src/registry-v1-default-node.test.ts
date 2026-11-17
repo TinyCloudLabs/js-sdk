@@ -80,6 +80,22 @@ test("any other v1-only record is still refused", async () => {
   }
 });
 
+test("a default-node v1 record without a valid owner signature is refused", async () => {
+  const signedElsewhere = await v1Record(["/dns4/test-node.invalid/tcp/443/https"]);
+  const stranger = privateKeyToAccount(generatePrivateKey()); // Ephemeral TEST signer only.
+  for (const record of [
+    // Signed for another node, then rewritten to name the default node.
+    { ...signedElsewhere, multiaddrs: ["/dns4/node.tinycloud.xyz/tcp/443/https"] },
+    // Names the default node but is signed by a key that isn't the owner.
+    await signLocationRecord({ version: 1, subject, sequence: 4, multiaddrs: ["/dns4/node.tinycloud.xyz/tcp/443/https"],
+      updated_at: "2026-11-04T00:00:00.000Z" }, { type: "did:pkh", signMessage: (message: string) => stranger.signMessage({ message }) }),
+  ]) {
+    const fetchFn = registry(record);
+    expect(await resolveOwnerHosts(subject, { fetch: fetchFn })).toMatchObject({ status: "unavailable", reason: "invalid-signature" });
+    await expect(resolveRegistryResource(subject, space, "read", { fetch: fetchFn })).rejects.toMatchObject({ code: "registry_unavailable" });
+  }
+});
+
 test("without confirmed v2 absence, or after v2 history, a default-node v1 record does not route", async () => {
   const v1 = await v1Record(["/dns4/node.tinycloud.xyz/tcp/443/https"]);
   // A v2 outage could hide a newer v2 record.
