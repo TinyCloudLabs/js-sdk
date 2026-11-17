@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createPrivateKey, sign } from 'node:crypto';
 import { NodeWasmBindings, serializeDelegation } from '@tinycloud/node-sdk';
-import { assertSuccessor, INTERIM_PERIOD_MS, maintainOutbound, peerLimitNote, peerRenewalLimitMs } from '../dist/interim-renewal.js';
+import { assertSuccessor, INTERIM_PERIOD_MS, maintainOutbound, peerLimitNote, peerRenewalLimitMs, UNSIGNED_LONG_PEER_MIN_REMAINING_MS } from '../dist/interim-renewal.js';
 import { peerReadPermissions } from '../dist/keys.js';
 import { peerExpiryStatus } from '../dist/status.js';
 
@@ -42,11 +42,15 @@ test('peer limit comes from the signed lifetime of the inbound delegation', () =
 
 test('without a signed issued-at, what remains of the signed expiry decides', () => {
   const limit = remaining => peerRenewalLimitMs({ inbound: inboundOf(remaining, Date.now(), false) });
-  assert.equal(limit(30 * DAY), INTERIM_PERIOD_MS, 'more than 7 days left proves a long-lived peer');
+  assert.equal(limit(30 * DAY), INTERIM_PERIOD_MS, 'more than 8 days left proves a long-lived peer');
   assert.equal(limit(7 * DAY), SEVEN);
   assert.equal(limit(2 * DAY), SEVEN);
   assert.equal(limit(7 * DAY + SKEW - 5_000), SEVEN, 'clock skew above 7 days is still a 7-day peer');
-  assert.equal(limit(7 * DAY + 2 * SKEW), INTERIM_PERIOD_MS);
+  assert.equal(limit(7 * DAY + 2 * SKEW), SEVEN, 'a 0.5.x peer with a clock a little ahead is still 7 days');
+  assert.equal(limit(7 * DAY + 6 * 3600_000), SEVEN, '0.5.x-style inbound, 6 h ahead');
+  assert.equal(limit(UNSIGNED_LONG_PEER_MIN_REMAINING_MS - 60_000), SEVEN);
+  assert.equal(limit(UNSIGNED_LONG_PEER_MIN_REMAINING_MS + 60_000), INTERIM_PERIOD_MS);
+  assert.equal(limit(9 * DAY), INTERIM_PERIOD_MS, 'more than 8 days left is long-lived');
 });
 
 test('unknown or unparseable inbound gets 7 days', () => {

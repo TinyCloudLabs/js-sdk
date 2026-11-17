@@ -13,6 +13,11 @@ const DAY = 86_400_000;
 export const INTERIM_PERIOD_MS = 30 * DAY;
 /** What a Courier 0.5.x peer accepts; also the floor for any peer whose own lifetime is short or unreadable. */
 export const LEGACY_PEER_LIMIT_MS = 7 * DAY;
+/**
+ * Without a signed `nbf`, an inbound is read as long-lived only with more than this left on its signed expiry. A 0.5.x peer signs 7 days
+ * from its own clock, so one whose clock is under a day ahead still reads as 7 days; a healthy 0.6 peer renews at half-life (about 15 days left or more).
+ */
+export const UNSIGNED_LONG_PEER_MIN_REMAINING_MS = 8 * DAY;
 const MAX_ISSUED = 1000;
 
 export interface InterimState {
@@ -102,7 +107,7 @@ function signedWindow(serialized: string | undefined): { notBefore?: number; exp
  * Courier's signed delegations carry no issued-at, so the lifetime is exact only when `nbf` is signed. A signed `nbf` is the
  * peer's own claim: it must not lie in the future (beyond skew) and must give a lifetime above 0 and at most 30 days (+ skew),
  * else the inbound is treated as unknown. Without `nbf` the signed expiry still proves a lifetime of at least what remains of
- * it: more than 7 days (+ clock skew) left means the peer issues long delegations, and anything else stays at 7 days.
+ * it: more than UNSIGNED_LONG_PEER_MIN_REMAINING_MS left means the peer issues long delegations, and anything else stays at 7 days.
  */
 function peerAcceptMs(peer: Pick<StoredPeer, 'inbound'>, now: number): number {
   const { notBefore, expiresAt } = signedWindow(peer.inbound?.delegation);
@@ -112,8 +117,8 @@ function peerAcceptMs(peer: Pick<StoredPeer, 'inbound'>, now: number): number {
     lifetime = expiresAt - notBefore;
     if (notBefore > now + CLOCK_SKEW_MS || lifetime <= 0 || lifetime > INTERIM_PERIOD_MS + CLOCK_SKEW_MS) return LEGACY_PEER_LIMIT_MS;
   }
-  if (lifetime <= LEGACY_PEER_LIMIT_MS + CLOCK_SKEW_MS) return LEGACY_PEER_LIMIT_MS;
-  return notBefore !== undefined ? Math.min(lifetime, INTERIM_PERIOD_MS) : INTERIM_PERIOD_MS;
+  if (notBefore === undefined) return lifetime > UNSIGNED_LONG_PEER_MIN_REMAINING_MS ? INTERIM_PERIOD_MS : LEGACY_PEER_LIMIT_MS;
+  return lifetime <= LEGACY_PEER_LIMIT_MS + CLOCK_SKEW_MS ? LEGACY_PEER_LIMIT_MS : Math.min(lifetime, INTERIM_PERIOD_MS);
 }
 
 /**
