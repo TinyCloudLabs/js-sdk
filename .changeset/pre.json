@@ -31,6 +31,7 @@
   "changesets": [
     "bound-legacy-context-catalog",
     "chatgpt-consent-catalog-scope",
+    "claude-annotation-titles",
     "cli-courier-clean-home-links",
     "cli-courier-inbox-safe-id",
     "cli-courier-wake-agent-cli",
