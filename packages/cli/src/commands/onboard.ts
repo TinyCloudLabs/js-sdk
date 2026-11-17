@@ -17,7 +17,7 @@ import { ensureDelegationAuthority, refreshOpenKeySession, type OpenKeyAcquisiti
 import { createKeyOnlyProfile } from "./init.js";
 import { FEED_PRESET, FEED_PRESET_ASKS, FEED_PRESET_EXPIRY, FEED_PRESET_PERMISSIONS } from "../lib/feed-preset.js";
 
-/** Lifetime of every onboarding approval: OpenKey's maximum. */
+/** Lifetime of each approval of the default onboarding: OpenKey's maximum. A preset sets its own on its step. */
 const ONBOARD_EXPIRY = "30d";
 
 const kv = (actions: string[]) => actions.map((action) => `tinycloud.kv/${action}`);
@@ -33,6 +33,8 @@ export const ONBOARD_STEPS: ReadonlyArray<{
   /** What the approval gives, in the owner's words. */
   asks: string;
   permissions: PermissionEntry[];
+  /** Lifetime of this step's approval; ONBOARD_EXPIRY when absent. */
+  expiry?: string;
 }> = [
   {
     space: "applications",
@@ -60,7 +62,7 @@ export function onboardSteps(preset: unknown): ReadonlyArray<OnboardStep> {
   if (preset !== FEED_PRESET) {
     throw new CLIError("INVALID_ARGUMENT", `Unknown --preset "${String(preset).slice(0, 40)}". Available: ${FEED_PRESET}.`, ExitCode.USAGE_ERROR);
   }
-  return [{ space: "applications", asks: FEED_PRESET_ASKS, permissions: [...FEED_PRESET_PERMISSIONS] }];
+  return [{ space: "applications", asks: FEED_PRESET_ASKS, permissions: [...FEED_PRESET_PERMISSIONS], expiry: FEED_PRESET_EXPIRY }];
 }
 
 
@@ -118,7 +120,7 @@ export function registerOnboardCommand(program: Command): void {
           if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
             const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
               permissions: step.permissions,
-              expiry: ONBOARD_EXPIRY,
+              expiry: step.expiry ?? ONBOARD_EXPIRY,
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
               ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
@@ -134,7 +136,7 @@ export function registerOnboardCommand(program: Command): void {
             profile,
             node: await ensureAuthenticated(ctx),
             requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
-            expiryOption: ONBOARD_EXPIRY,
+            expiryOption: step.expiry ?? ONBOARD_EXPIRY,
             exactApproval: true,
             openKeyAcquisition: acquire,
           });

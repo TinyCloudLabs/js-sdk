@@ -19,8 +19,11 @@ import { FEED_PREFIX, FEED_REGISTRY } from "../feed/resources.js";
  */
 export const FEED_PRESET = "feed";
 
-/** Lifetime of the approval: OpenKey's maximum, as in the default onboarding and the feed guide. */
-export const FEED_PRESET_EXPIRY = "30d";
+/**
+ * Lifetime of the approval: 7 days, the agent-preset policy (auth.ts: a preset keeps the 7-day lifetime, the owner may
+ * shorten it but not extend it). The feed guide says 30 days; this is the one constant to change if Sam picks that.
+ */
+export const FEED_PRESET_EXPIRY = "7d";
 
 const SPACE = "applications";
 const sql = (actions: string[]) => actions.map((action) => `tinycloud.sql/${action}`);
@@ -34,4 +37,4 @@ export const FEED_PRESET_PERMISSIONS: readonly PermissionEntry[] = [
 
 /** What the approval gives, in the owner's words. */
 export const FEED_PRESET_ASKS =
-  "Run your agent feed for 30 days: read and write the feed's tables, create them, and set up the webhooks that wake your agents. Nothing else in your apps.";
+  "Run your agent feed for 7 days: read and write the feed's tables, create them, and set up the webhooks that wake your agents. Nothing else in your apps.";

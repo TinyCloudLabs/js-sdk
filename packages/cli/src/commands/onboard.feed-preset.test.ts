@@ -52,3 +52,9 @@ test("it asks for less than the default onboarding on the same space, and an unk
   expect(() => onboardSteps("everything")).toThrow(/Unknown --preset/);
   expect(onboardSteps(undefined)).toBe(ONBOARD_STEPS);
 });
+
+test("its approval lasts 7 days, the agent-preset lifetime, and the default onboarding keeps its own", () => {
+  expect(step!.expiry).toBe("7d");
+  expect(step!.asks).toContain("7 days");
+  expect(ONBOARD_STEPS.every((entry) => entry.expiry === undefined)).toBe(true);
+});
