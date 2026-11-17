@@ -22,6 +22,8 @@ export interface InterimState {
   lastAttemptAt?: string;
   unavailableAt?: string;
   inboundRefusedAt?: string;
+  /** Set once an over-long delegation was replaced by a shorter one; after that renewals only extend. */
+  shortenedAt?: string;
   cleanup: Record<string, { intentAt: string; revokedAt?: string }>;
 }
 export type InterimPeer = StoredPeer & { interim?: InterimState };
@@ -108,9 +110,12 @@ export function peerRenewalLimitMs(peer: Pick<StoredPeer, 'inbound'>, now = Date
   return lifetime <= LEGACY_PEER_LIMIT_MS + CLOCK_SKEW_MS ? LEGACY_PEER_LIMIT_MS : notBefore !== undefined ? Math.min(lifetime, INTERIM_PERIOD_MS) : INTERIM_PERIOD_MS;
 }
 
-/** True when a delegation ending at `end` is longer than the peer accepts (limit plus clock skew), so it must be replaced by a shorter one. */
-function outlivesPeerLimit(peer: Pick<StoredPeer, 'inbound'>, end: number, now: number): boolean {
-  return end > now + peerRenewalLimitMs(peer, now) + CLOCK_SKEW_MS;
+/**
+ * True when a delegation ending at `end` is longer than the peer accepts (limit plus clock skew), so a shorter one may replace it.
+ * Fires once per peer: after `shortenedAt` is set, a renewal must always extend the current delegation.
+ */
+function outlivesPeerLimit(peer: Pick<StoredPeer, 'inbound' | 'interim'>, end: number, now: number): boolean {
+  return !peer.interim?.shortenedAt && end > now + peerRenewalLimitMs(peer, now) + CLOCK_SKEW_MS;
 }
 
 /** `peer limit 7d` when the peer's limit shortens a renewal below the usual period; undefined otherwise. */
@@ -289,6 +294,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
     liveEnd(tip.expiresAt, Date.now());
     parentOf(node, profile, Date.now());
     await putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, before.etag);
+    if (overlong) { state.shortenedAt = new Date().toISOString(); save(); }
     return { state: 'renewed', delegation: next };
   } catch (error) {
     await cleanup(node, peer, next.cid, save);

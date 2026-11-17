@@ -223,3 +223,37 @@ test('assertSuccessor accepts a shorter successor only when the prior outlives t
   assert.throws(() => assertSuccessor(profile, peer, record('prior', 30, ['old']), record('new', 8, [parent.cid]), parent, now), /safely renew/);
   assert.throws(() => assertSuccessor(profile, peer, record('prior', 6, ['old']), record('new', 5, [parent.cid]), parent, now), /safely renew/, 'within the limit, a shorter successor is no renewal');
 });
+
+test('the shorter grant is published once; later ticks only extend', async () => {
+  const first = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
+  assert.equal((await maintainOutbound(first.node, first.profile, first.peer, first.save, { force: true, manual: true })).state, 'renewed');
+  assert.equal(first.counts.published.length, 1);
+  assert.ok(first.peer.interim.shortenedAt);
+  // The new tip ends within the peer limit: the next tick extends nothing and signs nothing.
+  assert.deepEqual(await maintainOutbound(first.node, first.profile, first.peer, first.save, { force: true, manual: true }), { state: 'live', reason: 'no-extension' });
+  assert.equal(first.counts.sign, 1);
+  assert.equal(first.counts.published.length, 1);
+
+  // A fresh process: the marker survives a profile reload, and an over-long tip is no longer replaced by a shorter one.
+  const reloaded = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
+  reloaded.peer.interim = JSON.parse(JSON.stringify(first.peer.interim));
+  assert.deepEqual(await maintainOutbound(reloaded.node, reloaded.profile, reloaded.peer, reloaded.save, { force: true, manual: true }), { state: 'live', reason: 'no-extension' });
+  assert.equal(reloaded.counts.sign, 0);
+  assert.equal(reloaded.counts.published.length, 0);
+});
+
+test('a renewal that does not extend is skipped now and issued, extending, on a later tick', async () => {
+  const f = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 7 * DAY + 60_000 });
+  const options = { force: true, manual: true };
+  assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, options), { state: 'live', reason: 'no-extension' });
+  assert.equal(f.counts.sign, 0);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 3 * 60_000;
+  try {
+    const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, options);
+    assert.equal(outcome.state, 'renewed');
+    assert.ok(outcome.delegation.expiry.getTime() > f.at + 7 * DAY + 60_000, 'extends the current delegation');
+    assert.ok(outcome.delegation.expiry.getTime() <= Date.now() + 7 * DAY);
+    assert.equal(f.peer.interim?.shortenedAt, undefined, 'the shorter-grant exception was not used');
+  } finally { Date.now = realNow; }
+});
