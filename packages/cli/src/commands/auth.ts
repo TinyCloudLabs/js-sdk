@@ -957,9 +957,16 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     )
     .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`)
     .option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)")
+    .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (options, cmd) => {
       try {
         noteUnneededYes(options.yes);
+        // Refused before anything is contacted. Only an OpenKey approval request link can be left and resumed: a pasted
+        // code and a device authorization are not saved requests, and without --grant nothing is approved.
+        if (options.timeout !== undefined && (!options.grant || options.paste === true || options.device === true)) {
+          throw new CLIError("INVALID_ARGUMENT", "--timeout requires --grant and cannot be combined with --paste or --device: only the approval request link can be left and resumed.", ExitCode.USAGE_ERROR);
+        }
+        const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
@@ -1073,6 +1080,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                   noPopup: options.popup === false,
                   paste: options.paste,
+                  ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: index + 1, of: groups.length } }),
                   ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
                 });
               }
