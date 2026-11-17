@@ -481,6 +481,7 @@ export type Ledger = {
   tc3030FirstPartyOriginsRoot?: LogoutRatchet;
   tc3076ChildExpiryRoot?: LogoutRatchet;
   tc3168V1DefaultNodeRoot?: LogoutRatchet;
+  tc3172DelegateNotBeforeRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1116,6 +1117,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3030FirstPartyOriginsRoot !== undefined) pins.push({ row: "tc3030FirstPartyOriginsRoot", pin: root.tc3030FirstPartyOriginsRoot.sourceCommits.at(-1)! });
   if (root.tc3076ChildExpiryRoot !== undefined) pins.push({ row: "tc3076ChildExpiryRoot", pin: root.tc3076ChildExpiryRoot.sourceCommits.at(-1)! });
   if (root.tc3168V1DefaultNodeRoot !== undefined) pins.push({ row: "tc3168V1DefaultNodeRoot", pin: root.tc3168V1DefaultNodeRoot.sourceCommits.at(-1)! });
+  if (root.tc3172DelegateNotBeforeRoot !== undefined) pins.push({ row: "tc3172DelegateNotBeforeRoot", pin: root.tc3172DelegateNotBeforeRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1221,6 +1223,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3030FirstPartyOriginsRoot", root.tc3030FirstPartyOriginsRoot?.root.ceiling],
     ["tc3076ChildExpiryRoot", root.tc3076ChildExpiryRoot?.root.ceiling],
     ["tc3168V1DefaultNodeRoot", root.tc3168V1DefaultNodeRoot?.root.ceiling],
+    ["tc3172DelegateNotBeforeRoot", root.tc3172DelegateNotBeforeRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3535,6 +3538,26 @@ export const approvedTc3168V1DefaultNodeRoot: LogoutRatchet = {
   "reason": "A verified v1-only registry record that names only the default node routes there as in 3.11, through an explicit legacy marker on the registered verdict and the node-sdk automatic-setup gate; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1024 (47ea08a5, based on master d8f2d10a) measured index.mjs 1526090 and index.cjs 1460517 gzip -9 bytes: +124 and +198 over the TC-3076 ceilings 1525966 and 1460319. No other ceiling moves. Details: TC-3168"
 };
 
+/** The exact TC-3172 delegateTo notBefore root allowance from canonical CI. */
+export const approvedTc3172DelegateNotBeforeRoot: LogoutRatchet = {
+  "label": "delegateTo notBefore option on the node-sdk (TC-3172)",
+  "ruling": "TC-3172 size ruling: a ratchet row in the TC-3168 pattern for #1025's exact canonical CI bytes; index.mjs +173 B and index.cjs +160 B over the TC-3168 ceilings, each under the 800 B per-row cap. Details: TC-3172",
+  "base": "875e26acdc1444d4f1c144efbf692d68c8ba2cb8",
+  "sourceCommits": ["0fab85aac8cf09b4bace5c3460b0788c1d6de980"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329745596",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329747802"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 173, "index.cjs": 160 },
+    "ceiling": { "index.mjs": 1526263, "index.cjs": 1460677 }
+  },
+  "reason": "TinyCloudNode.delegateTo takes an optional notBefore that is validated and passed through to the delegation's nbf, with the refusals for an invalid date, a time at or after expiry, and a future start; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1025 (0fab85aa, based on master 875e26ac) measured index.mjs 1526263 and index.cjs 1460677 gzip -9 bytes: +173 and +160 over the TC-3168 ceilings 1526090 and 1460517. No other ceiling moves. Details: TC-3172"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3637,6 +3660,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3030FirstPartyOriginsRoot: approvedTc3030FirstPartyOriginsRoot,
   tc3076ChildExpiryRoot: approvedTc3076ChildExpiryRoot,
   tc3168V1DefaultNodeRoot: approvedTc3168V1DefaultNodeRoot,
+  tc3172DelegateNotBeforeRoot: approvedTc3172DelegateNotBeforeRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4105,6 +4129,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3076ChildExpiryRoot ||
         JSON.stringify(value.tc3168V1DefaultNodeRoot) !== JSON.stringify(approvedTc3168V1DefaultNodeRoot))) {
     throw new Error("Only the exact TC-3168 root admission is approved.");
+  }
+  if (value.tc3172DelegateNotBeforeRoot !== undefined &&
+      (!value.tc3168V1DefaultNodeRoot ||
+        JSON.stringify(value.tc3172DelegateNotBeforeRoot) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot))) {
+    throw new Error("Only the exact TC-3172 root admission is approved.");
   }
 }
 
@@ -4998,5 +5027,13 @@ export function validateTc3168V1DefaultNodeRootTransition(base?: LogoutRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3168V1DefaultNodeRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3168 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3172 delegateTo notBefore root admission is introduced once and immutable. */
+export function validateTc3172DelegateNotBeforeRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3172 root admission may be introduced once and cannot change later.");
   }
 }
