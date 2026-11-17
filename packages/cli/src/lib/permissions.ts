@@ -481,8 +481,8 @@ export async function loadManifestPermissions(
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
-  // OpenKey's device sign-in refuses encryption grants, so the built-in Share publishing manifest goes through it
-  // without its default-key decrypt entry. A paste sign-in keeps the entry.
+  // OpenKey's device sign-in refuses decrypt on the `share/` prefix (it grants only exact `share/<id>` files, TC-3204),
+  // so the built-in Share publishing manifest goes through it without its prefix decrypt entry. A paste sign-in keeps it.
   if (options.device && source === SHARE_PUBLISHING_MANIFEST_REF && Array.isArray(manifest.permissions)) {
     manifest.permissions = manifest.permissions.filter((entry: unknown) =>
       !(entry !== null && typeof entry === "object" &&

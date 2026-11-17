@@ -31,7 +31,8 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  * - `tinycloud.encryption/decrypt` on the account's own `default/share/` prefix:
  *   an email-addressed share's policy ceiling includes decrypt on one leaf in that prefix, and without it
  *   `tc share publish --to email:...` is refused (`decrypt-not-held`). A paste sign-in requests it;
- *   OpenKey's device sign-in refuses encryption grants, so `--device` and `enable share` leave it out.
+ *   OpenKey's device sign-in grants decrypt only on exact shared files (`share/<id>`, at most 4 per request) and
+ *   refuses this `share/` prefix (TC-3204), so `--device` and `enable share` leave it out.
  *
  * Not requested:
  * - `del`: no `tc share` command deletes stored sources.
