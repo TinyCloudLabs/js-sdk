@@ -29,6 +29,8 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
-    "auth-retry-grant-hint"
+    "auth-retry-grant-hint",
+    "node-sdk-delegate-not-before",
+    "tc-3141-legacy-list-lazy"
   ]
 }
