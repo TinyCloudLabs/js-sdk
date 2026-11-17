@@ -19,6 +19,7 @@ import { openFeedHandoff } from "../feed/local.js";
 import type { LocalFeedHandoff } from "../feed/local.js";
 import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runner.js";
 import { connectFeedAgent } from "../feed/connection.js";
+import { retryWhileSpaceNotHosted } from "../feed/space-wait.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
 import { FEED_PREFIX, FEED_REGISTRY as REGISTRY } from "../feed/resources.js";
@@ -139,7 +140,8 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           output: { spaceId: space, database: resources.outputResource },
           responses: { spaceId: space, database: resources.responseResource },
         };
-        const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
+        // A brand-new account's space is hosted by OpenKey in the background after approval: wait briefly for "Space not found".
+        const delegation = await retryWhileSpaceNotHosted(() => connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
           const { delegation } = await node.delegateTo(did, [
@@ -148,7 +150,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
             { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] },
           ], { expiry, requireActivation: true });
           return delegation;
-        });
+        }));
         outputJson({ source, delegation });
       } catch (error) { return handleError(error); }
     });
