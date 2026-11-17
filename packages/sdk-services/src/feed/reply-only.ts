@@ -3,7 +3,8 @@ import type { FeedCard } from "./types";
 
 /** A card's fields without the revision's own identity and time, which differ between any two revisions. */
 function comparable(card: FeedCard): { fields: Record<string, unknown>; payload: Record<string, unknown> } {
-  const fields: Record<string, unknown> = {};
+  // A null prototype: a JSON `__proto__` key is an own property of the parsed card and must be compared like any other key.
+  const fields: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(card)) {
     if (key !== "revision" && key !== "issuanceId" && key !== "createdAt" && key !== "payload") fields[key] = value;
   }
@@ -11,7 +12,7 @@ function comparable(card: FeedCard): { fields: Record<string, unknown>; payload:
 }
 
 function without(record: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
-  const rest: Record<string, unknown> = {};
+  const rest: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(record)) if (!keys.includes(key)) rest[key] = value;
   return rest;
 }

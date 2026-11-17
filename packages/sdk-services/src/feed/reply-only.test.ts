@@ -168,3 +168,25 @@ test("Home's absent render or payload counts as a post for the first-reply excep
   expect(feed.isReplyOnlyRevision(renderOf({ ...noRender(), payload: {} }, "post", 1), { ...noRender(), revision: 2, payload: {} })).toBe(false);
   expect(feed.isReplyOnlyRevision(noRender(), renderOf({ ...noRender(), payload: { replies: [{ text: "one" }] } }, "post"))).toBe(false); // absent → post with a reply
 });
+
+// Bobbie's review of #1015: both are places the port differed from Home.
+test("a changed `__proto__` key counts as a change, like any other payload key", () => {
+  const parse = (payload: string, revisionNumber: number) => ({ ...base, revision: revisionNumber, payload: JSON.parse(payload) as Record<string, unknown> });
+  const before = parse('{"__proto__":{"target":"draft"}}', 1);
+  expect(feed.isReplyOnlyRevision(before, parse('{"__proto__":{"target":"draft"},"replies":[{"text":"one"}]}', 2))).toBe(true);
+  expect(feed.isReplyOnlyRevision(before, parse('{"__proto__":{"target":"payment"},"replies":[{"text":"one"}]}', 2))).toBe(false);
+  expect(feed.isReplyOnlyRevision(base, parse('{"__proto__":{"target":"payment"},"replies":[{"text":"one"}]}', 2))).toBe(false);
+  // A card-level key too.
+  const fieldBefore = JSON.parse('{"cardId":"card-reply-only","revision":1,"issuanceId":"i1","kind":"decision","needsResponse":true,"title":"T","body":"B","urgency":1,"createdAt":"2026-10-29T12:00:00Z","__proto__":{"x":1}}') as FeedCard;
+  const fieldAfter = JSON.parse('{"cardId":"card-reply-only","revision":2,"issuanceId":"i2","kind":"decision","needsResponse":true,"title":"T","body":"B","urgency":1,"createdAt":"2026-10-29T12:01:00Z","__proto__":{"x":2},"payload":{"replies":[{"text":"one"}]}}') as FeedCard;
+  expect(feed.isReplyOnlyRevision(fieldBefore, fieldAfter)).toBe(false);
+});
+
+test("a typed (sitrep) card never inherits an earlier answer, as in Home", async () => {
+  const typed = (n: number, replies: unknown[]): FeedCard => revision(n, { payload: { sitrep: { record: { kind: "decision" } }, replies } });
+  const t1 = typed(1, []); const t2 = typed(2, [reply(1)]);
+  const { answerAt, state } = await ownerFeed([t1, t2]);
+  await answerAt(t1);
+  expect(await state(t2, true)).toMatchObject({ response: null });
+  expect((await state(t2, true)).answeredAtRevision).toBeUndefined();
+});

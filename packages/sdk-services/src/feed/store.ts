@@ -396,7 +396,9 @@ export const getFeedCardState: FeedApi["getFeedCardState"] = async (output, resp
   if (!card) return feedError("NOT_FOUND", "Card issuance not found");
   const own = await answerStateOf(output, responses, identity);
   if (!own.ok) return own;
-  if (own.data.response !== null || options?.carryReplyOnlyAnswer !== true) return ok({ card, ...own.data });
+  // Home never carries an answer onto a typed (sitrep) card either: its board record is the request, not the replies.
+  const typed = card.payload?.sitrep !== undefined || card.payload?.sitrepThread !== undefined;
+  if (own.data.response !== null || options?.carryReplyOnlyAnswer !== true || typed) return ok({ card, ...own.data });
 
   // No answer on this revision: walk back through earlier revisions while each step only appended replies (Home's rule).
   const earlier = await jsonRows<FeedCard>(output,
