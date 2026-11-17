@@ -1048,9 +1048,6 @@ export interface TinyCloudNodeConfig {
 const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
   "disableSubDelegation requires a session-key delegation to a did:key (not did:pkh); use the session-key DID or drop the flag";
 
-/** The furthest ahead of now a delegation's `notBefore` may be set. */
-const DELEGATION_NOT_BEFORE_MAX_AHEAD_MS = 5 * 60_000;
-
 /**
  * Check `DelegateToOptions.notBefore` against the expiry the delegation will actually be signed with, and return it
  * as whole seconds since the epoch (floored, as the expiry is). `undefined` when none was requested.
@@ -1061,11 +1058,11 @@ function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, now
     throw new Error("delegateTo: notBefore must be a valid Date");
   }
   const notBeforeSecs = Math.floor(notBefore.getTime() / 1000);
-  if (notBeforeSecs > Math.floor(expiration.getTime() / 1000)) {
-    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is after the delegation's expiry (${expiration.toISOString()})`);
+  if (notBeforeSecs >= Math.floor(expiration.getTime() / 1000)) {
+    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is not before the delegation's expiry (${expiration.toISOString()})`);
   }
-  if (notBefore.getTime() > nowMs + DELEGATION_NOT_BEFORE_MAX_AHEAD_MS) {
-    throw new Error("delegateTo: notBefore may be at most 5 minutes in the future");
+  if (notBefore.getTime() > nowMs) {
+    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is in the future; the node would reject the delegation until then, so it must not be later than now`);
   }
   return notBeforeSecs;
 }
@@ -1094,10 +1091,11 @@ export interface DelegateToOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
   /**
-   * Sign the delegation with this not-before (`nbf`), to the whole second. Refused when it is after the
-   * delegation's expiry (the expiry delegateTo will sign, after the session cap), more than 5 minutes in the
-   * future, or not a valid Date, and with `forceWalletSign`, whose SIWE path cannot carry it. Default: none, so
-   * the delegation is valid from the moment it is signed.
+   * Sign the delegation with this not-before (`nbf`), to the whole second, so a delegation can be backdated to cover an
+   * issuer clock that runs ahead of the node's. Refused when it is in the future (the node checks a delegation against its own
+   * clock with no leeway, so a future `nbf` fails activation), when it is not before the delegation's expiry (the
+   * expiry delegateTo will sign, after the session cap), or not a valid Date, and with `forceWalletSign`, whose SIWE
+   * path cannot carry it. Default: none, so the delegation is valid from the moment it is signed.
    */
   notBefore?: Date;
   /** Force the wallet-signed SIWE path even if the caps are derivable. Default false. */

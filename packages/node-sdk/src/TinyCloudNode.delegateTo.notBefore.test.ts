@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
-
-import type { ISessionManager, IWasmBindings, PermissionEntry } from "@tinycloud/sdk-core";
+import { ed25519 } from "@noble/curves/ed25519";
+import { afterAll, beforeAll, describe, expect, mock, setSystemTime, test } from "bun:test";
+import { base58btc } from "multiformats/bases/base58";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
@@ -134,25 +134,29 @@ const runtimePermission: PermissionEntry = { service: "tinycloud.kv", space: "se
 const signerCalls = (node: TinyCloudNode): unknown[][] =>
   (Reflect.get(node, "wasmBindings") as { createDelegation: { mock: { calls: unknown[][] } } }).createDelegation.mock.calls;
 
+// A fixed whole second plus 900 ms, so "floored" is distinguishable from "rounded" whatever instant the suite runs at.
+const wholeSecond = () => Math.floor(Date.now() / 1000) * 1000;
+
 describe("delegateTo notBefore", () => {
-  test("session path: the requested instant reaches the signer as whole seconds", async () => {
+  test("session path: the requested instant reaches the signer floored to the whole second", async () => {
     const node = makeNode(farFuture(), sessionRecap);
-    const notBefore = new Date(Date.now() + 2 * MINUTE + 789);
+    const base = wholeSecond();
+    const notBefore = new Date(base - 2 * MINUTE + 900);
     await withActivation(() => node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore }));
     expect(signerCalls(node)).toHaveLength(1);
-    expect(signerCalls(node)[0][5]).toBe(Math.floor(notBefore.getTime() / 1000));
-    expect(Number.isInteger(signerCalls(node)[0][5])).toBe(true);
+    expect(signerCalls(node)[0][5]).toBe(base / 1000 - 120);
   });
 
-  test("runtime-grant path: the requested instant reaches the signer as whole seconds", async () => {
+  test("runtime-grant path: the requested instant reaches the signer floored to the whole second", async () => {
     const node = makeNode(farFuture());
-    const notBefore = new Date(Date.now() - MINUTE);
+    const base = wholeSecond();
+    const notBefore = new Date(base - MINUTE + 900);
     await withActivation(async () => {
       await node.grantRuntimePermissions([runtimePermission]);
       await node.delegateTo(BACKEND, [runtimePermission], { expiry: "1d", notBefore });
     });
     expect(signerCalls(node)).toHaveLength(1);
-    expect(signerCalls(node)[0][5]).toBe(Math.floor(notBefore.getTime() / 1000));
+    expect(signerCalls(node)[0][5]).toBe(base / 1000 - 60);
   });
 
   test("without the option the signer is given no not-before, on both paths", async () => {
@@ -174,27 +178,97 @@ describe("delegateTo notBefore", () => {
       .delegateTo(BACKEND, [sessionPermission], { expiry: MINUTE, notBefore: new Date(Date.now() + 2 * MINUTE) })
       .catch((e: Error) => e);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/notBefore .* is after the delegation's expiry/);
+    expect((error as Error).message).toMatch(/notBefore .* is not before the delegation's expiry/);
     expect(signerCalls(node)).toHaveLength(0);
   });
 
   test("the expiry it is compared with is the one signed after the session cap", async () => {
-    // Requested 30 days, but the session ends in 2 minutes: a not-before at 3 minutes is after what will be signed.
+    // Requested 30 days, but the session ends in 2 minutes: a not-before at 3 minutes is not before what will be signed.
     const node = makeNode(new Date(Date.now() + 2 * MINUTE), sessionRecap);
     await expect(
       node.delegateTo(BACKEND, [sessionPermission], { notBefore: new Date(Date.now() + 3 * MINUTE) }),
-    ).rejects.toThrow(/is after the delegation's expiry/);
+    ).rejects.toThrow(/is not before the delegation's expiry/);
     expect(signerCalls(node)).toHaveLength(0);
   });
 
-  test("more than 5 minutes ahead is refused; 4 minutes ahead is signed", async () => {
+  test("on the runtime path it is compared with the runtime grant's expiry, which caps the requested one", async () => {
+    // The session lasts a year and delegateTo asks for a day, but the runtime grant ends in 3 minutes: that is the expiry
+    // signed, so a not-before at 4 minutes is not before it. Against the session-capped day it would only be "in the future",
+    // which is a different refusal.
+    const node = makeNode(farFuture());
+    await withActivation(() => node.grantRuntimePermissions([runtimePermission], { expiry: "3m" }));
+    await expect(
+      node.delegateTo(BACKEND, [runtimePermission], { expiry: "1d", notBefore: new Date(Date.now() + 4 * MINUTE) }),
+    ).rejects.toThrow(/is not before the delegation's expiry/);
+    expect(signerCalls(node)).toHaveLength(0);
+  });
+
+  test("a not-before equal to the expiry, to the second, is refused", async () => {
+    const base = wholeSecond();
+    setSystemTime(new Date(base));
+    try {
+      const node = makeNode(farFuture(), sessionRecap);
+      await expect(
+        node.delegateTo(BACKEND, [sessionPermission], { expiry: 3 * MINUTE, notBefore: new Date(base + 3 * MINUTE) }),
+      ).rejects.toThrow(/is not before the delegation's expiry/);
+      // One second earlier is before the expiry, so it falls through to the future check instead.
+      await expect(
+        node.delegateTo(BACKEND, [sessionPermission], { expiry: 3 * MINUTE, notBefore: new Date(base + 3 * MINUTE - 1000) }),
+      ).rejects.toThrow(/is in the future/);
+      expect(signerCalls(node)).toHaveLength(0);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("a not-before in the future is refused, even by one second; now and the past are signed", async () => {
     const node = makeNode(farFuture(), sessionRecap);
     await expect(
-      node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore: new Date(Date.now() + 6 * MINUTE) }),
-    ).rejects.toThrow(/at most 5 minutes in the future/);
+      node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore: new Date(Date.now() + 4 * MINUTE) }),
+    ).rejects.toThrow(/is in the future/);
+    await expect(
+      node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore: new Date(Date.now() + 1000) }),
+    ).rejects.toThrow(/is in the future/);
     expect(signerCalls(node)).toHaveLength(0);
-    await withActivation(() => node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore: new Date(Date.now() + 4 * MINUTE) }));
-    expect(signerCalls(node)).toHaveLength(1);
+    await withActivation(async () => {
+      await node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore: new Date() });
+      await node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore: new Date(Date.now() - 5 * MINUTE) });
+    });
+    expect(signerCalls(node)).toHaveLength(2);
+  });
+
+  test("with disableSubDelegation the not-before survives the terminal re-sign", async () => {
+    const privateKey = ed25519.utils.randomPrivateKey();
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const sessionDid = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...publicKey))}`;
+    const b64u = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
+    const node = makeNode(farFuture(), sessionRecap);
+    // The session key is a real one, and the signer mock returns a UCAN signed by it that carries the nbf it was given.
+    const session = Reflect.get(Reflect.get(node, "auth"), "tinyCloudSession");
+    Object.assign(session, { jwk: { kty: "OKP", crv: "Ed25519", x: b64u(publicKey), d: b64u(privateKey) } });
+    const createDelegation = mock((_session: unknown, delegateDID: string, spaceId: string, abilities: Abilities, expirationSecs: number, notBeforeSecs?: number) => {
+      const input = [
+        { alg: "EdDSA", typ: "JWT", ucv: "0.10.0" },
+        { iss: `${sessionDid}#${sessionDid.slice("did:key:".length)}`, aud: delegateDID, exp: expirationSecs, nbf: notBeforeSecs, prf: ["bafyparent"], att: {} },
+      ].map((part) => b64u(Buffer.from(JSON.stringify(part)))).join(".");
+      return {
+        delegation: `${input}.${b64u(ed25519.sign(Buffer.from(input), privateKey))}`,
+        cid: "child-cid",
+        delegateDid: delegateDID,
+        expiry: expirationSecs,
+        resources: Object.entries(abilities).flatMap(([service, paths]) =>
+          Object.entries(paths).map(([path, actions]) => ({ service, space: spaceId, path, actions }))),
+      };
+    });
+    Reflect.set(Reflect.get(node, "wasmBindings"), "createDelegation", createDelegation);
+    const notBefore = new Date(wholeSecond() - 2 * MINUTE + 900);
+    const result = await withActivation(() =>
+      node.delegateTo(BACKEND, [sessionPermission], { expiry: "1d", notBefore, disableSubDelegation: true }),
+    );
+    expect(result.delegation.disableSubDelegation).toBe(true);
+    const payload = JSON.parse(Buffer.from(result.delegation.delegationHeader.Authorization.split(".")[1]!, "base64url").toString());
+    expect(payload.fct).toEqual([{ "xyz.tinycloud.policy/delegationMode": "terminal" }]);
+    expect(payload.nbf).toBe(Math.floor(notBefore.getTime() / 1000));
   });
 
   test("an invalid Date or a non-Date is refused", async () => {
