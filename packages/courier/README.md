@@ -36,27 +36,46 @@ CLI's `skills/tinycloud-cli/INSTALL.md`).
 
 ## Updates
 
-The standalone `courier` command checks npm when it starts (and when `courier watch` restarts), at most once every 24 hours
-per install; the time of the last check is kept in `<COURIER_HOME>/update-check.json`. If the `latest` dist-tag is a stable
-release newer than the one running, Courier installs it and runs your command again on the new version; `courier watch`
-does the same, so a long-running watcher picks up the new release the next time it restarts. It never downgrades and never
-follows `beta` or `next`, or a prerelease on `latest`.
+The standalone `courier` command checks npm when a process starts, at most once every 24 hours per install (the time of the
+last check is kept in `<COURIER_HOME>/update-check-<id>.json`, one file per install). A watcher restarted by systemd or launchd (`Restart=always` /
+`KeepAlive`) is a new process and checks; a watcher that keeps running never checks again by itself, so it picks up a new
+release at its next restart. If the `latest` dist-tag is a stable release newer than the running one, Courier installs it
+and runs your command again on the new version. It never downgrades and never follows `beta`, `next` or a prerelease on
+`latest`.
 
-Before it switches, Courier checks that the downloaded tarball matches the registry's sha512 `dist.integrity`, that the
-release has an npm provenance attestation naming this tarball and the `TinyCloudLabs/js-sdk` repository, and that
-`npm audit signatures` passes on a staged install of it (which needs `npm` on PATH). A release that fails any of these, or
-has no provenance, is not installed. It installs with the package manager and in the place that installed the running
-copy (npm, pnpm, yarn classic or bun; a global install or an app directory such as `/opt/courier/app`). Allow up to two
-minutes for the install itself on the one start that updates.
+Before it switches, Courier:
 
-Each skip is one line on stderr and never fails the command: registry unreachable (3 s timeout), no write permission to the
-install (the line gives the command to run yourself), under CI (`CI` set), a woken agent's own `courier` calls, or an
-install Courier can't update. `npx` runs and source checkouts are never updated.
+1. downloads the tarball into a private directory under `COURIER_HOME` while hashing it, and requires the sha512 to equal
+   the registry's `dist.integrity`;
+2. verifies the release's npm provenance with sigstore (signature, certificate chain and transparency log) and accepts only
+   this repository's release workflow on master as the signer
+   (`https://github.com/TinyCloudLabs/js-sdk/.github/workflows/changesets.yml@refs/heads/master`, issuer
+   `https://token.actions.githubusercontent.com`); the statement it signed must name the file it just hashed. A stolen npm
+   token cannot publish a release that passes; a release with no provenance is refused;
+3. runs `npm audit signatures` on a staged install of that file (an extra check on its dependencies; needs `npm` on PATH).
+
+Then it installs that same file, not a name and version fetched again, with install scripts off, using the package manager
+and in the place that installed the running copy: npm (global or an app directory), or pnpm, yarn classic or bun (global
+only: installing a file into an app's `package.json` would record a temporary path, so for those app installs the log line
+gives the command to run yourself). npm is run with an empty user and global configuration, the registry
+`https://registry.npmjs.org/` named on the command line, and `npm_config_*` and the other package managers' configuration
+variables removed from its environment; an npm app install is made with `--no-save`, so its `package.json` and lockfile are
+unchanged. Courier's own dependencies are resolved by the package manager at that moment. If the install fails or leaves the
+wrong version, Courier reinstalls the running version from its registry tarball (hash checked the same way); if that fails
+too, it says so on stderr and, when no usable copy is left, does not run the command.
+
+Each step has a hard limit: registry 3 s, attestation 5 s, signature check 10 s, download 15 s, staged install 20 s, audit
+10 s, install 20 s; a rollback adds 5 s, 10 s and 20 s. The worst case for one start is 118 s. A step that hits its limit
+ends the update without installing; an install that hits it is rolled back.
+
+Each skip is one line on stderr and never fails the command: registry unreachable, no write permission to the install (the
+line gives the command to run yourself), under CI (`CI` set), a woken agent's own `courier` calls, or an install Courier
+can't update. On Windows auto-update is off (the line gives the `npm install --global` command to run). `npx`, `pnpm dlx`,
+`bunx` and `yarn dlx` runs and source checkouts are never updated.
 
 To pin the version you have, set `COURIER_NO_AUTO_UPDATE=1` in the environment (a systemd unit or launchd plist for
 `courier watch` needs it set there; the files `--install-systemd` and `--install-launchd` write do not set it), or pass
-`--no-auto-update` to `courier`. Install an exact version with `npm install --global @tinycloud/courier@<version>` to stay
-on it with updates off. `tinycloud courier` is updated with the `tinycloud` CLI, not by this check.
+`--no-auto-update` to `courier`. `tinycloud courier` is updated with the `tinycloud` CLI, not by this check.
 
 ## Guided start and invitations
 

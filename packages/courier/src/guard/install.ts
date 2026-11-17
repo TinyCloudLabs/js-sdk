@@ -4,10 +4,11 @@ import path from 'node:path';
 import { installBinaryCensus } from './binaries.js';
 import { programName } from '../program.js';
 import { isRecord } from '../a2a.js';
-import { WAKE_CHILD_ENV } from '../auto-update.js';
 import { installRoots, realpathBest } from './paths.js';
 import { createHash } from 'node:crypto';
 
+/** Set in every wake-adapter child's environment: a woken agent's own `courier` calls never check for updates (`auto-update.ts`). */
+export const WAKE_CHILD_ENV = 'COURIER_WAKE_CHILD';
 /** Where this OS user keeps credentials that a woken agent can read through the Read tool (and a shell) unless HOME differs. */
 export const CREDENTIAL_FILES = ['.config/gh/**', '.npmrc', '.netrc', '.ssh/**', '.aws/**', '.config/gcloud/**', '.docker/config.json', '.config/wrangler/**', '.config/.wrangler/**', '.git-credentials'];
 /**

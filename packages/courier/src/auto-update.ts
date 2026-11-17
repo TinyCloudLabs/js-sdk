@@ -8,30 +8,42 @@ import { parseArgs } from './args.js';
 import { isRecord } from './a2a.js';
 import { profileDir, readRegularFile, writeSecure } from './profile.js';
 import { courierPackage, courierVersion } from './version.js';
+import { WAKE_CHILD_ENV } from './guard/install.js';
 
 /**
  * Self-update on start (standalone `courier` bin only).
  *
- * One check per install per 24 h against the npm `latest` dist-tag. A strictly newer stable release is verified
- * (tarball sha512 against `dist.integrity`, a SLSA provenance attestation that names this repository and this tarball,
- * `npm audit signatures` on a staged copy) and only then installed with the package manager and at the location that
- * installed the running copy. The command is then re-run on the new version. Every skip or refusal is one stderr line and
- * never fails the command.
+ * One check per install per 24 h against the npm `latest` dist-tag. A strictly newer stable release is downloaded into a
+ * private directory while it is hashed (sha512 against `dist.integrity`); its npm provenance is verified with sigstore
+ * (DSSE signature, Fulcio certificate chain, Rekor inclusion, signer pinned to this repository's release workflow,
+ * subject digest equal to the hash of the file just downloaded); and `npm audit signatures` runs on a staged install of
+ * that file. Only then is that same file installed, with scripts off, by the package manager and at the location that
+ * installed the running copy, and the command is re-run on the new version. Every skip or refusal is one stderr line and
+ * never fails the command; a failed install is rolled back, and if that fails too the command does not run.
  */
 
-export const PACKAGE = courierPackage().name;
+let cachedName: string | undefined;
+/** Read on first use, inside the guarded check: a package.json missing mid-swap must not crash every courier command at load. */
+const packageName = (): string => (cachedName ??= courierPackage().name);
 export const REGISTRY = 'https://registry.npmjs.org';
-const REPOSITORY = 'https://github.com/TinyCloudLabs/js-sdk';
+/** The only signer whose provenance is accepted: the release workflow of this repository, run from master. */
+export const SIGNER_IDENTITY = 'https://github.com/TinyCloudLabs/js-sdk/.github/workflows/changesets.yml@refs/heads/master';
+export const SIGNER_ISSUER = 'https://token.actions.githubusercontent.com';
 const PROVENANCE_TYPE = 'https://slsa.dev/provenance/v1';
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-export const REGISTRY_TIMEOUT_MS = 3_000;
-const DOWNLOAD_TIMEOUT_MS = 30_000;
-const COMMAND_TIMEOUT_MS = 120_000;
+/**
+ * Hard limit for each step. A start where every step runs to its limit, including a rollback, takes their sum: 118 s.
+ * A step that reaches its limit ends the update (nothing is installed) or, for an install, triggers the rollback.
+ */
+export const STEP_TIMEOUT_MS = {
+  latest: 3_000, attestation: 5_000, signature: 10_000, download: 15_000, stage: 20_000, audit: 10_000, install: 20_000,
+  rollbackRelease: 5_000, rollbackDownload: 10_000, rollbackInstall: 20_000,
+} as const;
 const MAX_TARBALL_BYTES = 100 * 1024 * 1024;
-const STATE_FILE = 'update-check.json';
-/** Set on the re-executed process and on every wake-adapter child: neither checks for updates. */
+/** One file per install (`update-check-<id>.json`): two installs under one Courier home each keep their own 24 h slot. */
+const STATE_PREFIX = 'update-check-';
+/** Set on the re-executed process: it does not check again. (`WAKE_CHILD_ENV` marks wake-adapter children the same way.) */
 export const REEXEC_ENV = 'COURIER_AUTO_UPDATED';
-export const WAKE_CHILD_ENV = 'COURIER_WAKE_CHILD';
 export const OPT_OUT_ENV = 'COURIER_NO_AUTO_UPDATE';
 export const OPT_OUT_FLAG = '--no-auto-update';
 
@@ -98,7 +110,8 @@ const has = (file: string): boolean => fs.existsSync(file);
 export function detectInstall(packageRoot: string, platform: NodeJS.Platform = process.platform): Install | { unsupported: string } | undefined {
   let real: string;
   try { real = fs.realpathSync(packageRoot); } catch { return undefined; }
-  if (real.includes(`${sep}_npx${sep}`)) return undefined;
+  // Throwaway runs are never updated: npx (`_npx`), pnpm dlx (`dlx`), bunx (`bunx-<uid>-…`), yarn dlx (`xfs-…`).
+  if (/[\\/](_npx|dlx)[\\/]|[\\/](bunx|xfs)-[^\\/]*[\\/]/.test(real)) return undefined;
 
   const pnpmMarker = `${sep}node_modules${sep}.pnpm${sep}`;
   const pnpmAt = real.indexOf(pnpmMarker);
@@ -130,26 +143,34 @@ export function detectInstall(packageRoot: string, platform: NodeJS.Platform = p
   return { manager, scope: 'local', root: base, modulesDir };
 }
 
-/** The argv that installs exactly `version` the way `install` was made. */
-export function installCommand(install: Install, version: string): { command: string; args: string[] } {
-  const spec = `${PACKAGE}@${version}`;
-  const registry = ['--registry', `${REGISTRY}/`];
+/**
+ * The argv that installs `spec` the way `install` was made. With `work` (the private directory that holds the empty npm
+ * config files) it is the form Courier runs: scripts off, the npm registry named, and for npm the user and global
+ * configuration replaced by those files so no scoped-registry override applies. Without it, the command a person would run.
+ */
+export function installCommand(install: Install, spec: string, work?: string): { command: string; args: string[] } {
   const global = install.scope === 'global';
+  const own = work !== undefined;
+  const registry = ['--registry', `${REGISTRY}/`];
+  const scripts = own ? ['--ignore-scripts'] : [];
   switch (install.manager) {
-    case 'npm':
-      return { command: 'npm', args: ['install', ...(global ? ['--global'] : []), '--prefix', install.root, spec, '--no-audit', '--no-fund', ...registry] };
+    case 'npm': {
+      // A file installed into an app directory is not recorded in its package.json or lockfile.
+      const mode = global ? ['--global'] : own ? ['--no-save'] : [];
+      return { command: 'npm', args: ['install', ...mode, '--prefix', install.root, spec, ...scripts, ...(work === undefined ? registry : ['--no-audit', '--no-fund', ...npmConfigArgs(work)])] };
+    }
     case 'pnpm':
-      return { command: 'pnpm', args: global ? ['add', '--global', spec, ...registry] : ['add', '--dir', install.root, spec, ...registry] };
+      return { command: 'pnpm', args: global ? ['add', '--global', spec, ...scripts, ...registry] : ['add', '--dir', install.root, spec, ...scripts, ...registry] };
     case 'yarn':
-      return { command: 'yarn', args: global ? ['global', 'add', spec, ...registry] : ['--cwd', install.root, 'add', spec, ...registry] };
+      return { command: 'yarn', args: global ? ['global', 'add', spec, ...scripts, ...registry] : ['--cwd', install.root, 'add', spec, ...scripts, ...registry] };
     case 'bun':
-      return { command: 'bun', args: global ? ['add', '--global', spec, ...registry] : ['add', '--cwd', install.root, spec, ...registry] };
+      return { command: 'bun', args: global ? ['add', '--global', spec, ...scripts, ...registry] : ['add', '--cwd', install.root, spec, ...scripts, ...registry] };
   }
 }
 
 const shellWord = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
 export function manualCommand(install: Install, version: string): string {
-  const { command, args } = installCommand(install, version);
+  const { command, args } = installCommand(install, `${packageName()}@${version}`);
   return [command, ...args].map(shellWord).join(' ');
 }
 
@@ -172,20 +193,30 @@ export interface UpdateDeps {
   packageRoot: string;
   fetch: typeof fetch;
   run: (command: string, args: string[], opts: { cwd?: string; timeoutMs: number }) => Promise<RunResult>;
+  /** Verify a sigstore bundle (DSSE signature, certificate chain, transparency log) for exactly this signer; rejects if it does not hold. */
+  verifyBundle: (bundle: unknown, policy: { certificateIssuer: string; certificateIdentityURI: string }) => Promise<void>;
   /** One line to stderr. */
   log: (line: string) => void;
+  /** Defaults to the real platform: auto-update is off on Windows. */
   platform?: NodeJS.Platform;
 }
 
 export type UpdateResult =
   | { kind: 'none' }
-  | { kind: 'updated'; from: string; to: string; entry: string };
+  | { kind: 'updated'; from: string; to: string; entry: string }
+  /** A failed update whose rollback failed too and left no usable copy: the command must not run. */
+  | { kind: 'broken' };
 
 interface CheckState { checkedAt: number; install: string; result: string }
 
 /** Why a skip or a refusal happened; the message is the one log line. */
 class Stop extends Error {
   constructor(message: string, readonly result: string) { super(message); }
+}
+
+/** An update that failed and could not be undone: there is no usable copy to run. */
+class Broken extends Stop {
+  constructor(message: string) { super(message, 'broken'); }
 }
 
 const truthy = (value: string | undefined): boolean => value !== undefined && value !== '' && !/^(0|false|no)$/i.test(value);
@@ -199,13 +230,14 @@ export function stripOptOutFlag(argv: string[]): { argv: string[]; optOut: boole
 }
 
 /** Commands that never check: informational ones, and the hooks a woken agent runs on every tool call. */
-const EXEMPT_COMMANDS = new Set(['guard', 'run-approved', 'broker']);
+const EXEMPT_COMMANDS: Record<string, boolean> = { guard: true, 'run-approved': true, broker: true };
 
 function exempt(argv: string[]): boolean {
   const args = parseArgs(argv);
-  const command = args.positional[0];
-  if (!command) return true;
-  return args.has('help') || args.has('version') || EXEMPT_COMMANDS.has(command);
+  if (!args.positional[0] || args.has('help') || args.has('version')) return true;
+  // Any hook name before `--` counts, wherever it sits: a leading `--flag value` must not move it out of the exemption.
+  const end = argv.indexOf('--');
+  return (end === -1 ? argv : argv.slice(0, end)).some((word) => EXEMPT_COMMANDS[word] === true);
 }
 
 function readState(file: string): CheckState | undefined {
@@ -238,8 +270,8 @@ async function getJson(deps: UpdateDeps, url: string, timeoutMs: number, what: s
 interface Release { version: string; integrity: string; tarball: string; provenance: boolean }
 
 function parseRelease(doc: unknown, deps: UpdateDeps): Release {
-  const bad = (why: string) => new Stop(`auto-update skipped: npm registry data for ${PACKAGE}@latest is not usable (${why}), staying on ${deps.version}`, 'bad-metadata');
-  if (!isRecord(doc) || doc.name !== PACKAGE || typeof doc.version !== 'string' || !parseSemver(doc.version)) throw bad('name or version');
+  const bad = (why: string) => new Stop(`auto-update skipped: npm registry data for ${packageName()}@latest is not usable (${why}), staying on ${deps.version}`, 'bad-metadata');
+  if (!isRecord(doc) || doc.name !== packageName() || typeof doc.version !== 'string' || !parseSemver(doc.version)) throw bad('name or version');
   if (!isRecord(doc.dist)) throw bad('no dist');
   const { integrity, tarball, attestations } = doc.dist;
   const version = doc.version;
@@ -254,88 +286,107 @@ function parseRelease(doc: unknown, deps: UpdateDeps): Release {
 
 const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
+const refuse = (version: string, why: string, deps: UpdateDeps): Stop => new Stop(`refused ${packageName()}@${version}: ${why}, staying on ${deps.version}`, 'refused');
+
 /** The registry document must give a sha512 integrity and a tarball URL on the npm registry; nothing is fetched yet. */
 function assertServable(release: Release, deps: UpdateDeps): void {
-  const refuse = (why: string) => new Stop(`refused ${PACKAGE}@${release.version}: ${why}, staying on ${deps.version}`, 'refused');
-  if (!SHA512_INTEGRITY.test(release.integrity)) throw refuse('the registry gives no sha512 integrity');
-  if (release.tarball !== `${REGISTRY}/${PACKAGE}/-/courier-${release.version}.tgz`) throw refuse('its tarball is not served from the npm registry');
+  if (!SHA512_INTEGRITY.test(release.integrity)) throw refuse(release.version, 'the registry gives no sha512 integrity', deps);
+  if (release.tarball !== `${REGISTRY}/${packageName()}/-/courier-${release.version}.tgz`) throw refuse(release.version, 'its tarball is not served from the npm registry', deps);
 }
 
-/** Download the release tarball and compare its sha512 with `dist.integrity`. */
-async function checkTarball(release: Release, deps: UpdateDeps): Promise<void> {
-  const refuse = (why: string) => new Stop(`refused ${PACKAGE}@${release.version}: ${why}, staying on ${deps.version}`, 'refused');
+/**
+ * Stream the tarball into `file` while hashing it. The file stays only if its sha512 is `integrity`. Returns that digest
+ * as hex, which is what the provenance statement must name.
+ */
+async function downloadTarball(url: string, integrity: string, file: string, timeoutMs: number, version: string, deps: UpdateDeps): Promise<string> {
+  const unreachable = (suffix = '') => new Stop(`auto-update skipped: could not download ${packageName()}@${version}${suffix}, staying on ${deps.version}`, 'offline');
   let res: Response;
   try {
-    res = await deps.fetch(release.tarball, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS), redirect: 'error' });
+    res = await deps.fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
   } catch {
-    throw new Stop(`auto-update skipped: could not download ${PACKAGE}@${release.version}, staying on ${deps.version}`, 'offline');
+    throw unreachable();
   }
-  if (!res.ok || !res.body) throw new Stop(`auto-update skipped: could not download ${PACKAGE}@${release.version} (HTTP ${res.status}), staying on ${deps.version}`, 'offline');
+  if (!res.ok || !res.body) throw unreachable(` (HTTP ${res.status})`);
   const hash = createHash('sha512');
   let size = 0;
+  const fd = fs.openSync(file, 'wx', 0o600);
   try {
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
       size += chunk.byteLength;
-      if (size > MAX_TARBALL_BYTES) throw refuse('its tarball is larger than 100 MB');
+      if (size > MAX_TARBALL_BYTES) throw refuse(version, 'its tarball is larger than 100 MB', deps);
       hash.update(chunk);
+      for (let written = 0; written < chunk.byteLength;) written += fs.writeSync(fd, chunk, written);
     }
   } catch (e) {
     if (e instanceof Stop) throw e;
-    throw new Stop(`auto-update skipped: could not download ${PACKAGE}@${release.version}, staying on ${deps.version}`, 'offline');
+    throw unreachable();
+  } finally {
+    fs.closeSync(fd);
   }
-  if (`sha512-${hash.digest('base64')}` !== release.integrity) throw refuse('the downloaded tarball does not match its registry integrity (sha512)');
+  const digest = hash.digest();
+  if (`sha512-${digest.toString('base64')}` !== integrity) throw refuse(version, 'the downloaded tarball does not match its registry integrity (sha512)', deps);
+  fs.chmodSync(file, 0o400);
+  return digest.toString('hex');
 }
 
-/** The SLSA provenance statement must be about this tarball and say it was built from this repository. */
-async function checkProvenance(release: Release, deps: UpdateDeps): Promise<void> {
-  const refuse = (why: string) => new Stop(`refused ${PACKAGE}@${release.version}: ${why}, staying on ${deps.version}`, 'refused');
-  if (!release.provenance) throw new Stop(`no npm provenance for ${release.version}, staying on ${deps.version}`, 'refused');
-  const bundle = await getJson(deps, `${REGISTRY}/-/npm/v1/attestations/${PACKAGE.replace('/', '%2f')}@${release.version}`, DOWNLOAD_TIMEOUT_MS, 'provenance');
-  const list = isRecord(bundle) && Array.isArray(bundle.attestations) ? bundle.attestations : [];
+/**
+ * The npm provenance bundle must verify with sigstore (DSSE signature, Fulcio chain, Rekor inclusion) for exactly the
+ * pinned signer, and the statement it signed must be about the tarball that was hashed. Nothing in the registry's own JSON
+ * is trusted: a bundle that merely says the right things fails the signature or the identity check.
+ */
+async function verifyProvenance(release: Release, digestHex: string, deps: UpdateDeps): Promise<void> {
+  const bad = (why: string) => refuse(release.version, why, deps);
+  const doc = await getJson(deps, `${REGISTRY}/-/npm/v1/attestations/${packageName().replace('/', '%2f')}@${release.version}`, STEP_TIMEOUT_MS.attestation, 'provenance');
+  const list = isRecord(doc) && Array.isArray(doc.attestations) ? doc.attestations : [];
   const entry = list.find((a) => isRecord(a) && a.predicateType === PROVENANCE_TYPE);
-  const payload = isRecord(entry) && isRecord(entry.bundle) && isRecord(entry.bundle.dsseEnvelope) ? entry.bundle.dsseEnvelope.payload : undefined;
-  if (typeof payload !== 'string') throw refuse('its provenance attestation is missing');
-  let statement: unknown;
-  try { statement = JSON.parse(Buffer.from(payload, 'base64').toString('utf8')); } catch { throw refuse('its provenance attestation is unreadable'); }
-  if (!isRecord(statement) || statement.predicateType !== PROVENANCE_TYPE || !Array.isArray(statement.subject) || statement.subject.length !== 1) {
-    throw refuse('its provenance attestation is malformed');
+  const bundle = isRecord(entry) ? entry.bundle : undefined;
+  const envelope = isRecord(bundle) && isRecord(bundle.dsseEnvelope) ? bundle.dsseEnvelope : undefined;
+  if (!envelope || typeof envelope.payload !== 'string' || envelope.payloadType !== 'application/vnd.in-toto+json') throw bad('its provenance attestation is missing');
+  try {
+    await deps.verifyBundle(bundle, { certificateIssuer: SIGNER_ISSUER, certificateIdentityURI: SIGNER_IDENTITY });
+  } catch (e) {
+    throw bad(`its provenance did not verify for ${SIGNER_IDENTITY} (${e instanceof Error ? e.message.slice(0, 120) : 'unknown error'})`);
   }
+  let statement: unknown;
+  try { statement = JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf8')); } catch { throw bad('its provenance attestation is unreadable'); }
+  if (!isRecord(statement) || statement.predicateType !== PROVENANCE_TYPE || !Array.isArray(statement.subject) || statement.subject.length !== 1) throw bad('its provenance attestation is malformed');
   const [subject] = statement.subject as unknown[];
   const digest = isRecord(subject) && isRecord(subject.digest) ? subject.digest.sha512 : undefined;
-  const expected = Buffer.from(release.integrity.slice('sha512-'.length), 'base64').toString('hex');
-  if (!isRecord(subject) || subject.name !== `pkg:npm/${PACKAGE.replace('@', '%40')}@${release.version}` || digest !== expected) {
-    throw refuse('its provenance attestation is for a different tarball');
+  if (!isRecord(subject) || subject.name !== `pkg:npm/${packageName().replace('@', '%40')}@${release.version}` || digest !== digestHex) {
+    throw bad('its provenance attestation is for a different tarball');
   }
-  const predicate = isRecord(statement.predicate) ? statement.predicate : {};
-  const build = isRecord(predicate.buildDefinition) ? predicate.buildDefinition : {};
-  const external = isRecord(build.externalParameters) ? build.externalParameters : {};
-  const workflow = isRecord(external.workflow) ? external.workflow : {};
-  if (workflow.repository !== REPOSITORY) throw refuse(`its provenance says it was built from ${String(workflow.repository)}, not ${REPOSITORY}`);
 }
 
-/** `npm audit signatures` on a staged install of the release: registry signatures and attestations of it and its dependencies. */
-async function auditStaged(release: Release, deps: UpdateDeps): Promise<void> {
-  const refuse = (why: string) => new Stop(`refused ${PACKAGE}@${release.version}: ${why}, staying on ${deps.version}`, 'refused');
-  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-update-'));
+/** The empty files (in the private work directory) that stand in for the user's and the global npm configuration. */
+const NPM_CONFIG_FILES = ['user.npmrc', 'global.npmrc'];
+
+/** npm options that name the registry and ignore every user and global npm configuration, scoped-registry overrides included. */
+const npmConfigArgs = (work: string): string[] => [
+  '--userconfig', path.join(work, NPM_CONFIG_FILES[0]), '--globalconfig', path.join(work, NPM_CONFIG_FILES[1]),
+  '--registry', `${REGISTRY}/`, `--${packageName().split('/')[0]}:registry=${REGISTRY}/`, '--no-update-notifier', '--loglevel', 'error',
+];
+
+/**
+ * `npm audit signatures` on a staged install of the downloaded file: registry signatures and attestations of its
+ * dependencies. An extra check; the proof that the release itself came from our workflow is `verifyProvenance`.
+ */
+async function auditStaged(release: Release, tarball: string, work: string, deps: UpdateDeps): Promise<void> {
+  const stage = path.join(work, 'stage');
+  fs.mkdirSync(stage, { mode: 0o700 });
+  fs.writeFileSync(path.join(stage, 'package.json'), '{"name":"courier-update-stage","private":true}\n');
+  let installed: RunResult;
   try {
-    fs.writeFileSync(path.join(stage, 'package.json'), '{"name":"courier-update-stage","private":true}\n');
-    const registry = ['--registry', `${REGISTRY}/`];
-    let installed: RunResult;
-    try {
-      // No scripts run before the release is verified.
-      installed = await deps.run('npm', ['install', '--prefix', stage, `${PACKAGE}@${release.version}`, '--ignore-scripts', '--no-audit', '--no-fund', ...registry], { cwd: stage, timeoutMs: COMMAND_TIMEOUT_MS });
-    } catch {
-      throw new Stop(`auto-update skipped: npm is not available to verify ${PACKAGE}@${release.version}, staying on ${deps.version}`, 'no-npm');
-    }
-    if (installed.code !== 0) throw new Stop(`auto-update skipped: could not stage ${PACKAGE}@${release.version} for verification, staying on ${deps.version}`, 'offline');
-    const audited = await deps.run('npm', ['audit', 'signatures', '--json', ...registry], { cwd: stage, timeoutMs: COMMAND_TIMEOUT_MS });
-    let report: unknown;
-    try { report = JSON.parse(audited.stdout); } catch { /* judged below by the exit code */ }
-    const problems = isRecord(report) ? [...(Array.isArray(report.invalid) ? report.invalid : []), ...(Array.isArray(report.missing) ? report.missing : [])] : [];
-    if (audited.code !== 0 || problems.length > 0 || !isRecord(report)) throw refuse('npm audit signatures failed on it or its dependencies');
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
+    // No scripts run before the release is verified.
+    installed = await deps.run('npm', ['install', '--prefix', stage, tarball, '--ignore-scripts', '--no-audit', '--no-fund', ...npmConfigArgs(work)], { cwd: stage, timeoutMs: STEP_TIMEOUT_MS.stage });
+  } catch {
+    throw new Stop(`auto-update skipped: npm is not available to verify ${packageName()}@${release.version}, staying on ${deps.version}`, 'no-npm');
   }
+  if (installed.code !== 0) throw new Stop(`auto-update skipped: could not stage ${packageName()}@${release.version} for verification, staying on ${deps.version}`, 'offline');
+  const audited = await deps.run('npm', ['audit', 'signatures', '--json', ...npmConfigArgs(work)], { cwd: stage, timeoutMs: STEP_TIMEOUT_MS.audit });
+  let report: unknown;
+  try { report = JSON.parse(audited.stdout); } catch { /* judged below by the exit code */ }
+  const problems = isRecord(report) ? [...(Array.isArray(report.invalid) ? report.invalid : []), ...(Array.isArray(report.missing) ? report.missing : [])] : [];
+  if (audited.code !== 0 || problems.length > 0 || !isRecord(report)) throw refuse(release.version, 'npm audit signatures failed on its dependencies', deps);
 }
 
 function assertWritable(install: Install, release: Release, deps: UpdateDeps): void {
@@ -343,51 +394,60 @@ function assertWritable(install: Install, release: Release, deps: UpdateDeps): v
     try {
       fs.accessSync(dir, fs.constants.W_OK);
     } catch {
-      throw new Stop(`auto-update skipped: ${PACKAGE}@${release.version} is available but ${dir} is not writable, staying on ${deps.version}; run: ${manualCommand(install, release.version)}`, 'no-permission');
+      throw new Stop(`auto-update skipped: ${packageName()}@${release.version} is available but ${dir} is not writable, staying on ${deps.version}; run: ${manualCommand(install, release.version)}`, 'no-permission');
     }
   }
 }
 
+const installedPackageDir = (install: Install): string => path.join(install.modulesDir, ...packageName().split('/'));
+
 function installedVersion(install: Install): string | undefined {
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(install.modulesDir, '@tinycloud', 'courier', 'package.json'), 'utf8')) as { version?: unknown };
+    const pkg = JSON.parse(fs.readFileSync(path.join(installedPackageDir(install), 'package.json'), 'utf8')) as { version?: unknown };
     return typeof pkg.version === 'string' ? pkg.version : undefined;
   } catch { return undefined; }
 }
 
-/** What npm recorded for the installed copy, when it records it (`node_modules/.package-lock.json`). */
-function installedIntegrity(install: Install): string | undefined | 'unrecorded' {
-  try {
-    const lock = JSON.parse(fs.readFileSync(path.join(install.modulesDir, '.package-lock.json'), 'utf8')) as { packages?: Record<string, { integrity?: unknown }> };
-    const entry = lock.packages?.[`node_modules/${PACKAGE}`];
-    return typeof entry?.integrity === 'string' ? entry.integrity : 'unrecorded';
-  } catch { return 'unrecorded'; }
-}
-
-async function switchTo(install: Install, release: Release, deps: UpdateDeps): Promise<string> {
-  const fail = (why: string) => new Stop(`auto-update failed: ${why}; staying on ${deps.version}. Run: ${manualCommand(install, release.version)}`, 'failed');
-  const { command, args } = installCommand(install, release.version);
+/** Install `tarball` the way `install` was made (scripts off, private npm config) and say whether `version` is then what is on disk. */
+async function installFile(install: Install, tarball: string, work: string, timeoutMs: number, version: string, deps: UpdateDeps): Promise<'ok' | 'failed' | 'not-run'> {
+  const { command, args } = installCommand(install, tarball, work);
   let result: RunResult;
   try {
-    result = await deps.run(command, args, { cwd: install.root, timeoutMs: COMMAND_TIMEOUT_MS });
+    result = await deps.run(command, args, { cwd: work, timeoutMs });
   } catch {
-    throw fail(`${command} is not available`);
+    return 'not-run';
   }
-  const entry = path.join(install.modulesDir, '@tinycloud', 'courier', 'dist', 'cli.js');
-  const back = async () => {
-    const undo = installCommand(install, deps.version);
-    try { await deps.run(undo.command, undo.args, { cwd: install.root, timeoutMs: COMMAND_TIMEOUT_MS }); } catch { /* reported by the caller */ }
-  };
-  if (result.code !== 0) {
-    if (installedVersion(install) !== deps.version) await back();
-    throw fail(`${command} exited ${result.code}`);
+  return result.code === 0 && installedVersion(install) === version && has(path.join(installedPackageDir(install), 'dist', 'cli.js')) ? 'ok' : 'failed';
+}
+
+/**
+ * Put the running version back from its registry tarball, checked against that release's `dist.integrity` (the same
+ * download-hash-install route as the update, minus the provenance a beta may not have). Returns why it could not.
+ */
+async function rollback(install: Install, work: string, deps: UpdateDeps): Promise<string | undefined> {
+  try {
+    const previous = parseRelease(await getJson(deps, `${REGISTRY}/${packageName().replace('/', '%2f')}/${deps.version}`, STEP_TIMEOUT_MS.rollbackRelease, deps.version), deps);
+    if (previous.version !== deps.version) return 'the registry answered for another version';
+    assertServable(previous, deps);
+    const file = path.join(work, `previous-${previous.version}.tgz`);
+    await downloadTarball(previous.tarball, previous.integrity, file, STEP_TIMEOUT_MS.rollbackDownload, previous.version, deps);
+    return (await installFile(install, file, work, STEP_TIMEOUT_MS.rollbackInstall, deps.version, deps)) === 'ok' ? undefined : `${install.manager} did not leave ${deps.version} in place`;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
   }
-  const recorded = install.manager === 'npm' ? installedIntegrity(install) : 'unrecorded';
-  if (installedVersion(install) !== release.version || !has(entry) || (recorded !== 'unrecorded' && recorded !== release.integrity)) {
-    await back();
-    throw fail(`the installed copy is not ${release.version} with the verified integrity; put ${deps.version} back`);
-  }
-  return fs.realpathSync(entry);
+}
+
+async function switchTo(install: Install, release: Release, tarball: string, work: string, deps: UpdateDeps): Promise<string> {
+  const outcome = await installFile(install, tarball, work, STEP_TIMEOUT_MS.install, release.version, deps);
+  if (outcome === 'ok') return fs.realpathSync(path.join(installedPackageDir(install), 'dist', 'cli.js'));
+  if (outcome === 'not-run') throw new Stop(`auto-update failed: ${install.manager} is not available, staying on ${deps.version}; run: ${manualCommand(install, release.version)}`, 'failed');
+  const failure = `installing ${release.version} did not leave ${release.version} in place`;
+  const undone = await rollback(install, work, deps);
+  if (undone === undefined) throw new Stop(`auto-update failed: ${failure}; ${deps.version} was put back and checked against its registry integrity`, 'failed');
+  const repair = `repair it with: ${manualCommand(install, deps.version)}`;
+  const line = `auto-update FAILED: ${failure}, and putting ${deps.version} back failed too (${undone})`;
+  if (installedVersion(install) === deps.version && has(path.join(installedPackageDir(install), 'dist', 'cli.js'))) throw new Stop(`${line}; the installed copy still reports ${deps.version}, ${repair}`, 'rollback-failed');
+  throw new Broken(`${line}; the installed copy is not usable, ${repair}`);
 }
 
 /**
@@ -405,8 +465,11 @@ export async function checkForUpdate(argv: string[], deps: UpdateDeps, flagOptOu
     if (flagOptOut) throw new Stop(`auto-update skipped: ${OPT_OUT_FLAG}`, 'opt-out');
     if (truthy(deps.env[OPT_OUT_ENV])) throw new Stop(`auto-update skipped: ${OPT_OUT_ENV} is set`, 'opt-out');
     if (truthy(deps.env.CI)) throw new Stop('auto-update skipped: running under CI', 'ci');
+    // The package managers' Windows shims (`npm.cmd`) can't be spawned without a shell, and the profile files' ownership and
+    // symlink checks are POSIX: rather than half-work, auto-update is off there.
+    if ((deps.platform ?? process.platform) === 'win32') throw new Stop(`auto-update skipped: not supported on Windows; update with: npm install --global ${packageName()}@latest`, 'unsupported');
 
-    const stateFile = path.join(profileDir(), STATE_FILE);
+    const stateFile = path.join(profileDir(), `${STATE_PREFIX}${createHash('sha256').update(deps.packageRoot).digest('hex').slice(0, 16)}.json`);
     const now = deps.now();
     const previous = readState(stateFile);
     if (previous && previous.install === deps.packageRoot && previous.checkedAt <= now + 60_000 && now - previous.checkedAt < CHECK_INTERVAL_MS) return none;
@@ -421,17 +484,31 @@ export async function checkForUpdate(argv: string[], deps: UpdateDeps, flagOptOu
 
     try {
       if ('unsupported' in install) throw new Stop(`auto-update skipped: ${install.unsupported}; update it with your package manager`, 'unsupported');
-      const release = parseRelease(await getJson(deps, `${REGISTRY}/${PACKAGE.replace('/', '%2f')}/latest`, REGISTRY_TIMEOUT_MS, 'latest'), deps);
+      const release = parseRelease(await getJson(deps, `${REGISTRY}/${packageName().replace('/', '%2f')}/latest`, STEP_TIMEOUT_MS.latest, 'latest'), deps);
       if (!isStable(release.version) || compareSemver(release.version, deps.version) <= 0) { save('current'); return none; }
       if (!release.provenance) throw new Stop(`no npm provenance for ${release.version}, staying on ${deps.version}`, 'refused');
+      if (install.scope === 'local' && install.manager !== 'npm') {
+        // Installing the verified file would write its (temporary) path into the app's package.json.
+        throw new Stop(`auto-update skipped: ${release.version} is available, but a ${install.manager} app install can't take a verified file without rewriting package.json, staying on ${deps.version}; run: ${manualCommand(install, release.version)}`, 'unsupported');
+      }
       assertWritable(install, release, deps);
       assertServable(release, deps);
-      await checkProvenance(release, deps);
-      await checkTarball(release, deps);
-      await auditStaged(release, deps);
-      const entry = await switchTo(install, release, deps);
+
+      // Everything below works on one private file: the bytes that are hashed and verified are the bytes that get installed.
+      const work = fs.mkdtempSync(path.join(profileDir(), 'update-'));
+      let entry: string;
+      try {
+        for (const name of NPM_CONFIG_FILES) fs.writeFileSync(path.join(work, name), '', { mode: 0o600 });
+        const tarball = path.join(work, `courier-${release.version}.tgz`);
+        const digest = await downloadTarball(release.tarball, release.integrity, tarball, STEP_TIMEOUT_MS.download, release.version, deps);
+        await verifyProvenance(release, digest, deps);
+        await auditStaged(release, tarball, work, deps);
+        entry = await switchTo(install, release, tarball, work, deps);
+      } finally {
+        fs.rmSync(work, { recursive: true, force: true });
+      }
       save(`updated to ${release.version}`);
-      deps.log(`${PACKAGE} updated ${deps.version} → ${release.version} (${install.manager}${install.scope === 'global' ? ' global' : ` in ${install.root}`})`);
+      deps.log(`${packageName()} updated ${deps.version} → ${release.version} (${install.manager}${install.scope === 'global' ? ' global' : ` in ${install.root}`})`);
       return { kind: 'updated', from: deps.version, to: release.version, entry };
     } catch (e) {
       if (e instanceof Stop) save(e.result);
@@ -439,6 +516,10 @@ export async function checkForUpdate(argv: string[], deps: UpdateDeps, flagOptOu
       throw e;
     }
   } catch (e) {
+    if (e instanceof Broken) {
+      deps.log(e.message);
+      return { kind: 'broken' };
+    }
     deps.log(e instanceof Stop ? e.message : `auto-update skipped: ${e instanceof Error ? e.message : String(e)}`);
     return none;
   }
@@ -447,9 +528,16 @@ export async function checkForUpdate(argv: string[], deps: UpdateDeps, flagOptOu
 // ---------------------------------------------------------------------------------------------------------------------
 // the real world
 
+/** The package managers read their configuration from these: a variable set for another purpose must not redirect the install. */
+const MANAGER_CONFIG_ENV = /^(npm_config_|pnpm_config_|yarn_|bun_config_)/i;
+
+export function managerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !MANAGER_CONFIG_ENV.test(key)));
+}
+
 function runProcess(command: string, args: string[], opts: { cwd?: string; timeoutMs: number }): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, npm_config_update_notifier: 'false', npm_config_loglevel: 'error' } });
+    const child = spawn(command, args, { cwd: opts.cwd, stdio: ['ignore', 'pipe', 'pipe'], env: managerEnv(process.env) });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d: Buffer) => { if (stdout.length < 1_000_000) stdout += d.toString('utf8'); });
@@ -460,29 +548,19 @@ function runProcess(command: string, args: string[], opts: { cwd?: string; timeo
   });
 }
 
-export interface RerunOptions {
-  /** Stdin is a terminal: a Ctrl-C reaches the child itself, so SIGINT is forwarded only if the child outlasts `graceMs`. */
-  interactive?: boolean;
-  graceMs?: number;
-}
-
 /**
  * Run `entry` with `argv` as a child that owns this process's stdio, forward stop signals to it, and give back its exit code.
- * SIGTERM and SIGHUP are forwarded at once. SIGINT is too, unless a terminal is attached: then Ctrl-C has already
- * interrupted the child (same foreground group), and forwarding it as well would be a second SIGINT, which `watch` takes
- * as "stop now". In that case the child gets one SIGINT only if it is still running after `graceMs`, so a `kill -INT` sent to
- * this process alone never leaves the child behind.
+ * SIGTERM and SIGHUP are forwarded at once. SIGINT is forwarded only if the child is still running after `graceMs`: when
+ * the signal came from a terminal's Ctrl-C the whole foreground group, child included, already got it (whether or not
+ * stdin is a terminal), and a second SIGINT is what `watch` reads as "stop now". A `kill -INT` sent to this process alone
+ * still reaches the child, one grace period later.
  */
-export function runOnNewVersion(entry: string, argv: string[], env: NodeJS.ProcessEnv = process.env, opts: RerunOptions = {}): Promise<number> {
-  const interactive = opts.interactive ?? Boolean(process.stdin.isTTY);
-  const graceMs = opts.graceMs ?? 5_000;
+export function runOnNewVersion(entry: string, argv: string[], env: NodeJS.ProcessEnv = process.env, opts: { graceMs?: number } = {}): Promise<number> {
+  const graceMs = opts.graceMs ?? 3_000;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, ...argv], { stdio: 'inherit', env: { ...env, [REEXEC_ENV]: '1' } });
     let pendingInt: NodeJS.Timeout | undefined;
-    const onInt = () => {
-      if (!interactive) { child.kill('SIGINT'); return; }
-      pendingInt ??= setTimeout(() => { child.kill('SIGINT'); }, graceMs);
-    };
+    const onInt = () => { pendingInt ??= setTimeout(() => { child.kill('SIGINT'); }, graceMs); };
     const onTerm = () => { child.kill('SIGTERM'); };
     const onHup = () => { child.kill('SIGHUP'); };
     process.on('SIGINT', onInt);
@@ -496,18 +574,34 @@ export function runOnNewVersion(entry: string, argv: string[], env: NodeJS.Proce
       resolve(code);
     };
     child.once('error', (e) => {
-      process.stderr.write(`${PACKAGE}: could not start the updated copy (${e.message}); run the command again\n`);
+      process.stderr.write(`courier: could not start the updated copy (${e.message}); run the command again\n`);
       done(1);
     });
     child.once('close', (code, signal) => { done(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1)); });
   });
 }
 
+/** Sigstore verification of a provenance bundle: DSSE signature, Fulcio certificate chain, Rekor inclusion, and the pinned signer. */
+export async function verifyWithSigstore(bundle: unknown, policy: { certificateIssuer: string; certificateIdentityURI: string }): Promise<void> {
+  const { verify } = await import('sigstore');
+  const cache = path.join(profileDir(), 'sigstore-tuf');
+  fs.mkdirSync(cache, { recursive: true, mode: 0o700 });
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      verify(bundle as Parameters<typeof verify>[0], { ...policy, tufCachePath: cache, timeout: STEP_TIMEOUT_MS.signature / 2, retry: false }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error('timed out')); }, STEP_TIMEOUT_MS.signature); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Entry for `cli.ts`: the check with the real registry, disk and package manager. Returns the argv to run and, when
  * the package was updated, the new `dist/cli.js` to re-run it with.
  */
-export async function autoUpdate(argv: string[]): Promise<{ argv: string[]; entry?: string }> {
+export async function autoUpdate(argv: string[]): Promise<{ argv: string[]; entry?: string; broken?: boolean }> {
   const { argv: kept, optOut } = stripOptOutFlag(argv);
   let version: string;
   try { version = courierVersion(); } catch { return { argv: kept }; }
@@ -518,7 +612,9 @@ export async function autoUpdate(argv: string[]): Promise<{ argv: string[]; entr
     packageRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'),
     fetch: globalThis.fetch,
     run: runProcess,
-    log: (line) => { process.stderr.write(`${PACKAGE}: ${line}\n`); },
+    verifyBundle: verifyWithSigstore,
+    log: (line) => { process.stderr.write(`courier: ${line}\n`); },
   }, optOut);
-  return result.kind === 'updated' ? { argv: kept, entry: result.entry } : { argv: kept };
+  if (result.kind === 'updated') return { argv: kept, entry: result.entry };
+  return result.kind === 'broken' ? { argv: kept, broken: true } : { argv: kept };
 }
