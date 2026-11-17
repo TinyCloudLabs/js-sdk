@@ -286,6 +286,95 @@ test("each assistant's address serves the plugin's exact tools under its own aud
   expect(await readdir(join(stateDir, "chatgpt", "tenants"))).toHaveLength(1);
 }, 60_000);
 
+test("the restricted addresses' personal-record tools differ from /mcp's only in not offering catalog apps", async () => {
+  const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
+  const { client, createClient } = await startHostedMcp({
+    nodeHost: "https://node.tinycloud.test",
+    ownerDids,
+    resourcePath: "/chatgpt/mcp",
+  });
+  const restricted = (await client.listTools()).tools;
+  const hosted = (await (await createClient("openkey-user-1", ownerDids, { path: "/mcp" })).listTools()).tools;
+  const appDescription = (tools: typeof restricted) => String(record(record(
+    tools.find((tool) => tool.name === "tinycloud_apps_context")!.inputSchema.properties,
+  ).app).description);
+  expect(appDescription(hosted)).toContain("healthlog");
+  expect(appDescription(hosted)).toContain("recipes");
+  expect(JSON.stringify(restricted)).not.toMatch(/health ?log|recipes/i);
+  expect(appDescription(restricted)).toMatch(/personal app id/);
+  // With /mcp's sentence put back, the four tools are /mcp's own.
+  const restored = JSON.stringify(restricted.filter((tool) => tool.name !== "tinycloud_connect"))
+    .replace(JSON.stringify(appDescription(restricted)), JSON.stringify(appDescription(hosted)));
+  expect(restored).toBe(JSON.stringify(hosted.filter((tool) => tool.name.startsWith("tinycloud_apps_"))));
+}, 60_000);
+
+test("a restricted address answers a catalog app with its page and asks for no approval", async () => {
+  const hermeticModule = await import(new URL(
+    "./test-support/hermetic-node.mjs", import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  const { app, client, createClient, stateDir } = await startHostedMcp({
+    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath: "/chatgpt/mcp",
+  });
+  const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
+  const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
+  const [tenantId] = await readdir(join(stateDir, "chatgpt", "tenants"));
+  const tenantStateRoot = join(stateDir, "chatgpt", "tenants", tenantId!);
+  const bootstrap = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, bootstrapUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await postCallback(app, bootstrapUrl, bootstrap)).toEqual({ status: 200, body: { success: true } });
+  const pendingApprovals = async () =>
+    (await readdir(join(tenantStateRoot, ".tinycloud", "profiles", "agent", "pending")).catch(() => [])).length;
+  const before = await pendingApprovals();
+
+  for (const [slug, title, link] of [
+    ["healthlog", "Health Log", "https://share.tinycloud.xyz/apps/run#xyz.tinycloud.sample.healthlog"],
+    ["recipes", "Recipes", "https://share.tinycloud.xyz/apps/run#xyz.tinycloud.sample.recipes"],
+  ] as const) {
+    for (const access of ["change", "read"]) {
+      const reply = await client.callTool({ name: "tinycloud_apps_context", arguments: { app: slug, access } });
+      expect(reply.isError).toBeUndefined();
+      expect(record(reply.structuredContent)).toEqual({
+        status: "error",
+        operation: { operationId: "tinycloud.apps.context", operationVersion: 1 },
+        context: { profile: "agent", host: "unresolved", posture: "unauthenticated" },
+        error: {
+          code: "INPUT_INVALID",
+          message: expect.stringContaining(`${title} is not available through this connector. Its page is ${link}.`),
+          retryable: false,
+          details: { reason: "catalog_app_unavailable", app: slug, link },
+        },
+      });
+      // Clients that show only the text still get the page.
+      expect(JSON.stringify(reply.content)).toContain(link);
+      expect(JSON.stringify(reply)).not.toMatch(/approval|connect\?state=/i);
+    }
+  }
+  expect(await pendingApprovals()).toBe(before);
+
+  // A personal app is still requested as before.
+  expect(record((await client.callTool({ name: "tinycloud_apps_context", arguments: { app: "fitness" } })).structuredContent))
+    .toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+  expect(await pendingApprovals()).toBe(before + 1);
+
+  // Every restricted address answers the same, before any account is connected.
+  for (const prefix of ["claude", "grok", "muse"]) {
+    const assistant = await createClient("openkey-user-1", [hermetic.ownerDid], { path: `/${prefix}/mcp` });
+    const refused = record((await assistant.callTool({ name: "tinycloud_apps_context", arguments: { app: "recipes" } })).structuredContent);
+    expect(record(refused.error).details).toEqual({
+      reason: "catalog_app_unavailable", app: "recipes", link: "https://share.tinycloud.xyz/apps/run#xyz.tinycloud.sample.recipes",
+    });
+  }
+  // /mcp has the catalog apps' tools, so the same call goes on to the account.
+  const hosted = await createClient("openkey-user-1", [hermetic.ownerDid], { path: "/mcp" });
+  expect(record((await hosted.callTool({ name: "tinycloud_apps_context", arguments: { app: "healthlog" } })).structuredContent))
+    .toMatchObject({ status: "error", error: { code: "SESSION_NOT_FOUND" } });
+}, 90_000);
+
 test("a signed bootstrap and a signed delegation approval let a hosted tool use the stored authority", async () => {
   // The loopback node lives in node-sdk's test sources, outside this package's
   // build graph; stdio.test.ts loads the same fixtures the same way.

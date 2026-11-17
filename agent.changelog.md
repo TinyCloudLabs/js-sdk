@@ -3,6 +3,15 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-17
+
+- TC-2416: the restricted addresses no longer offer or accept a catalog app in
+  `tinycloud_apps_context`. Its `app` description omits the slugs there, and a
+  catalog slug is answered with `INPUT_INVALID` / `catalog_app_unavailable` and
+  the tiny-app link instead of an approval request for access no tool on those
+  addresses can use. `/mcp` is unchanged. The rules keep their catalog section
+  on every address.
+
 ## 2026-11-13
 
 - TC-2416 recovery: restore discovery, reads, conditional writes and optional SQL
