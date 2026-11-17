@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { X509Certificate, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -174,9 +174,12 @@ export function manualCommand(install: Install, version: string): string {
   return [command, ...args].map(shellWord).join(' ');
 }
 
-/** The directories the install writes to: it must be able to write all of them. */
+/**
+ * The directories the install writes to: it must be able to write all of them. The global bin directory (where the
+ * `courier` link lives) is one: a prefix whose `bin` is read-only would fail after the package was already replaced.
+ */
 export function writeTargets(install: Install): string[] {
-  return install.scope === 'local' ? [install.root, install.modulesDir] : [install.modulesDir];
+  return install.scope === 'local' ? [install.root, install.modulesDir, path.join(install.modulesDir, '.bin')] : [install.modulesDir, path.join(install.root, 'bin')];
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -390,7 +393,10 @@ async function auditStaged(release: Release, tarball: string, work: string, deps
 }
 
 function assertWritable(install: Install, release: Release, deps: UpdateDeps): void {
-  for (const dir of writeTargets(install)) {
+  for (const target of writeTargets(install)) {
+    // A directory that does not exist yet (`.bin`, `bin`) is created by the install: its nearest existing parent must be writable.
+    let dir = target;
+    while (!has(dir) && dir !== path.dirname(dir)) dir = path.dirname(dir);
     try {
       fs.accessSync(dir, fs.constants.W_OK);
     } catch {
@@ -487,9 +493,11 @@ export async function checkForUpdate(argv: string[], deps: UpdateDeps, flagOptOu
       const release = parseRelease(await getJson(deps, `${REGISTRY}/${packageName().replace('/', '%2f')}/latest`, STEP_TIMEOUT_MS.latest, 'latest'), deps);
       if (!isStable(release.version) || compareSemver(release.version, deps.version) <= 0) { save('current'); return none; }
       if (!release.provenance) throw new Stop(`no npm provenance for ${release.version}, staying on ${deps.version}`, 'refused');
-      if (install.scope === 'local' && install.manager !== 'npm') {
-        // Installing the verified file would write its (temporary) path into the app's package.json.
-        throw new Stop(`auto-update skipped: ${release.version} is available, but a ${install.manager} app install can't take a verified file without rewriting package.json, staying on ${deps.version}; run: ${manualCommand(install, release.version)}`, 'unsupported');
+      if (install.manager !== 'npm') {
+        // pnpm, yarn and bun record the path of a file they install: in an app that is its package.json, globally their own
+        // manifest. The verified file is deleted afterwards, so the next `add`/`upgrade` would look for a file that is gone.
+        const where = install.scope === 'local' ? 'app install can\'t take a verified file without rewriting package.json' : 'global install records the path of a file it installs, which is deleted afterwards';
+        throw new Stop(`auto-update skipped: ${release.version} is available, but a ${install.manager} ${where}, staying on ${deps.version}; run: ${manualCommand(install, release.version)}`, 'unsupported');
       }
       assertWritable(install, release, deps);
       assertServable(release, deps);
@@ -529,7 +537,7 @@ export async function checkForUpdate(argv: string[], deps: UpdateDeps, flagOptOu
 // the real world
 
 /** The package managers read their configuration from these: a variable set for another purpose must not redirect the install. */
-const MANAGER_CONFIG_ENV = /^(npm_config_|pnpm_config_|yarn_|bun_config_)/i;
+const MANAGER_CONFIG_ENV = /^(npm_config_|pnpm_config_|yarn_|bun_config_|corepack_)/i;
 
 export function managerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(env).filter(([key]) => !MANAGER_CONFIG_ENV.test(key)));
@@ -581,7 +589,25 @@ export function runOnNewVersion(entry: string, argv: string[], env: NodeJS.Proce
   });
 }
 
-/** Sigstore verification of a provenance bundle: DSSE signature, Fulcio certificate chain, Rekor inclusion, and the pinned signer. */
+/** The signer as sigstore matches it: it takes the identity as an unanchored regular expression, so a bare string also matches `…master-evil`. */
+export function signerPattern(identity: string): string {
+  return `^${identity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
+}
+
+/** The URI subject alternative name of the certificate that signed `bundle` must be exactly `identity`. */
+export function assertSignerIdentity(bundle: unknown, identity: string): void {
+  const material = isRecord(bundle) && isRecord(bundle.verificationMaterial) ? bundle.verificationMaterial : undefined;
+  const chain = material && isRecord(material.x509CertificateChain) ? material.x509CertificateChain.certificates : undefined;
+  const leaf = material && isRecord(material.certificate) ? material.certificate : Array.isArray(chain) ? chain[0] : undefined;
+  if (!isRecord(leaf) || typeof leaf.rawBytes !== 'string') throw new Error('the bundle has no signing certificate');
+  const names = new X509Certificate(Buffer.from(leaf.rawBytes, 'base64')).subjectAltName?.split(', ') ?? [];
+  if (!names.includes(`URI:${identity}`)) throw new Error(`certificate identity is ${names.join(', ') || 'missing'}`);
+}
+
+/**
+ * Sigstore verification of a provenance bundle: DSSE signature, Fulcio certificate chain, Rekor inclusion, and the pinned
+ * signer, matched as an anchored pattern by sigstore and again as an exact string against the certificate.
+ */
 export async function verifyWithSigstore(bundle: unknown, policy: { certificateIssuer: string; certificateIdentityURI: string }): Promise<void> {
   const { verify } = await import('sigstore');
   const cache = path.join(profileDir(), 'sigstore-tuf');
@@ -589,12 +615,13 @@ export async function verifyWithSigstore(bundle: unknown, policy: { certificateI
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
-      verify(bundle as Parameters<typeof verify>[0], { ...policy, tufCachePath: cache, timeout: STEP_TIMEOUT_MS.signature / 2, retry: false }),
+      verify(bundle as Parameters<typeof verify>[0], { ...policy, certificateIdentityURI: signerPattern(policy.certificateIdentityURI), tufCachePath: cache, timeout: STEP_TIMEOUT_MS.signature / 2, retry: false }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error('timed out')); }, STEP_TIMEOUT_MS.signature); }),
     ]);
   } finally {
     clearTimeout(timer);
   }
+  assertSignerIdentity(bundle, policy.certificateIdentityURI);
 }
 
 /**
