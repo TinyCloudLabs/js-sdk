@@ -34,6 +34,7 @@
     "cli-courier-clean-home-links",
     "cli-courier-inbox-safe-id",
     "cli-courier-wake-agent-cli",
+    "courier-bounded-renewal",
     "courier-clean-home-links",
     "courier-collect-peer-renewal",
     "courier-home-file-allowlist",
