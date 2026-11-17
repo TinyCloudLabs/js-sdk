@@ -88,6 +88,11 @@ export interface RegisteredRegistryVerdict {
   readonly hosts: readonly RegistryHost[];
   /** Routing used a reverified cache younger than one hour after an eligible outage. */
   readonly offline?: true;
+  /**
+   * Set only for a verified v1-only record naming exactly the default node, after
+   * confirmed v2 absence (TC-3168). Routes to that node; never v2 sequence evidence.
+   */
+  readonly legacy?: "v1-default-node";
 }
 
 export interface UnregisteredRegistryVerdict {
