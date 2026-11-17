@@ -92,7 +92,19 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
     return actions.length > 0 ? { ...entry, actions } : entry;
   });
 }
-const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => {
+/**
+ * OpenKey signs one space per approval, and the two app lists live in different spaces (applications; default for the
+ * original layout), so the original layout's list cannot ride along with a call's own scopes. It is asked for as a second
+ * step: once `wanted` is granted and the original list is still not readable, the next call asks for that list alone.
+ * A connection that already reads it (including a legacy-only one) is unchanged.
+ */
+function withLegacyDiscoveryNext(context: RuntimeOperationContext, wanted: readonly AppsPermission[]): AppsPermission[] {
+  if (hasDiscoveryAccess(context, "legacy", true)) return [...wanted];
+  const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
+  if (!evaluateOperationAuthority(context.runtime!.granted as unknown as readonly PermissionEntry[], wanted as never, resolve).satisfied) return [...wanted];
+  return [discoveryPermission(context, "legacy")];
+}
+const contextWanted = async (context: RuntimeOperationContext, input: ContextInput) => {
   const layouts = (["new", "legacy"] as const).filter((layout) => hasDiscoveryAccess(context, layout, true));
   const discovery = layouts.length ? layouts.map((layout) => discoveryPermission(context, layout)) : [discoveryPermission(context)];
   if (input.app === undefined) return discovery;
@@ -110,15 +122,31 @@ const contextAuthority = async (context: RuntimeOperationContext, input: Context
     ...(input.access === "read" ? [] : [appDiscoveryPermission(context, input.app)]),
     appRecordsPermission(context, input.app, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined)];
 };
+const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => {
+  const wanted = await contextWanted(context, input);
+  // A catalog slug (healthlog, recipes) names a published app, not the owner's own records.
+  return input.app !== undefined && Object.prototype.hasOwnProperty.call(TC_APPS_CATALOG_PERMISSIONS, input.app)
+    ? wanted
+    : withLegacyDiscoveryNext(context, wanted);
+};
 const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]).map((entry) => {
   const read = { ...entry, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
   return evaluateOperationAuthority(context.runtime!.granted as unknown as readonly PermissionEntry[], [read], operationSpaceResolver(context.runtime!.node, context.summary.space)).satisfied ? read : entry;
 });
-const writeAuthority = async (context: RuntimeOperationContext, input: WriteInput) => scopesFor(
-  context,
-  input.ops.flatMap((op) => op.op === "move" ? [op.from, op.to] : [op.key]),
-  true,
-);
+/** Creating an app (its catalog or discovery entry, no ETag) first reads the original layout's list, so a same-named older app is found and kept. */
+const writeAuthority = async (context: RuntimeOperationContext, input: WriteInput) => {
+  const scopes = scopesFor(
+    context,
+    input.ops.flatMap((op) => op.op === "move" ? [op.from, op.to] : [op.key]),
+    true,
+  );
+  const createsApp = input.ops.some((op) => {
+    if (op.op !== "put" || op.etag !== undefined) return false;
+    const parts = parseKey(op.key);
+    return parts?.layout === "new" && (parts.area === "discovery" || (parts.area === "catalog" && parts.kind === undefined));
+  });
+  return createsApp ? withLegacyDiscoveryNext(context, scopes) : scopes;
+};
 const queryAuthority = async (context: RuntimeOperationContext, input: QueryInput) => {
   const app = input.kinds[0]!.app;
   return [appRecordsPermission(context, app, undefined, input.layout), copyPermission(context, app, input.layout)];
