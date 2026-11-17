@@ -1053,6 +1053,7 @@ test("a revoked SQL approval is asked for again, like a missing one", async () =
 test("a revoked records approval is asked for again by the personal-record tools, and a new approval restores them", async () => {
   const { hermetic, proxy, client, approve } = await setupProxiedSession();
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
   const required = record((await client.callTool({
     name: "tinycloud_apps_context", arguments: { app: "fitness" },
   })).structuredContent);
@@ -1084,6 +1085,9 @@ test("a revoked records approval is asked for again by the personal-record tools
   await approve(String(record(again.approval).url));
   expect(record((await client.callTool({ name: "tinycloud_apps_read", arguments: read })).structuredContent).status)
     .toBe("ok");
+  const listAsk = record((await client.callTool({ name: "tinycloud_apps_write", arguments: write })).structuredContent);
+  expect(listAsk).toMatchObject({ status: "authority_required", missing: [{ path: "xyz.tinycloud.agent-data/catalog/" }] });
+  await approve(String(record(listAsk.approval).url));
   expect(record((await client.callTool({ name: "tinycloud_apps_write", arguments: write })).structuredContent))
     .toMatchObject({ status: "ok", output: { ops: [{ outcome: "ok" }] } });
 }, 90_000);
@@ -1549,6 +1553,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
   const { app, client, stateDir } = await startHostedMcp({
     nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath,
   });
@@ -1606,7 +1611,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
     { op: "put", key, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
   ];
   const written = await approved("tinycloud_apps_write", { ops });
-  expect(approvalCount).toBe(namedApp ? 1 : 2);
+  expect(approvalCount).toBe(namedApp ? 2 : 3);
   expect(written).toMatchObject({
     status: "ok", output: { ops: [
       { outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" },
@@ -1625,7 +1630,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
     { key: `${root}catalog/weight`, value: { kind: "weight" } },
   ] } });
   expect(JSON.stringify(read.content)).toContain("80.5");
-  expect(approvalCount).toBe(namedApp ? 1 : 2);
+  expect(approvalCount).toBe(namedApp ? 2 : 3);
   const beforeLaterApp = approvalCount;
   expect(await approved("tinycloud_apps_context", { app: "books" })).toMatchObject({ status: "ok" });
   const later = await approved("tinycloud_apps_write", { ops: ops.map((op) => ({
