@@ -831,7 +831,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   allowsAutomaticSetup(resource: string): boolean {
     const verdict = this.registryVerdict;
     if (verdict === undefined || verdict.status === "unregistered") return true;
-    if (verdict.status !== "registered" || verdict.record === undefined) return false;
+    if (verdict.status !== "registered") return false;
+    // Only a v1-only owner on the default node routes without a v2 record (TC-3168); 3.11 set it up there.
+    if (verdict.record === undefined) return true;
     if (resource.startsWith("urn:tinycloud:encryption:")) return verdict.record.encryptionNode !== null;
     const identity = pkhSpaceIdentity(resource);
     return verdict.record.spaces.some((space) =>
