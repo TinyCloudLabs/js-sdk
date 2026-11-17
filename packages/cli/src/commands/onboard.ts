@@ -72,7 +72,7 @@ export function registerOnboardCommand(program: Command): void {
     .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. OpenKey displays the requested permissions separately; no generated free-text reason is sent. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
-    .option("--preset <name>", `Ask only for what a feature needs instead of the default starting grant: ${FEED_PRESET} is one approval for the agent feed (its tables and webhooks, not your apps' data), ${FEED_PRESET_EXPIRY}`)
+    .option("--preset <name>", `Ask only for what a feature needs instead of the default starting grant: ${FEED_PRESET} is one approval for the agent feed (its tables and the watch subscription, not your apps' data), ${FEED_PRESET_EXPIRY}`)
     .action(async (options, cmd) => {
       try {
         const steps = onboardSteps(options.preset);

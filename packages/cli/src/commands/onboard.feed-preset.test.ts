@@ -24,9 +24,11 @@ test("it covers everything feed connect and feed watch use for an agent", () => 
   for (const database of [FEED_REGISTRY, outputResource, responseResource]) {
     for (const action of ["read", "write", "schema"]) expect(covers("tinycloud.sql", `tinycloud.sql/${action}`, database)).toBe(true);
   }
-  // The webhook that wakes the agent is on the response database; connect also lists and replaces its own.
-  for (const action of ["register", "subscribe", "list", "unregister"]) {
-    expect(covers("tinycloud.hooks", `tinycloud.hooks/${action}`, `sql/${responseResource}`)).toBe(true);
+  // `feed connect` delegates hooks/subscribe on the response database to the agent, so the owner has to hold it.
+  expect(covers("tinycloud.hooks", "tinycloud.hooks/subscribe", `sql/${responseResource}`)).toBe(true);
+  // The webhook commands are not on master, so the preset does not ask for them.
+  for (const action of ["register", "list", "unregister"]) {
+    expect(covers("tinycloud.hooks", `tinycloud.hooks/${action}`, `sql/${responseResource}`)).toBe(false);
   }
 });
 
