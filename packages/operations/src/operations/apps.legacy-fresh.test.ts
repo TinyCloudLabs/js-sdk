@@ -5,7 +5,7 @@ import { evaluateOperationAuthority } from "../authority.js";
 import type { RuntimeOperationContext } from "../contract.js";
 import { operationSpaceResolver } from "../secrets.js";
 import type { AppsPermission } from "../tc-apps/kv.js";
-import { definition, DEFAULT_SPACE, FITNESS, fixture, key, SPACE, withGrants, write } from "./apps.fixtures.js";
+import { definition, DEFAULT_SPACE, type FakeKv, FITNESS, fixture, key, SPACE, withGrants, write } from "./apps.fixtures.js";
 
 // A fresh connection on an account that already has records under the original
 // xyz.tinycloud.agent-data/ layout (default space). OpenKey signs one space per approval, and the original layout
@@ -25,12 +25,26 @@ const createTodos = [
   { op: "put", key: `${ID}todos/catalog`, value: todos },
   { op: "put", key: `${DISCOVERY}todos/entry`, value: { v: 1, app: "todos", id: `${ID}todos`, title: "Todos" } },
 ];
+/** A complete first create, in the order the rules give: app catalog, first kind, discovery entry, first record. */
+const createTodosFull = [
+  createTodos[0]!,
+  { op: "put", key: `${ID}todos/catalog/todo`, value: todoKind },
+  createTodos[1]!,
+  { op: "put", key: `${ID}todos/todo/open/2026-11-18-new`, value: { data: { title: "New" } } },
+];
 const fitnessUpdate = { op: "put", key: `${FITNESS}catalog`, etag: `"blake3-${"a".repeat(64)}"`, value: { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" } };
 
 function seedLegacy(legacy: { seed(key: string, value: unknown): string }) {
   legacy.seed(`${OLDER_ROOT}catalog/todos`, todos);
   legacy.seed(`${OLDER_ROOT}catalog/todos/todo`, todoKind);
   legacy.seed(`${OLDER_ROOT}todos/todo/open/2026-11-03-existing`, { v: 1, at: "2026-11-03", data: { title: "Existing" } });
+}
+/** Every default-space read fails per key the way the SDK reports a single-key read failure. */
+function failLegacyReads(legacy: FakeKv, error: { code: string; message: string; meta: Record<string, unknown> }) {
+  legacy.batchGet = async (keys: string[]) => {
+    legacy.reads.push(keys);
+    return { ok: true as const, data: { results: keys.map((key) => ({ key, result: { ok: false as const, error } })) } };
+  };
 }
 const spacesOf = (permissions: readonly AppsPermission[]) => [...new Set(permissions.map((permission) => permission.space))];
 const granted = (permissions: readonly AppsPermission[]) => permissions.map((permission) => ({ ...permission }));
@@ -123,6 +137,41 @@ describe("a fresh connection on an account with legacy records", () => {
       expect(result.output.ops.map((op: { outcome: string }) => op.outcome)).toEqual(["INVALID", "INVALID"]);
       expect(kv.writes).toEqual([]);
       expect(legacy.writes).toEqual([]);
+    });
+  });
+
+  // The SDK's KV read reports a space that was never hosted as KV_NOT_FOUND with a 404 "Space not found" message
+  // (sdk-services KVService.classifyNotFound). Such a space cannot hold older apps, so the create goes ahead.
+  test("an owner whose default space was never hosted approves the list read, then creates the app in the new layout", async () => {
+    await fixture(async (kv, context, legacy) => {
+      failLegacyReads(legacy, { code: "KV_NOT_FOUND", message: "KV 404 - Space not found", meta: { status: 404, statusText: "Not Found" } });
+      const afterFirst = await afterFirstApproval(context, "write", { ops: createTodosFull });
+      expect(await asked("write", afterFirst, { ops: createTodosFull })).toEqual([legacyDiscovery]);
+
+      const result = await write(withGrants(context, [...(afterFirst.runtime!.granted as AppsPermission[]), legacyDiscovery]), createTodosFull);
+      expect(result.output.ops.map((op: { outcome: string }) => op.outcome)).toEqual(["ok", "ok", "ok", "ok"]);
+      expect(kv.writes.map((entry) => entry.key)).toEqual(expect.arrayContaining(createTodosFull.map((op) => op.key)));
+      expect(kv.writes.every((entry) => entry.key.startsWith(ID))).toBe(true);
+      expect(legacy.reads).toEqual([[`${OLDER_ROOT}catalog/todos`], [`${OLDER_ROOT}catalog/todos`]]);
+      expect(legacy.writes).toEqual([]);
+    });
+  });
+
+  test("any other node error on the original-list read refuses the create, with nothing written", async () => {
+    const errors = [
+      { code: "AUTH_UNAUTHORIZED", message: `Failed to get key "${OLDER_ROOT}catalog/todos": 403 - Unauthorized Action`, meta: { status: 403 } },
+      { code: "NETWORK_ERROR", message: `Failed to get key "${OLDER_ROOT}catalog/todos": 500 - internal error`, meta: { status: 500 } },
+    ];
+    for (const error of errors) await fixture(async (kv, context, legacy) => {
+      failLegacyReads(legacy, error);
+      const afterFirst = await afterFirstApproval(context, "write", { ops: createTodosFull });
+      const result = await write(withGrants(context, [...(afterFirst.runtime!.granted as AppsPermission[]), legacyDiscovery]), createTodosFull);
+      expect(result.status, error.code).toBe("ok");
+      const outcomes = result.output.ops.map((op: { outcome: string }) => op.outcome);
+      expect(outcomes, error.code).not.toContain("ok");
+      expect([outcomes[0], outcomes[2]], error.code).toEqual([expect.not.stringMatching(/^(ok|INVALID)$/), expect.not.stringMatching(/^(ok|INVALID)$/)]);
+      expect(kv.writes, error.code).toEqual([]);
+      expect(legacy.writes, error.code).toEqual([]);
     });
   });
 
