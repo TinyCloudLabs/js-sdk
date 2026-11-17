@@ -29,7 +29,7 @@ export interface InterimState {
 export type InterimPeer = StoredPeer & { interim?: InterimState };
 type LedgerEntry = StoredPeer['outbound'][number] & { priorCid?: string; delegation?: string; revokedAt?: string };
 type Resource = AccountDelegationRecord['resources'][number];
-export type InterimResult = { state: 'live' | 'renewed' | 'lapsed' | 'revoked' | 'owner-revoked' | 'unavailable'; delegation?: PortableDelegation; reason?: 'no-extension' };
+export type InterimResult = { state: 'live' | 'renewed' | 'lapsed' | 'revoked' | 'owner-revoked' | 'unavailable'; delegation?: PortableDelegation; reason?: 'no-extension' | 'overlong' };
 
 /** Per-action canonical equality includes conditions, never just permission subsets. */
 export function issuedAuthority(resources: readonly Resource[]): string {
@@ -99,15 +99,30 @@ function signedWindow(serialized: string | undefined): { notBefore?: number; exp
 /**
  * Longest lifetime this peer is known to accept, from the delegation it gave us:
  * 7 days (or less, or unknown) means 7 days; longer means that lifetime, capped at INTERIM_PERIOD_MS.
- * Courier's signed delegations carry no issued-at, so the lifetime is exact only when `nbf` is signed. Otherwise the signed
- * expiry still proves a lifetime of at least what remains of it: more than 7 days (+ clock skew) left means the peer issues
- * long delegations, and anything else stays at 7 days.
+ * Courier's signed delegations carry no issued-at, so the lifetime is exact only when `nbf` is signed. A signed `nbf` is the
+ * peer's own claim: it must not lie in the future (beyond skew) and must give a lifetime above 0 and at most 30 days (+ skew),
+ * else the inbound is treated as unknown. Without `nbf` the signed expiry still proves a lifetime of at least what remains of
+ * it: more than 7 days (+ clock skew) left means the peer issues long delegations, and anything else stays at 7 days.
  */
-export function peerRenewalLimitMs(peer: Pick<StoredPeer, 'inbound'>, now = Date.now()): number {
+function peerAcceptMs(peer: Pick<StoredPeer, 'inbound'>, now: number): number {
   const { notBefore, expiresAt } = signedWindow(peer.inbound?.delegation);
   if (expiresAt === undefined) return LEGACY_PEER_LIMIT_MS;
-  const lifetime = notBefore !== undefined && expiresAt > notBefore ? expiresAt - notBefore : expiresAt - now;
-  return lifetime <= LEGACY_PEER_LIMIT_MS + CLOCK_SKEW_MS ? LEGACY_PEER_LIMIT_MS : notBefore !== undefined ? Math.min(lifetime, INTERIM_PERIOD_MS) : INTERIM_PERIOD_MS;
+  let lifetime = expiresAt - now;
+  if (notBefore !== undefined) {
+    lifetime = expiresAt - notBefore;
+    if (notBefore > now + CLOCK_SKEW_MS || lifetime <= 0 || lifetime > INTERIM_PERIOD_MS + CLOCK_SKEW_MS) return LEGACY_PEER_LIMIT_MS;
+  }
+  if (lifetime <= LEGACY_PEER_LIMIT_MS + CLOCK_SKEW_MS) return LEGACY_PEER_LIMIT_MS;
+  return notBefore !== undefined ? Math.min(lifetime, INTERIM_PERIOD_MS) : INTERIM_PERIOD_MS;
+}
+
+/**
+ * Lifetime to sign for this peer. A limit below INTERIM_PERIOD_MS is signed with a clock-skew margin, because the peer checks
+ * it against its own clock; the 30-day period and the parent end carry no margin.
+ */
+export function peerRenewalLimitMs(peer: Pick<StoredPeer, 'inbound'>, now = Date.now()): number {
+  const accepted = peerAcceptMs(peer, now);
+  return accepted < INTERIM_PERIOD_MS ? accepted - CLOCK_SKEW_MS : accepted;
 }
 
 /**
@@ -115,12 +130,12 @@ export function peerRenewalLimitMs(peer: Pick<StoredPeer, 'inbound'>, now = Date
  * Fires once per peer: after `shortenedAt` is set, a renewal must always extend the current delegation.
  */
 function outlivesPeerLimit(peer: Pick<StoredPeer, 'inbound' | 'interim'>, end: number, now: number): boolean {
-  return !peer.interim?.shortenedAt && end > now + peerRenewalLimitMs(peer, now) + CLOCK_SKEW_MS;
+  return !peer.interim?.shortenedAt && end > now + peerAcceptMs(peer, now) + CLOCK_SKEW_MS;
 }
 
 /** `peer limit 7d` when the peer's limit shortens a renewal below the usual period; undefined otherwise. */
 export function peerLimitNote(peer: Pick<StoredPeer, 'inbound'>, now = Date.now()): string | undefined {
-  const limit = peerRenewalLimitMs(peer, now);
+  const limit = peerAcceptMs(peer, now);
   return limit < INTERIM_PERIOD_MS ? `peer limit ${Number((limit / DAY).toFixed(2))}d` : undefined;
 }
 
@@ -263,10 +278,11 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   const lastAttempt = state.lastAttemptAt ? Date.parse(state.lastAttemptAt) : tip.issuedAt?.getTime();
   // A current delegation longer than the peer accepts is replaced at once by a shorter one: waiting for its half-life would leave the peer unable to read it.
   // `extendOnly` (artifact export) never replaces a grant with a shorter one: the receiving `pair accept` refuses it as stale.
-  const overlong = !options.extendOnly && outlivesPeerLimit(peer, end, now);
+  const outlives = outlivesPeerLimit(peer, end, now);
+  const overlong = !options.extendOnly && outlives;
   if (!options.force && ((!options.manual && !overlong && now < started + (end - started) / 2)
     || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
-  if (!overlong && Math.floor(Math.min(now + limitMs, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: 'no-extension' };
+  if (!overlong && Math.floor(Math.min(now + limitMs, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: options.extendOnly && outlives ? 'overlong' : 'no-extension' };
   state.lastAttemptAt = new Date(now).toISOString();
   save();
   const key = k.peerDelegation(peer.handle, peer.sessionId);

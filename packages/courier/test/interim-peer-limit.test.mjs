@@ -9,6 +9,7 @@ import { peerExpiryStatus } from '../dist/status.js';
 
 const DAY = 86_400_000;
 const SKEW = 5 * 60 * 1000;
+const SEVEN = 7 * DAY - SKEW; // a 7-day peer is signed for 7 days less the clock-skew margin
 const manager = new NodeWasmBindings().createSessionManager();
 const keyId = manager.createSessionKey('test-issuer');
 const signingJwk = JSON.parse(manager.jwk(keyId));
@@ -31,31 +32,31 @@ function inboundOf(lifetimeMs, at = Math.floor(Date.now() / 1000) * 1000, signed
 }
 
 test('peer limit comes from the signed lifetime of the inbound delegation', () => {
-  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(7 * DAY) }), 7 * DAY);
-  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(7 * DAY + SKEW) }), 7 * DAY, 'clock skew above 7 days is still a 7-day peer');
-  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(2 * DAY) }), 7 * DAY);
-  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(10 * DAY) }), 10 * DAY);
+  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(7 * DAY) }), SEVEN);
+  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(7 * DAY + SKEW) }), SEVEN, 'clock skew above 7 days is still a 7-day peer');
+  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(2 * DAY) }), SEVEN);
+  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(10 * DAY) }), 10 * DAY - SKEW);
   assert.equal(peerRenewalLimitMs({ inbound: inboundOf(30 * DAY) }), 30 * DAY);
-  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(90 * DAY) }), INTERIM_PERIOD_MS, 'capped at the interim period');
+  assert.equal(peerRenewalLimitMs({ inbound: inboundOf(30 * DAY + SKEW) }), INTERIM_PERIOD_MS, 'the 30-day period carries no margin');
 });
 
 test('without a signed issued-at, what remains of the signed expiry decides', () => {
   const limit = remaining => peerRenewalLimitMs({ inbound: inboundOf(remaining, Date.now(), false) });
   assert.equal(limit(30 * DAY), INTERIM_PERIOD_MS, 'more than 7 days left proves a long-lived peer');
-  assert.equal(limit(7 * DAY), 7 * DAY);
-  assert.equal(limit(2 * DAY), 7 * DAY);
-  assert.equal(limit(7 * DAY + SKEW - 5_000), 7 * DAY, 'clock skew above 7 days is still a 7-day peer');
+  assert.equal(limit(7 * DAY), SEVEN);
+  assert.equal(limit(2 * DAY), SEVEN);
+  assert.equal(limit(7 * DAY + SKEW - 5_000), SEVEN, 'clock skew above 7 days is still a 7-day peer');
   assert.equal(limit(7 * DAY + 2 * SKEW), INTERIM_PERIOD_MS);
 });
 
 test('unknown or unparseable inbound gets 7 days', () => {
-  assert.equal(peerRenewalLimitMs({}), 7 * DAY);
+  assert.equal(peerRenewalLimitMs({}), SEVEN);
   for (const delegation of ['not json', '{}', JSON.stringify({ delegationHeader: { Authorization: 'a.b' } }),
     JSON.stringify({ delegationHeader: { Authorization: `a.${Buffer.from('{}').toString('base64url')}.c` }, expiry: new Date().toISOString() })]) {
-    assert.equal(peerRenewalLimitMs({ inbound: { delegation, cid: 'c', expiresAt: new Date().toISOString() } }), 7 * DAY);
+    assert.equal(peerRenewalLimitMs({ inbound: { delegation, cid: 'c', expiresAt: new Date().toISOString() } }), SEVEN);
   }
   // Local expiry metadata alone never lengthens the limit.
-  assert.equal(peerRenewalLimitMs({ inbound: { ...inboundOf(30 * DAY), delegation: '{}' } }), 7 * DAY);
+  assert.equal(peerRenewalLimitMs({ inbound: { ...inboundOf(30 * DAY), delegation: '{}' } }), SEVEN);
 });
 
 test('limit note appears only when it shortens a renewal', () => {
@@ -121,8 +122,8 @@ test('a 7-day peer gets at most a 7-day renewal', async () => {
   const f = fixture({ inboundLifetime: 7 * DAY });
   const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save);
   assert.equal(outcome.state, 'renewed');
-  assert.deepEqual(f.counts.expiries, [7 * DAY]);
-  assert.ok(outcome.delegation.expiry.getTime() <= Date.now() + 7 * DAY);
+  assert.deepEqual(f.counts.expiries, [SEVEN]);
+  assert.ok(outcome.delegation.expiry.getTime() <= Date.now() + 7 * DAY - SKEW, 'ends at least the clock-skew margin before 7 days');
 });
 
 test('a 30-day peer gets 30 days', async () => {
@@ -137,7 +138,7 @@ test('an unknown inbound gets 7 days', async () => {
   const f = fixture({ inboundLifetime: undefined });
   const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save);
   assert.equal(outcome.state, 'renewed');
-  assert.deepEqual(f.counts.expiries, [7 * DAY]);
+  assert.deepEqual(f.counts.expiries, [SEVEN]);
 });
 
 test('a renewal never exceeds the parent end, for a 30-day peer', async () => {
@@ -173,7 +174,7 @@ test('assertSuccessor accepts the bounded renewal and refuses one past the peer 
   const profile = { courierDid, spaceId };
   const sevenDay = { handle: 'bob', courierDid: peerDid, sessionId: 'one-session', status: 'paired', outbound: [], inbound: inboundOf(7 * DAY) };
   const thirtyDay = { ...sevenDay, inbound: inboundOf(30 * DAY) };
-  assert.doesNotThrow(() => assertSuccessor(profile, sevenDay, prior, next(7), parent, now));
+  assert.doesNotThrow(() => assertSuccessor(profile, sevenDay, prior, next(7 - SKEW / DAY), parent, now));
   assert.throws(() => assertSuccessor(profile, sevenDay, prior, next(8), parent, now), /safely renew/);
   assert.doesNotThrow(() => assertSuccessor(profile, thirtyDay, prior, next(30), parent, now));
   assert.throws(() => assertSuccessor(profile, thirtyDay, prior, next(31), parent, now), /safely renew/);
@@ -192,9 +193,9 @@ for (const options of [{ force: true, manual: true }, { manual: true }, {}]) {
     const f = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
     const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, options);
     assert.equal(outcome.state, 'renewed');
-    assert.deepEqual(f.counts.expiries, [7 * DAY]);
+    assert.deepEqual(f.counts.expiries, [SEVEN]);
     const expiry = outcome.delegation.expiry.getTime();
-    assert.ok(expiry <= Date.now() + 7 * DAY && expiry > Date.now() + 6 * DAY, 'shorter than the 30-day delegation it replaces');
+    assert.ok(expiry <= Date.now() + 7 * DAY - SKEW && expiry > Date.now() + 6 * DAY, 'shorter than the 30-day delegation it replaces');
     assert.equal(f.counts.published.length, 1);
     assert.equal(JSON.parse(f.counts.published[0].value.delegation).cid, 'new');
     assert.equal(f.peer.outbound.at(-1).cid, 'new');
@@ -219,7 +220,7 @@ test('assertSuccessor accepts a shorter successor only when the prior outlives t
     issuedAt: new Date(now - DAY), notBefore: null, expiresAt: new Date(now + days * DAY), status: 'active' });
   const profile = { courierDid, spaceId };
   const peer = { handle: 'bob', courierDid: peerDid, sessionId: 'one-session', status: 'paired', outbound: [], inbound: inboundOf(7 * DAY) };
-  assert.doesNotThrow(() => assertSuccessor(profile, peer, record('prior', 30, ['old']), record('new', 7, [parent.cid]), parent, now));
+  assert.doesNotThrow(() => assertSuccessor(profile, peer, record('prior', 30, ['old']), record('new', 7 - SKEW / DAY, [parent.cid]), parent, now));
   assert.throws(() => assertSuccessor(profile, peer, record('prior', 30, ['old']), record('new', 8, [parent.cid]), parent, now), /safely renew/);
   assert.throws(() => assertSuccessor(profile, peer, record('prior', 6, ['old']), record('new', 5, [parent.cid]), parent, now), /safely renew/, 'within the limit, a shorter successor is no renewal');
 });
@@ -248,23 +249,37 @@ test('a renewal that does not extend is skipped now and issued, extending, on a 
   assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, options), { state: 'live', reason: 'no-extension' });
   assert.equal(f.counts.sign, 0);
   const realNow = Date.now;
-  Date.now = () => realNow() + 3 * 60_000;
+  Date.now = () => realNow() + 10 * 60_000;
   try {
     const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, options);
     assert.equal(outcome.state, 'renewed');
     assert.ok(outcome.delegation.expiry.getTime() > f.at + 7 * DAY + 60_000, 'extends the current delegation');
-    assert.ok(outcome.delegation.expiry.getTime() <= Date.now() + 7 * DAY);
+    assert.ok(outcome.delegation.expiry.getTime() <= Date.now() + 7 * DAY - SKEW);
     assert.equal(f.peer.interim?.shortenedAt, undefined, 'the shorter-grant exception was not used');
   } finally { Date.now = realNow; }
 });
 
 test('artifact export never replaces an over-long grant with a shorter one', async () => {
   const f = fixture({ inboundLifetime: undefined, tipEndsAt: 30 * DAY });
-  assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true, extendOnly: true }), { state: 'live', reason: 'no-extension' });
+  assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true, extendOnly: true }), { state: 'live', reason: 'overlong' });
   assert.equal(f.counts.sign, 0);
   assert.equal(f.peer.interim?.shortenedAt, undefined);
   // The same peer through the publishing path (the 0.5.x reader) does get the shorter 7-day grant.
   const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true });
   assert.equal(outcome.state, 'renewed');
-  assert.deepEqual(f.counts.expiries, [7 * DAY]);
+  assert.deepEqual(f.counts.expiries, [SEVEN]);
+});
+
+test('a signed nbf is bounded: not in the future, lifetime above 0 and at most 30 days, else the inbound is unknown (7 days)', () => {
+  const at = Math.floor(Date.now() / 1000) * 1000;
+  const sign7 = peerRenewalLimitMs({});
+  const limit = (nbfAt, lifetimeMs) => peerRenewalLimitMs({ inbound: { ...inboundOf(lifetimeMs, nbfAt), expiresAt: '' } });
+  assert.equal(limit(at, 30 * DAY), INTERIM_PERIOD_MS, 'a valid 30-day nbf');
+  assert.equal(limit(at - 40 * DAY, 90 * DAY), sign7, 'lifetime over 30 days');
+  assert.equal(limit(at - 40 * DAY, 41 * DAY), sign7, 'an old nbf cannot inflate a long expiry');
+  assert.equal(limit(at + 2 * 3600_000, 30 * DAY), sign7, 'nbf in the future');
+  assert.equal(limit(at + 60_000, 30 * DAY), INTERIM_PERIOD_MS, 'nbf within clock skew is fine');
+  const backwards = jwt({ iss: peerDid, aud: courierDid, nbf: Math.floor(at / 1000) + 100, exp: Math.floor(at / 1000) + 50, prf: [], att: {} });
+  const inbound = { delegation: JSON.stringify({ cid: 'x', delegationHeader: { Authorization: backwards }, expiry: new Date(at) }), cid: 'x', expiresAt: new Date(at).toISOString() };
+  assert.equal(peerRenewalLimitMs({ inbound }), sign7, 'expiry before nbf');
 });

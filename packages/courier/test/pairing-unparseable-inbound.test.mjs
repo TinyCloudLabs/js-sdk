@@ -172,7 +172,8 @@ test('unparseable inbound: the export is refused with a clear message rather tha
   const calls = { ...hits };
   const refused = await runFail(issuer.home, ['pair', 'renew', 'to-recipient', '--renew-artifact', '--force']);
   assert.equal(refused.stdout, '', 'no artifact is exported');
-  assert.match(refused.stderr, /\[renew-throttled\].*peer limit 7d.*Nothing was exported/);
+  assert.match(refused.stderr, /\[renew-throttled\].*already runs longer than the peer accepts \(peer limit 7d\).*published automatically on the next renewal tick.*Nothing was exported/);
+  assert.doesNotMatch(refused.stderr, /as long as the peer accepts/);
   assert.equal(profileBytes(issuer.home), before, 'nothing was signed or recorded');
   assert.deepEqual(hits, calls);
 });
