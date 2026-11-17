@@ -27,8 +27,8 @@ export interface InterimState {
   lastAttemptAt?: string;
   unavailableAt?: string;
   inboundRefusedAt?: string;
-  /** Set once an over-long delegation was replaced by a shorter one; after that renewals only extend. */
-  shortenedAt?: string;
+  /** CID of the over-long delegation that was replaced by a shorter one. That same delegation is never shortened twice. */
+  shortenedCid?: string;
   cleanup: Record<string, { intentAt: string; revokedAt?: string }>;
 }
 export type InterimPeer = StoredPeer & { interim?: InterimState };
@@ -132,14 +132,16 @@ export function peerRenewalLimitMs(peer: Pick<StoredPeer, 'inbound'>, now = Date
 
 /**
  * True when a delegation ending at `end` is longer than the peer accepts (limit plus clock skew), so a shorter one may replace it.
- * Fires once per peer: after `shortenedAt` is set, a renewal must always extend the current delegation.
+ * Fires once per over-long delegation: `shortenedCid` names the one already replaced, so a later over-long tip can be repaired again
+ * but the same tip is never shortened in a loop.
  */
-function outlivesPeerLimit(peer: Pick<StoredPeer, 'inbound' | 'interim'>, end: number, now: number): boolean {
-  return !peer.interim?.shortenedAt && end > now + peerAcceptMs(peer, now) + CLOCK_SKEW_MS;
+function outlivesPeerLimit(peer: Pick<StoredPeer, 'inbound' | 'interim'>, tipCid: string, end: number, now: number): boolean {
+  return peer.interim?.shortenedCid !== tipCid && end > now + peerAcceptMs(peer, now) + CLOCK_SKEW_MS;
 }
 
-/** `peer limit 7d` when the peer's limit shortens a renewal below the usual period; undefined otherwise. */
+/** `peer limit 7d` when the peer's limit shortens a renewal below the usual period; undefined otherwise, and for a peer with no inbound yet. */
 export function peerLimitNote(peer: Pick<StoredPeer, 'inbound'>, now = Date.now()): string | undefined {
+  if (!peer.inbound) return undefined;
   const limit = peerAcceptMs(peer, now);
   return limit < INTERIM_PERIOD_MS ? `peer limit ${Number((limit / DAY).toFixed(2))}d` : undefined;
 }
@@ -257,7 +259,7 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
   if (!sameBinding(profile, peer, prior) || !sameBinding(profile, peer, next)
     || issuedAuthority(prior.resources) !== issuedAuthority(next.resources)
     || next.parents.length !== 1 || next.parents[0] !== parent.cid
-    || (!outlivesPeerLimit(peer, liveEnd(prior.expiresAt, now), now) && liveEnd(next.expiresAt, now) <= liveEnd(prior.expiresAt, now))
+    || (!outlivesPeerLimit(peer, prior.cid, liveEnd(prior.expiresAt, now), now) && liveEnd(next.expiresAt, now) <= liveEnd(prior.expiresAt, now))
     || liveEnd(next.expiresAt, now) > Math.min(now + peerRenewalLimitMs(peer, now), parent.end)) {
     throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   }
@@ -283,7 +285,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   const lastAttempt = state.lastAttemptAt ? Date.parse(state.lastAttemptAt) : tip.issuedAt?.getTime();
   // A current delegation longer than the peer accepts is replaced at once by a shorter one: waiting for its half-life would leave the peer unable to read it.
   // `extendOnly` (artifact export) never replaces a grant with a shorter one: the receiving `pair accept` refuses it as stale.
-  const outlives = outlivesPeerLimit(peer, end, now);
+  const outlives = outlivesPeerLimit(peer, tip.cid, end, now);
   const overlong = !options.extendOnly && outlives;
   if (!options.force && ((!options.manual && !overlong && now < started + (end - started) / 2)
     || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
@@ -316,7 +318,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
     liveEnd(tip.expiresAt, Date.now());
     parentOf(node, profile, Date.now());
     await putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, before.etag);
-    if (overlong) { state.shortenedAt = new Date().toISOString(); save(); }
+    if (overlong) { state.shortenedCid = tip.cid; save(); }
     return { state: 'renewed', delegation: next };
   } catch (error) {
     await cleanup(node, peer, next.cid, save);

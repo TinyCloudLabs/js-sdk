@@ -65,7 +65,8 @@ test('unknown or unparseable inbound gets 7 days', () => {
 
 test('limit note appears only when it shortens a renewal', () => {
   assert.equal(peerLimitNote({ inbound: inboundOf(7 * DAY) }), 'peer limit 7d');
-  assert.equal(peerLimitNote({}), 'peer limit 7d');
+  assert.equal(peerLimitNote({}), undefined, 'no inbound yet: nothing to show');
+  assert.equal(peerLimitNote({ inbound: { delegation: 'not-a-valid-delegation', cid: 'c', expiresAt: new Date().toISOString() } }), 'peer limit 7d');
   assert.equal(peerLimitNote({ inbound: inboundOf(7 * DAY, undefined, false) }), 'peer limit 7d');
   assert.equal(peerLimitNote({ inbound: inboundOf(30 * DAY, undefined, false) }), undefined);
   assert.equal(peerLimitNote({ inbound: inboundOf(30 * DAY) }), undefined);
@@ -91,13 +92,14 @@ function fixture({ inboundLifetime, tipEndsAt = 3 * DAY, parentEndsAt = 40 * DAY
   const portable = (item, proof) => {
     const att = {};
     for (const entry of item.resources) for (const action of entry.actions) (att[entry.resource] ??= {})[action] = [{}];
-    const authorization = jwt({ iss: item.delegatorDid, aud: item.delegateDid, nbf: Math.floor(at / 1000), exp: Math.floor(item.expiresAt.getTime() / 1000), prf: [proof], att });
+    const authorization = jwt({ iss: item.delegatorDid, aud: item.delegateDid, nbf: Math.floor(at / 1000), exp: Math.floor(item.expiresAt.getTime() / 1000), nnc: item.cid, prf: [proof], att });
     return { cid: item.cid, delegationHeader: { Authorization: authorization }, ownerAddress: '0x1111111111111111111111111111111111111111', chainId: 1, spaceId,
       path: `xyz.tinycloud.courier/to/bob/threads/${peer.sessionId}/`, actions: ['tinycloud.kv/get', 'tinycloud.kv/list'],
       resources: item.resources.map(entry => { const uri = entry.resource.slice(spaceId.length + 1); const slash = uri.indexOf('/'); return { space: spaceId, service: uri.slice(0, slash), path: uri.slice(slash + 1), actions: entry.actions, caveats: entry.caveats }; }),
       expiry: item.expiresAt, delegateDID: peerDid, delegatorDID: courierDid };
   };
   const original = portable(record, 'old-owner-grant');
+  let latestPublished = serializeDelegation(original);
   const node = {
     credentialHolderDid: courierDid,
     restorableSession: { delegationCid: parent.cid, siwe: `courier.test wants you to sign in with your Ethereum account:\n0x1111111111111111111111111111111111111111\n\nCourier renewal test.\n\nURI: did:key:issuer\nVersion: 1\nChain ID: 1\nNonce: abcdefgh\nIssued At: ${new Date(at - DAY).toISOString()}\nExpiration Time: ${new Date(parent.end).toISOString()}` },
@@ -107,14 +109,14 @@ function fixture({ inboundLifetime, tipEndsAt = 3 * DAY, parentEndsAt = 40 * DAY
       revokeIssued: async cid => { counts.revoke.push(cid); const found = records.find(item => item.cid === cid); if (found) found.status = 'revoked'; return { ok: true, data: { revoked: true, cid } }; },
     },
     kv: {
-      get: async () => ({ ok: true, data: { data: { delegation: serializeDelegation(original) }, headers: { etag: '"prior"' } } }),
-      put: async (key, value) => { counts.published.push({ key, value }); return { ok: true, data: {} }; },
+      get: async () => ({ ok: true, data: { data: { delegation: latestPublished }, headers: { etag: '"prior"' } } }),
+      put: async (key, value) => { counts.published.push({ key, value }); latestPublished = value.delegation; return { ok: true, data: {} }; },
     },
     delegateTo: async (audience, entries, options) => {
       counts.sign++;
       counts.expiries.push(options.expiry);
       const end = Math.floor((clamp ? Math.min(Date.now() + options.expiry, parent.end) : Date.now() + options.expiry) / 1000) * 1000;
-      record = { ...structuredClone(record), cid: 'new', parents: [parent.cid], notBefore: new Date(at), expiresAt: new Date(end) };
+      record = { ...structuredClone(record), cid: counts.sign === 1 ? 'new' : `new${counts.sign}`, parents: [parent.cid], notBefore: new Date(at), expiresAt: new Date(end) };
       records.push(record);
       return { delegation: portable(record, parent.cid) };
     },
@@ -233,7 +235,7 @@ test('the shorter grant is published once; later ticks only extend', async () =>
   const first = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
   assert.equal((await maintainOutbound(first.node, first.profile, first.peer, first.save, { force: true, manual: true })).state, 'renewed');
   assert.equal(first.counts.published.length, 1);
-  assert.ok(first.peer.interim.shortenedAt);
+  assert.equal(first.peer.interim.shortenedCid, 'prior', 'the marker names the over-long tip it replaced');
   // The new tip ends within the peer limit: the next tick extends nothing and signs nothing.
   assert.deepEqual(await maintainOutbound(first.node, first.profile, first.peer, first.save, { force: true, manual: true }), { state: 'live', reason: 'no-extension' });
   assert.equal(first.counts.sign, 1);
@@ -259,7 +261,7 @@ test('a renewal that does not extend is skipped now and issued, extending, on a 
     assert.equal(outcome.state, 'renewed');
     assert.ok(outcome.delegation.expiry.getTime() > f.at + 7 * DAY + 60_000, 'extends the current delegation');
     assert.ok(outcome.delegation.expiry.getTime() <= Date.now() + 7 * DAY - SKEW);
-    assert.equal(f.peer.interim?.shortenedAt, undefined, 'the shorter-grant exception was not used');
+    assert.equal(f.peer.interim?.shortenedCid, undefined, 'the shorter-grant exception was not used');
   } finally { Date.now = realNow; }
 });
 
@@ -267,7 +269,7 @@ test('artifact export never replaces an over-long grant with a shorter one', asy
   const f = fixture({ inboundLifetime: undefined, tipEndsAt: 30 * DAY });
   assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true, extendOnly: true }), { state: 'live', reason: 'overlong' });
   assert.equal(f.counts.sign, 0);
-  assert.equal(f.peer.interim?.shortenedAt, undefined);
+  assert.equal(f.peer.interim?.shortenedCid, undefined);
   // The same peer through the publishing path (the 0.5.x reader) does get the shorter 7-day grant.
   const outcome = await maintainOutbound(f.node, f.profile, f.peer, f.save, { force: true, manual: true });
   assert.equal(outcome.state, 'renewed');
@@ -286,4 +288,35 @@ test('a signed nbf is bounded: not in the future, lifetime above 0 and at most 3
   const backwards = jwt({ iss: peerDid, aud: courierDid, nbf: Math.floor(at / 1000) + 100, exp: Math.floor(at / 1000) + 50, prf: [], att: {} });
   const inbound = { delegation: JSON.stringify({ cid: 'x', delegationHeader: { Authorization: backwards }, expiry: new Date(at) }), cid: 'x', expiresAt: new Date(at).toISOString() };
   assert.equal(peerRenewalLimitMs({ inbound }), sign7, 'expiry before nbf');
+});
+
+test('a later over-long tip is repaired once more, never twice for the same tip', async () => {
+  const f = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
+  const options = { force: true, manual: true };
+  // 1. 7-day peer, 30-day tip: shortened once; the marker names the tip it replaced.
+  assert.equal((await maintainOutbound(f.node, f.profile, f.peer, f.save, options)).state, 'renewed');
+  assert.equal(f.counts.published.length, 1);
+  assert.equal(f.peer.interim.shortenedCid, 'prior');
+  // 2. The peer is now long-lived: the tip extends to 30 days.
+  f.peer.inbound = inboundOf(30 * DAY, f.at);
+  const extended = await maintainOutbound(f.node, f.profile, f.peer, f.save, options);
+  assert.equal(extended.state, 'renewed');
+  assert.ok(extended.delegation.expiry.getTime() > Date.now() + 29 * DAY);
+  assert.equal(f.counts.published.length, 2);
+  // 3. The peer is back to 7 days while our tip is 30 days: repaired exactly once more.
+  f.peer.inbound = inboundOf(7 * DAY, f.at);
+  const tip30 = f.peer.outbound.at(-1).cid;
+  assert.equal((await maintainOutbound(f.node, f.profile, f.peer, f.save, options)).state, 'renewed');
+  assert.equal(f.counts.published.length, 3);
+  assert.equal(f.peer.interim.shortenedCid, tip30);
+  assert.deepEqual(f.counts.expiries, [SEVEN, INTERIM_PERIOD_MS, SEVEN]);
+  // 4. Nothing further to shorten or extend.
+  assert.deepEqual(await maintainOutbound(f.node, f.profile, f.peer, f.save, options), { state: 'live', reason: 'no-extension' });
+  assert.equal(f.counts.published.length, 3);
+  assert.deepEqual(f.counts.revoke, []);
+  // The same over-long tip is never shortened in a loop: with its CID already marked, it is left alone.
+  const again = fixture({ inboundLifetime: 7 * DAY, tipEndsAt: 30 * DAY });
+  again.peer.interim = { cleanup: {}, shortenedCid: 'prior' };
+  assert.deepEqual(await maintainOutbound(again.node, again.profile, again.peer, again.save, options), { state: 'live', reason: 'no-extension' });
+  assert.equal(again.counts.sign, 0);
 });

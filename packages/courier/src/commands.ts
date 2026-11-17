@@ -509,7 +509,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, arti
 async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
   const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
   if (result.reason === 'overlong') {
-    fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts (${peerLimitNote(peer)}). A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);
+    fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts${peerLimitNote(peer) ? ` (${peerLimitNote(peer)})` : ''}. A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);
   }
   if (result.reason === 'no-extension') {
     const limit = peerLimitNote(peer);
