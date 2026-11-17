@@ -219,12 +219,12 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       catch (error) { return handleError(error); }
     });
 
-  agentOptions(feed.command("show <reference>").description("Read the current answer, acknowledgement and outcome separately; messages are excluded"))
+  agentOptions(feed.command("show <reference>").description("Read the current answer, acknowledgement and outcome separately; messages are excluded. A revision that only added replies keeps the earlier revision's answer (answeredAtRevision says which), as in Home"))
     .action(async (reference: string, _options, command) => {
       try {
         const { output, responses } = await context(command);
         const identity = value(await resolveFeedCard(output, reference));
-        outputJson(value(await getFeedCardState(output, responses, identity)));
+        outputJson(value(await getFeedCardState(output, responses, identity, { carryReplyOnlyAnswer: true })));
       } catch (error) { return handleError(error); }
     });
 
