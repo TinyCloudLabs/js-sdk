@@ -503,8 +503,10 @@ test("signed reusable read scope covers future children and digest-bound handoff
   })).structuredContent).toMatchObject({ status: "error", error: { code: "READ_SOURCE_CHANGED" } });
 }, 90_000);
 
+// A node answers a revoked chain with plain text before 1.25.17 and with a JSON envelope since.
+for (const form of ["text", "envelope"] as const) {
 for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as const) {
-  test(`a definitive bootstrap ${marker} response renews one tenant once under concurrent connects`, async () => {
+  test(`a definitive bootstrap ${marker} response (${form}) renews one tenant once under concurrent connects`, async () => {
     const { hermetic, proxy, app, client, createClient, stateRoot, stateDir, bootstrap, approve } =
       await setupProxiedSession();
     const sessionPath = join(stateRoot, ".tinycloud/profiles/agent/session.json");
@@ -544,7 +546,9 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
     proxy.onInvocation = async (actions) => {
       if (!respondsTo(actions, "tinycloud.kv/list", "spaces/")) return undefined;
       await Promise.resolve();
-      return new Response(`Invalid invocation: ${nodeText}`, { status: 401 });
+      return form === "text"
+        ? new Response(`Invalid invocation: ${nodeText}`, { status: 401 })
+        : revocationEnvelope(nodeText);
     };
     // No pending approval exists yet: this exercises the first pending write,
     // the probe, and the persistent cleanup under concurrent HTTP requests.
@@ -572,6 +576,7 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
       .toMatchObject({ connected: true });
     expect(await readFile(sessionPath, "utf8") === original).toBe(false);
   }, 90_000);
+}
 }
 
 test("a cleared approval cannot be restored by a delayed pending-file writer", async () => {
@@ -798,8 +803,9 @@ test("node connection refusal does not break initialization, tools/list or a sav
     .toMatchObject({ connected: false, approvalUrl: expect.stringContaining("/connect?state=") });
 }, 90_000);
 
+for (const form of ["text", "envelope"] as const) {
 for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as const) {
-  test(`a scoped ${marker} refusal removes only its exact grant under concurrent operations`, async () => {
+  test(`a scoped ${marker} refusal (${form}) removes only its exact grant under concurrent operations`, async () => {
     const { hermetic, proxy, app, client, createClient, stateDir, stateRoot, bootstrap, approve } =
       await setupProxiedSession();
     const primary = { space: "applications", key: "agents/demo/profile", representation: "json" };
@@ -856,7 +862,7 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
       ? `delegation-revoked: ${primaryCid}`
       : `delegation-ancestor-revoked: ancestor=${primaryCid} invoked=${String(otherBody.delegationCid)}`;
     proxy.onInvocation = (actions) => respondsTo(actions, "tinycloud.kv/get", primary.key)
-      ? new Response(nodeText, { status: 401 })
+      ? (form === "text" ? new Response(nodeText, { status: 401 }) : revocationEnvelope(nodeText))
       : undefined;
     const refusals = await Promise.all(Array.from({ length: 4 }, () =>
       client.callTool({ name: "tinycloud_kv_get", arguments: primary })));
@@ -896,6 +902,70 @@ for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as co
     expect(String(record(again.approval).url) === String(record(primaryRequest.approval).url)).toBe(false);
   }, 90_000);
 }
+}
+
+test("a revoked SQL approval is asked for again, like a missing one", async () => {
+  const { proxy, client, stateRoot, approve } = await setupProxiedSession();
+  const query = { space: "applications", database: "xyz.tinycloud.demo/notes", sql: "SELECT 1" };
+  const required = record((await client.callTool({ name: "tinycloud_sql_query", arguments: query })).structuredContent);
+  expect(required).toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+  const cid = String((await approve(String(record(required.approval).url))).delegationCid);
+  const additionalPath = join(stateRoot, ".tinycloud/profiles/agent/additional-delegations.json");
+  expect(await readFile(additionalPath, "utf8")).toContain(cid);
+
+  const nodeText = `delegation-revoked: ${cid}`;
+  proxy.onInvocation = (actions) => actions.some((entry) => entry.action === "tinycloud.sql/read")
+    ? revocationEnvelope(nodeText)
+    : undefined;
+  const reply = await client.callTool({ name: "tinycloud_sql_query", arguments: query });
+  assertPublicReplyOmitsNodeData(reply, nodeText, cid);
+  const renewed = record(reply.structuredContent);
+  expect(renewed).toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+  expect(String(record(renewed.approval).url)).not.toBe(String(record(required.approval).url));
+  expect(record(renewed.retry).inputDigest).toBe(record(required.retry).inputDigest);
+  expect(await exists(additionalPath)).toBe(false);
+  proxy.onInvocation = undefined;
+  expect((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent)
+    .toMatchObject({ connected: true });
+}, 90_000);
+
+test("a revoked records approval is asked for again by the personal-record tools, and a new approval restores them", async () => {
+  const { hermetic, proxy, client, approve } = await setupProxiedSession();
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  const required = record((await client.callTool({
+    name: "tinycloud_apps_context", arguments: { app: "fitness" },
+  })).structuredContent);
+  expect(required).toMatchObject({ status: "authority_required", approval: { kind: "openkey" } });
+  const cid = String((await approve(String(record(required.approval).url))).delegationCid);
+  const read = { prefixes: ["xyz.tinycloud.tinyapps.fitness/weight/2026-10/"] };
+  const write = { ops: [{ op: "put", key: "xyz.tinycloud.tinyapps.fitness/catalog", value: {
+    app: "fitness", title: "Fitness", about: "Body measurements", created: "2026-10-14",
+  } }] };
+  expect(record((await client.callTool({ name: "tinycloud_apps_read", arguments: read })).structuredContent).status)
+    .toBe("ok");
+
+  // The owner revokes that approval at the node; the connector still holds it.
+  const nodeText = `delegation-revoked: ${cid}`;
+  proxy.onInvocation = (actions) =>
+    actions.some((entry) => entry.resource.includes("/kv/xyz.tinycloud.tinyapps.fitness/"))
+      ? revocationEnvelope(nodeText)
+      : undefined;
+  for (const [name, args] of [["tinycloud_apps_read", read], ["tinycloud_apps_write", write]] as const) {
+    const reply = await client.callTool({ name, arguments: args });
+    assertPublicReplyOmitsNodeData(reply, nodeText, cid);
+    expect(record(reply.structuredContent), name)
+      .toMatchObject({ status: "authority_required", approval: { kind: "openkey", url: expect.stringContaining("/connect?state=") } });
+  }
+
+  proxy.onInvocation = undefined;
+  const again = record((await client.callTool({ name: "tinycloud_apps_read", arguments: read })).structuredContent);
+  expect(again.status).toBe("authority_required");
+  await approve(String(record(again.approval).url));
+  expect(record((await client.callTool({ name: "tinycloud_apps_read", arguments: read })).structuredContent).status)
+    .toBe("ok");
+  expect(record((await client.callTool({ name: "tinycloud_apps_write", arguments: write })).structuredContent))
+    .toMatchObject({ status: "ok", output: { ops: [{ outcome: "ok" }] } });
+}, 90_000);
 
 test("a concurrent scoped refusal still includes approval after another call removes the grant", async () => {
   const { proxy, client, stateRoot, approve } = await setupProxiedSession();
@@ -2076,6 +2146,14 @@ async function serveNodeProxy(upstream: string): Promise<NodeProxy> {
 
 function respondsTo(actions: readonly NodeInvocation[], action: string, path: string): boolean {
   return actions.some((entry) => entry.action === action && entry.resource.endsWith(`/kv/${path}`));
+}
+
+/** The 401 a node since 1.25.17 sends for a revoked chain: its refusal text beside a stable code. */
+function revocationEnvelope(text: string): Response {
+  return Response.json(
+    { code: text.startsWith("delegation-revoked") ? "delegation_revoked" : "parent_revoked", error: text },
+    { status: 401 },
+  );
 }
 
 async function setupProxiedSession(): Promise<{
