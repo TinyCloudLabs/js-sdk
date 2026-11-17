@@ -21,7 +21,7 @@ test("an empty or malformed --to is refused before the token is reserved", async
     let activated = 0;
     for (const agentDid of ["", "agent-A", "did:key:", "did: key:a"]) {
       await expect(connectFeedAgent(registry.handle, { ...source, agentDid }, async () => { activated += 1; return {}; }))
-        .rejects.toThrow(/Invalid agent DID/);
+        .rejects.toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2, message: expect.stringMatching(/Invalid agent DID/) });
     }
     expect(activated).toBe(0);
     // Nothing was written, not even the table, so the same token connects with the right DID.

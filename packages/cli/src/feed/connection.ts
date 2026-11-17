@@ -1,6 +1,7 @@
 import type { FeedDatabase, FeedSource } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
-import { cliErrorFromService } from "../output/errors.js";
+import { CLIError, cliErrorFromService } from "../output/errors.js";
+import { ExitCode } from "../config/constants.js";
 
 function value<T>(result: Result<T>): T {
   if (!result.ok) throw cliErrorFromService(result.error);
@@ -16,7 +17,7 @@ export async function connectFeedAgent<TGrant extends object>(
 ): Promise<TGrant> {
   // Before any write: a token must never be reserved for an identity that cannot receive a grant.
   if (!DID_SHAPE.test(source.agentDid)) {
-    throw new Error(`Invalid agent DID "${source.agentDid}": pass the agent's DID with --to (for example did:key:...). No token was reserved.`);
+    throw new CLIError("INVALID_ARGUMENT", `Invalid agent DID "${source.agentDid}": pass the agent's DID with --to (for example did:key:...). No token was reserved.`, ExitCode.USAGE_ERROR);
   }
   value(await registry.execute(`CREATE TABLE IF NOT EXISTS feed_agents (
     agent_id TEXT PRIMARY KEY, agent_did TEXT NOT NULL, label TEXT NOT NULL,
