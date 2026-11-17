@@ -111,3 +111,60 @@ test("an answer on the newer revision wins over a carried one, and an unanswered
   expect(carried.response).toMatchObject({ responseId: own.answer.responseId, revision: 2 });
   expect(carried.answeredAtRevision).toBeUndefined();
 });
+
+// The cases of Home's own tests for this rule (tinychat `frontend/src/feed/cardKit.test.ts`), on cards. The two Home cases about a
+// different source or agent have no equivalent here: the rule takes the cards of one agent's output database.
+const homeCard = (revisionNumber: number, replies?: string[], change: Partial<FeedCard> = {}, payload: Record<string, unknown> = { render: "thread", source: { label: "S" } }): FeedCard => ({
+  cardId: "card", revision: revisionNumber, issuanceId: `i${revisionNumber}`, kind: "ask", needsResponse: true, title: "T", body: "B", urgency: 1,
+  createdAt: `2026-11-0${revisionNumber}T00:00:00Z`, choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }], ...change,
+  payload: { ...payload, ...(replies ? { replies: replies.map((text) => ({ text })) } : {}) },
+});
+const renderOf = (card: FeedCard, render: string | undefined, revisionNumber = 2): FeedCard => {
+  const { render: _render, ...rest } = card.payload ?? {};
+  return { ...card, revision: revisionNumber, payload: { ...rest, ...(render ? { render } : {}) } };
+};
+
+test("Home's reply-only cases: appends in any amount, even across skipped revisions", () => {
+  expect(feed.isReplyOnlyRevision(homeCard(1), homeCard(2, ["one"]))).toBe(true);
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one"]), homeCard(2, ["one", "two", "three"]))).toBe(true);
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one"]), homeCard(4, ["one", "two"]))).toBe(true);
+});
+
+test("Home's not-reply-only cases", () => {
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one", "two"]), homeCard(2, ["one!", "two", "three"]))).toBe(false); // edited earlier reply
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one", "two"]), homeCard(2, ["two", "three"]))).toBe(false); // removed reply
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one", "two"]), homeCard(2, ["two", "one", "three"]))).toBe(false); // reordered
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one"]), homeCard(2))).toBe(false); // replies missing from the next one
+  expect(feed.isReplyOnlyRevision(homeCard(1, ["one"]), homeCard(2, ["one"]))).toBe(false); // nothing appended
+  expect(feed.isReplyOnlyRevision(homeCard(1), homeCard(2, ["one"], { body: "Changed" }))).toBe(false); // body change
+  expect(feed.isReplyOnlyRevision(homeCard(1), homeCard(2, ["one"], { choices: [{ id: "a", label: "A2" }, { id: "b", label: "B" }] }))).toBe(false); // choice label
+  expect(feed.isReplyOnlyRevision(homeCard(1), homeCard(2, ["one"], { choices: [{ id: "b", label: "B" }, { id: "a", label: "A" }] }))).toBe(false); // choice order
+  expect(feed.isReplyOnlyRevision(homeCard(1), homeCard(2, ["one"], { cardId: "other" }))).toBe(false); // different card
+  expect(feed.isReplyOnlyRevision(homeCard(2), homeCard(2, ["one"]))).toBe(false); // same revision
+  expect(feed.isReplyOnlyRevision(homeCard(3), homeCard(2, ["one"]))).toBe(false); // older revision
+  expect(feed.isReplyOnlyRevision(homeCard(1), homeCard(2, ["one"], {}, { render: "post", source: { label: "S" } }))).toBe(false); // thread → post with a reply
+});
+
+test("Home's first-reply exception: a post may become a thread with its first reply and nothing else", () => {
+  const post = (replies?: string[], body?: string) => homeCard(1, replies, body ? { body } : {}, { render: "post", source: { label: "S" } });
+  expect(feed.isReplyOnlyRevision(post(), homeCard(2, ["one"]))).toBe(true); // absent → 1
+  expect(feed.isReplyOnlyRevision(post([]), homeCard(2, ["one"]))).toBe(true); // [] → 1
+  expect(feed.isReplyOnlyRevision(homeCard(1), renderOf(homeCard(1, ["one"]), "post"))).toBe(false); // thread → post
+  expect(feed.isReplyOnlyRevision(post(), homeCard(2))).toBe(false); // post → thread, no reply
+  expect(feed.isReplyOnlyRevision(post(), homeCard(2, ["one"], { body: "Changed" }))).toBe(false); // plus a body change
+  expect(feed.isReplyOnlyRevision(post(["one"]), homeCard(2, ["one", "two"]))).toBe(false); // previous already had replies
+  expect(feed.isReplyOnlyRevision(post(), renderOf(homeCard(1, ["one"]), "link"))).toBe(false); // post → link
+  expect(feed.isReplyOnlyRevision(homeCard(1), renderOf(homeCard(1, ["one"]), "link"))).toBe(false); // thread → link
+});
+
+test("Home's absent render or payload counts as a post for the first-reply exception only", () => {
+  const noRender = () => renderOf(homeCard(1), undefined, 1);
+  const noPayload = (): FeedCard => { const { payload: _payload, ...rest } = homeCard(1); return rest; };
+  const thread = (card: FeedCard, replies?: string[]): FeedCard => ({ ...card, revision: 2, payload: { ...(card.payload ?? {}), render: "thread", ...(replies ? { replies: replies.map((text) => ({ text })) } : {}) } });
+  expect(feed.isReplyOnlyRevision(noRender(), thread(noRender(), ["one"]))).toBe(true); // absent render key → thread with a first reply
+  expect(feed.isReplyOnlyRevision(noPayload(), { ...noPayload(), revision: 2, payload: { render: "thread", replies: [{ text: "one" }] } })).toBe(true); // absent payload
+  expect(feed.isReplyOnlyRevision(noRender(), renderOf({ ...noRender(), payload: { replies: [{ text: "one" }] } }, "link"))).toBe(false); // absent → link
+  expect(feed.isReplyOnlyRevision(noRender(), renderOf({ ...noRender(), payload: {} }, "post"))).toBe(false); // absent ↔ post with no reply: a stray render difference
+  expect(feed.isReplyOnlyRevision(renderOf({ ...noRender(), payload: {} }, "post", 1), { ...noRender(), revision: 2, payload: {} })).toBe(false);
+  expect(feed.isReplyOnlyRevision(noRender(), renderOf({ ...noRender(), payload: { replies: [{ text: "one" }] } }, "post"))).toBe(false); // absent → post with a reply
+});
