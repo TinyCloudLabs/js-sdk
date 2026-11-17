@@ -21,6 +21,7 @@ import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runne
 import { connectFeedAgent } from "../feed/connection.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
+import { parseFeedNotify, registerFeedNotify } from "../feed/notify.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -47,6 +48,10 @@ async function context(command: Command) {
 function agentOptions(command: Command): Command {
   return command.requiredOption("--agent <token>", "Stable owner-scoped agent token")
     .option("--space <name|uri>", "Owner space containing the feed resources", "applications");
+}
+
+function collectOption(next: string, previous: string[]): string[] {
+  return [...previous, next];
 }
 
 async function readPrivatePayload(file: string | undefined): Promise<FeedResponsePayload | undefined> {
@@ -132,8 +137,13 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .requiredOption("--to <did>", "Authenticated agent DID receiving the grant")
     .requiredOption("--label <label>", "Owner registry display label")
     .option("--expiry <duration>", "Delegation expiry duration", "24h")
+    .option("--notify-url <url>", "https URL to call when the owner saves an answer or message, so a short-lived agent wakes at once")
+    .option("--notify-header <name:value>", "Header to send with each notification, repeatable (e.g. 'Authorization: Bearer KEY'). Stored encrypted, never shown again; prefer --notify-header-env, since command lines are visible", collectOption, [])
+    .option("--notify-header-env <name=ENV_VAR>", "Header whose value is read from an environment variable, repeatable", collectOption, [])
     .action(async (options, command) => {
       try {
+        // Validate before anything is provisioned; header values never appear in an error.
+        const notify = parseFeedNotify(options);
         const { node, space, sql, resources, output, responses } = await context(command);
         const did = options.to.split("#")[0];
         const source: FeedSource = {
@@ -151,7 +161,15 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           ], { expiry, requireActivation: true });
           return delegation;
         });
-        outputJson({ source, delegation });
+        if (notify === undefined) return outputJson({ source, delegation });
+        let receipt;
+        try {
+          receipt = await registerFeedNotify(node.hooks, space, resources.responseResource, notify);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "unknown error";
+          throw new Error(`The feed is connected, but the notify webhook was not registered: ${reason}. Run the same command again to retry.`);
+        }
+        outputJson({ source, delegation, notify: receipt });
       } catch (error) { return handleError(error); }
     });
 

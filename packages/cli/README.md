@@ -189,6 +189,27 @@ retried with the same DID and resources. The agent receives read/write on
 response-write or schema authority. Display labels and tokens select resources;
 the signed grants determine access.
 
+A short-lived agent cannot hold `feed watch` open. Add `--notify-url` and the node
+calls that https URL whenever the owner saves an answer or message, so the agent
+wakes at once. `--notify-header "Name: value"` (repeatable) and
+`--notify-header-env Name=ENV_VAR` add headers to each call, for receivers that need
+their own credential:
+
+```bash
+GROK_KEY="Bearer ..." tinycloud --profile owner feed connect --agent writer --to "$AGENT_DID" \
+  --label Writer --notify-url https://grok.example/routine/hook \
+  --notify-header-env Authorization=GROK_KEY > feed-grant.json
+```
+
+Header values are stored encrypted by the node, are never shown or listed again (only
+the names), and are never printed in errors. Prefer `--notify-header-env`: command
+lines are visible to other local users. Host, Content-Length, Content-Type, Cookie,
+`X-TinyCloud-*` and other transport headers are refused. The output's `notify` object
+carries the webhook id, header names and a one-time HMAC secret for
+`X-TinyCloud-Signature`; the node does not return it. The call's body is the write
+event, including the response and card IDs. Running `connect` again with the same
+flags re-registers the webhook.
+
 Publish `card.json` from the agent profile:
 
 ```json

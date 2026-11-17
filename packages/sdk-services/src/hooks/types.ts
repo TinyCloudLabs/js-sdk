@@ -17,12 +17,20 @@ export interface HookWebhookScope {
 export interface HookWebhookRegistration extends HookWebhookScope {
   callbackUrl: string;
   secret: string;
+  /**
+   * Custom headers sent with every delivery, for example `{ Authorization: "Bearer <key>" }`.
+   * Write-only: stored encrypted by the node, listed by name only. Reserved headers
+   * (Host, Content-Length, Content-Type, Cookie, X-TinyCloud-*, hop-by-hop) are refused.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface HookWebhookRecord extends HookWebhookScope {
   id: string;
   subscriberDid?: string;
   callbackUrl: string;
+  /** Names of the custom delivery headers; their values are never returned. */
+  headerNames?: string[];
   active: boolean;
   createdAt: string;
 }
@@ -50,6 +58,10 @@ export interface HookEvent {
   epoch: string;
   eventIndex: number;
   timestamp: string;
+  /** Feed response this write recorded (SQL writes to a feed response database), so a receiver need not scan for it. */
+  responseId?: string;
+  /** Feed card the response is about. */
+  cardId?: string;
 }
 
 export interface HookStreamEvent {
