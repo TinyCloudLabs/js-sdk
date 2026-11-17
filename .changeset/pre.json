@@ -54,6 +54,7 @@
     "panel-load-failure-reload",
     "restore-commit-expiry",
     "restore-existing-personal-app-access",
+    "revoked-approval-node-envelope",
     "share-key-recorded-at-registration",
     "share-permanent-exit-2",
     "signout-local-first-fence",
