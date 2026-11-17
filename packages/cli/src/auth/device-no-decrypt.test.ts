@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { NodeWasmBindings, type PermissionEntry } from "@tinycloud/node-sdk";
 
 // TC-3204: OpenKey's device sign-in grants no encryption ability. The CLI refuses every tinycloud.encryption entry,
-// in any spelling, before it contacts OpenKey.
+// under its full or short service name in any case, before it contacts OpenKey.
 const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-device-no-decrypt-"));
 process.env.TC_HOME = home;

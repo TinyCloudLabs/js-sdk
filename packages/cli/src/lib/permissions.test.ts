@@ -547,7 +547,7 @@ describe("loadManifestPermissions", () => {
     const error = await loadManifestPermissions(source, "agent", { allowLogicalSpaces: true, device: true }).catch((caught: Error) => caught);
     expect((error as Error).message).toBe(
       "--device can't ask for tinycloud.encryption/decrypt on space \"default\", path \"share/\", because device sign-in can't decrypt. " +
-      "Run the command without --device to approve in a browser, or remove the tinycloud.encryption entry from the manifest.",
+      "Run the command without --device to approve in a browser, or remove the tinycloud.encryption entry.",
     );
   });
 

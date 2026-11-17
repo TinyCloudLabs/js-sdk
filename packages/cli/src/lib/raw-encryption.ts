@@ -36,9 +36,9 @@ export function isDefaultNetworkDecrypt(permission: Pick<PermissionEntry, "servi
 }
 
 /**
- * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry in
- * any spelling. Device sign-in grants no encryption ability (TC-3204;
- * openkey apps/api/src/services/device-authorization.ts, deviceRequestPermissions).
+ * The first entry OpenKey's device flow refuses: any entry in a secrets space ("secrets"), or any encryption entry
+ * under its full or short service name, in any case. Device sign-in grants no encryption ability (TC-3204). Other
+ * spellings are refused by OpenKey's exact device allowlist (openkey apps/api/src/services/device-flow-abilities.ts).
  */
 export function deviceRefusal(entries: readonly PermissionEntry[]): PermissionEntry | "secrets" | undefined {
   for (const entry of entries) {
@@ -60,5 +60,5 @@ export function deviceRefusalMessage(refused: PermissionEntry | "secrets", subje
   const actions = refused.actions.slice(0, 5).map((action) => safeClipped(action)).join(", ") || "no actions";
   return `--device can't ask for ${actions} on space "${safeClipped(refused.space ?? "")}", path "${safeClipped(refused.path)}"` +
     `${refused.caveats?.length ? " with extra limits" : ""}, because device sign-in can't decrypt. ` +
-    "Run the command without --device to approve in a browser, or remove the tinycloud.encryption entry from the manifest.";
+    "Run the command without --device to approve in a browser, or remove the tinycloud.encryption entry.";
 }
