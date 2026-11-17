@@ -1094,7 +1094,7 @@ export interface DelegateToOptions {
    * Sign the delegation with this not-before (`nbf`), to the whole second, so a delegation can be backdated to cover an
    * issuer clock that runs ahead of the node's. Refused when it is in the future (the node checks a delegation against its own
    * clock with no leeway, so a future `nbf` fails activation), when it is not before the delegation's expiry (the
-   * expiry delegateTo will sign, after the session cap), or not a valid Date, and with `forceWalletSign`, whose SIWE
+   * expiry delegateTo will sign, after the session cap and, on the runtime-grant path, the runtime grant's own end), or not a valid Date, and with `forceWalletSign`, whose SIWE
    * path cannot carry it. Default: none, so the delegation is valid from the moment it is signed.
    */
   notBefore?: Date;

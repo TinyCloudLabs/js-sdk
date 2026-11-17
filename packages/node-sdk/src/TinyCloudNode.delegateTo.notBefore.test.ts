@@ -1,7 +1,8 @@
 import { ed25519 } from "@noble/curves/ed25519";
 import { afterAll, beforeAll, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { base58btc } from "multiformats/bases/base58";
-import { TinyCloudNode } from "./TinyCloudNode";
+import type { ISessionManager, IWasmBindings, PermissionEntry } from "@tinycloud/sdk-core";
+import { TinyCloudNode, type TinyCloudNodeConfig } from "./TinyCloudNode";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 /**
@@ -77,7 +78,7 @@ function makeNode(sessionExpiry: Date, sessionRecap: unknown[] = []): TinyCloudN
   const node = new TinyCloudNode({
     host: "https://tinycloud.test",
     tinycloudRegistryUrl: registry.url.origin,
-    signer: { getAddress: async () => ADDRESS, getChainId: async () => 1, signMessage: mock(async () => "0xsig") } as unknown as ConstructorParameters<typeof TinyCloudNode>[0]["signer"],
+    signer: { getAddress: async () => ADDRESS, getChainId: async () => 1, signMessage: mock(async () => "0xsig") } as unknown as TinyCloudNodeConfig["signer"],
     wasmBindings: wasmBindings(sessionRecap),
   });
   const siwe = `tinycloud.test wants you to sign in with your Ethereum account:
