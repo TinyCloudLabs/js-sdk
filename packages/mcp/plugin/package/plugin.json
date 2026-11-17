@@ -52,8 +52,8 @@
               "expected_behavior": "After required confirmation or consent, the intended todo is absent in authoritative read/list results. Unrelated records remain. Do not claim historical-blob physical erasure."
             },
             {
-              "description": "P05: Optional derived copy. Authorized synthetic fixtures contain workouts of 20 and 30 minutes on October 18 and 19, 2026 in Europe/London.",
-              "prompt": "Use a fast searchable copy to total my workout minutes for October 18–19, 2026.",
+              "description": "P05: Optional derived copy. The test account's workouts app holds workouts of 20 and 30 minutes on October 18 and 19, 2026 in Europe/London.",
+              "prompt": "Use a fast searchable copy to total the workout minutes in my workouts app for October 18–19, 2026.",
               "tools_triggered": "tinycloud_apps_context and tinycloud_apps_read as needed, tinycloud_apps_query",
               "expected_behavior": "Obtain separate copy approval when needed, refresh the derived copy and return 50 minutes. Verify canonical personal records remain unchanged by this query."
             }
