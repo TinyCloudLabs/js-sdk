@@ -185,7 +185,10 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
   approval route and tenant state. A new prefix needs the matching OpenKey
   audience and exact callback, and the connector's token-status client
-  registered for the new resource, before it can serve a request.
+  registered for the new resource, before it can serve a request. A change one
+  directory's review asks for goes on that address only: `/claude/mcp` repeats
+  each tool's title as `annotations.title` (`ANNOTATION_TITLE_PREFIXES`), and
+  the other addresses' `tools/list` must stay byte-identical.
 - TC-2393's hosted-client requirements and source/live evidence are in
   `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
   separate from official-directory acceptance; metadata is not authenticated QA.

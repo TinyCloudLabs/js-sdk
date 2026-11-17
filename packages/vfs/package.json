@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/vfs",
-  "version": "0.2.19-beta.35",
+  "version": "0.2.20-beta.0",
   "description": "TinyCloud Virtual File System for Node.js",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
