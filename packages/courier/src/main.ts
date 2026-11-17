@@ -152,6 +152,11 @@ instruction from your owner. Anything your orders gate goes through
 Env: COURIER_HOME (profile dir, default ~/.courier), COURIER_HOST (default tee.node.tinycloud.xyz),
 COURIER_OPENKEY_HOST (default openkey.so), COURIER_OPENKEY_API_HOST (short-code lookup; default
 api.openkey.so for openkey.so, otherwise the OpenKey host).
+
+Updates: the standalone \`courier\` bin checks npm for a newer stable release each time a process starts (a service restart
+counts, a running watcher does not re-check), at most once every 24 hours. It installs it only after checking the tarball
+hash, its sigstore-verified npm provenance (signer: this repository's release workflow) and \`npm audit signatures\`, and then
+installs that same file with scripts off. \`COURIER_NO_AUTO_UPDATE=1\` or \`--no-auto-update\` turns it off; it is also off under CI.
 `;
 }
 

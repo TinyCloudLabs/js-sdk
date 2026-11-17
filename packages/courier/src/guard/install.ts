@@ -7,6 +7,8 @@ import { isRecord } from '../a2a.js';
 import { installRoots, realpathBest } from './paths.js';
 import { createHash } from 'node:crypto';
 
+/** Set in every wake-adapter child's environment: a woken agent's own `courier` calls never check for updates (`auto-update.ts`). */
+export const WAKE_CHILD_ENV = 'COURIER_WAKE_CHILD';
 /** Where this OS user keeps credentials that a woken agent can read through the Read tool (and a shell) unless HOME differs. */
 export const CREDENTIAL_FILES = ['.config/gh/**', '.npmrc', '.netrc', '.ssh/**', '.aws/**', '.config/gcloud/**', '.docker/config.json', '.config/wrangler/**', '.config/.wrangler/**', '.git-credentials'];
 /**
@@ -180,6 +182,8 @@ export function agentHomeEnv(home: string): Record<string, string> {
     XDG_RUNTIME_DIR: path.join(clean, '.runtime'),
     TMPDIR: path.join(clean, 'tmp'), TMP: path.join(clean, 'tmp'), TEMP: path.join(clean, 'tmp'),
     TC_HOME: noOwnerProfileDir(home),
+    // Tells a `courier` started by the woken agent (guard hook, inbox, send…) not to check for updates.
+    [WAKE_CHILD_ENV]: '1',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(clean, '.gitconfig'),
   };
