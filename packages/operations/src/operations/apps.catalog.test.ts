@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, RuntimeOperationContext } from "../contract.js";
-import { tcAppsApprovalReason } from "../tc-apps.js";
+import { TC_APPS_CATALOG_APPS, TC_APPS_CATALOG_PERMISSIONS, tcAppsApprovalReason } from "../tc-apps.js";
+import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { knowledgeOperationDefinitions } from "./knowledge.js";
 import { HEALTHLOG_DATABASE, HEALTHLOG_DAY_CARD, HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_INSERT, HEALTHLOG_MEAL_READBACK, HEALTHLOG_MEAL_UPDATE, HEALTHLOG_WEIGHT_INSERT, HEALTHLOG_WEIGHT_READBACK, HEALTHLOG_WEIGHT_TODAY } from "../tc-apps/preamble.js";
 import type { AppsPermission } from "../tc-apps/kv.js";
@@ -222,5 +223,14 @@ describe("an unhosted space is not 'not installed'", () => {
       outcome = await sqlDefinition("tinycloud.sql.query").execute({ ...context, runtime: { ...context.runtime, node } } as never, { space: "applications", database: HEALTHLOG_DATABASE, sql: HEALTHLOG_MEAL_DUPLICATE_CHECK, params: ["2026-11-03", "lunch", "Dal"] } as never);
     });
     expect(outcome).toMatchObject({ status: "error", error: { code: "NODE_ERROR", details: { reason: "space_not_hosted" }, retryable: false } });
+  });
+});
+
+describe("catalog apps on a surface without their tools", () => {
+  test("every app a context call can request has the name and page the rules give for it", () => {
+    expect(Object.keys(TC_APPS_CATALOG_APPS).sort()).toEqual(Object.keys(TC_APPS_CATALOG_PERMISSIONS).sort());
+    for (const { title, link } of Object.values(TC_APPS_CATALOG_APPS)) {
+      expect(TC_APPS_RULES).toContain(`(${title}) | \`${link}\` |`);
+    }
   });
 });

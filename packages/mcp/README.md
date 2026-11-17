@@ -175,7 +175,12 @@ requests read only. A first meal without `app` retains three task approvals.
 `app: "recipes"` bundles app-list and Recipes-notes reads; its database is
 learned from those notes and SQL read access is requested separately.
 Recipes writes remain unsupported. The restricted public surface has no generic
-SQL tools; the catalog rules direct it to the app link when those tools are absent.
+SQL or knowledge tools, so it cannot work with either app: there `app`'s
+description names no catalog slug, and `app: "healthlog"` or `app: "recipes"`
+returns `INPUT_INVALID` with `details.reason: "catalog_app_unavailable"` and the
+app's tiny-app link, without requesting any approval. The catalog rules still
+route meals, body weight and recipes to those apps, so the assistant gives the
+link rather than saving that data as generic records.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to

@@ -251,3 +251,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
   (operations/src/operations/sql.ts). Drop that step when onboarding grants
   the schema for catalog apps (TC-2430).
+- A surface that does not register the catalog apps' tools (`CATALOG_APP_TOOLS`
+  in `packages/mcp/src/tools.ts`; today the restricted addresses) neither offers
+  nor accepts a catalog slug: `tinycloud_apps_context`'s `app` description omits
+  them, and `app: "healthlog"` or `"recipes"` is answered before the kernel with
+  `INPUT_INVALID`, `details.reason: "catalog_app_unavailable"` and the tiny-app
+  link, so no approval is planned. `/mcp` and `operations.json` are unaffected.
+  Keep the catalog section in the rules those addresses return: it is what makes
+  an assistant give the app link for a new meal or body-weight request instead
+  of creating a generic app for it.
