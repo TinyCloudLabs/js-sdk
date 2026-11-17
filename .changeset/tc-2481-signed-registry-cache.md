@@ -7,6 +7,10 @@
 "@tinycloud/sdk-services": patch
 "@tinycloud/replica": patch
 ---
+Routing now reads a verified, owner-signed copy of each owner's registry record and refreshes it before each decision. A device with no saved settings no longer falls back to a default host when the registry is unreachable; it refuses with `RegistryUnavailableError`.
+
+Details of the change:
+
 Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
 
 The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
