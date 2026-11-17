@@ -27,7 +27,7 @@ describe("token bucket", () => {
     expect(limiter.take("b", "k", rule).allowed).toBe(false);
   });
 
-  test("keys and buckets are independent, and peek never spends", () => {
+  test("keys and buckets are independent, and a refund gives back one call but never past the capacity", () => {
     const time = clock();
     const limiter = createRateLimiter({ now: time.now });
     const rule = { perMinute: 1, burst: 1 };
@@ -35,10 +35,15 @@ describe("token bucket", () => {
     expect(limiter.take("read", "alice", rule).allowed).toBe(false);
     expect(limiter.take("read", "bob", rule).allowed).toBe(true);
     expect(limiter.take("write", "alice", rule).allowed).toBe(true);
-    expect(limiter.peek("fresh", "x", rule).allowed).toBe(true);
-    expect(limiter.peek("fresh", "x", rule).allowed).toBe(true);
-    expect(limiter.take("fresh", "x", rule).allowed).toBe(true);
-    expect(limiter.peek("fresh", "x", rule).allowed).toBe(false);
+    limiter.refund("read", "alice", rule);
+    expect(limiter.take("read", "alice", rule).allowed).toBe(true);
+    expect(limiter.take("read", "alice", rule).allowed).toBe(false);
+    limiter.refund("read", "alice", rule);
+    limiter.refund("read", "alice", rule);
+    expect(limiter.take("read", "alice", rule).allowed).toBe(true);
+    expect(limiter.take("read", "alice", rule).allowed).toBe(false);
+    limiter.refund("never-spent", "x", rule);
+    expect(limiter.take("never-spent", "x", rule).allowed).toBe(true);
   });
 
   test("never grows past maxKeys", () => {

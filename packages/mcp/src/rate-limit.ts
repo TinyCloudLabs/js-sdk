@@ -44,8 +44,8 @@ export type RateDecision =
 export interface RateLimiter {
   /** Spend one call from the bucket, or say how long until one is free. */
   take(bucket: string, key: string, rule: RateRule): RateDecision;
-  /** Whether a call would be allowed, without spending it. */
-  peek(bucket: string, key: string, rule: RateRule): RateDecision;
+  /** Give back one call a caller spent with `take`, never past the bucket's capacity. */
+  refund(bucket: string, key: string, rule: RateRule): void;
 }
 
 export const DEFAULT_RATE_LIMITS: Omit<RateLimitConfig, "now"> = {
@@ -84,8 +84,12 @@ export function createRateLimiter(config: Pick<RateLimitConfig, "maxKeys" | "now
       : { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(((1 - bucket.tokens) * 60) / rule.perMinute)) };
 
   return {
-    peek(bucket, key, rule) {
-      return decide(refilled(`${bucket}\0${key}`, rule), rule);
+    refund(bucket, key, rule) {
+      const id = `${bucket}\0${key}`;
+      if (!buckets.has(id)) return;
+      const state = refilled(id, rule);
+      state.tokens = Math.min(rule.burst ?? rule.perMinute, state.tokens + 1);
+      buckets.set(id, state);
     },
     take(bucket, key, rule) {
       const id = `${bucket}\0${key}`;
@@ -174,12 +178,18 @@ export function refuseTool(limits: RateLimits, subject: string, name: string, de
   return decision.allowed ? undefined : { limitClass, retryAfterSeconds: decision.retryAfterSeconds };
 }
 
-/** 429 when the request's address is over `bucket`'s limit. `spend: false` only checks. No-op when address limits are off. */
-export function refuseAddress(limits: RateLimits, request: Request, bucket: string, spend: boolean): Response | undefined {
+/** 429 when the request's address is over `bucket`'s limit; otherwise spends one call. No-op when address limits are off. */
+export function refuseAddress(limits: RateLimits, request: Request, bucket: string): Response | undefined {
   const address = clientAddress(request, limits.config.trustedProxyHops);
   if (address === undefined) return undefined;
-  const decision = (spend ? limits.limiter.take : limits.limiter.peek)(bucket, address, limits.config.ip);
+  const decision = limits.limiter.take(bucket, address, limits.config.ip);
   return decision.allowed ? undefined : rateLimitedResponse(decision.retryAfterSeconds);
+}
+
+/** Give back a call `refuseAddress` spent, once the request turns out not to deserve the charge. */
+export function refundAddress(limits: RateLimits, request: Request, bucket: string): void {
+  const address = clientAddress(request, limits.config.trustedProxyHops);
+  if (address !== undefined) limits.limiter.refund(bucket, address, limits.config.ip);
 }
 
 /** 429 when an authenticated request is over its OAuth client's or its subject's request ceiling. */

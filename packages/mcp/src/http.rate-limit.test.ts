@@ -199,6 +199,52 @@ test("rejected bearer tokens cost their address, while a request with no token d
   expect((await attempt({ "x-forwarded-for": "203.0.113.51", authorization: "Bearer not-a-token" })).status).toBe(401);
 });
 
+test("50 bad tokens sent at once cost only their address's burst; the rest are refused before any lookup finishes", async () => {
+  const { app } = await start(LIMITS);
+  const attempt = (headers: Record<string, string>) => hostedFetch(app, "https://mcp.test/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  const responses = await Promise.all(Array.from({ length: 50 }, (_, index) => attempt({
+    "x-forwarded-for": "203.0.113.60",
+    authorization: `Bearer not-a-token-${index}`,
+  })));
+  const statuses = responses.map((response) => response.status);
+  // LIMITS.ip is a burst of 2: charged before the lookup, so concurrency cannot buy more than that.
+  expect(statuses.filter((status) => status === 401)).toHaveLength(2);
+  expect(statuses.filter((status) => status === 429)).toHaveLength(48);
+});
+
+test("a valid token is not charged to its address, so users behind one shared address are not throttled", async () => {
+  const { app, tokenFor } = await start(LIMITS);
+  const token = await tokenFor("alice");
+  const post = () => hostedFetch(app, "https://mcp.test/mcp", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "x-forwarded-for": "203.0.113.61",
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  // More valid requests than the address burst of 2, one by one and then all at once.
+  for (let index = 0; index < 6; index += 1) expect((await post()).status).not.toBe(429);
+  const together = await Promise.all(Array.from({ length: 2 }, post));
+  expect(together.map((response) => response.status)).not.toContain(429);
+  // And the address still has its whole budget for bad tokens afterwards.
+  const bad = { "x-forwarded-for": "203.0.113.61", authorization: "Bearer not-a-token" };
+  const attempt = () => hostedFetch(app, "https://mcp.test/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...bad },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  expect((await attempt()).status).toBe(401);
+  expect((await attempt()).status).toBe(401);
+  expect((await attempt()).status).toBe(429);
+});
+
 async function hostedFetch(app: HostedMcpApp, input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
   const request = input instanceof Request ? new Request(input, init) : new Request(input.toString(), init);
   const headers = new Headers(request.headers);

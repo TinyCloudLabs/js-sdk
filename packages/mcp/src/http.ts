@@ -19,6 +19,7 @@ import {
   createRateLimits,
   rateLimitedToolResult,
   refuseAddress,
+  refundAddress,
   refuseAuthenticated,
   refuseTool,
   type RateLimitConfig,
@@ -415,7 +416,7 @@ function createHostedSurface(
       }
       if (limits !== undefined && request.method !== "OPTIONS" &&
         (url.pathname === connectPath || url.pathname === callbackPath)) {
-        const blocked = refuseAddress(limits, request, "approval", true);
+        const blocked = refuseAddress(limits, request, "approval");
         if (blocked !== undefined) {
           return url.pathname === callbackPath ? callbackCors(blocked, config.openkeyHost) : blocked;
         }
@@ -561,21 +562,24 @@ function createHostedSurface(
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
       if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
-      // Bearer tokens the server must reject cost an OpenKey lookup, so they spend the address's budget. A request with
-      // no token is a cheap discovery 401 and does not: every ChatGPT user shares OpenAI's addresses.
+      // Bearer tokens the server must reject cost an OpenKey lookup, so they spend the address's budget. The call is
+      // charged BEFORE the lookup and given back for a token that proves valid: a check-then-charge would let any
+      // number of concurrent bad tokens through before the first one is counted. A request with no token is a cheap
+      // discovery 401 and does not spend: every ChatGPT user shares OpenAI's addresses.
       const presented = request.headers.has("authorization");
       if (limits !== undefined && presented) {
-        const blocked = refuseAddress(limits, request, "bad-token", false);
+        const blocked = refuseAddress(limits, request, "bad-token");
         if (blocked !== undefined) return mcpCors(blocked, request);
       }
-      const auth = await authenticate(request);
-      if (limits !== undefined) {
-        if (auth instanceof Response) {
-          if (presented) refuseAddress(limits, request, "bad-token", true);
-        } else {
-          const blocked = refuseAuthenticated(limits, auth.clientId, auth.extra?.subject);
-          if (blocked !== undefined) return mcpCors(blocked, request);
-        }
+      const auth = await authenticate(request).catch((error: unknown) => {
+        // An unexpected failure is not evidence of a bad token: do not charge the address for it.
+        if (limits !== undefined && presented) refundAddress(limits, request, "bad-token");
+        throw error;
+      });
+      if (limits !== undefined && !(auth instanceof Response)) {
+        if (presented) refundAddress(limits, request, "bad-token");
+        const blocked = refuseAuthenticated(limits, auth.clientId, auth.extra?.subject);
+        if (blocked !== undefined) return mcpCors(blocked, request);
       }
       return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
