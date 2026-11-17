@@ -29,18 +29,19 @@ const NOW = new Date("2026-11-17T12:00:00.000Z");
 const ROOT_END = new Date("2027-11-17T12:00:00.000Z");
 
 /** A wallet-signed SIWE CACAO from `signer` to `audience` over `paths`, as a wallet signs a share root. */
-async function walletRoot(signer: typeof owner, space: string, paths: readonly string[], audience = SHARE_DID): Promise<Delegation> {
+async function walletRoot(signer: typeof owner, space: string, paths: readonly string[], options: { audience?: string; notBefore?: Date } = {}): Promise<Delegation> {
+  const audience = options.audience ?? SHARE_DID;
   const att: Record<string, Record<string, unknown[]>> = {};
   for (const path of paths) att[`${space}/kv/${path}`] = Object.fromEntries(READ.map((action) => [action, [{}]]));
   const lines = Object.keys(att).sort().map((uri, index) => ` (${index + 1}) 'tinycloud.kv': 'get', 'metadata' for '${uri}'.`).join("");
   const statement = `I further authorize the stated URI to perform the following actions on my behalf:${lines}`;
   const resources = [`urn:recap:${Buffer.from(JSON.stringify({ att, prf: [] })).toString("base64url")}`];
-  const fields = { domain: "app.tinycloud.xyz", nonce: "tc3194nonce", issuedAt: "2026-11-17T11:00:00.000Z", expirationTime: ROOT_END.toISOString() };
+  const fields = { domain: "app.tinycloud.xyz", nonce: "tc3194nonce", issuedAt: "2026-11-17T11:00:00.000Z", expirationTime: ROOT_END.toISOString(), ...(options.notBefore ? { notBefore: options.notBefore.toISOString() } : {}) };
   const message = new SiweMessage({ ...fields, address: signer.address, uri: audience, version: "1", chainId: 1, statement, resources }).prepareMessage();
   const signature = await signer.signMessage({ message });
   const authHeader = Buffer.from(encodeDagCbor({
     h: { t: "eip4361" },
-    p: { domain: fields.domain, iss: `did:pkh:eip155:1:${signer.address}`, aud: audience, version: 1, nonce: fields.nonce, iat: fields.issuedAt, exp: fields.expirationTime, statement, resources },
+    p: { domain: fields.domain, iss: `did:pkh:eip155:1:${signer.address}`, aud: audience, version: 1, nonce: fields.nonce, iat: fields.issuedAt, exp: fields.expirationTime, ...(fields.notBefore ? { nbf: fields.notBefore } : {}), statement, resources },
     s: { t: "eip191", s: new Uint8Array(Buffer.from(signature.slice(2), "hex")) },
   })).toString("base64url");
   const { cid } = await parseSignedSiweCacao(authHeader);
@@ -48,14 +49,14 @@ async function walletRoot(signer: typeof owner, space: string, paths: readonly s
 }
 
 /** A `tc1:` token claiming `space` and both recording resources, carrying `delegation` as its root. */
-function token(space: string, delegation: Delegation): string {
+function token(space: string, delegation: Delegation, keyDid = SHARE_DID): string {
   const data: EncodedShareData = {
     version: 1,
     host: "https://node.tinycloud.xyz",
     spaceId: space,
     path: TRANSCRIPT,
     resources: [{ path: TRANSCRIPT, actions: READ }, { path: AUDIO, actions: READ }],
-    keyDid: SHARE_DID,
+    keyDid,
     key: SHARE_JWK,
     delegation: { ...delegation, spaceId: space },
   };
@@ -63,8 +64,9 @@ function token(space: string, delegation: Delegation): string {
 }
 
 describe("inspectShareToken", () => {
-  test("names the owner, the exact resources and the access end from the owner's wallet signature", async () => {
-    const inspected = await inspectShareToken(token(SPACE, await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO])), { now: NOW });
+  test("names the owner, the exact resources, the access end and the root from the owner's wallet signature", async () => {
+    const root = await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO]);
+    const inspected = await inspectShareToken(token(SPACE, root), { now: NOW });
 
     expect(inspected).toEqual({
       ok: true,
@@ -72,6 +74,7 @@ describe("inspectShareToken", () => {
         owner: { address: owner.address, chainId: 1, spaceId: SPACE },
         resources: [{ path: TRANSCRIPT, actions: READ }, { path: AUDIO, actions: READ }],
         accessExpiresAt: ROOT_END,
+        rootCid: root.cid,
       },
     });
   });
@@ -89,12 +92,40 @@ describe("inspectShareToken", () => {
 
   test("refuses a root that does not grant every resource the token claims, or grants it to another key", async () => {
     const narrower = await walletRoot(owner, SPACE, [TRANSCRIPT]);
-    const toAnotherKey = await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO], fixture.delegation.audience);
+    const toAnotherKey = await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO], { audience: fixture.delegation.audience });
     for (const root of [narrower, toAnotherKey]) {
       const inspected = await inspectShareToken(token(SPACE, root), { now: NOW });
       expect(inspected.ok).toBe(false);
       if (!inspected.ok) expect(inspected.error.code).toBe(DelegationErrorCodes.INVALID_TOKEN);
     }
+  });
+
+  test("refuses, without throwing, a root or token that names something other than a DID", async () => {
+    const genuine = await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO]);
+    const toACid = await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO], { audience: `ucan:${genuine.cid}` });
+    const cases = [token(SPACE, toACid), token(SPACE, genuine, "garbage"), token(SPACE, { ...genuine, delegateDID: "garbage" })];
+    for (const shareToken of cases) {
+      const inspected = await inspectShareToken(shareToken, { now: NOW });
+      expect(inspected.ok).toBe(false);
+      if (!inspected.ok) expect(inspected.error.code).toBe(DelegationErrorCodes.INVALID_TOKEN);
+    }
+  });
+
+  test("refuses an owner-signed root over a space id the node would read as another space", async () => {
+    for (const space of [`tinycloud:pkh:eip155:01:${owner.address}:default`, `${SPACE}:extra`, `${SPACE}/extra`]) {
+      const inspected = await inspectShareToken(token(space, await walletRoot(owner, space, [TRANSCRIPT, AUDIO])), { now: NOW });
+      expect(inspected.ok).toBe(false);
+      if (!inspected.ok) expect(inspected.error.code).toBe(DelegationErrorCodes.INVALID_TOKEN);
+    }
+  });
+
+  test("a genuine root that is not valid yet is not claimable, and is not reported as expired", async () => {
+    const root = await walletRoot(owner, SPACE, [TRANSCRIPT, AUDIO], { notBefore: new Date("2027-01-01T00:00:00.000Z") });
+    const early = await inspectShareToken(token(SPACE, root), { now: NOW });
+    expect(early.ok).toBe(false);
+    if (!early.ok) expect(early.error.code).toBe(DelegationErrorCodes.INVALID_TOKEN);
+    const later = await inspectShareToken(token(SPACE, root), { now: new Date("2027-02-01T00:00:00.000Z") });
+    expect(later.ok).toBe(true);
   });
 
   test("reports a genuine share whose root has ended as expired", async () => {

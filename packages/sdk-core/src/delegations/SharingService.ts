@@ -249,6 +249,8 @@ export interface InspectedShareToken {
   resources: ShareResource[];
   /** When the root delegation ends: anyone holding the token can claim it until then. */
   accessExpiresAt: Date;
+  /** The root delegation's CID, checked against its signed bytes: one share has one, whichever link carries it. */
+  rootCid: string;
 }
 
 /** Most resources one share may carry (the owner-delegation bound). */
@@ -1844,7 +1846,7 @@ async function verifyShareRoot(
   spaceId: string,
   keyDid: string,
   resources: readonly ShareResource[],
-): Promise<{ chainId: number; address: string; expiresAt: Date } | null> {
+): Promise<{ chainId: number; address: string; expiresAt: Date; notBefore: Date | null } | null> {
   const owner = ownerFromSpaceId(spaceId);
   const authorization = delegation.authHeader;
   if (!owner || !authorization || authorization.includes(".")) return null;
@@ -1855,9 +1857,11 @@ async function verifyShareRoot(
     return null;
   }
   if (root.issuer.toLowerCase() !== `did:pkh:eip155:${owner.chainId}:${owner.address}`.toLowerCase()) return null;
-  if (principalDid(root.audience) !== principalDid(keyDid)) return null;
+  if (!samePrincipal(root.audience, keyDid)) return null;
   const expiresAt = root.expiresAt === undefined ? null : new Date(root.expiresAt);
   if (!expiresAt || Number.isNaN(expiresAt.getTime())) return null;
+  const notBefore = root.notBefore === undefined ? null : new Date(root.notBefore);
+  if (notBefore && Number.isNaN(notBefore.getTime())) return null;
   const entries = Object.entries(root.attenuation);
   if (entries.length !== resources.length) return null;
   const matched = new Set<ShareResource>();
@@ -1868,7 +1872,16 @@ async function verifyShareRoot(
     if (!wanted || !sortedEqual(Object.keys(abilities), wanted.actions)) return null;
     matched.add(wanted);
   }
-  return { chainId: owner.chainId, address: owner.address, expiresAt };
+  return { chainId: owner.chainId, address: owner.address, expiresAt, notBefore };
+}
+
+/** Whether two strings name the same principal: `false`, never a throw, when either is not a DID. */
+function samePrincipal(a: string, b: string): boolean {
+  try {
+    return principalDid(a) === principalDid(b);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1878,7 +1891,8 @@ async function verifyShareRoot(
  * for anything shown to a person before they claim the share. The node still decides every claim and read.
  *
  * Refuses (`INVALID_TOKEN`) a malformed token, one whose root does not match, one whose root was signed by a
- * session key rather than the owner's wallet (it cannot be checked offline), and (`AUTH_EXPIRED`) an ended root.
+ * session key rather than the owner's wallet (it cannot be checked offline), one whose root is not valid yet, and
+ * (`AUTH_EXPIRED`) an ended root.
  */
 export async function inspectShareToken(
   token: string,
@@ -1892,12 +1906,16 @@ export async function inspectShareToken(
     error: createError(DelegationErrorCodes.INVALID_TOKEN, "The share token is not backed by its owner's signature"),
   });
   if (!spaceIdsEqual(data.delegation.spaceId, data.spaceId)
-    || principalDid(data.delegation.delegateDID) !== principalDid(data.keyDid)
+    || !samePrincipal(data.delegation.delegateDID, data.keyDid)
     || !shareKeyMatchesDid(data.key, data.keyDid)) return invalid();
   const resources = data.resources ?? [{ path: data.path, actions: data.delegation.actions }];
   const root = await verifyShareRoot(data.delegation, data.spaceId, data.keyDid, resources);
   if (!root) return invalid();
-  if (root.expiresAt <= (options.now ?? new Date())) {
+  const now = options.now ?? new Date();
+  if (root.notBefore && root.notBefore > now) {
+    return { ok: false, error: createError(DelegationErrorCodes.INVALID_TOKEN, "The share is not valid yet") };
+  }
+  if (root.expiresAt <= now) {
     return { ok: false, error: createError(DelegationErrorCodes.AUTH_EXPIRED, "The share has expired") };
   }
   return {
@@ -1906,12 +1924,14 @@ export async function inspectShareToken(
       owner: { address: root.address, chainId: root.chainId, spaceId: data.spaceId },
       resources: resources.map((resource) => ({ path: resource.path, actions: [...resource.actions] })),
       accessExpiresAt: root.expiresAt,
+      rootCid: data.delegation.cid,
     },
   };
 }
 
+/** The owner a space id names, read the way the node reads it: `tinycloud:pkh:eip155:<chain>:<address>:<name>`. */
 function ownerFromSpaceId(spaceId: string): { chainId: number; address: string } | null {
-  const match = spaceId.match(/^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/);
+  const match = spaceId.match(/^tinycloud:pkh:eip155:([1-9]\d*):(0x[0-9a-fA-F]{40}):([^:/?#]+)$/);
   if (!match) return null;
   const chainId = Number(match[1]);
   if (!Number.isSafeInteger(chainId)) return null;
