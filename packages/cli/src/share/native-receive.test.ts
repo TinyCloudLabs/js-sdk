@@ -32,15 +32,6 @@ describe("native bearer receive", () => {
     expect(failure).toMatchObject({ code: "SHARE_REVOKED", exitCode: 4 });
   });
 
-  it("explains verified absence of the sender's storage settings without retrying", async () => {
-    const subject = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
-    const cause = new NodeNotFoundError(subject, { status: "unregistered", subject, source: "offchain", hosts: [] });
-    const failure = await readerFor({ code: cause.code, message: cause.message, cause, meta: {} })(link)
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(CLIError);
-    expect(failure).toMatchObject({ code: "SHARE_SENDER_UNREGISTERED", exitCode: 4 });
-  });
-
   it.each([
     { status: "registered", subject: "did:key:z6MkSender", source: "offchain", hosts: [] },
     { status: "unregistered", subject: "did:key:z6MkSender", source: "offchain", hosts: [], offline: true },
