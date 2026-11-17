@@ -95,7 +95,7 @@ test("root OAuth Protected Resource Metadata alias matches the path-specific doc
   expect(metadata).toMatchObject({
     resource: "https://mcp.test/mcp",
     authorization_servers: ["https://openkey.test/api/auth"],
-    scopes_supported: ["tinycloud:mcp"],
+    scopes_supported: ["tinycloud:mcp", "offline_access"],
     bearer_methods_supported: ["header"],
   });
   expect(alias.headers.get("access-control-allow-origin")).toBe("*");
@@ -572,7 +572,7 @@ for (const prefix of ["chatgpt", "claude", "grok", "muse"]) {
     expect(metadataDocument).toMatchObject({
       resource: `https://mcp.test/${prefix}/mcp`,
       authorization_servers: ["https://openkey.test/api/auth"],
-      scopes_supported: ["tinycloud:mcp"],
+      scopes_supported: ["tinycloud:mcp", "offline_access"],
     });
     expect(metadataDocument.bearer_methods_supported).toBeUndefined();
     const unauthenticated = await app.fetch(request(`/${prefix}/mcp`, { method: "POST" }));
