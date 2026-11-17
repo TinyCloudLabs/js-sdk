@@ -3,6 +3,7 @@ import { connectFeedAgent } from "./connection";
 import { disconnectFeedAgent } from "./disconnect";
 import { ExitCode } from "../config/constants";
 import { CLIError } from "../output/errors";
+import { revokeIssuedDelegation } from "../commands/delegation";
 import { sqliteHandle, unwrap } from "../../../sdk-services/src/feed/sqlite.test-helper";
 import type { FeedSource } from "../../../sdk-services/src/feed";
 
@@ -105,6 +106,34 @@ test("any other node refusal, including an unauthorized revoke, still leaves the
     await expect(disconnectFeedAgent(handle, "demo", async () => {
       throw new CLIError("REVOKE_UNAUTHORIZED", "The node refused this revocation.", ExitCode.PERMISSION_DENIED);
     })).rejects.toMatchObject({ code: "REVOKE_UNAUTHORIZED" });
+    expect(await rows(handle, "feed_agents")).toEqual([["demo"]]);
+  } finally { close(); }
+});
+
+// The node's own answer to a revocation it cannot place is `404 Space not found`; the SDK reports it as NOT_FOUND. A 404 from anything
+// else (a proxy, an older node's route) comes back as a failed request: it must never be read as "the grant is gone".
+const nodeAnswering = (error: { code: string; message: string; meta?: Record<string, unknown> }) =>
+  ({ delegationManager: { revokeIssued: async () => ({ ok: false as const, error }) } }) as never;
+const revokeVia = (node: never) => (cid: string) => revokeIssuedDelegation(node, { profile: "owner", host: "https://node.example" }, cid).then(() => undefined);
+
+test("the node's `Space not found` answer to the revoke removes the row", async () => {
+  const { handle, close } = sqliteHandle();
+  try {
+    await connectFeedAgent(handle, source, async () => ({ cid: "bafy-grant-1" }));
+    const node = nodeAnswering({ code: "NOT_FOUND", message: "Delegation not found: bafy-grant-1", meta: { cid: "bafy-grant-1", status: 404 } });
+    expect(await disconnectFeedAgent(handle, "demo", revokeVia(node))).toMatchObject({ revoked: false, nodeHadNoGrant: true, removed: true });
+    expect(await rows(handle, "feed_agents")).toEqual([]);
+  } finally { close(); }
+});
+
+test("a bare 404 (a proxy or an older node) keeps the row and reports a failure", async () => {
+  const { handle, close } = sqliteHandle();
+  try {
+    await connectFeedAgent(handle, source, async () => ({ cid: "bafy-grant-1" }));
+    const node = nodeAnswering({ code: "NETWORK_ERROR", message: "Failed to revoke delegation: 404 - <html>Not Found</html>", meta: { cid: "bafy-grant-1", status: 404 } });
+    const failure = await disconnectFeedAgent(handle, "demo", revokeVia(node)).then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(CLIError);
+    expect(failure).not.toMatchObject({ code: "TARGET_NOT_FOUND" });
     expect(await rows(handle, "feed_agents")).toEqual([["demo"]]);
   } finally { close(); }
 });
