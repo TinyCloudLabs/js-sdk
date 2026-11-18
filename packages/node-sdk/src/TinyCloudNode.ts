@@ -1408,6 +1408,21 @@ function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
   return "gate_unavailable";
 }
 
+/**
+ * The node's busy or timeout answer, which the SDK has already retried (under
+ * its retry policy, honouring the node's Retry-After) by the time it reaches a
+ * caller. Read from the error or the error it wraps.
+ */
+function isSdkRetriedNodeAnswer(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth += 1) {
+    const code = Reflect.get(current, "code");
+    if (code === ErrorCodes.NODE_BUSY || code === ErrorCodes.REQUEST_TIMEOUT) return true;
+    current = Reflect.get(current, "cause");
+  }
+  return false;
+}
+
 export class TinyCloudNode {
   /** @internal Registered by importing @tinycloud/node-sdk (not /core) */
   private static nodeDefaults?: NodeDefaults;
@@ -4473,6 +4488,17 @@ export class TinyCloudNode {
         ) {
           console.warn(
             "TinyCloud account registry sync stopped: storage is full",
+            error,
+          );
+          return;
+        }
+        // The node's busy and timeout answers reach here after the SDK has
+        // retried them under its retry policy and the node's Retry-After. A
+        // second loop would multiply the requests a busy node gets (up to 12
+        // per write instead of 4), so stop; the next sync tries again.
+        if (isSdkRetriedNodeAnswer(error)) {
+          console.warn(
+            "TinyCloud account registry sync stopped: the node is busy; the SDK already retried it",
             error,
           );
           return;

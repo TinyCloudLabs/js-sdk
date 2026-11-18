@@ -3327,5 +3327,23 @@
       "ceiling": { "index.mjs": 1528459, "index.cjs": 1461965 }
     },
     "reason": "SharingService grants several resources in one share, signs one recipient child over all of them, and adds inspectShareToken, which checks a share token offline against the owner's wallet signature and returns the owner, the resources, when access ends and the root CID; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1033 (ffa4b6a0, based on master 0b5a6bc8) measured index.mjs 1528459 and index.cjs 1461965 gzip -9 bytes: +2196 and +1288 over the TC-3172 ceilings 1526263 and 1460677. No other ceiling moves. Details: TC-3194"
+  },
+  "tc3243SdkOwnsBusyRetryRoot": {
+    "label": "account registry sync leaves busy retries to the SDK (TC-3243)",
+    "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3194 pattern for #1038's exact canonical CI bytes over #1033's ceilings; index.mjs +150 B and index.cjs +108 B over the TC-3194 ceilings, each under the 800 B per-row cap. Details: TC-3243",
+    "base": "23953408e6724fa5f488e67e6c418c50bca83fb3",
+    "sourceCommits": ["42eeab4a2f342a2c6213cc69340eb8c87413147d"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228469",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228412"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 150, "index.cjs": 108 },
+      "ceiling": { "index.mjs": 1528609, "index.cjs": 1462073 }
+    },
+    "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
   }
 }

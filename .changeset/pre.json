@@ -29,10 +29,12 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "auth-request-grant-timeout",
     "auth-request-stale-link",
     "auth-retry-grant-hint",
     "native-share-recording-links",
     "node-sdk-delegate-not-before",
+    "node-sdk-registry-sync-busy",
     "tc-3141-legacy-list-lazy"
   ]
 }
