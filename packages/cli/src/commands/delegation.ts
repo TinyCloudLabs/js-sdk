@@ -129,6 +129,17 @@ export async function revokeAsDelegate(node: TinyCloudNode, ctx: { profile: stri
 export async function giveBackDelegation(
   node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string, control: StoredRevokeControl,
 ) {
+  // The revoke is signed with this profile's key and carries the revoke grant as its proof, so the grant is installed first.
+  try {
+    node.installRevokeControl({ ...control, expiry: new Date(control.expiry) });
+  } catch (error) {
+    throw new CLIError(
+      "REVOKE_UNAUTHORIZED",
+      error instanceof Error ? error.message : String(error),
+      ExitCode.PERMISSION_DENIED,
+      { hint: "The revoke grant stored with this delegation cannot be used by this profile; ask the owner to revoke it." },
+    );
+  }
   const result = await node.delegationManager.revoke(cid, { authorityCid: control.cid });
   if (!result.ok) {
     if (result.error.code === "PERMISSION_DENIED") {

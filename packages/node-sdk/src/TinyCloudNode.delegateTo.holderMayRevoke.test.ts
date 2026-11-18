@@ -23,7 +23,7 @@ test("holderMayRevoke returns a revoke grant that names only the new delegation,
   expect(control.aud).toBe(audience());
   expect(control.exp).toBe(granted.exp);
   expect(control.prf).toEqual([]);
-  expect(revokeControl).toMatchObject({ targetCid: delegation.cid, delegateDID: audience() });
+  expect(revokeControl).toMatchObject({ targetCid: delegation.cid, delegateDID: audience(), spaceId: delegation.spaceId });
   expect(revokeControl!.expiry.getTime()).toBe(delegation.expiry.getTime());
   expect(revokeControl!.cid).not.toBe(delegation.cid);
 });
@@ -76,4 +76,19 @@ test("any other answer to the revoke grant (500) leaves the error unmarked", asy
   } finally {
     restore();
   }
+});
+
+test("the holder gives the delegation back with the revoke grant: its invocation is signed by the holder's key with the grant as proof", async () => {
+  const { delegation, revokeControl } = await fixture.owner.delegateTo(audience(), [...fixture.permissions], { expiry: "1h", holderMayRevoke: true });
+  const before = fixture.nativeBearerStats().revocations;
+  fixture.delegate.installRevokeControl(revokeControl!);
+  const result = await fixture.delegate.delegationManager.revoke(delegation.cid, { authorityCid: revokeControl!.cid });
+  expect(result.ok ? "ok" : JSON.stringify(result.error)).toBe("ok");
+  expect(fixture.nativeBearerStats().revocations).toBe(before + 1);
+});
+
+test("a revoke grant issued to another key, or already over, is refused at install", async () => {
+  const { revokeControl } = await fixture.owner.delegateTo(audience(), [...fixture.permissions], { expiry: "1h", holderMayRevoke: true });
+  expect(() => fixture.owner.installRevokeControl(revokeControl!)).toThrow("not to this session's key");
+  expect(() => fixture.delegate.installRevokeControl({ ...revokeControl!, expiry: new Date(Date.now() - 1000) })).toThrow("has ended");
 });

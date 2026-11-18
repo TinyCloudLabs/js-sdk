@@ -110,7 +110,7 @@ async function runCli(
 
 
 const control = (overrides: Record<string, unknown> = {}) => ({
-  cid: "bafy-revoke-control", targetCid: grant.cid, delegateDID: grant.delegateDID,
+  cid: "bafy-revoke-control", targetCid: grant.cid, delegateDID: grant.delegateDID, spaceId: grant.spaceId,
   authorization: "header.payload.signature", expiry: expiresAt, ...overrides,
 });
 

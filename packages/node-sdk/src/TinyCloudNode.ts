@@ -1138,6 +1138,8 @@ export interface RevokeControl {
   targetCid: string;
   /** The DID that holds it (the delegation's recipient). */
   delegateDID: string;
+  /** The space the delegation is in; the holder's revoke invocation is routed there. */
+  spaceId: string;
   /** The signed compact UCAN, as sent in the `Authorization` header. */
   authorization: string;
   /** End of the grant: the same as the delegation's. */
@@ -8673,6 +8675,43 @@ export class TinyCloudNode {
   }
 
   /**
+   * Makes a revoke grant this key was issued (`delegateTo({ holderMayRevoke })`, as `RevokeControl`) usable as the authority
+   * of `delegationManager.revoke(targetCid, { authorityCid: control.cid })`. The invocation is signed with this session's key
+   * and carries the grant as its proof, so the grant must have been issued to this key.
+   */
+  installRevokeControl(control: RevokeControl): void {
+    const session = this._serviceContext?.session;
+    if (!session) throw new Error("Sign in before installing a revoke grant.");
+    if (session.verificationMethod.split("#", 1)[0] !== control.delegateDID.split("#", 1)[0]) {
+      throw new Error(`The revoke grant ${control.cid} was issued to ${control.delegateDID}, not to this session's key.`);
+    }
+    if (control.expiry.getTime() <= Date.now()) throw new Error(`The revoke grant ${control.cid} has ended.`);
+    const delegation: PortableDelegation = {
+      cid: control.cid,
+      delegationHeader: { Authorization: control.authorization },
+      delegateDID: control.delegateDID,
+      delegatorDID: "",
+      spaceId: control.spaceId,
+      path: "",
+      actions: ["tinycloud.delegation/revoke"],
+      resources: [{ service: "tinycloud.delegation", space: `urn:cid:${control.targetCid}`, path: "", actions: ["tinycloud.delegation/revoke"] }],
+      expiry: control.expiry,
+      allowSubDelegation: false,
+      ownerAddress: this.session?.address ?? "",
+      chainId: this.session?.chainId ?? 0,
+      ...(control.host === undefined ? {} : { host: control.host }),
+    };
+    this.runtimePermissionGrants = this.runtimePermissionGrants.filter((grant) => grant.delegation.cid !== control.cid);
+    this.runtimePermissionGrants.push({
+      session: { delegationHeader: delegation.delegationHeader, delegationCid: delegation.cid, spaceId: delegation.spaceId, verificationMethod: session.verificationMethod, jwk: session.jwk },
+      delegation,
+      operations: this.operationsFromDelegation(delegation),
+      expiresAt: control.expiry,
+      provenance: "delegated",
+    });
+  }
+
+  /**
    * Signs and activates the revoke-only grant for `delegation`: issuer = the key that signed `delegation` (its delegator),
    * audience = the delegation's recipient, ability `tinycloud.delegation/revoke` on exactly `urn:cid:<delegation>`, the same
    * end, nothing else, and no proof (the node decides whether it admits that). On failure the delegation stays active;
@@ -8707,6 +8746,7 @@ export class TinyCloudNode {
         cid: control.cid,
         targetCid: delegation.cid,
         delegateDID: delegation.delegateDID.split("#", 1)[0]!,
+        spaceId: delegation.spaceId,
         authorization: control.authorization,
         expiry: delegation.expiry,
         ...(delegation.host === undefined ? {} : { host: delegation.host }),

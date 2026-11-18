@@ -23,7 +23,7 @@ const { revokeAsDelegate } = await import("../commands/delegation.js");
 const AGENT = "did:key:z6MkAgent";
 const TARGET = "bafy-granted";
 const valid = (overrides: Record<string, unknown> = {}) => ({
-  cid: "bafy-control", targetCid: TARGET, delegateDID: AGENT, authorization: "header.payload.signature",
+  cid: "bafy-control", targetCid: TARGET, delegateDID: AGENT, spaceId: "tinycloud:pkh:eip155:1:0xabc:applications", authorization: "header.payload.signature",
   expiry: new Date(Date.now() + 3_600_000).toISOString(), ...overrides,
 });
 const ctx = (profile: string) => ({ profile, host: "https://node.example" });
@@ -37,9 +37,9 @@ async function holderProfile(name: string) {
 const heldGrants = async (name: string) => (await readAdditionalDelegations<{ delegation: { cid: string } }>(name)).map((entry) => entry.delegation.cid);
 
 function nodeAnswering(revoke: unknown, revokeIssued: unknown = { ok: true, data: { cid: TARGET } }) {
-  const calls = { revoke: [] as unknown[][], revokeIssued: [] as string[] };
-  const node = { delegationManager: {
-    revoke: async (...args: unknown[]) => { calls.revoke.push(args); return revoke; },
+  const calls = { revoke: [] as unknown[][], revokeIssued: [] as string[], installed: [] as Array<{ cid: string; expiry: Date }>, order: [] as string[] };
+  const node = { installRevokeControl: (control: { cid: string; expiry: Date }) => { calls.installed.push(control); calls.order.push("install"); }, delegationManager: {
+    revoke: async (...args: unknown[]) => { calls.revoke.push(args); calls.order.push("revoke"); return revoke; },
     revokeIssued: async (cid: string) => { calls.revokeIssued.push(cid); return revokeIssued; },
   } };
   return { node: node as never, calls };
@@ -50,6 +50,7 @@ test("a revoke grant is accepted only for the delegation it names and the recipi
   expect(parseRevokeControl(valid({ targetCid: "bafy-other" }), TARGET)).toBeUndefined();
   expect(parseRevokeControl(valid(), TARGET, "did:key:z6MkSomeoneElse")).toBeUndefined();
   expect(parseRevokeControl(valid({ authorization: "" }), TARGET)).toBeUndefined();
+  expect(parseRevokeControl(valid({ spaceId: undefined }), TARGET)).toBeUndefined();
   expect(parseRevokeControl(valid({ expiry: "not a date" }), TARGET)).toBeUndefined();
   expect(parseRevokeControl("nope", TARGET)).toBeUndefined();
 });
@@ -74,6 +75,8 @@ test("with a stored revoke grant the holder gives the delegation back with it, a
   const { node, calls } = nodeAnswering({ ok: true, data: { cid: TARGET } });
   expect(await revokeAsDelegate(node, ctx(profile), TARGET)).toMatchObject({ cid: TARGET, revoked: true, authority: "revoke-grant" });
   expect(calls.revoke).toEqual([[TARGET, { authorityCid: "bafy-control" }]]);
+  expect(calls.order).toEqual(["install", "revoke"]);
+  expect(calls.installed[0]).toMatchObject({ cid: "bafy-control", expiry: expect.any(Date) });
   expect(calls.revokeIssued).toEqual([]);
   expect(await heldGrants(profile)).toEqual([]);
   expect(await loadRevokeControls(profile)).toEqual([]);

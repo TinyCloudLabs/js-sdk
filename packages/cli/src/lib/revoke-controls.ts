@@ -20,6 +20,8 @@ export interface StoredRevokeControl {
   cid: string;
   targetCid: string;
   delegateDID: string;
+  /** The space of the delegation; the revoke is routed there. */
+  spaceId: string;
   authorization: string;
   expiry: string;
   host?: string;
@@ -33,14 +35,15 @@ export function revokeControlsPath(profile: string): string {
 export function parseRevokeControl(value: unknown, targetCid: string, expectedDelegate?: string): StoredRevokeControl | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
-  const { cid, delegateDID, authorization } = candidate;
+  const { cid, delegateDID, authorization, spaceId } = candidate;
   if (typeof cid !== "string" || cid === "" || typeof delegateDID !== "string" || typeof authorization !== "string" || authorization === "") return undefined;
+  if (typeof spaceId !== "string" || spaceId === "") return undefined;
   if (candidate.targetCid !== targetCid) return undefined;
   if (expectedDelegate !== undefined && delegateDID.split("#", 1)[0] !== expectedDelegate.split("#", 1)[0]) return undefined;
   const expiry = new Date(candidate.expiry as string | number | Date);
   if (Number.isNaN(expiry.getTime())) return undefined;
   return {
-    cid, targetCid, delegateDID, authorization, expiry: expiry.toISOString(),
+    cid, targetCid, delegateDID, spaceId, authorization, expiry: expiry.toISOString(),
     ...(typeof candidate.host === "string" ? { host: candidate.host } : {}),
   };
 }
