@@ -301,7 +301,7 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.
-  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped?.code === "MAX_BYTES_EXCEEDED" ? SHARE_TOO_LARGE_MESSAGE : mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
+  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
 
 function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
@@ -404,8 +404,16 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
 function byteLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 95 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "--max-bytes must be between 1 byte and 95 MiB.", 7);
   return parsed;
+}
+
+/** The refusal for a share over the limit: the node's 95 MiB cap, or the smaller `--max-bytes` the user set. */
+function shareTooLarge(maxBytes: number | undefined): CLIError {
+  const message = maxBytes === undefined || maxBytes === MAX_SHARE_STDIN_BYTES
+    ? SHARE_TOO_LARGE_MESSAGE
+    : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to 95 MiB.`;
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 
 function mediaTypeFor(filename: string): string {
@@ -432,7 +440,7 @@ function assertAggregateInputLimit(inputs: readonly { readonly bytes: Uint8Array
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes);
   }
 }
 
@@ -496,7 +504,9 @@ export function registerShareCommand(program: Command): void {
           for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
           // Refuse unsafe names before touching any source, so stdin is never awaited for one.
           for (const file of files) shareInputFilename(file, name);
-          inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+          inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes).catch((error: unknown) => {
+            throw error instanceof Error && error.message === "MAX_BYTES_EXCEEDED" ? shareTooLarge(maxBytes) : error;
+          })));
         }
         assertAggregateInputLimit(inputs, maxBytes);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);

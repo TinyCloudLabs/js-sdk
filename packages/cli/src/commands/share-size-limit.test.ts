@@ -79,7 +79,17 @@ describe("the share size limit is the largest upload the node accepts", () => {
   test("--max-bytes cannot raise the limit past 95 MiB", async () => {
     const result = await run([await fileOf(1), "--max-bytes", String(NODE_UPLOAD_BODY_BYTES + 1)]);
     expect(result.exitCode).toBe(7);
-    expect(errorOf(result.stderr).message).toBe("max-bytes must be between 1 and 95 MiB");
+    expect(errorOf(result.stderr).message).toBe("--max-bytes must be between 1 byte and 95 MiB.");
+    expect(published).toHaveLength(0);
+  });
+
+  test("a file over a smaller --max-bytes names that limit, not 95 MB", async () => {
+    const result = await run([await fileOf(2000), "--max-bytes", "1000"]);
+    expect(result.exitCode).toBe(7);
+    expect(errorOf(result.stderr)).toEqual({
+      code: "MAX_BYTES_EXCEEDED",
+      message: "This file is over the --max-bytes limit you set (1000 bytes). Use a smaller file or raise --max-bytes, up to 95 MiB.",
+    });
     expect(published).toHaveLength(0);
   });
 });
