@@ -3345,5 +3345,23 @@
       "ceiling": { "index.mjs": 1528609, "index.cjs": 1462073 }
     },
     "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
+  },
+  "tc3285SecretTypesRoot": {
+    "label": "optional secret type and getEntry (TC-3285)",
+    "ruling": "TC-3285 size ruling (Naomi): a ratchet row in the TC-3243 pattern for #1042's exact canonical CI bytes over the TC-3243 ceilings; index.mjs +227 B and index.cjs +219 B, each under the 800 B per-row cap. Details: TC-3285",
+    "base": "b758e712acf147bc3b2f801418b78c3bea4bf917",
+    "sourceCommits": ["342ac278df3699db027e0ab54ae2340d3d05f3b5"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056649418",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056650074"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 227, "index.cjs": 219 },
+      "ceiling": { "index.mjs": 1528836, "index.cjs": 1462292 }
+    },
+    "reason": "SecretsService reads a secret's optional type (getEntry) and validates the type on put; sdk-services, sdk-core, node-sdk and web-sdk expose it and are bundled into the web-sdk root. The TOTP helpers are a separate subpath and are not in the root. Canonical Node 22/Bun 1.3.14 CI on #1042 (342ac278, based on master ae9a23c9) measured index.mjs 1528836 and index.cjs 1462292 gzip -9 bytes: +227 and +219 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3285"
   }
 }

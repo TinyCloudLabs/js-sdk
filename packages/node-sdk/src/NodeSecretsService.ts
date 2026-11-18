@@ -174,6 +174,17 @@ export class NodeSecretsService implements ISecretsService {
       : this.service.get(name, options);
   }
 
+  async getEntry(
+    name: string,
+    options?: SecretScopeOptions,
+  ): ReturnType<ISecretsService["getEntry"]> {
+    const permission = await this.ensurePermission(name, options, "get");
+    if (!permission.ok) return permission;
+    return options === undefined
+      ? this.service.getEntry(name)
+      : this.service.getEntry(name, options);
+  }
+
   async put(
     name: string,
     value: string,
