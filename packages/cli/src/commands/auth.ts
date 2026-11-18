@@ -137,6 +137,7 @@ import {
   storedAdditionalDelegation,
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
+import { appendRevokeControl, parseRevokeControl } from "../lib/revoke-controls.js";
 import { approvalNotices } from "../lib/approval-notices.js";
 import {
   APPS_AGENT_EXPIRY,
@@ -1341,6 +1342,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           delegationCid: imported.delegation.cid,
           expiry: importExpiry.toISOString(),
         });
+        // A grant file from an issuer that allows give-back carries a revoke-only grant beside the delegation. It is kept
+        // only when it names this delegation and is addressed to the same recipient.
+        const importedControl = parsed !== null && typeof parsed === "object" && "revokeControl" in parsed
+          ? parseRevokeControl((parsed as { revokeControl: unknown }).revokeControl, imported.delegation.cid, imported.delegation.delegateDID)
+          : undefined;
+        if (importedControl !== undefined) await appendRevokeControl(ctx.profile, importedControl);
 
         outputJson({
           imported: true,
@@ -1350,6 +1357,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           delegationCid: imported.delegation.cid,
           permissions,
           expiry: importExpiry.toISOString(),
+          ...(importedControl === undefined ? {} : { revokeControlCid: importedControl.cid }),
         });
       } catch (error) {
         return handleError(error);

@@ -136,24 +136,31 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .option("--expiry <duration>", "Delegation expiry duration", "24h")
     .action(async (options, command) => {
       try {
-        const { node, space, sql, resources, output, responses } = await context(command);
+        const { node, space, sql, resources, output, responses, profile } = await context(command);
         const did = options.to.split("#")[0];
         const source: FeedSource = {
           sourceId: options.agent, agentDid: did, label: options.label,
           output: { spaceId: space, database: resources.outputResource },
           responses: { spaceId: space, database: resources.responseResource },
         };
+        let revokeControl: Awaited<ReturnType<typeof node.delegateTo>>["revokeControl"];
         const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
-          const { delegation } = await node.delegateTo(did, [
+          const granted = await node.delegateTo(did, [
             { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
             { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
             { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] },
-          ], { expiry, requireActivation: true });
-          return delegation;
+          ], { expiry, requireActivation: true, holderMayRevoke: true }).catch(async (error: unknown) => {
+            // The grant is live but its give-back grant was not issued: no registry row will name it, so withdraw it now.
+            const orphan = error !== null && typeof error === "object" && "delegation" in error ? (error as { delegation?: { cid?: unknown } }).delegation?.cid : undefined;
+            if (typeof orphan === "string") await revokeIssuedDelegation(node, profile, orphan);
+            throw error;
+          });
+          revokeControl = granted.revokeControl;
+          return granted.delegation;
         });
-        outputJson({ source, delegation });
+        outputJson({ source, delegation, ...(revokeControl === undefined ? {} : { revokeControl }) });
       } catch (error) { return handleError(error); }
     });
 

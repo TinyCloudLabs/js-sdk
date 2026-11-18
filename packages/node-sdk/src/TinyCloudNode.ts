@@ -1119,7 +1119,34 @@ export interface DelegateToOptions {
    * Off by default because grants to a not-yet-hosted space (e.g. secrets) are valid. Default false.
    */
   requireActivation?: boolean;
+  /**
+   * Also issue the recipient a revoke-only grant for this delegation (TC-3150): a second delegation, signed by the same key
+   * as the first, that names only `tinycloud.delegation/revoke` on this delegation's exact CID and ends when it ends, so the
+   * recipient can give the grant back. It is returned as `revokeControl`. Share links never set this: a link key is shared.
+   * Refused with `forceWalletSign`, with a `did:pkh` recipient, and when the delegation would last longer than 31 days.
+   * Throws after the delegation was activated when the revoke grant cannot be activated; the error carries `delegation`.
+   * Default false.
+   */
+  holderMayRevoke?: boolean;
 }
+
+/** A revoke-only grant: lets its audience revoke exactly one delegation (the grant it was issued with). */
+export interface RevokeControl {
+  /** CID of this revoke grant. */
+  cid: string;
+  /** The delegation the holder may revoke with it. */
+  targetCid: string;
+  /** The DID that holds it (the delegation's recipient). */
+  delegateDID: string;
+  /** The signed compact UCAN, as sent in the `Authorization` header. */
+  authorization: string;
+  /** End of the grant: the same as the delegation's. */
+  expiry: Date;
+  host?: string;
+}
+
+/** The longest a revoke grant can last: the signer's limit for a proofless compact UCAN. */
+const REVOKE_CONTROL_MAX_SECONDS = 31 * 24 * 60 * 60;
 
 /**
  * Result of {@link TinyCloudNode.delegateTo}.
@@ -1132,6 +1159,8 @@ export interface DelegateToOptions {
 export interface DelegateToResult {
   delegation: PortableDelegation;
   prompted: boolean;
+  /** Present when `holderMayRevoke` was set. */
+  revokeControl?: RevokeControl;
 }
 
 /**
@@ -8475,6 +8504,14 @@ export class TinyCloudNode {
     if (options?.disableSubDelegation && did.startsWith("did:pkh:")) {
       throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
+    if (options?.holderMayRevoke) {
+      if (options.forceWalletSign) {
+        throw new Error("delegateTo: holderMayRevoke cannot be combined with forceWalletSign=true; the revoke grant is signed by the session key.");
+      }
+      if (!did.startsWith("did:key:")) {
+        throw new Error("delegateTo: holderMayRevoke needs a did:key recipient.");
+      }
+    }
 
     // 1. Session validity check — fail fast with a clear error class so
     //    callers can catch and trigger a fresh sign-in.
@@ -8580,6 +8617,13 @@ export class TinyCloudNode {
       throw new PermissionNotInManifestError(plan.missing ?? [], plan.granted ?? []);
     }
     const notBeforeSecs = resolveNotBeforeSecs(options?.notBefore, plan.effectiveExpiration, Date.now());
+    if (options?.holderMayRevoke) {
+      // Refuse before anything is signed: a delegation whose revoke grant cannot be issued must not be activated.
+      const lifetimeSecs = (plan.effectiveExpiration.getTime() - Date.now()) / 1000;
+      if (lifetimeSecs > REVOKE_CONTROL_MAX_SECONDS) {
+        throw new Error("delegateTo: holderMayRevoke needs a delegation that lasts at most 31 days.");
+      }
+    }
     if (plan.path === "runtime") {
       const delegation = await this.createDelegationViaRuntimeGrant(
         did,
@@ -8592,6 +8636,9 @@ export class TinyCloudNode {
         options?.requireActivation === true,
         notBeforeSecs,
       );
+      if (options?.holderMayRevoke) {
+        return { delegation, prompted: false, revokeControl: await this.issueRevokeControl(delegation, plan.grant.session) };
+      }
       return { delegation, prompted: false };
     }
 
@@ -8611,7 +8658,52 @@ export class TinyCloudNode {
       options?.requireActivation === true,
       notBeforeSecs,
     );
+    if (options?.holderMayRevoke) {
+      return { delegation, prompted: false, revokeControl: await this.issueRevokeControl(delegation, session) };
+    }
     return { delegation, prompted: false };
+  }
+
+  /**
+   * Signs and activates the revoke-only grant for `delegation`: issuer = the key that signed `delegation` (its delegator),
+   * audience = the delegation's recipient, ability `tinycloud.delegation/revoke` on exactly `urn:cid:<delegation>`, the same
+   * end, nothing else, and no proof (the node decides whether it admits that). On failure the delegation stays active;
+   * the error carries it as `delegation` so the caller can revoke it.
+   */
+  private async issueRevokeControl(
+    delegation: PortableDelegation,
+    signer: Pick<TinyCloudSession, "jwk" | "verificationMethod">,
+  ): Promise<RevokeControl> {
+    const graph = this._serviceGraph;
+    try {
+      const nowSecs = Math.floor(Date.now() / 1000);
+      const control = await signCompactUcanRootAuthorization({
+        issuerDid: signer.verificationMethod.split("#", 1)[0]!,
+        audienceDid: delegation.delegateDID.split("#", 1)[0]!,
+        attenuation: { [`urn:cid:${delegation.cid}`]: { "tinycloud.delegation/revoke": [{}] } },
+        facts: [{}],
+        notBefore: nowSecs,
+        expiresAt: Math.floor(delegation.expiry.getTime() / 1000),
+        nonce: `urn:uuid:${crypto.randomUUID()}`,
+        sign: (bytes) => signBytesWithJwk(bytes, signer.jwk),
+      });
+      const result = await this.activateResourceSession({ Authorization: control.authorization }, [delegation.spaceId], graph.signal);
+      graph.assertActive();
+      if (!result.success) throw new Error(describeHostFailure(result));
+      return {
+        cid: control.cid,
+        targetCid: delegation.cid,
+        delegateDID: delegation.delegateDID.split("#", 1)[0]!,
+        authorization: control.authorization,
+        expiry: delegation.expiry,
+        ...(delegation.host === undefined ? {} : { host: delegation.host }),
+      };
+    } catch (cause) {
+      throw Object.assign(
+        new Error(`The delegation ${delegation.cid} was activated, but its revoke grant could not be issued: ${cause instanceof Error ? cause.message : String(cause)}`),
+        { cause, delegation },
+      );
+    }
   }
 
   /**
