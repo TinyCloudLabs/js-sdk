@@ -68,7 +68,7 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
   const isHome = relative === "";
   const inside = !isHome && !relative.startsWith("..") && !api.isAbsolute(relative);
   const again = "Nothing was changed, so run the same command again once it's fixed.";
-  const head = `TinyCloud can't write its folder ${shown(folder)} (${code})`;
+  const head = `The TinyCloud CLI can't write to its folder ${shown(folder)} (${code})`;
   const metadata = { path: shown(folder), errno: code };
   const refuse = (message: string): CLIError => new CLIError("STATE_FOLDER_NOT_WRITABLE", message, ExitCode.ERROR, metadata);
 
@@ -77,7 +77,7 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
     return refuse(`${head}${where}. Ask the person who manages this computer to give your user write access to it. ${again}`);
   }
   if (windows) {
-    return refuse(`${head}: your Windows user can't write there. Run this yourself in PowerShell: icacls ${powershellQuoted(folder)} /grant "\${env:USERNAME}:(OI)(CI)F" /T. ${again}`);
+    return refuse(`${head}: your Windows user can't write there. Run this yourself in PowerShell:\n  icacls ${powershellQuoted(folder)} /grant "\${env:USERNAME}:(OI)(CI)F" /T\n${again}`);
   }
   let owned = false;
   let mode = "";
@@ -89,10 +89,10 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
     // The cause stays general when the folder cannot be inspected.
   }
   if (owned) {
-    return refuse(`${head}: it is read-only for your user (mode ${mode}) or sits on a read-only disk. Run this yourself: chmod u+rwx ${posixQuoted(folder)}. ${again}`);
+    return refuse(`${head}: it's read-only for your user (mode ${mode}), or it's on a read-only disk. Run this yourself:\n  chmod u+rwx ${posixQuoted(folder)}\n${again}`);
   }
   if (isHome) {
     return refuse(`${head}: your home folder belongs to another user. Ask the person who manages this computer to give your user write access to it. ${again}`);
   }
-  return refuse(`${head}: it belongs to another user, often root after an earlier sudo run. Run this yourself in a terminal, not through an agent: sudo chown -R "$USER" ${posixQuoted(folder)}. ${again}`);
+  return refuse(`${head}: it belongs to another user, often root after an earlier sudo run. Run this yourself in a terminal, not through an agent:\n  sudo chown -R "$USER" ${posixQuoted(folder)}\n${again}`);
 }

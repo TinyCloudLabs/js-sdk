@@ -32,8 +32,9 @@ describe("the profile folder cannot be written", () => {
     const result = JSON.parse(run.stdout.toString().trim());
     expect(result.code).toBe("STATE_FOLDER_NOT_WRITABLE");
     expect(result.message).toBe(
-      `TinyCloud can't write its folder ${home} (EACCES): it is read-only for your user (mode 555) or sits on a read-only disk. ` +
-        `Run this yourself: chmod u+rwx '${home}'. Nothing was changed, so run the same command again once it's fixed.`,
+      `The TinyCloud CLI can't write to its folder ${home} (EACCES): it's read-only for your user (mode 555), or it's on a read-only disk. Run this yourself:\n` +
+        `  chmod u+rwx '${home}'\n` +
+        "Nothing was changed, so run the same command again once it's fixed.",
     );
     expect(() => mkdirSync(join(home, ".tinycloud"))).toThrow();
   });
@@ -42,8 +43,9 @@ describe("the profile folder cannot be written", () => {
     // /usr/share exists and belongs to root; the home is /usr so that it counts as inside.
     const error = unwritableStateFolder(errno("EACCES"), "/usr/share/nothing-here", posix("/usr"));
     expect(messageOf(error)).toBe(
-      "TinyCloud can't write its folder /usr/share (EACCES): it belongs to another user, often root after an earlier sudo run. " +
-        "Run this yourself in a terminal, not through an agent: sudo chown -R \"$USER\" '/usr/share'. Nothing was changed, so run the same command again once it's fixed.",
+      "The TinyCloud CLI can't write to its folder /usr/share (EACCES): it belongs to another user, often root after an earlier sudo run. Run this yourself in a terminal, not through an agent:\n" +
+        "  sudo chown -R \"$USER\" '/usr/share'\n" +
+        "Nothing was changed, so run the same command again once it's fixed.",
     );
   });
 
@@ -83,8 +85,10 @@ describe("the profile folder cannot be written", () => {
 
   test("on Windows the fix is an icacls grant, single-quoted for PowerShell, only below the home", () => {
     const context: StateFolderContext = { home: "C:\\Users\\a", platform: "win32", uid: undefined, exists: () => true };
-    expect(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a\\.tinycloud", context))).toContain(
-      "icacls 'C:\\Users\\a\\.tinycloud' /grant \"${env:USERNAME}:(OI)(CI)F\" /T",
+    expect(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a\\.tinycloud", context))).toBe(
+      "The TinyCloud CLI can't write to its folder C:\\Users\\a\\.tinycloud (EACCES): your Windows user can't write there. Run this yourself in PowerShell:\n" +
+        "  icacls 'C:\\Users\\a\\.tinycloud' /grant \"${env:USERNAME}:(OI)(CI)F\" /T\n" +
+        "Nothing was changed, so run the same command again once it's fixed.",
     );
     expect(commands(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Windows\\x", context)))).toBe(false);
     expect(commands(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a", context)))).toBe(false);
