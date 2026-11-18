@@ -7,7 +7,7 @@ import { handleError, CLIError, cliErrorFromService } from "../output/errors.js"
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
-import { delegateWithGiveBack, findRevokeControl, removeHeldDelegation, removeRevokeControl, type StoredRevokeControl } from "../lib/revoke-controls.js";
+import { delegateWithGiveBack, shellWord, findRevokeControl, removeHeldDelegation, removeRevokeControl, type StoredRevokeControl } from "../lib/revoke-controls.js";
 import { parseExpiry } from "../lib/duration.js";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { PermissionNotInManifestError, type AccountDelegationRecord, type TinyCloudNode } from "@tinycloud/node-sdk";
@@ -123,7 +123,8 @@ export async function revokeAsDelegate(node: TinyCloudNode, ctx: { profile: stri
 
 /**
  * The holder gives back a grant with the revoke-only grant it was issued with. The stored grant and revoke grant are dropped
- * only after the node answered 200: any failure leaves both for a retry. A grant the node no longer has counts as gone.
+ * only after the node answered 200 or said it has no such delegation (NOT_FOUND: nothing left to give back, so the stale
+ * records go). Any other failure, a refusal or a network error included, leaves both for a retry.
  */
 export async function giveBackDelegation(
   node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string, control: StoredRevokeControl,
@@ -138,14 +139,11 @@ export async function giveBackDelegation(
         { status: result.error.meta?.status, hint: "The revoke grant issued with this delegation may have ended or been withdrawn by its issuer." },
       );
     }
-    if (result.error.code === "NOT_FOUND") {
-      throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
-    }
-    throw issuedFailure(result.error, ctx.host);
+    if (result.error.code !== "NOT_FOUND") throw issuedFailure(result.error, ctx.host);
   }
   await removeHeldDelegation(ctx.profile, cid);
   await removeRevokeControl(ctx.profile, cid);
-  return { cid, revoked: true as const, authority: "revoke-grant" as const };
+  return { cid, revoked: true as const, authority: "revoke-grant" as const, ...(result.ok ? {} : { alreadyGone: true as const }) };
 }
 
 async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
@@ -215,7 +213,7 @@ export function registerDelegationCommand(
         }));
         const delegateOptions = { expiry: expiry.getTime() - Date.now(), requireActivation: true };
         const { delegation: created, revokeControl } = await (options.holderMayRevoke === true
-          ? delegateWithGiveBack(node, recipient, entries, delegateOptions, (cid) => `${CLI_NAME} delegation revoke ${cid}`)
+          ? delegateWithGiveBack(node, recipient, entries, delegateOptions, (cid) => `${CLI_NAME} delegation revoke ${shellWord(cid)}`, (orphan) => revokeIssuedDelegation(node, ctx, orphan))
           : node.delegateTo(recipient, entries, delegateOptions)
         ).catch((error: unknown) => {
           if (error instanceof PermissionNotInManifestError) {

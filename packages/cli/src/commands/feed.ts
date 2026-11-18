@@ -21,7 +21,7 @@ import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runne
 import { connectFeedAgent } from "../feed/connection.js";
 import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
-import { delegateWithGiveBack } from "../lib/revoke-controls.js";
+import { delegateWithGiveBack, shellWord } from "../lib/revoke-controls.js";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
@@ -153,12 +153,8 @@ slash prefix and output are explicit; source get/sync grants are separate from f
             { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
             { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
             { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] },
-          ], { expiry, requireActivation: true }, () => `${CLI_NAME} feed disconnect --agent ${options.agent}`).catch(async (error: unknown) => {
-            // The grant is live but its give-back grant was not issued: no registry row will name it, so withdraw it now.
-            const orphan = error !== null && typeof error === "object" && "delegation" in error ? (error as { delegation?: { cid?: unknown } }).delegation?.cid : undefined;
-            if (typeof orphan === "string") await revokeIssuedDelegation(node, profile, orphan);
-            throw error;
-          });
+          ], { expiry, requireActivation: true }, () => `${CLI_NAME} feed disconnect --agent ${shellWord(options.agent)}`,
+          (orphan) => revokeIssuedDelegation(node, profile, orphan));
           revokeControl = granted.revokeControl;
           return granted.delegation;
         });

@@ -82,7 +82,6 @@ test("with a stored revoke grant the holder gives the delegation back with it, a
 for (const [label, answer, code] of [
   ["a refusal", { ok: false, error: { code: "PERMISSION_DENIED", message: "Unauthorized Revoker", meta: { status: 403 } } }, "REVOKE_UNAUTHORIZED"],
   ["a network failure", { ok: false, error: { code: "NETWORK_ERROR", message: "connection reset" } }, "NETWORK_ERROR"],
-  ["a missing delegation", { ok: false, error: { code: "NOT_FOUND", message: "gone" } }, "TARGET_NOT_FOUND"],
 ] as const) {
   test(`${label} from the node keeps the stored grant and the revoke grant, so the holder can retry`, async () => {
     const profile = `holder-${code.toLowerCase()}`;
@@ -93,6 +92,15 @@ for (const [label, answer, code] of [
     expect((await loadRevokeControls(profile)).map((control) => control.targetCid)).toEqual([TARGET]);
   });
 }
+
+test("a delegation the node no longer has clears the stale local rows, so the holder is not left with a record that cannot be revoked", async () => {
+  const profile = "holder-gone";
+  await holderProfile(profile);
+  const { node } = nodeAnswering({ ok: false, error: { code: "NOT_FOUND", message: "gone" } });
+  expect(await revokeAsDelegate(node, ctx(profile), TARGET)).toMatchObject({ cid: TARGET, revoked: true, authority: "revoke-grant", alreadyGone: true });
+  expect(await heldGrants(profile)).toEqual([]);
+  expect(await loadRevokeControls(profile)).toEqual([]);
+});
 
 test("without a stored revoke grant the holder falls back to revoking what its own key issued", async () => {
   const profile = "holder-none";

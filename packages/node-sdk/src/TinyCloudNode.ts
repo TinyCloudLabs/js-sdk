@@ -8680,7 +8680,7 @@ export class TinyCloudNode {
    */
   private async issueRevokeControl(
     delegation: PortableDelegation,
-    signer: Pick<TinyCloudSession, "jwk" | "verificationMethod">,
+    signer: { jwk: object; verificationMethod: string },
   ): Promise<RevokeControl> {
     const graph = this._serviceGraph;
     // Set only when the node answers the revoke grant's activation with `REVOKE_CONTROL_REFUSED_STATUS`: it won't admit it.
