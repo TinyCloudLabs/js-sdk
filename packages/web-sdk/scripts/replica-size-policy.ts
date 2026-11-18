@@ -484,6 +484,7 @@ export type Ledger = {
   tc3172DelegateNotBeforeRoot?: LogoutRatchet;
   tc3194NativeShareLinksRoot?: LogoutRatchet;
   tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
+  tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1122,6 +1123,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3172DelegateNotBeforeRoot !== undefined) pins.push({ row: "tc3172DelegateNotBeforeRoot", pin: root.tc3172DelegateNotBeforeRoot.sourceCommits.at(-1)! });
   if (root.tc3194NativeShareLinksRoot !== undefined) pins.push({ row: "tc3194NativeShareLinksRoot", pin: root.tc3194NativeShareLinksRoot.sourceCommits.at(-1)! });
   if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
+  if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1230,6 +1232,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3172DelegateNotBeforeRoot", root.tc3172DelegateNotBeforeRoot?.root.ceiling],
     ["tc3194NativeShareLinksRoot", root.tc3194NativeShareLinksRoot?.root.ceiling],
     ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
+    ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3604,6 +3607,26 @@ export const approvedTc3243SdkOwnsBusyRetryRoot: LogoutRatchet = {
   "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
 };
 
+/** The exact TC-3286 share-links-without-delegation-actions root allowance from canonical CI. */
+export const approvedTc3286ShareNoDelegationActionsRoot: LogoutRatchet = {
+  "label": "share links never carry tinycloud.delegation actions (TC-3286)",
+  "ruling": "TC-3286 size ruling (Naomi): a ratchet row in the #1038 pattern for #1043's exact canonical CI bytes over the TC-3243 ceilings; index.mjs +116 B and index.cjs +60 B over the TC-3243 ceilings, each under the 800 B per-row cap. Details: TC-3286",
+  "base": "ae9a23c95d5ca18849304cd9760041001a56e839",
+  "sourceCommits": ["a67014792ba4a81d5e4a5a6414403a5cec86e0f9"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44378559074",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44378559074/job/135064193515",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44378559074/job/135064193589"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 116, "index.cjs": 60 },
+    "ceiling": { "index.mjs": 1528725, "index.cjs": 1462133 }
+  },
+  "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (a6701479, based on master ae9a23c9) measured index.mjs 1528725 and index.cjs 1462133 gzip -9 bytes: +116 and +60 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3286"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3709,6 +3732,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3172DelegateNotBeforeRoot: approvedTc3172DelegateNotBeforeRoot,
   tc3194NativeShareLinksRoot: approvedTc3194NativeShareLinksRoot,
   tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
+  tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4192,6 +4216,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3194NativeShareLinksRoot ||
         JSON.stringify(value.tc3243SdkOwnsBusyRetryRoot) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot))) {
     throw new Error("Only the exact TC-3243 root admission is approved.");
+  }
+  if (value.tc3286ShareNoDelegationActionsRoot !== undefined &&
+      (!value.tc3243SdkOwnsBusyRetryRoot ||
+        JSON.stringify(value.tc3286ShareNoDelegationActionsRoot) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot))) {
+    throw new Error("Only the exact TC-3286 root admission is approved.");
   }
 }
 
@@ -5109,5 +5138,13 @@ export function validateTc3243SdkOwnsBusyRetryRootTransition(base?: LogoutRatche
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3243 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3286 share-links-without-delegation-actions root admission is introduced once and immutable. */
+export function validateTc3286ShareNoDelegationActionsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3286 root admission may be introduced once and cannot change later.");
   }
 }
