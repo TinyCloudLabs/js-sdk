@@ -92,4 +92,26 @@ describe("the share size limit is the largest upload the node accepts", () => {
     });
     expect(published).toHaveLength(0);
   });
+
+  test("several files that together pass the limit get the 'add up' message, for the default and for a smaller --max-bytes", async () => {
+    const [first, second] = [join(root, "a.md"), join(root, "b.md")];
+    await writeFile(first, "");
+    await truncate(first, 60);
+    await writeFile(second, "");
+    await truncate(second, 60);
+    const custom = await run([first, second, "--max-bytes", "100"]);
+    expect(custom.exitCode).toBe(7);
+    expect(errorOf(custom.stderr)).toEqual({
+      code: "MAX_BYTES_EXCEEDED",
+      message: "These files add up to more than the --max-bytes limit you set (100 bytes). Share fewer at once or raise --max-bytes, up to 95 MiB.",
+    });
+    await truncate(first, NODE_UPLOAD_BODY_BYTES);
+    const standard = await run([first, second]);
+    expect(standard.exitCode).toBe(7);
+    expect(errorOf(standard.stderr)).toEqual({
+      code: "MAX_BYTES_EXCEEDED",
+      message: "These files add up to more than 95 MB. Share fewer at once or use smaller files.",
+    });
+    expect(published).toHaveLength(0);
+  });
 });

@@ -408,11 +408,16 @@ function byteLimit(value: string | undefined): number | undefined {
   return parsed;
 }
 
-/** The refusal for a share over the limit: the node's 95 MiB cap, or the smaller `--max-bytes` the user set. */
-function shareTooLarge(maxBytes: number | undefined): CLIError {
-  const message = maxBytes === undefined || maxBytes === MAX_SHARE_STDIN_BYTES
-    ? SHARE_TOO_LARGE_MESSAGE
-    : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to 95 MiB.`;
+/** The refusal for a share over the limit: the node's 95 MiB cap, or the smaller `--max-bytes` the user set. `together` is true when several inputs add up to more than the limit. */
+function shareTooLarge(maxBytes: number | undefined, together = false): CLIError {
+  const defaultLimit = maxBytes === undefined || maxBytes === MAX_SHARE_STDIN_BYTES;
+  const message = together
+    ? defaultLimit
+      ? "These files add up to more than 95 MB. Share fewer at once or use smaller files."
+      : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to 95 MiB.`
+    : defaultLimit
+      ? SHARE_TOO_LARGE_MESSAGE
+      : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to 95 MiB.`;
   return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 
@@ -440,7 +445,7 @@ function assertAggregateInputLimit(inputs: readonly { readonly bytes: Uint8Array
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes, inputs.length > 1);
   }
 }
 
