@@ -33,7 +33,7 @@ describe("the profile folder cannot be written", () => {
     expect(result.code).toBe("STATE_FOLDER_NOT_WRITABLE");
     expect(result.message).toBe(
       `TinyCloud can't write its folder ${home} (EACCES): it is read-only for your user (mode 555) or sits on a read-only disk. ` +
-        `Run yourself: chmod u+rwx '${home}'. Then run the same command again; nothing was changed.`,
+        `Run this yourself: chmod u+rwx '${home}'. Nothing was changed, so run the same command again once it's fixed.`,
     );
     expect(() => mkdirSync(join(home, ".tinycloud"))).toThrow();
   });
@@ -43,7 +43,7 @@ describe("the profile folder cannot be written", () => {
     const error = unwritableStateFolder(errno("EACCES"), "/usr/share/nothing-here", posix("/usr"));
     expect(messageOf(error)).toBe(
       "TinyCloud can't write its folder /usr/share (EACCES): it belongs to another user, often root after an earlier sudo run. " +
-        "Run yourself in a terminal, not through an agent: sudo chown -R \"$USER\" '/usr/share'. Then run the same command again; nothing was changed.",
+        "Run this yourself in a terminal, not through an agent: sudo chown -R \"$USER\" '/usr/share'. Nothing was changed, so run the same command again once it's fixed.",
     );
   });
 

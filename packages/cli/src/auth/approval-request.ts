@@ -614,6 +614,9 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     }
   }
   if (!entry) {
+    // The request below is a link at the links API (a per-address daily quota); the entry is written right after.
+    // Check the profile folder can be written first so an unwritable folder stops here, before any link is made.
+    await ProfileManager.ensureProfileDir(profile);
     const relay = createECDH("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
