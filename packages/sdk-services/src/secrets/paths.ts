@@ -5,7 +5,7 @@ import type { SecretType } from "./secretTypes";
 export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 const SECRET_PREFIX = "secrets/";
-const ISOLATED_SECRET_PREFIX = `${SECRET_PREFIX}isolated/`;
+const ISOLATED_SECRET_PREFIX = "secrets-isolated/";
 export const SECRET_KEY_APP_ID = "xyz.tinycloud.secrets";
 const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 
@@ -87,7 +87,6 @@ export interface ResolvedSecretPath {
 export interface ParsedSecretCatalogKey {
   name: string;
   scope?: string;
-  isolated?: true;
 }
 
 export function canonicalizeSecretScope(
@@ -170,10 +169,8 @@ export function resolveSecretListPrefix(
 export function parseSecretCatalogKey(
   key: string,
 ): ParsedSecretCatalogKey | undefined {
-  const isolated = key.startsWith("isolated/");
-  if (isolated) key = key.slice("isolated/".length);
   if (SECRET_NAME_RE.test(key)) {
-    return { name: key, ...(isolated ? { isolated: true } : {}) };
+    return { name: key };
   }
 
   const parts = key.split("/");
@@ -191,7 +188,7 @@ export function parseSecretCatalogKey(
     if (scope === undefined || scope !== rawScope) {
       return undefined;
     }
-    return { name, scope, ...(isolated ? { isolated: true } : {}) };
+    return { name, scope };
   } catch {
     return undefined;
   }

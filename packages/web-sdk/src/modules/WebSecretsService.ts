@@ -185,8 +185,8 @@ export class WebSecretsService implements ISecretsService {
       : this.service.list(options);
   }
 
-  listAll(): ReturnType<ISecretsService["listAll"]> {
-    return this.service.listAll();
+  listAll(options?: Pick<SecretScopeOptions, "isolated">): ReturnType<ISecretsService["listAll"]> {
+    return options === undefined ? this.service.listAll() : this.service.listAll(options);
   }
 
   private get service(): ISecretsService {

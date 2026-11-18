@@ -172,7 +172,10 @@ export class SecretsService implements ISecretsService {
     };
   }
 
-  async listAll(): Promise<Result<SecretCatalogEntry[], SecretsError>> {
+  async listAll(
+    options?: Pick<SecretScopeOptions, "isolated">,
+  ): Promise<Result<SecretCatalogEntry[], SecretsError>> {
+    const prefix = resolveSecretListPrefix(options).slice("vault/".length);
     const entries = new Map<string, SecretCatalogEntry>();
     // A node older than bounded list paging ignores the cursor and returns the
     // same page again; a repeated cursor would loop forever, so it fails.
@@ -181,7 +184,7 @@ export class SecretsService implements ISecretsService {
 
     do {
       const result = await this.vault.listPage({
-        prefix: "secrets/",
+        prefix,
         removePrefix: true,
         limit: 1000,
         source: "network",
@@ -195,7 +198,7 @@ export class SecretsService implements ISecretsService {
         const entry = parseSecretCatalogKey(key);
         if (!entry) continue;
         const id = `${entry.scope ?? ""}\u0000${entry.name}`;
-        if (entry.isolated || !entries.has(id)) entries.set(id, entry);
+        entries.set(id, options?.isolated ? { ...entry, isolated: true } : entry);
       }
 
       cursor = result.data.truncated ? result.data.nextCursor : undefined;

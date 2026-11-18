@@ -55,6 +55,6 @@ export interface ISecretsService {
     options?: SecretScopeOptions,
   ): Promise<Result<void, SecretsError>>;
   list(options?: SecretScopeOptions): Promise<Result<string[], SecretsError>>;
-  /** List global and scoped secrets without decrypting their values. */
-  listAll(): Promise<Result<SecretCatalogEntry[], SecretsError>>;
+  /** List global and scoped secrets in one namespace without decrypting their values. */
+  listAll(options?: Pick<SecretScopeOptions, "isolated">): Promise<Result<SecretCatalogEntry[], SecretsError>>;
 }
