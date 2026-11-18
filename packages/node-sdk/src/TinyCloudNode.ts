@@ -7072,16 +7072,27 @@ export class TinyCloudNode {
     spaceId: string;
     path: string;
     actions: string[];
+    resources?: Array<{ path: string; actions: string[] }>;
     requestedExpiry: Date;
   }, assertActive?: () => void): Promise<Delegation | undefined> {
     // A share past the technical limit is a clear refusal, not a swallowed failure below.
     assertExpiryWithinTechnicalLimit(params.requestedExpiry, "siwe");
+    // One resource keeps the path/actions shape; several are one permission each,
+    // in share order, so the returned delegation's flat path is the share's first.
+    const authority = params.resources && params.resources.length > 1
+      ? {
+        permissions: params.resources.map((resource) => ({
+          service: resource.actions[0]?.split("/", 1)[0] ?? "",
+          path: resource.path,
+          actions: [...resource.actions],
+        })),
+      }
+      : { path: params.path, actions: params.actions };
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
         spaceId: params.spaceId,
-        path: params.path,
-        actions: params.actions,
+        ...authority,
         expiresAt: params.requestedExpiry,
       }, assertActive, params.onPrepared)).delegation;
     } catch {
