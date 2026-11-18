@@ -95,6 +95,15 @@ function inferShortServiceFromActionUrns(
   return short;
 }
 
+/**
+ * A share link never carries a `tinycloud.delegation` action (TC-3286): whoever holds the link must not be able
+ * to revoke, create, list or renew delegations with it. A holder's own revoke is a separate, explicit grant.
+ */
+const SHARE_DELEGATION_ACTION_MESSAGE = "A share link can't carry tinycloud.delegation actions";
+function includesDelegationAction(actions: readonly string[]): boolean {
+  return actions.some((action) => action.startsWith("tinycloud.delegation/"));
+}
+
 // =============================================================================
 // Constants
 // =============================================================================
@@ -911,7 +920,9 @@ export class SharingService implements ISharingService {
       if (!params.path) return invalid("path is required");
       // Build full path with prefix (matches how KVService stores data)
       // If pathPrefix is "demo-app" and path is "hello", fullPath is "demo-app/hello"
-      return { ok: true, data: [{ path: fullPath(params.path), actions: params.actions ?? DEFAULT_READ_ACTIONS }] };
+      const actions = params.actions ?? DEFAULT_READ_ACTIONS;
+      if (includesDelegationAction(actions)) return invalid(SHARE_DELEGATION_ACTION_MESSAGE);
+      return { ok: true, data: [{ path: fullPath(params.path), actions }] };
     }
     if (params.path !== undefined || params.actions !== undefined) return invalid("Give either path and actions, or resources");
     if (params.resources.length === 0 || params.resources.length > MAX_SHARE_RESOURCES) {
@@ -921,6 +932,7 @@ export class SharingService implements ISharingService {
     for (const resource of params.resources) {
       if (!resource.path) return invalid("path is required");
       const actions = resource.actions ?? DEFAULT_READ_ACTIONS;
+      if (includesDelegationAction(actions)) return invalid(SHARE_DELEGATION_ACTION_MESSAGE);
       const path = fullPath(resource.path);
       if (params.resources.length > 1) {
         if (canonicalCapabilityPath(path) === null || path.includes("*")) return invalid("Each shared resource needs a canonical path");
@@ -1547,6 +1559,12 @@ export class SharingService implements ISharingService {
             DelegationErrorCodes.PERMISSION_DENIED,
             "Requested actions exceed the sharing-link capability"
           ),
+        };
+      }
+      if (includesDelegationAction(actions)) {
+        return {
+          ok: false,
+          error: createError(DelegationErrorCodes.INVALID_INPUT, SHARE_DELEGATION_ACTION_MESSAGE),
         };
       }
       const service = inferShortServiceFromActionUrns(actions);
