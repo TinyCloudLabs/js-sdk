@@ -484,6 +484,7 @@ export type Ledger = {
   tc3172DelegateNotBeforeRoot?: LogoutRatchet;
   tc3194NativeShareLinksRoot?: LogoutRatchet;
   tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
+  tc3243CourierSdkOwnsBusyRetryRoot?: LogoutRatchet & { worker: { delta: number; ceiling: number }; replicaWorker: { delta: number; ceiling: number } };
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1122,6 +1123,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3172DelegateNotBeforeRoot !== undefined) pins.push({ row: "tc3172DelegateNotBeforeRoot", pin: root.tc3172DelegateNotBeforeRoot.sourceCommits.at(-1)! });
   if (root.tc3194NativeShareLinksRoot !== undefined) pins.push({ row: "tc3194NativeShareLinksRoot", pin: root.tc3194NativeShareLinksRoot.sourceCommits.at(-1)! });
   if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
+  if (root.tc3243CourierSdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243CourierSdkOwnsBusyRetryRoot", pin: root.tc3243CourierSdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1230,6 +1232,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3172DelegateNotBeforeRoot", root.tc3172DelegateNotBeforeRoot?.root.ceiling],
     ["tc3194NativeShareLinksRoot", root.tc3194NativeShareLinksRoot?.root.ceiling],
     ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
+    ["tc3243CourierSdkOwnsBusyRetryRoot", root.tc3243CourierSdkOwnsBusyRetryRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3604,6 +3607,28 @@ export const approvedTc3243SdkOwnsBusyRetryRoot: LogoutRatchet = {
   "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
 };
 
+/** The exact TC-3243 Courier busy-classification root and worker allowance from canonical CI. */
+export const approvedTc3243CourierSdkOwnsBusyRetryRoot: NonNullable<Ledger["tc3243CourierSdkOwnsBusyRetryRoot"]> = {
+  "label": "Courier and KV batchGet leave busy retries to the SDK (TC-3243)",
+  "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3243 registry-sync pattern for #1037's exact canonical CI bytes; index.mjs +7 B and index.cjs +6 B over the TC-3243 registry-sync ceilings, kv-storage worker +14 B and replica worker +14 B over the TC-2931 worker ceilings, each far under the 800 B per-row cap. Details: TC-3243",
+  "base": "b758e712acf147bc3b2f801418b78c3bea4bf917",
+  "sourceCommits": ["7f6337a765c1807c0157477b7d4fc27721b0e76e"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44233448391",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44233448391/job/134563795047",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44233448391/job/134563795379"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 7, "index.cjs": 6 },
+    "ceiling": { "index.mjs": 1528616, "index.cjs": 1462079 }
+  },
+  "worker": { "delta": 14, "ceiling": 780917 },
+  "replicaWorker": { "delta": 14, "ceiling": 774575 },
+  "reason": "KVService.batchGet runs a 503 body through nodeRetryError, and the Courier transient-error check skips NODE_BUSY and REQUEST_TIMEOUT; sdk-services is bundled into the web-sdk root and both replica workers. Canonical Node 22/Bun 1.3.14 CI on #1037 (7f6337a7, based on master b758e712) measured index.mjs 1528616 and index.cjs 1462079 gzip -9 bytes (+7/+6 over the TC-3243 registry-sync ceilings 1528609 and 1462073), the kv-storage worker 780917 (+14 over 780903) and replica.worker.js 774575 (+14 over 774561). No other ceiling moves. Details: TC-3243"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3709,6 +3734,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3172DelegateNotBeforeRoot: approvedTc3172DelegateNotBeforeRoot,
   tc3194NativeShareLinksRoot: approvedTc3194NativeShareLinksRoot,
   tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
+  tc3243CourierSdkOwnsBusyRetryRoot: approvedTc3243CourierSdkOwnsBusyRetryRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4192,6 +4218,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3194NativeShareLinksRoot ||
         JSON.stringify(value.tc3243SdkOwnsBusyRetryRoot) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot))) {
     throw new Error("Only the exact TC-3243 root admission is approved.");
+  }
+  if (value.tc3243CourierSdkOwnsBusyRetryRoot !== undefined &&
+      (!value.tc3243SdkOwnsBusyRetryRoot ||
+        JSON.stringify(value.tc3243CourierSdkOwnsBusyRetryRoot) !== JSON.stringify(approvedTc3243CourierSdkOwnsBusyRetryRoot))) {
+    throw new Error("Only the exact TC-3243 Courier root and worker admission is approved.");
   }
 }
 
@@ -5109,5 +5140,13 @@ export function validateTc3243SdkOwnsBusyRetryRootTransition(base?: LogoutRatche
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3243 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3243 Courier busy-classification root and worker admission is introduced once and immutable. */
+export function validateTc3243CourierSdkOwnsBusyRetryRootTransition(base?: Ledger["tc3243CourierSdkOwnsBusyRetryRoot"], current?: Ledger["tc3243CourierSdkOwnsBusyRetryRoot"]): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3243CourierSdkOwnsBusyRetryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3243 Courier root and worker admission may be introduced once and cannot change later.");
   }
 }
