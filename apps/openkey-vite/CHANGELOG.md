@@ -1,5 +1,59 @@
 # openkey-vite
 
+## 0.0.48-beta.2
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.13.0-beta.2
+
+## 0.0.48-beta.1
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/web-sdk@3.13.0-beta.1
+
+## 0.0.48-beta.0
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/web-sdk@3.13.0-beta.0
+
+## 0.0.47
+
+### Patch Changes
+
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [b669909]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [adfe9b5]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [d4366f9]
+- Updated dependencies [728b25c]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [ce16ef6]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+- Updated dependencies [711903b]
+- Updated dependencies [9ff4cf2]
+- Updated dependencies [2c9c7cc]
+  - @tinycloud/web-sdk@3.12.0
+
 ## 0.0.47-beta.38
 
 ### Patch Changes

@@ -1,5 +1,128 @@
 # @tinycloudlabs/sdk-services
 
+## 3.12.0
+
+### Minor Changes
+
+- 1c9206b: `tinycloud feed watch` no longer needs `--runner`: without it, each new owner response is printed as one JSON line on stdout. `--once` exits after the first batch of new responses is handed off, so an agent whose tools return only when a command exits can run the watcher in the background and be woken by the owner's next answer or comment. `listenFeedResponses` takes the matching `once` option.
+
+  Fixed: an idle `feed watch` no longer exits with status 0 after about a minute. That happened when the node closed an idle hooks stream and nothing kept Node's event loop alive during the reconnect backoff.
+
+  Details: TC-2205
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; registered resources without destinations do not fall back. An owner with only an older (v1) registry record keeps working when that record names only the default node, `https://node.tinycloud.xyz`: requests go there, as before. Any other v1-only record is refused until the owner saves a signed v2 record with `tinycloud registry publish`. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481, TC-3168
+
+- 593f051: Add opt-in TCW2 key wraps (HKDF-SHA256, with authenticated key context and metadata). Readers accept both wrap versions whatever the writer is set to; new writes stay v1 unless `keyWrapV2` is enabled. Network descriptors and payload schemas are unchanged.
+
+  Add the `requireKeyWrapV2` reader policy (off by default) across Node, Web, services and named-key clients. Writer defaults and signed receiver-response compatibility are unchanged.
+
+  Column decryption now requires an explicit expected format. V1 wrapped keys require encrypted framing; callers that select legacy plaintext get the bytes unchanged unless `strictEncryption` is enabled. Both flags default to false.
+
+  Details: TC-2518, TC-2517
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- 18288bf: A pending KV write whose request got the node's 503 busy/`unavailable_retryable` answer, which says nothing was applied, now settles as failed instead of ambiguous. A 5xx without that marker, and `request_timeout`, stay ambiguous.
+
+  Details: TC-2606
+
+- f859fb3: Restore persisted sessions from local state and initialize replication on demand. Explicit network KV reads bypass replica setup. Refresh browser hosting and panel grants after restore.
+
+  Serialize panel-grant storage updates and sign-out cleanup so a delayed reactivation cannot overwrite a newly granted permission.
+
+  Details: TC-2773
+
+- ccf3347: Refuse live routing when storage settings cannot be reached and none are saved on the device, instead of selecting a configured or default server. Preserve first-time onboarding after a reachable, genuine no-entry response and the existing verified-cache fallback strictly younger than one hour. Keep the registry-unavailable error code and provide a value-free explanation for the cold-device refusal.
+
+  Compatibility: applications that previously continued on a default server during a cold outage must retry after storage settings are reachable. Offline session inspection remains local-only; this change does not add network access to restore or relax server-side verification.
+
+  Preserve typed routing failures through vault deletion and listing instead of reporting missing keys or generic storage errors. Secret get, put, delete and list now share the value-free `REGISTRY_UNAVAILABLE` CLI projection for unreachable storage settings, including the cold-device explanation; genuine HTTP authorization refusals, missing keys and other storage failures retain their existing classification.
+
+  Restore validated local replicas from the persisted session and host hints, retaining the existing capability check. Actual network operations still use current storage settings, including the cold-device refusal.
+
+  Classify the explicit no-saved-settings refusal as offline for replica synchronization, after HTTP and authority denials. Complete local reads retain consent, installed-grant and committed-write checks; unverifiable settings and revocation signals still prevent stale local delivery.
+
+  Details: TC-2481
+
+- b32f52e: Routing now reads a verified, owner-signed copy of each owner's registry record and refreshes it before each decision. A device with no saved settings no longer falls back to a default host when the registry is unreachable; it refuses with `RegistryUnavailableError`.
+
+  Details of the change:
+
+  Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. A cold device (no saved settings for the owner) no longer falls back to a configured or default host on HTTP 5xx, a transport error or a timeout: live routing is refused with `RegistryUnavailableError` (see the cold-device refusal entry). Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+- c070c4b: Use resource routing and destination identity checks for policy, delegation, sharing and identity operations on Node/Web-owned SDK objects. Preserve per-space write outcomes and bind newly issued proofs to the selected destination.
+
+  Standalone Core objects and low-level policy functions still trust a host explicitly supplied by the caller; they do not consult the registry without a resource transport callback. Received-share and restored-data destinations require that callback. Node-local resource names without a routing owner are refused by the Node/Web transport rather than mapped to the current account.
+
+  Keep new-user onboarding tied to constructor-supplied hosts or an explicit code-supplied sign-in override, independently of restored session hints; registered routes still take precedence. Bind hosting, policy delivery, publication and grant activation to the initiating service graph across asynchronous preparation, response validation and signing. Web wrapper calls refuse account/session replacement before dispatch, and static share receiving uses the verified parent and registry-routed share actor rather than the link's recorded host.
+
+  Refuse redirects for credential- or body-bearing Core and Node requests, including encryption-network creation. Preserve typed routing failures and partial-write receipts, metadata and causes through delegation and sharing Result adapters rather than reporting a partial side effect as a generic network failure.
+
+  The unauthenticated, bodyless replication-restoration `/info` hint preflight remains an explicit exception so local replica hydration does not wait for a registry lookup.
+
+  Details: TC-2594
+
+- b00ad0b: Reuse confirmed absence for browser registry data reads for up to 60 seconds. Registered routes, writes, revocations, share delivery, node identity, sign-in and any other lookup not marked as a data read refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
+
+  Details: TC-2987
+
+- Updated dependencies [f4220cf]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+  - @tinycloud/bootstrap@2.9.0
+
 ## 3.12.0-beta.37
 
 ### Patch Changes

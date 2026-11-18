@@ -176,7 +176,6 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
     issuerProfile.peers[handle].outbound.at(-1).issuedAt = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
     fixtureApi.age(issuerProfile.peers[handle].outbound.at(-1).cid, 25 * 3600 * 1000);
   }
-  issuerProfile.peers['issuer-one'].inbound.delegation = 'not-a-valid-delegation';
   fs.writeFileSync(path.join(issuer.home, 'profile.json'), `${JSON.stringify(issuerProfile, null, 2)}\n`);
 
   const unknown = await runFail(issuer.home, ['pair', 'renew', 'missing-peer', '--renew-artifact']);

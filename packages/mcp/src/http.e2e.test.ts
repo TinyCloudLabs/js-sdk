@@ -251,7 +251,7 @@ test("public plugin enforces its tools, OAuth audience and separate approval sta
   expect((await hostedFetch(app, privateApproval)).status).toBe(400);
 }, 60_000);
 
-test("each assistant's address serves the plugin's exact tools under its own audience, approval route and state", async () => {
+test("each assistant's address serves the plugin's tools under its own audience, approval route and state", async () => {
   const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
   const { app, client, createClient, stateDir } = await startHostedMcp({
     nodeHost: "https://node.tinycloud.test",
@@ -262,7 +262,9 @@ test("each assistant's address serves the plugin's exact tools under its own aud
   for (const prefix of ["claude", "grok", "muse"]) {
     const path = `/${prefix}/mcp`;
     const assistant = await createClient("openkey-user-1", ownerDids, { path });
-    expect((await assistant.listTools()).tools).toEqual(pluginTools);
+    // Claude's address repeats each title in the annotations; see the next test. Nothing else may differ.
+    const tools = (await assistant.listTools()).tools;
+    expect(prefix === "claude" ? tools.map(withoutAnnotationTitle) : tools).toEqual(pluginTools);
     // A token issued for one address opens no other, in either direction.
     for (const [target, audience] of [
       [path, "https://mcp.test/mcp"],
@@ -285,6 +287,36 @@ test("each assistant's address serves the plugin's exact tools under its own aud
   }
   expect(await readdir(join(stateDir, "chatgpt", "tenants"))).toHaveLength(1);
 }, 60_000);
+
+test("only /claude/mcp repeats each tool's title as annotations.title, and its tools differ in nothing else", async () => {
+  const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
+  const { client, createClient } = await startHostedMcp({
+    nodeHost: "https://node.tinycloud.test",
+    ownerDids,
+    resourcePath: "/claude/mcp",
+  });
+  const claude = (await client.listTools()).tools;
+  expect(claude.map((tool) => [tool.name, tool.annotations?.title]).sort()).toEqual([
+    ["tinycloud_apps_context", "Personal apps context"],
+    ["tinycloud_apps_query", "Query personal records"],
+    ["tinycloud_apps_read", "Read personal records"],
+    ["tinycloud_apps_write", "Write personal records"],
+    ["tinycloud_connect", "Connect TinyCloud"],
+  ]);
+  for (const tool of claude) expect(tool.annotations?.title, tool.name).toBe(tool.title);
+  const listed = async (path: string) => (await (await createClient("openkey-user-1", ownerDids, { path })).listTools()).tools;
+  for (const path of ["/mcp", "/chatgpt/mcp", "/grok/mcp", "/muse/mcp"]) {
+    for (const tool of await listed(path)) expect(tool.annotations, `${path} ${tool.name}`).not.toHaveProperty("title");
+  }
+  expect(claude.map(withoutAnnotationTitle)).toEqual(await listed("/chatgpt/mcp"));
+}, 60_000);
+
+/** A listed tool as it would be without the title Claude's address adds to its annotations. */
+function withoutAnnotationTitle<T extends { annotations?: { title?: string } }>(tool: T): T {
+  if (tool.annotations === undefined) return tool;
+  const { title: _title, ...annotations } = tool.annotations;
+  return { ...tool, annotations };
+}
 
 test("the restricted addresses' personal-record tools differ from /mcp's only in not offering catalog apps", async () => {
   const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
@@ -1021,6 +1053,7 @@ test("a revoked SQL approval is asked for again, like a missing one", async () =
 test("a revoked records approval is asked for again by the personal-record tools, and a new approval restores them", async () => {
   const { hermetic, proxy, client, approve } = await setupProxiedSession();
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
   const required = record((await client.callTool({
     name: "tinycloud_apps_context", arguments: { app: "fitness" },
   })).structuredContent);
@@ -1052,6 +1085,9 @@ test("a revoked records approval is asked for again by the personal-record tools
   await approve(String(record(again.approval).url));
   expect(record((await client.callTool({ name: "tinycloud_apps_read", arguments: read })).structuredContent).status)
     .toBe("ok");
+  const listAsk = record((await client.callTool({ name: "tinycloud_apps_write", arguments: write })).structuredContent);
+  expect(listAsk).toMatchObject({ status: "authority_required", missing: [{ path: "xyz.tinycloud.agent-data/catalog/" }] });
+  await approve(String(record(listAsk.approval).url));
   expect(record((await client.callTool({ name: "tinycloud_apps_write", arguments: write })).structuredContent))
     .toMatchObject({ status: "ok", output: { ops: [{ outcome: "ok" }] } });
 }, 90_000);
@@ -1517,6 +1553,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
   const { app, client, stateDir } = await startHostedMcp({
     nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath,
   });
@@ -1574,7 +1611,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
     { op: "put", key, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
   ];
   const written = await approved("tinycloud_apps_write", { ops });
-  expect(approvalCount).toBe(namedApp ? 1 : 2);
+  expect(approvalCount).toBe(namedApp ? 2 : 3);
   expect(written).toMatchObject({
     status: "ok", output: { ops: [
       { outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" },
@@ -1593,7 +1630,7 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
     { key: `${root}catalog/weight`, value: { kind: "weight" } },
   ] } });
   expect(JSON.stringify(read.content)).toContain("80.5");
-  expect(approvalCount).toBe(namedApp ? 1 : 2);
+  expect(approvalCount).toBe(namedApp ? 2 : 3);
   const beforeLaterApp = approvalCount;
   expect(await approved("tinycloud_apps_context", { app: "books" })).toMatchObject({ status: "ok" });
   const later = await approved("tinycloud_apps_write", { ops: ops.map((op) => ({

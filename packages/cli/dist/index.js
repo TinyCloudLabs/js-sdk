@@ -17079,6 +17079,16 @@ function bodyCutOff(error) {
 function lapsedPastRetention(entry, now) {
   return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
 }
+async function showApprovalLink(options, entry) {
+  options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+  if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+The link is valid until ${entry.requestExpiresAt}.
+`);
+  if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+    await tryOpenBrowser(entry.approvalUrl);
+  }
+}
 async function expiredRequest(profile, entry, drop) {
   if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
   return new CLIError(
@@ -17091,6 +17101,18 @@ async function discoverRefusedAsExpired(entry, response, now) {
   if (response.status !== 400 || entry.resultRef !== void 0 || now < Date.parse(entry.requestExpiresAt)) return false;
   const body = await response.clone().json().catch(() => null);
   return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
+}
+async function openKeySaysExpired(entry, signingKey) {
+  let response;
+  try {
+    response = await post2(entry, "discover", signingKey);
+  } catch {
+    return false;
+  }
+  if (response.ok) return false;
+  if (await discoverRefusedAsExpired(entry, response, Date.now())) return true;
+  const body = await response.clone().json().catch(() => null);
+  return typeof body === "object" && body !== null && "code" in body && body.code === "expired_request";
 }
 async function pauseBetweenAttempts(profile, entry, approvalWait, reached = false) {
   if (!approvalWait) {
@@ -17165,9 +17187,21 @@ async function acquireApprovalRequest(_did, options) {
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
-  const isNewRequest = entry === void 0;
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
+  let isNewRequest = entry === void 0;
+  const clock = approvalWait?.now ?? Date.now;
+  let linkWithheld = false;
+  if (entry && !entry.resultRef && !entry.resultEnvelope && clock() >= Date.parse(entry.requestExpiresAt)) {
+    linkWithheld = true;
+    if (lapsedPastRetention(entry, clock())) {
+      if (approvalWait) throw await expiredRequest(profile, entry, true);
+      if (await openKeySaysExpired(entry, signingKey)) {
+        const staleRequestId = entry.requestId;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+        entry = void 0;
+        isNewRequest = true;
+        linkWithheld = false;
+      }
+    }
   }
   if (!entry) {
     const relay = createECDH2("prime256v1");
@@ -17202,13 +17236,8 @@ async function acquireApprovalRequest(_did, options) {
     await updatePending(profile, (items) => [...items, entry]);
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
-    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
-${entry.approvalUrl}
-`);
-    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
-      await tryOpenBrowser(entry.approvalUrl);
-    }
+    if (!linkWithheld) await showApprovalLink(options, entry);
+    else if (!options.onApprovalRequest) console.error("Checking the saved request with OpenKey...");
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
@@ -17232,6 +17261,10 @@ ${entry.approvalUrl}
       }
       answered = true;
       if (response.status === 202) {
+        if (linkWithheld) {
+          linkWithheld = false;
+          await showApprovalLink(options, entry);
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
@@ -32980,6 +33013,7 @@ import { createHash } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
   LocationRecordValidationError,
   LocationRegistryHttpError,
   parseSignedCompactUcanAttenuation,
@@ -33959,7 +33993,7 @@ function createShareAuthorityAdapters(input = {}) {
       };
       sharing = () => new TinyCloudNode2({
         ...registry,
-        newUserHost: null,
+        newUserHost: DEFAULT_TINYCLOUD_FALLBACK_HOST,
         autoDiscoverLocalNode: false,
         onRegistryFallback: recordRegistryFallbackWarning
       }).sharing;
@@ -33969,17 +34003,6 @@ function createShareAuthorityAdapters(input = {}) {
     const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
     const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
-    const cause = failure?.cause;
-    if (failure?.code === "node_not_found" && typeof cause === "object" && cause !== null && "code" in cause && cause.code === "node_not_found" && "verdict" in cause) {
-      const verdict = cause.verdict;
-      if (typeof verdict === "object" && verdict !== null && "status" in verdict && verdict.status === "unregistered" && !("offline" in verdict && verdict.offline === true)) {
-        throw new CLIError(
-          "SHARE_SENDER_UNREGISTERED",
-          "The account that shared this hasn't published its storage settings. Ask them to publish them (with tinycloud registry publish), then try again.",
-          ExitCode.NOT_FOUND
-        );
-      }
-    }
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
       throw new CLIError("SHARE_REVOKED", "This share link has been revoked by its sender.", ExitCode.NOT_FOUND);
     }
