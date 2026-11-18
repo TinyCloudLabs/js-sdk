@@ -1,5 +1,15 @@
 # @tinycloud/cli
 
+## 1.7.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+  - @tinycloud/share-sdk@1.6.0-beta.0
+  - @tinycloud/operations@0.9.1-beta.2
+
 ## 1.7.1-beta.3
 
 ### Patch Changes
