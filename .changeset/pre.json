@@ -34,6 +34,7 @@
     "auth-retry-grant-hint",
     "native-share-recording-links",
     "node-sdk-delegate-not-before",
+    "node-sdk-registry-sync-busy",
     "tc-3141-legacy-list-lazy"
   ]
 }
