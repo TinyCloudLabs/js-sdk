@@ -82,7 +82,7 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
   const relative = api.relative(fold(api.resolve(resolvedHome)), fold(api.resolve(resolvedFolder)));
   const isHome = relative === "";
   const inside = !isHome && !relative.startsWith("..") && !api.isAbsolute(relative);
-  const who = context.user || "your user";
+  const who = shown(context.user || "your user");
   const head = `The TinyCloud CLI can't write to its folder ${shown(folder)} (${code})`;
   const metadata = { path: shown(folder), errno: code };
   const refuse = (cause: string): CLIError => new CLIError("STATE_FOLDER_NOT_WRITABLE", `${head}: ${cause} Nothing was changed.`, ExitCode.ERROR, metadata);
@@ -100,5 +100,5 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
   const mode = (info.mode & 0o777).toString(8);
   if (info.uid === context.uid) return refuse(`it's read-only for ${who} (mode ${mode}), or the disk is read-only.`);
   if (isHome) return refuse("the home folder belongs to another user.");
-  return refuse(`it belongs to another user (owner ${(context.ownerOf ?? passwdOwner)(info.uid)}, mode ${mode}).`);
+  return refuse(`it belongs to another user (owner ${shown((context.ownerOf ?? passwdOwner)(info.uid))}, mode ${mode}).`);
 }
