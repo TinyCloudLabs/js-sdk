@@ -199,6 +199,8 @@ import {
   principalDidEquals,
   parseNetworkId,
   resolveSecretPath,
+  secretNamedKeyPath,
+  SECRET_KEY_APP_ID,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
   type CanonicalJson,
@@ -246,7 +248,7 @@ import {
   type RequestSink,
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
-import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import type { NamedKeyClient } from "./encryption-keys";
 import { NodeUserAuthorization, type PreparedOpenKeyAuthorization, type SpaceHosting } from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
@@ -290,6 +292,10 @@ export interface SecretReadInput {
   name: string;
   /** Optional logical secret scope. */
   scope?: string;
+  /** Read an isolated secret, never its legacy namesake. */
+  isolated?: boolean;
+  /** Pin both reads to this installed child CID, for explicit isolated reads. */
+  delegationCid?: string;
 }
 
 /** Safe, validated capability hint returned when the node denies one read phase. */
@@ -6112,24 +6118,24 @@ export class TinyCloudNode {
     kvService.setReadThroughReady(start ? attach : attach());
   }
 
-  private createSpaceScopedKVService(spaceId: string): KVService {
+  private createSpaceScopedKVService(spaceId: string, pinnedSession?: ServiceSession): KVService {
     const kvService = new KVService({});
     if (this._serviceContext) {
       const spaceScopedContext = this._serviceGraph.track(createServiceContext({
         requestSink: this._serviceGraph.requestSink,
-        invoke: this._serviceContext.invoke,
-        invokeAny: this._serviceContext.invokeAny,
+        invoke: pinnedSession ? this.wasmBindings.invoke : this._serviceContext.invoke,
+        invokeAny: pinnedSession ? this.wasmBindings.invokeAny : this._serviceContext.invokeAny,
         fetch: unrecordedFetchOf(this._serviceContext),
         hosts: this._serviceContext.hosts,
         telemetry: this.config.telemetry,
         retryPolicy: this.config.retryPolicy,
       }));
-      const session = this._serviceContext.session;
+      const session = pinnedSession ?? this._serviceContext.session;
       if (session) {
         spaceScopedContext.setSession({ ...session, spaceId });
       }
       kvService.initialize(spaceScopedContext);
-      this.attachReplicationKV(spaceId, kvService);
+      if (!pinnedSession) this.attachReplicationKV(spaceId, kvService);
     }
     return kvService;
   }
@@ -6266,6 +6272,7 @@ export class TinyCloudNode {
     networkId: string;
     action: string;
     facts: NetworkInvocationFact;
+    delegationCid?: string;
   }, binding?: {
     graph: ServiceGraphLifetime;
     session: ServiceSession;
@@ -6286,12 +6293,17 @@ export class TinyCloudNode {
         action: input.action,
       },
     ];
-    const headers = this.invokeAnyWithRuntimePermissions(
-      session,
-      entries,
-      [input.facts as Record<string, unknown>],
-    );
-    const signingSession = this.selectInvokeAnySession(session, entries).session;
+    const proof = input.delegationCid === undefined ? undefined : this.secretReadProof(input.delegationCid);
+    if (input.delegationCid !== undefined &&
+        (!proof || input.action !== DECRYPT_ACTION || !proof.operations.some((operation) =>
+          operation.resource === input.networkId && operation.action === DECRYPT_ACTION && !operation.caveats?.length))) {
+      throw new Error("The selected delegation does not authorize this named-key decrypt");
+    }
+    const facts = [input.facts as Record<string, unknown>];
+    const headers = proof
+      ? this.wasmBindings.invokeAny(proof.session, entries, facts)
+      : this.invokeAnyWithRuntimePermissions(session, entries, facts);
+    const signingSession = proof?.session ?? this.selectInvokeAnySession(session, entries).session;
     const authorization = authorizationHeader(headers);
     const audienceBound = await rewriteInvocationAudience(
       authorization,
@@ -6521,6 +6533,7 @@ export class TinyCloudNode {
       encryption: {
         networkId: `urn:tinycloud:encryption:${ownerDid}:${DEFAULT_ENCRYPTION_NETWORK_NAME}`,
         service: encryptionService,
+        namedKeys: () => this.keys,
         decryptCapabilityProof: () => ({
           proofs: [this.requireServiceSession().delegationCid],
         }),
@@ -7461,19 +7474,64 @@ export class TinyCloudNode {
     return secrets;
   }
 
+  /** Issue one revocable child delegation for one existing isolated secret. */
+  async delegateSecretRead(
+    recipientDid: string,
+    name: string,
+    options: { scope?: string; expiry?: string | number } = {},
+  ): Promise<DelegateToResult> {
+    const space = this.ownedSpaceId("secrets");
+    const secret = resolveSecretPath(name, { scope: options.scope, isolated: true });
+    const found = await this.kvForSpace(space).head(secret.permissionPaths.vault);
+    if (!found.ok) {
+      throw Object.assign(new Error("Cannot grant access to this isolated secret"), { cause: found.error });
+    }
+
+    const key = formatKeyResource(
+      parseEncryptionResource(this.getEncryptionNetworkIdForSpace(space)).networkId,
+      secretNamedKeyPath(space, secret.vaultKey)!,
+    );
+    return this.delegateTo(recipientDid, [
+      { service: "tinycloud.kv", space, path: secret.permissionPaths.vault, actions: ["get"], skipPrefix: true },
+      { service: "tinycloud.encryption", path: key, actions: ["decrypt"] },
+    ], { ...(options.expiry === undefined ? {} : { expiry: options.expiry }), requireActivation: true });
+  }
+
+  private secretReadProof(cid: string): RuntimePermissionGrant | undefined {
+    this.pruneExpiredRuntimePermissionGrants();
+    return this.runtimePermissionGrants.find((grant) => grant.provenance === "delegated" && grant.delegation.cid === cid);
+  }
+
   /**
    * Read a secret from an explicit target space without requesting or
    * auto-signing authority. Active runtime delegations are selected by the
    * normal KV and encryption invocation paths.
    */
   async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
-    const resolved = resolveSecretPath(input.name, { scope: input.scope });
+    const resolved = resolveSecretPath(input.name, { scope: input.scope, isolated: input.isolated });
     const targetSpace = input.space.startsWith("tinycloud:")
       ? input.space
       : this.ownedSpaceId(input.space);
-    const result = await this.getBaseVault(targetSpace).readNetworkEncrypted<unknown>(
-      resolved.vaultKey,
-    );
+    const vault = this.getBaseVault(targetSpace);
+    let result;
+    if (input.delegationCid === undefined) {
+      result = await vault.readNetworkEncrypted(resolved.vaultKey);
+    } else {
+      if (!input.isolated) return { status: "read_failed" };
+      const proof = this.secretReadProof(input.delegationCid);
+      if (!proof || !proof.operations.some((operation) =>
+        operation.service === "kv" && operation.action === "tinycloud.kv/get" &&
+        operation.path === resolved.permissionPaths.vault && operation.spaceId !== undefined &&
+        this.spaceIdsEqual(operation.spaceId, targetSpace) && !operation.caveats?.length)) {
+        return { status: "read_failed" };
+      }
+      // Keep the named-key implementation out of the base browser bundle.
+      const { createNamedKeyClient } = await import("./encryption-keys.js");
+      result = await vault.readNetworkEncrypted(resolved.vaultKey, undefined, {
+        kv: this.createSpaceScopedKVService(targetSpace, this.grantSessionForSpace(proof, targetSpace)),
+        namedKeys: createNamedKeyClient(this, { delegationCid: input.delegationCid }),
+      });
+    }
 
     if (result.status !== "ok") {
       if (result.status === "permission_required") {
@@ -7625,7 +7683,14 @@ export class TinyCloudNode {
       return false;
     }
 
-    const expanded = expandPermissionEntriesCore(permissions);
+    // Check an existing exact isolated-secret grant without making named-key
+    // entries valid in a generic interactive permission request.
+    const expanded = permissions.flatMap((entry) =>
+      entry.service === ENCRYPTION_PERMISSION_SERVICE &&
+        entry.path.includes(`/apps/${SECRET_KEY_APP_ID}/`) && !entry.path.endsWith("/")
+        ? expandDelegationPermissionEntries([entry])
+        : expandPermissionEntriesCore([entry]),
+    );
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return true;
     }

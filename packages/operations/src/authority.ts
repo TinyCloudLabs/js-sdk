@@ -80,11 +80,13 @@ export function evaluateAuthority(
  * Each requirement is judged against every grant in its owner-exact space
  * together: a verified SIWE ReCap reports one entry per signed action, so
  * `get` and `list` on one path arrive as two grants.
+ * Isolated reads additionally require the resource path and action by name.
  */
 export function evaluateOperationAuthority(
   granted: readonly PermissionEntry[],
   required: readonly PermissionEntry[],
   resolveSpace?: OperationSpaceResolver,
+  exactPathsAndActions = false,
 ): AuthorityEvaluation {
   const canonicalGranted = canonicalizeOperationCapabilities(granted, resolveSpace);
   const canonicalRequired = canonicalizeOperationCapabilities(required, resolveSpace);
@@ -93,9 +95,16 @@ export function evaluateOperationAuthority(
   for (const requested of canonicalRequired) {
     const sameScope = canonicalGranted.filter((candidate) =>
       candidate.service === requested.service &&
-      operationSpacesEqual(candidate.space, requested.space)
+      operationSpacesEqual(candidate.space, requested.space) &&
+      (!exactPathsAndActions || candidate.path === requested.path)
     );
-    if (!isCapabilitySubset([requested], sameScope).subset) missing.push(requested);
+    const covered = exactPathsAndActions
+      ? requested.actions.every((action) => isCapabilitySubset(
+          [{ ...requested, actions: [action] }],
+          sameScope.filter((candidate) => candidate.actions.includes(action)),
+        ).subset)
+      : isCapabilitySubset([requested], sameScope).subset;
+    if (!covered) missing.push(requested);
   }
 
   return {
@@ -161,8 +170,10 @@ function canonicalizeOperationResource(permission: PermissionEntry): PermissionE
   // service marker, not an owned data-space; an explicit full space stays bound.
   const rawMarker = permission.space === "encryption"
     && permission.path.startsWith("urn:tinycloud:encryption:");
+  // Named key resources are already canonical (EIP-55); lowercasing would
+  // make them fail the strict SDK parser used for named-key containment.
   const match = permission.path.match(
-    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:.*)$/,
+    /^(urn:tinycloud:encryption:did:pkh:eip155:\d+:)(0x[0-9a-fA-F]{40})(:[^/]*)$/,
   );
   if (!match && !rawMarker) return permission;
   const canonical = {

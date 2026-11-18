@@ -1,17 +1,18 @@
 // Namespace-shaped so modules that bundle this one stay compatible with
 // lightweight node-sdk test doubles.
 import * as nodeSdk from "@tinycloud/node-sdk";
+import { resolveSecretPath, type ResolvedSecretPath } from "@tinycloud/sdk-core";
 
 import { OperationInvocationError, operationError } from "./errors.js";
 
 const DEFAULT_SECRETS_SPACE = "secrets";
-const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 
 export interface SecretsGetInput {
   readonly name: string;
   readonly scope?: string;
   readonly space?: string;
+  readonly isolated?: boolean;
 }
 
 export interface SecretReference {
@@ -20,6 +21,7 @@ export interface SecretReference {
   readonly space: string;
   readonly vaultKey: string;
   readonly permissionPath: string;
+  readonly isolated?: true;
 }
 
 export function normalizeSecretsGetInput(
@@ -33,6 +35,7 @@ export function normalizeSecretsGetInput(
     // space, while an explicitly supplied short name is resolved later against
     // the authenticated identity.
     ...(input.space === undefined ? {} : { space: reference.space }),
+    ...(reference.isolated === true ? { isolated: true } : {}),
   };
 }
 
@@ -40,23 +43,27 @@ export function normalizeSecretsGetInput(
 export function resolveSecretReference(
   input: SecretsGetInput,
 ): SecretReference {
-  const name = input.name.trim();
-  if (!SECRET_NAME_RE.test(name)) {
+  const isolated = input.isolated === true;
+  let secret: ResolvedSecretPath;
+  try {
+    secret = resolveSecretPath(input.name, {
+      scope: input.scope === "" ? undefined : input.scope,
+      isolated,
+    });
+  } catch {
     throw invalidSecretInput();
   }
 
-  const scope = canonicalizeSecretScope(input.scope);
+  const { name, scope, vaultKey, permissionPaths } = secret;
   const space = normalizeSecretsSpace(input.space);
-  const vaultKey = scope === undefined
-    ? `secrets/${name}`
-    : `secrets/scoped/${scope}/${name}`;
 
   return {
     name,
     ...(scope === undefined ? {} : { scope }),
     space,
     vaultKey,
-    permissionPath: `vault/${vaultKey}`,
+    permissionPath: permissionPaths.vault,
+    ...(isolated ? { isolated: true } : {}),
   };
 }
 
@@ -71,7 +78,7 @@ export function resolveSecretReferenceForOperation(
   ownerSpace?: string,
 ): SecretReference {
   const reference = resolveSecretReference(input);
-  if (input.space === undefined && ownerSpace === undefined) return reference;
+  if (input.space === undefined && ownerSpace === undefined && reference.isolated !== true) return reference;
   return {
     ...reference,
     space: resolveOperationSpace(reference.space, node, ownerSpace),

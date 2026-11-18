@@ -241,7 +241,7 @@ export class NodeSecretsService implements ISecretsService {
         options,
         action,
         this.space,
-        action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
+        action === "get" && !options?.isolated ? this.config.getEncryptionNetworkId?.() : undefined,
       );
     } catch (error) {
       return secretsError(

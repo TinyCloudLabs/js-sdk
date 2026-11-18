@@ -27538,6 +27538,10 @@
           },
           "space": {
             "type": "string"
+          },
+          "isolated": {
+            "type": "boolean",
+            "description": "Read a secret that has its own encryption key"
           }
         },
         "required": [

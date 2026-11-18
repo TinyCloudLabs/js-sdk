@@ -1,14 +1,19 @@
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 import type { SecretType } from "./secretTypes";
 
 export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 const SECRET_PREFIX = "secrets/";
-const SCOPED_SECRET_PREFIX = "secrets/scoped/";
+const ISOLATED_SECRET_PREFIX = `${SECRET_PREFIX}isolated/`;
+export const SECRET_KEY_APP_ID = "xyz.tinycloud.secrets";
 const RESERVED_SECRET_SCOPES = new Set(["default", "global"]);
 
 export interface SecretScopeOptions {
   /** Optional logical scope. Omit for the global secret namespace. */
   scope?: string;
+  /** Select the isolated namespace; never fall back to a legacy record. */
+  isolated?: boolean;
   /** Bypass replication for existence-sensitive reads. */
   source?: "network";
 }
@@ -82,6 +87,7 @@ export interface ResolvedSecretPath {
 export interface ParsedSecretCatalogKey {
   name: string;
   scope?: string;
+  isolated?: true;
 }
 
 export function canonicalizeSecretScope(
@@ -128,10 +134,10 @@ export function resolveSecretPath(
   }
 
   const scope = canonicalizeSecretScope(options.scope);
-  const vaultKey =
-    scope === undefined
-      ? `${SECRET_PREFIX}${normalizedName}`
-      : `${SCOPED_SECRET_PREFIX}${scope}/${normalizedName}`;
+  const prefix = options.isolated ? ISOLATED_SECRET_PREFIX : SECRET_PREFIX;
+  const vaultKey = scope === undefined
+    ? `${prefix}${normalizedName}`
+    : `${prefix}scoped/${scope}/${normalizedName}`;
 
   return {
     name: normalizedName,
@@ -143,21 +149,31 @@ export function resolveSecretPath(
   };
 }
 
+/** Named key for an isolated vault row. Legacy paths never select a named key. */
+export function secretNamedKeyPath(spaceId: string, vaultKey: string): string | undefined {
+  if (!vaultKey.startsWith(ISOLATED_SECRET_PREFIX)) return undefined;
+  const canonicalSpace = spaceId.replace(/^(tinycloud:(?:did:)?pkh:eip155:\d+:)(0x[0-9a-fA-F]{40}):/, (_, prefix, address) =>
+    `${prefix.replace("tinycloud:did:", "tinycloud:")}${address.toLowerCase()}:`);
+  const digest = bytesToHex(sha256(new TextEncoder().encode(`${canonicalSpace}\0${vaultKey}`)));
+  return `apps/${SECRET_KEY_APP_ID}/${digest}`;
+}
+
 export function resolveSecretListPrefix(
   options: SecretScopeOptions = {},
 ): string {
   const scope = canonicalizeSecretScope(options.scope);
-  return scope === undefined
-    ? "vault/secrets/"
-    : `vault/secrets/scoped/${scope}/`;
+  const prefix = options.isolated ? ISOLATED_SECRET_PREFIX : SECRET_PREFIX;
+  return scope === undefined ? `vault/${prefix}` : `vault/${prefix}scoped/${scope}/`;
 }
 
 /** Parse a key relative to `secrets/` into its canonical catalog identity. */
 export function parseSecretCatalogKey(
   key: string,
 ): ParsedSecretCatalogKey | undefined {
+  const isolated = key.startsWith("isolated/");
+  if (isolated) key = key.slice("isolated/".length);
   if (SECRET_NAME_RE.test(key)) {
-    return { name: key };
+    return { name: key, ...(isolated ? { isolated: true } : {}) };
   }
 
   const parts = key.split("/");
@@ -175,7 +191,7 @@ export function parseSecretCatalogKey(
     if (scope === undefined || scope !== rawScope) {
       return undefined;
     }
-    return { name, scope };
+    return { name, scope, ...(isolated ? { isolated: true } : {}) };
   } catch {
     return undefined;
   }

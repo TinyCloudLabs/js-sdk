@@ -16,6 +16,8 @@ export {
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
+  secretNamedKeyPath,
+  SECRET_KEY_APP_ID,
 } from "./paths";
 export type {
   ISecretsService,

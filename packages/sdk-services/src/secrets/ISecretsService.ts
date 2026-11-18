@@ -26,6 +26,7 @@ export interface SecretCatalogEntry {
   name: string;
   /** Omitted for the global secret namespace. */
   scope?: string;
+  isolated?: true;
 }
 
 export type SecretsError = VaultError | ServiceError;

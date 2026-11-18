@@ -31,6 +31,9 @@ import type {
   InlineEncryptedEnvelope,
 } from "../encryption";
 import { base64Decode as envelopeBase64Decode } from "../encryption/canonical";
+import type { NamedKeyClient, NamedKeyEnvelope } from "../encryption/namedKeys";
+import { parseEncryptionResource } from "../encryption/resource";
+import { secretNamedKeyPath } from "../secrets/paths";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
   DataVaultConfig,
@@ -761,22 +764,28 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         ...(options?.metadata ?? {}),
       };
       const aad = toBytes(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
-      const envelopeResult = await config.service.encryptToNetwork(
-        config.networkId,
-        plaintext,
-        { aad, metadata },
-      );
-      if (!envelopeResult.ok) {
-        const routing = routingFailure(envelopeResult.error);
-        if (routing) return vaultError(routing);
-        return vaultError({
-          code: "STORAGE_ERROR",
-          cause: new Error(envelopeResult.error.message),
-        });
+      const keyPath = secretNamedKeyPath(this.vaultConfig.spaceId, key);
+      let envelope: InlineEncryptedEnvelope | NamedKeyEnvelope;
+      if (keyPath !== undefined) {
+        const keys = config.namedKeys?.();
+        if (keys === undefined) throw new Error("Named-key encryption is unavailable");
+        const networkId = parseEncryptionResource(config.networkId).networkId;
+        envelope = await keys.encrypt(keyPath, plaintext, { networkId, aad, metadata, ensureKey: true });
+      } else {
+        const envelopeResult = await config.service.encryptToNetwork(config.networkId, plaintext, { aad, metadata });
+        if (!envelopeResult.ok) {
+          const routing = routingFailure(envelopeResult.error);
+          if (routing) return vaultError(routing);
+          return vaultError({
+            code: "STORAGE_ERROR",
+            cause: new Error(envelopeResult.error.message),
+          });
+        }
+        envelope = envelopeResult.data;
       }
 
       const valuePath = `vault/${key}`;
-      const valueBody = JSON.stringify(envelopeResult.data);
+      const valueBody = JSON.stringify(envelope);
       const putOptions = options?.ifMatch !== undefined
         ? { ifMatch: options.ifMatch }
         : options?.ifNoneMatch !== undefined
@@ -815,6 +824,26 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         cause: toError(error),
       });
     }
+  }
+
+  private async decryptNetworkEnvelope(
+    key: string,
+    envelope: InlineEncryptedEnvelope | NamedKeyEnvelope,
+    namedKeys?: Pick<NamedKeyClient, "decrypt">,
+  ) {
+    const config = this.networkEncryption!;
+    const keyPath = secretNamedKeyPath(this.vaultConfig.spaceId, key);
+    if (keyPath === undefined) {
+      return config.service.decryptEnvelope(envelope as InlineEncryptedEnvelope, await this.decryptCapabilityProof());
+    }
+    if (envelope?.v !== 2 || !("keyPath" in envelope) || envelope.keyPath !== keyPath ||
+        envelope.networkId !== parseEncryptionResource(config.networkId).networkId ||
+        checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key) !== "ok") {
+      return { ok: false as const, error: { code: "INVALID_ENVELOPE", message: "Invalid isolated secret envelope" } };
+    }
+    const keys = namedKeys ?? config.namedKeys?.();
+    if (keys === undefined) throw new Error("Named-key decryption is unavailable");
+    return { ok: true as const, data: await keys.decrypt(envelope) };
   }
 
   private async getNetworkEncrypted<T = unknown>(
@@ -863,8 +892,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           });
         }
       }
-      const proof = await this.decryptCapabilityProof();
-      const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      const plaintextResult = await this.decryptNetworkEnvelope(key, envelope);
       if (!plaintextResult.ok) {
         const routing = routingFailure(plaintextResult.error);
         if (routing) return vaultError(routing);
@@ -914,6 +942,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
   async readNetworkEncrypted<T = unknown>(
     key: string,
     options?: VaultGetOptions<T>,
+    authority?: { kv: Pick<IKVService, "get">; namedKeys: Pick<NamedKeyClient, "decrypt"> },
   ): Promise<VaultNetworkReadResult<T>> {
     const config = this.networkEncryption;
     if (!config || !this.requireAuth()) {
@@ -922,7 +951,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
 
     let valueResult: Awaited<ReturnType<IKVService["get"]>>;
     try {
-      valueResult = await this.tc.kv.get<string>(`vault/${key}`, { raw: true, source: "network" });
+      valueResult = await (authority?.kv ?? this.tc.kv).get<string>(`vault/${key}`, { raw: true, source: "network" });
     } catch (error) {
       if (routingFailure(error)) throw error;
       return { status: "node_unreachable" };
@@ -971,10 +1000,9 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       }
     }
 
-    let plaintextResult: Awaited<ReturnType<typeof config.service.decryptEnvelope>>;
+    let plaintextResult;
     try {
-      const proof = await this.decryptCapabilityProof();
-      plaintextResult = await config.service.decryptEnvelope(envelope, proof);
+      plaintextResult = await this.decryptNetworkEnvelope(key, envelope, authority?.namedKeys);
     } catch (error) {
       if (routingFailure(error)) throw error;
       return { status: "decrypt_failed" };
@@ -1065,6 +1093,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     return this.withTelemetry("put", key, async () => {
       if (this.usesNetworkEncryption) {
         return this.putNetworkEncrypted(key, value, options);
+      }
+
+      if (secretNamedKeyPath(this.vaultConfig.spaceId, key) !== undefined) {
+        return vaultError({ code: "VAULT_LOCKED", message: "Isolated secrets require named-key encryption" });
       }
 
       if (options?.ifNoneMatch !== undefined) {
@@ -1196,6 +1228,10 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     return this.withTelemetry("get", key, async () => {
       if (this.usesNetworkEncryption) {
         return this.getNetworkEncrypted<T>(key, options);
+      }
+
+      if (secretNamedKeyPath(this.vaultConfig.spaceId, key) !== undefined) {
+        return vaultError({ code: "VAULT_LOCKED", message: "Isolated secrets require named-key encryption" });
       }
 
       if (options?.expectAad === true) {

@@ -15,7 +15,7 @@ import {
   secretTypeOf,
 } from "./secretTypes";
 import {
-  canonicalizeSecretScope,
+  resolveSecretListPrefix,
   parseSecretCatalogKey,
   resolveSecretPath,
   SECRET_NAME_RE,
@@ -151,8 +151,7 @@ export class SecretsService implements ISecretsService {
   ): Promise<Result<string[], SecretsError>> {
     let prefix: string;
     try {
-      const scope = canonicalizeSecretScope(options?.scope);
-      prefix = scope === undefined ? "secrets/" : `secrets/scoped/${scope}/`;
+      prefix = resolveSecretListPrefix(options).slice("vault/".length);
     } catch (error) {
       return invalidSecretInput(
         error instanceof Error ? error.message : String(error),
@@ -195,7 +194,8 @@ export class SecretsService implements ISecretsService {
       for (const key of result.data.keys) {
         const entry = parseSecretCatalogKey(key);
         if (!entry) continue;
-        entries.set(`${entry.scope ?? ""}\u0000${entry.name}`, entry);
+        const id = `${entry.scope ?? ""}\u0000${entry.name}`;
+        if (entry.isolated || !entries.has(id)) entries.set(id, entry);
       }
 
       cursor = result.data.truncated ? result.data.nextCursor : undefined;
