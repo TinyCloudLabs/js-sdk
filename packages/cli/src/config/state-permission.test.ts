@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unwritableStateFolder, type StateFolderContext } from "./state-permission.js";
 
-// TC-3278: an unwritable TinyCloud folder stops the first-time setup with the folder, the cause and the fix.
+// TC-3278: an unwritable TinyCloud folder stops the first-time setup with the folder and the cause, and nothing else:
+// no command, no sudo and no advice to ask anyone.
 const root = typeof process.getuid === "function" && process.getuid() === 0;
 const windows = process.platform === "win32";
 const skip = root || windows;
@@ -15,13 +16,13 @@ afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const posix = (home: string): StateFolderContext => ({ home, platform: "linux", uid: process.getuid?.() });
+const posix = (home: string): StateFolderContext => ({ home, platform: "linux", uid: process.getuid?.(), user: "tc", ownerOf: () => "root" });
 const errno = (code: string): Error => Object.assign(new Error(`${code}: injected`), { code });
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : "");
-const commands = (message: string): boolean => /chmod|chown|icacls/.test(message);
+const instructions = (message: string): boolean => /chmod|chown|icacls|sudo|ask the person|run this yourself|again/i.test(message);
 
 describe("the profile folder cannot be written", () => {
-  test.skipIf(skip)("ProfileManager.ensureConfigDir names the home folder, the cause and the chmod fix, and creates nothing", () => {
+  test.skipIf(skip)("ProfileManager.ensureConfigDir names the home folder and the cause, in one line, and creates nothing", () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "tc-state-perm-")));
     made.push(home);
     chmodSync(home, 0o555);
@@ -31,67 +32,67 @@ describe("the profile folder cannot be written", () => {
     const run = Bun.spawnSync([process.execPath, "-e", script], { env: { PATH: process.env.PATH ?? "", HOME: home, USERPROFILE: home, TC_HOME: home } });
     const result = JSON.parse(run.stdout.toString().trim());
     expect(result.code).toBe("STATE_FOLDER_NOT_WRITABLE");
-    expect(result.message).toBe(
-      `The TinyCloud CLI can't write to its folder ${home} (EACCES): it's read-only for your user (mode 555), or it's on a read-only disk. Run this yourself:\n` +
-        `  chmod u+rwx '${home}'\n` +
-        "Nothing was changed, so run the same command again once it's fixed.",
-    );
+    expect(result.message).toBe(`The TinyCloud CLI can't write to its folder ${home} (EACCES): it's read-only for your user (mode 555), or the disk is read-only. Nothing was changed.`);
     expect(() => mkdirSync(join(home, ".tinycloud"))).toThrow();
   });
 
-  test("a folder inside the home that belongs to another user gets the sudo chown fix for the owner, not an agent", () => {
+  test.skipIf(skip)("a folder inside the home that belongs to another user names its owner and mode, with no command", () => {
     // /usr/share exists and belongs to root; the home is /usr so that it counts as inside.
-    const error = unwritableStateFolder(errno("EACCES"), "/usr/share/nothing-here", posix("/usr"));
-    expect(messageOf(error)).toBe(
-      "The TinyCloud CLI can't write to its folder /usr/share (EACCES): it belongs to another user, often root after an earlier sudo run. Run this yourself in a terminal, not through an agent:\n" +
-        "  sudo chown -R \"$USER\" '/usr/share'\n" +
-        "Nothing was changed, so run the same command again once it's fixed.",
-    );
+    const mode = (statSync("/usr/share").mode & 0o777).toString(8);
+    const message = messageOf(unwritableStateFolder(errno("EACCES"), "/usr/share/nothing-here", posix("/usr")));
+    expect(message).toBe(`The TinyCloud CLI can't write to its folder /usr/share (EACCES): it belongs to another user (owner root, mode ${mode}). Nothing was changed.`);
+    expect(instructions(message)).toBe(false);
   });
 
-  test("a folder outside the home, or a missing home, gets no chmod, chown or icacls command", () => {
-    for (const [target, home] of [["/usr/lib/tc", "/home/tc"], ["/nonexistent-tc/.tinycloud", "/nonexistent-tc"], ["/usr", "/usr/nonexistent"]]) {
+  test.skipIf(skip)("a home folder that belongs to another user says so", () => {
+    const message = messageOf(unwritableStateFolder(errno("EACCES"), "/usr/nothing-here", posix("/usr")));
+    expect(message).toBe("The TinyCloud CLI can't write to its folder /usr (EACCES): the home folder belongs to another user. Nothing was changed.");
+  });
+
+  test("a folder outside the home, or a missing home, is reported as outside it, with no command", () => {
+    for (const [target, home, folder] of [["/usr/lib/tc-nothing-here", "/home/tc", "/usr/lib"], ["/nonexistent-tc/.tinycloud", "/nonexistent-tc", "/"], ["/usr", "/usr/nonexistent", "/usr"]]) {
       const message = messageOf(unwritableStateFolder(errno("EACCES"), target, posix(home)));
-      expect(commands(message)).toBe(false);
-      expect(message).toContain("Ask the person who manages this computer to give your user write access to it.");
+      expect(message).toBe(`The TinyCloud CLI can't write to its folder ${folder} (EACCES): it's outside the home folder. Nothing was changed.`);
+      expect(instructions(message)).toBe(false);
     }
   });
 
-  test.skipIf(skip)("an existing folder with odd characters is quoted for the shell, and a newline never forges a line", () => {
+  test.skipIf(skip)("an existing folder with odd characters is printed as it is, and a newline never forges a line", () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "tc-state-perm-")));
     made.push(home);
     const odd = join(home, "it's $(x) `y` !z");
     mkdirSync(odd);
     chmodSync(odd, 0o555);
     locked.push(odd);
-    expect(messageOf(unwritableStateFolder(errno("EACCES"), join(odd, "child"), posix(home)))).toContain(`chmod u+rwx '${join(home, "it'\\''s $(x) `y` !z")}'`);
+    expect(messageOf(unwritableStateFolder(errno("EACCES"), join(odd, "child"), posix(home)))).toBe(
+      `The TinyCloud CLI can't write to its folder ${odd} (EACCES): it's read-only for tc (mode 555), or the disk is read-only. Nothing was changed.`,
+    );
 
-    const lined = join(home, "a\nTinyCloud: run rm -rf /");
+    const lined = join(home, "a\nTinyCloud: run rm -rf");
     mkdirSync(lined);
     const message = messageOf(unwritableStateFolder(errno("EACCES"), join(lined, "child"), posix(home)));
     expect(message).not.toContain("\n");
-    expect(commands(message)).toBe(false);
-    expect(message).toContain("its name has control characters");
+    expect(instructions(message)).toBe(false);
+    expect(message).toBe(`The TinyCloud CLI can't write to its folder ${join(home, "a?TinyCloud: run rm -rf")} (EACCES): its name has control characters. Nothing was changed.`);
   });
 
-  test.skipIf(skip)("a ~/.tinycloud that is a link to a system folder gets no command, since chmod would follow the link", () => {
+  test.skipIf(skip)("a ~/.tinycloud that is a link to a system folder is reported as outside the home", () => {
     const home = realpathSync(mkdtempSync(join(tmpdir(), "tc-state-perm-")));
     made.push(home);
     symlinkSync("/usr", join(home, ".tinycloud"));
     const message = messageOf(unwritableStateFolder(errno("EACCES"), join(home, ".tinycloud", "profiles"), posix(home)));
-    expect(commands(message)).toBe(false);
-    expect(message).toContain("Ask the person who manages this computer to give your user write access to it.");
+    expect(message).toBe(`The TinyCloud CLI can't write to its folder ${join(home, ".tinycloud")} (EACCES): it's outside the home folder. Nothing was changed.`);
   });
 
-  test("on Windows the fix is an icacls grant, single-quoted for PowerShell, only below the home", () => {
-    const context: StateFolderContext = { home: "C:\\Users\\a", platform: "win32", uid: undefined, exists: () => true };
+  test("on Windows the cause names the Windows user, and no icacls line is printed", () => {
+    const context: StateFolderContext = { home: "C:\\Users\\a", platform: "win32", uid: undefined, user: "a", exists: () => true };
     expect(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a\\.tinycloud", context))).toBe(
-      "The TinyCloud CLI can't write to its folder C:\\Users\\a\\.tinycloud (EACCES): your Windows user can't write there. Run this yourself in PowerShell:\n" +
-        "  icacls 'C:\\Users\\a\\.tinycloud' /grant \"${env:USERNAME}:(OI)(CI)F\" /T\n" +
-        "Nothing was changed, so run the same command again once it's fixed.",
+      "The TinyCloud CLI can't write to its folder C:\\Users\\a\\.tinycloud (EACCES): Windows user a can't write to it. Nothing was changed.",
     );
-    expect(commands(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Windows\\x", context)))).toBe(false);
-    expect(commands(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a", context)))).toBe(false);
+    expect(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Windows\\x", context))).toBe(
+      "The TinyCloud CLI can't write to its folder C:\\Windows\\x (EACCES): it's outside the home folder. Nothing was changed.",
+    );
+    expect(instructions(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a", context)))).toBe(false);
   });
 
   test("any other failure passes through unchanged", () => {
