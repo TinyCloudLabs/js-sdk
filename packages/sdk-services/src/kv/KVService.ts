@@ -615,9 +615,12 @@ export class KVService extends BaseService implements IKVService {
             { meta: { status: response.status, statusText: response.statusText } }
           ));
         }
+        const message = `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`;
+        const retryError = nodeRetryError("kv", message, response, errorText);
+        if (retryError) return err(retryError);
         return err(serviceError(
           ErrorCodes.NETWORK_ERROR,
-          `Failed to batch read ${keys.length} key(s): ${response.status} - ${errorText}`,
+          message,
           "kv",
           { meta: { status: response.status, statusText: response.statusText } }
         ));

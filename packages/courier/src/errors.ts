@@ -76,11 +76,19 @@ export function isNotFoundError(error: unknown): boolean {
   return fieldOf(error, 'code') === 'KV_NOT_FOUND' || httpStatuses(error).includes(404);
 }
 
-/** Node-side or network failure worth a bounded retry on an idempotent read: any 5xx, or a network code. */
+/** Codes the SDK already retries under its own policy (it honours the node's Retry-After); see `isTransientError`. */
+const SDK_RETRIED_CODES = ['NODE_BUSY', 'REQUEST_TIMEOUT'];
+
+/**
+ * Node-side or network failure worth a bounded retry on an idempotent read: any 5xx, or a network code. Not the node's
+ * busy and timeout answers: the SDK has retried those, within its retry policy, before the error reaches the caller,
+ * so a second loop here would multiply the requests a busy node gets.
+ */
 export function isTransientError(error: unknown): boolean {
-  if (httpStatuses(error).some((s) => s >= 500 && s <= 599)) return true;
   const code = fieldOf(error, 'code');
   const causeCode = fieldOf(fieldOf(error, 'cause'), 'code');
+  if (SDK_RETRIED_CODES.some((c) => c === code || c === causeCode)) return false;
+  if (httpStatuses(error).some((s) => s >= 500 && s <= 599)) return true;
   return TRANSIENT_CODES.some((c) => c === code || c === causeCode);
 }
 

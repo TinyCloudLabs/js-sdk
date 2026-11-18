@@ -24,7 +24,7 @@ async function nap(ms: number) {
   await promise;
 }
 
-/** Bounded retry for idempotent KV reads — node blips are real (fetch failed, 5xx). */
+/** Bounded retry for idempotent KV reads — node blips are real (fetch failed, 5xx). The node's busy/timeout answers are the SDK's to retry (isTransientError). */
 async function readRetry<T>(fn: () => Promise<T>): Promise<T> {
   let last: unknown;
   for (let i = 0; i < 3; i++) {
