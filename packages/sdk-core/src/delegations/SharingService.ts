@@ -475,7 +475,8 @@ export interface SharingServiceConfig {
  * Whether a session can issue a sharing delegation from its own authority:
  * `"ok"` (an uncaveated entry covers it), `"caveated"` (only caveated entries
  * cover it; their caveats cannot be carried into a child delegation) or
- * `"not-covered"`.
+ * `"not-covered"` (no entry covers it, or it asks for a `tinycloud.delegation`
+ * action, which no share link carries).
  */
 export type ShareDelegationPreflight = "ok" | "caveated" | "not-covered";
 
@@ -958,10 +959,11 @@ export class SharingService implements ISharingService {
    * - `"not-covered"`: no entry covers it, or there is no session.
    *
    * It does not consult `onRootDelegationNeeded`, so a signer-backed session
-   * may still generate when this is not `"ok"`.
+   * may still generate when this is not `"ok"`. A `tinycloud.delegation` action
+   * is always `"not-covered"`: {@link generate} refuses it whatever the authority.
    */
   preflightGenerate(params: Pick<GenerateShareParams, "path" | "actions" | "expiry">): ShareDelegationPreflight {
-    if (!this.session || !params.path) return "not-covered";
+    if (!this.session || !params.path || includesDelegationAction(params.actions ?? DEFAULT_READ_ACTIONS)) return "not-covered";
     const fullPath = this.pathPrefix
       ? `${this.pathPrefix}/${params.path}`.replace(/\/+/g, "/")
       : params.path;

@@ -34,7 +34,7 @@ function signedParent(actions: readonly string[]): string {
   return `${signingInput}.${b64url(ed25519.sign(new TextEncoder().encode(signingInput), PARENT_SEED))}`;
 }
 
-function makeService() {
+function makeService(registry = new CapabilityKeyRegistry()) {
   const createDelegationWasm = mock((params: CreateDelegationWasmParams) => ({
     delegation: "child.token.signature",
     cid: "bafy-child",
@@ -67,7 +67,7 @@ function makeService() {
       getDID: mock(async () => `${LINK_DID}#${LINK_DID.slice("did:key:".length)}`),
       getJWK: mock(() => ({ kty: "OKP", crv: "Ed25519", x: b64url(LINK_PUBLIC), d: b64url(LINK_SEED) })),
     } as unknown as KeyProvider,
-    registry: new CapabilityKeyRegistry(),
+    registry,
     createKVService: mock(() => ({})) as never,
     createDelegationWasm,
     onRootDelegationNeeded,
@@ -99,6 +99,27 @@ describe("SharingService.generate refuses delegation actions", () => {
       expect(onRootDelegationNeeded).not.toHaveBeenCalled();
       expect(fetch).not.toHaveBeenCalled();
     });
+  }
+});
+
+test("preflightGenerate never reports a delegation-action link as ok, even when the session's authority covers it", () => {
+  const registry = new CapabilityKeyRegistry();
+  registry.registerKey({ id: "parent-key", did: "did:key:z6MkParent", type: "session", priority: 0 }, [{
+    cid: "bafy-parent",
+    delegateDID: "did:key:z6MkParent",
+    spaceId: SPACE,
+    path: PATH,
+    actions: ["tinycloud.kv/get", ...DELEGATION_ACTIONS],
+    expiry: EXPIRY,
+    isRevoked: false,
+    allowSubDelegation: true,
+  }]);
+  const { service } = makeService(registry);
+
+  // The same authority covers a read link, so only the delegation action decides the answer.
+  expect(service.preflightGenerate({ path: PATH, actions: ["tinycloud.kv/get"], expiry: new Date("2099-07-17T00:00:00.000Z") })).toBe("ok");
+  for (const action of DELEGATION_ACTIONS) {
+    expect(service.preflightGenerate({ path: PATH, actions: [action], expiry: new Date("2099-07-17T00:00:00.000Z") })).toBe("not-covered");
   }
 });
 
