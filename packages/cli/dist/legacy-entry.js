@@ -20613,6 +20613,18 @@ async function discoverRefusedAsExpired(entry, response, now) {
   const body = await response.clone().json().catch(() => null);
   return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
 }
+async function openKeySaysExpired(entry, signingKey) {
+  let response;
+  try {
+    response = await post2(entry, "discover", signingKey);
+  } catch {
+    return false;
+  }
+  if (response.ok) return false;
+  if (await discoverRefusedAsExpired(entry, response, Date.now())) return true;
+  const body = await response.clone().json().catch(() => null);
+  return typeof body === "object" && body !== null && "code" in body && body.code === "expired_request";
+}
 async function pauseBetweenAttempts(profile, entry, approvalWait, reached = false) {
   if (!approvalWait) {
     await wait(2e3);
@@ -20686,9 +20698,15 @@ async function acquireApprovalRequest(_did, options) {
   });
   if (matching.length > 1) throw invalid2("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
-  const isNewRequest = entry === void 0;
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
+  let isNewRequest = entry === void 0;
+  if (entry && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait?.now ?? Date.now)())) {
+    if (approvalWait) throw await expiredRequest(profile, entry, true);
+    if (await openKeySaysExpired(entry, signingKey)) {
+      const staleRequestId = entry.requestId;
+      await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+      entry = void 0;
+      isNewRequest = true;
+    }
   }
   if (!entry) {
     const relay = createECDH2("prime256v1");
@@ -20726,6 +20744,7 @@ async function acquireApprovalRequest(_did, options) {
     options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
     if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
 ${entry.approvalUrl}
+The link is valid until ${entry.requestExpiresAt}.
 `);
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
