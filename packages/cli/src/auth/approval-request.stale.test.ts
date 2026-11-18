@@ -256,13 +256,15 @@ describe("without --timeout, a stored request that expired past the result reten
     expect((await entries()).map((item) => item.requestId)).toContain(approved.requestId);
   });
 
-  test("when OpenKey cannot be asked, nothing is dropped on a guess: the saved request takes the normal path", async () => {
+  test("when OpenKey cannot be asked, nothing is dropped on a guess: the saved request takes the normal path; the link is shown only once OpenKey says it is open", async () => {
     const saved = await createPending();
     await expireLocally(20 * 60_000);
-    networkFault = (url) => url.pathname.endsWith("/result");
+    let faults = 0;
+    networkFault = (url) => url.pathname.endsWith("/result") && faults++ === 0;
     offered = [];
     await expect(acquireApprovalRequest(did, options((approvalUrl) => { offered.push(approvalUrl); throw LEFT; }))).rejects.toBe(LEFT);
     expect(offered).toEqual([saved.approvalUrl]);
+    expect(faults).toBe(2);
     expect(linkPosts).toBe(1);
     expect((await entries()).map((item) => item.requestId)).toEqual([saved.requestId]);
   });
