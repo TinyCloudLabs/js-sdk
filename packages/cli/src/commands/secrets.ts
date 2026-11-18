@@ -8,7 +8,7 @@ import {
   type PortableDelegation,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { appSecretScope } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import {
@@ -48,6 +48,7 @@ import { closeReplication } from "../lib/replication-registry.js";
 import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
 import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
+import { assertSecretValueMatchesType, parseSecretTypeOption } from "../lib/secret-type.js";
 import { tryOpenBrowser, warnBrowserNotOpened } from "../lib/browser.js";
 import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { runCommand, type CommandOutcome } from "../lib/run-command.js";
@@ -1721,9 +1722,11 @@ export function registerSecretsCommand(
     .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
+    .option("--type <type>", `What the secret is: ${SECRET_TYPES.join(", ")} (default: secret). A totp secret must be a base32 seed or an otpauth:// link.`)
     .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
     .action(async (name: string, value: string | undefined, options, cmd) => {
       try {
+        const secretType = parseSecretTypeOption(options.type);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureSecretsNode(ctx, options);
@@ -1750,6 +1753,10 @@ export function registerSecretsCommand(
         }
 
         const scopeOptions = resolveSecretScope(options);
+        assertSecretValueMatchesType(secretType, secretValue);
+        const putOptions = secretType === undefined
+          ? scopeOptions
+          : { ...scopeOptions, type: secretType };
         const result = await runSecretOperation({
           ctx,
           node,
@@ -1758,14 +1765,14 @@ export function registerSecretsCommand(
           scopeOptions,
           space: spaceUri,
           label: `Storing secret ${name}...`,
-          operation: () => secrets.put(name, secretValue, scopeOptions),
+          operation: () => secrets.put(name, secretValue, putOptions),
         });
 
         if (!result.ok) {
           throw cliErrorFromService(result.error);
         }
 
-        outputJson({ name, written: true });
+        outputJson({ name, written: true, ...(secretType === undefined ? {} : { type: secretType }) });
       } catch (error) {
         return handleError(error);
       }
