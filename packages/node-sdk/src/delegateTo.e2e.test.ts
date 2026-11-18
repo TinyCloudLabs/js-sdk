@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
+import { createNamedKeyClient, type NamedKeyEnvelope } from "./encryption-keys";
 import { pkhDid } from "@tinycloud/bootstrap";
 import { formatKeyResource } from "@tinycloud/sdk-services/encryption/resource";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
@@ -175,8 +176,10 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
 
   const appId = "xyz.tinycloud.secrets";
 
-  async function secretOwner(nodeHost = host) {
-    const signer = new PrivateKeySigner(`0x${randomBytes(32).toString("hex")}`);
+  async function secretOwner(
+    nodeHost = host,
+    signer = new PrivateKeySigner(`0x${randomBytes(32).toString("hex")}`),
+  ) {
     const networkId = `urn:tinycloud:encryption:${pkhDid(await signer.getAddress(), 1)}:default`;
     const owner = new TinyCloudNode({
       host: nodeHost,
@@ -205,11 +208,26 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
     await owner.signIn();
     await owner.ensureEncryptionNetwork();
     const space = owner.restorableSession!.spaceId;
-    return { owner, space, networkId };
+    return { owner, signer, space, networkId };
   }
 
   const isolated = { isolated: true } as const;
   const physicalPath = (name: string) => `vault/secrets/isolated/${name}`;
+  const recipientDid = (recipient: TinyCloudNode) => recipient.sessionDid!.split("#", 1)[0]!;
+
+  async function secretRecipient() {
+    const recipient = new TinyCloudNode({
+      host,
+      tinycloudRegistryUrl: registry.url.origin,
+      signer: new PrivateKeySigner(`0x${randomBytes(32).toString("hex")}`),
+      wasmBindings: new NodeWasmBindings(),
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+    });
+    await recipient.signIn();
+    return recipient;
+  }
 
   test("TC-3284: a recipient reads A, not B ciphertext; a legacy root proof cannot open A", async () => {
     const { owner, space, networkId } = await secretOwner();
@@ -227,18 +245,8 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
     expect(b).toMatchObject({ v: 2, networkId });
     expect(a.keyPath).not.toBe(b.keyPath);
 
-    const recipient = new TinyCloudNode({
-      host,
-      tinycloudRegistryUrl: registry.url.origin,
-      signer: new PrivateKeySigner(`0x${randomBytes(32).toString("hex")}`),
-      wasmBindings: new NodeWasmBindings(),
-      autoCreateSpace: true,
-      autoBootstrapAccount: false,
-      enablePublicSpace: false,
-    });
-    await recipient.signIn();
-    const did = recipient.sessionDid!.split("#", 1)[0]!;
-    const { delegation } = await owner.delegateSecretRead(did, "A");
+    const recipient = await secretRecipient();
+    const { delegation } = await owner.delegateSecretRead(recipientDid(recipient), "A");
     expect(delegation.resources).toEqual([
       { service: "encryption", space: "encryption", path: formatKeyResource(networkId, a.keyPath), actions: ["tinycloud.encryption/decrypt"] },
       { service: "kv", space, path: physicalPath("A"), actions: ["tinycloud.kv/get"] },
@@ -250,19 +258,10 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
     await expect(recipient.keys.decrypt(b)).rejects.toMatchObject({ status: expect.any(Number) });
     await expect(recipient.keys.decrypt({ ...b, keyPath: a.keyPath })).rejects.toMatchObject({ code: "KEY_UNWRAP_FAILED" });
 
-    const rootRecipient = new TinyCloudNode({
-      host,
-      tinycloudRegistryUrl: registry.url.origin,
-      signer: new PrivateKeySigner(`0x${randomBytes(32).toString("hex")}`),
-      wasmBindings: new NodeWasmBindings(),
-      autoCreateSpace: true,
-      autoBootstrapAccount: false,
-      enablePublicSpace: false,
-    });
-    await rootRecipient.signIn();
+    const rootRecipient = await secretRecipient();
     const legacyPath = "vault/secrets/LEGACY";
     expect(await owner.secrets.put("LEGACY", "synthetic legacy", { ifAbsent: true })).toMatchObject({ ok: true });
-    const rootOnly = await owner.delegateTo(rootRecipient.sessionDid!.split("#", 1)[0]!, [
+    const rootOnly = await owner.delegateTo(recipientDid(rootRecipient), [
       { service: "tinycloud.kv", space, path: legacyPath, actions: ["get"] },
       { service: "tinycloud.encryption", path: networkId, actions: ["decrypt"] },
     ], { requireActivation: true });
@@ -275,6 +274,46 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
       { proofs: [rootOnly.delegation.cid] },
     );
     expect(rootDecrypt).toMatchObject({ ok: false, error: { code: "DECRYPT_DENIED" } });
+  }, 30_000);
+
+  test("TC-3284: a fresh owner session revokes one secret grant by CID", async () => {
+    const { owner, signer, space } = await secretOwner();
+    for (const name of ["A", "B"]) {
+      expect(await owner.secrets.put(name, `synthetic ${name}`, { ...isolated, ifAbsent: true }))
+        .toMatchObject({ ok: true });
+    }
+    const stored = await owner.kvForSpace(space).get<string>(physicalPath("A"), { raw: true, source: "network" });
+    if (!stored.ok) throw new Error("isolated ciphertext was not stored");
+    const ciphertext: NamedKeyEnvelope = JSON.parse(stored.data.data);
+
+    const recipient = await secretRecipient();
+    const otherRecipient = await secretRecipient();
+    const grantA = await owner.delegateSecretRead(recipientDid(recipient), "A");
+    const grantB = await owner.delegateSecretRead(recipientDid(recipient), "B");
+    const otherGrantA = await owner.delegateSecretRead(recipientDid(otherRecipient), "A");
+    const cid = grantA.delegation.cid;
+    expect(grantA.prompted).toBe(false);
+    expect(new Set([cid, grantB.delegation.cid, otherGrantA.delegation.cid]).size).toBe(3);
+    await recipient.useRuntimeDelegation(grantA.delegation);
+    await recipient.useRuntimeDelegation(grantB.delegation);
+    await otherRecipient.useRuntimeDelegation(otherGrantA.delegation);
+
+    const readA = () => recipient.readSecret({ space, name: "A", ...isolated, delegationCid: cid });
+    const keysA = createNamedKeyClient(recipient, { delegationCid: cid });
+    expect(await readA()).toEqual({ status: "ok", value: "synthetic A" });
+    expect(new TextDecoder().decode(await keysA.decrypt(ciphertext))).toContain("synthetic A");
+
+    const { owner: revoker, space: revokerSpace } = await secretOwner(host, signer);
+    expect(revokerSpace).toBe(space);
+    expect(revoker.sessionDid).not.toBe(owner.sessionDid);
+    expect(await revoker.revokeDelegation(cid)).toEqual({ ok: true, data: { revoked: true, cid } });
+
+    expect(await readA()).toMatchObject({ status: "read_failed" });
+    await expect(keysA.decrypt(ciphertext)).rejects.toMatchObject({ status: 403 });
+    expect(await recipient.readSecret({ space, name: "B", ...isolated, delegationCid: grantB.delegation.cid }))
+      .toEqual({ status: "ok", value: "synthetic B" });
+    expect(await otherRecipient.readSecret({ space, name: "A", ...isolated, delegationCid: otherGrantA.delegation.cid }))
+      .toEqual({ status: "ok", value: "synthetic A" });
   }, 30_000);
 
   test("TC-3284: a full app key prefix refuses the write without storing a legacy envelope", async () => {
