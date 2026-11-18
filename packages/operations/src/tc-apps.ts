@@ -101,7 +101,7 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
       : kind.kind === "app-copy" ? `the searchable copy of your records for ${kind.app}`
       : kind.app === "healthlog" ? "your whole Health Log database"
       : "your Recipes app's notes";
-    return `Lets the TinyCloud connector ${authority.join(", ")} ${target} (${path}) in your TinyCloud ${kind.kind.startsWith("legacy-") ? "default" : "applications"} space, for 30 days.`;
+    return `Lets the TinyCloud connector ${authority.join(", ")} ${target} (${path}) in your TinyCloud ${kind.kind.startsWith("legacy-") ? "default" : "applications"} space.`;
   }).join(" ");
 }
 

@@ -95,6 +95,13 @@ describe("catalog task approvals", () => {
       for (const bad of [{ ...health, actions: ["tinycloud.sql/schema"] }, { ...health, path: "other" }, { ...recipes, path: "xyz.tinycloud.sample.recipes/" }, { ...health, space: SPACE.replace(/:applications$/, ":default") }]) {
         expect(tcAppsApprovalReason([list, bad])).toBeUndefined();
       }
+      // OpenKey's approval page states the access length itself, and the owner or the account can change it
+      // (an app-review account always gets one hour), so the reason this connector writes names no length.
+      for (const plan of [[list, health], [list, recipes]]) {
+        const reason = tcAppsApprovalReason(plan);
+        expect(reason).toContain("Lets the TinyCloud connector");
+        expect(reason).not.toMatch(/\b(for \d+ \w+|\d+ (minutes?|hours?|days?|weeks?)|an hour|one hour)\b/i);
+      }
     });
   });
 });
