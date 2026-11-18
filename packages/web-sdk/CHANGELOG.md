@@ -1,5 +1,26 @@
 # @tinycloudlabs/web-sdk
 
+## 3.13.0-beta.3
+
+### Minor Changes
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+  - @tinycloud/replica@0.4.6-beta.0
+
 ## 3.13.0-beta.2
 
 ### Patch Changes

@@ -44542,7 +44542,7 @@ import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile17 } from "fs/promises";
 import { join as join23 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
-import { appSecretScope } from "@tinycloud/sdk-core";
+import { appSecretScope, SECRET_TYPES as SECRET_TYPES2 } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, liveStoredLease as liveStoredLease3, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
 import {
@@ -44566,6 +44566,37 @@ init_replication_registry();
 init_session_expired();
 init_scoped_login();
 init_space();
+
+// src/lib/secret-type.ts
+init_errors();
+init_constants();
+import { SECRET_TYPES, isSecretType } from "@tinycloud/sdk-core";
+import { parseTotpSeed } from "@tinycloud/sdk-services/secrets/totp";
+function parseSecretTypeOption(input) {
+  if (input === void 0) return void 0;
+  if (!isSecretType(input)) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      `Unknown secret type ${JSON.stringify(input)}. Use one of: ${SECRET_TYPES.join(", ")}.`,
+      ExitCode.USAGE_ERROR
+    );
+  }
+  return input;
+}
+function assertSecretValueMatchesType(type, value4) {
+  if (type !== "totp") return;
+  const parsed = parseTotpSeed(value4);
+  if (!parsed.ok) {
+    throw new CLIError(
+      "USAGE_ERROR",
+      `The value is not a usable TOTP seed: ${parsed.message}`,
+      ExitCode.USAGE_ERROR,
+      { hint: "Pass a base32 seed or an otpauth://totp/... link, or store it without --type totp." }
+    );
+  }
+}
+
+// src/commands/secrets.ts
 init_browser();
 
 // src/lib/probe-child.ts
@@ -46123,8 +46154,9 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value4, options, cmd) => {
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--type <type>", `What the secret is: ${SECRET_TYPES2.join(", ")} (default: secret). A totp secret must be a base32 seed or an otpauth:// link.`).option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value4, options, cmd) => {
     try {
+      const secretType = parseSecretTypeOption(options.type);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureSecretsNode(ctx, options);
@@ -46146,6 +46178,8 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         secretValue = value4;
       }
       const scopeOptions = resolveSecretScope(options);
+      assertSecretValueMatchesType(secretType, secretValue);
+      const putOptions = secretType === void 0 ? scopeOptions : { ...scopeOptions, type: secretType };
       const result = await runSecretOperation({
         ctx,
         node,
@@ -46154,12 +46188,12 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         scopeOptions,
         space: spaceUri,
         label: `Storing secret ${name}...`,
-        operation: () => secrets2.put(name, secretValue, scopeOptions)
+        operation: () => secrets2.put(name, secretValue, putOptions)
       });
       if (!result.ok) {
         throw cliErrorFromService(result.error);
       }
-      outputJson({ name, written: true });
+      outputJson({ name, written: true, ...secretType === void 0 ? {} : { type: secretType } });
     } catch (error) {
       return handleError(error);
     }
