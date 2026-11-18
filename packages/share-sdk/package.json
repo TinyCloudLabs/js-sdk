@@ -40,6 +40,13 @@
       "require": "./dist/share-index.cjs",
       "default": "./dist/share-index.js"
     },
+    "./native-link": {
+      "types": "./dist/native-link.d.ts",
+      "browser": "./dist/native-link.js",
+      "import": "./dist/native-link.js",
+      "require": "./dist/native-link.cjs",
+      "default": "./dist/native-link.js"
+    },
     "./web-recipient": {
       "types": "./dist/web-recipient.d.ts",
       "import": "./dist/web-recipient.js",

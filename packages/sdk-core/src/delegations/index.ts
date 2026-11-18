@@ -95,6 +95,8 @@ export type {
 export {
   SharingService,
   createSharingService,
+  inspectShareToken,
+  InspectedShareToken,
   ISharingService,
   ShareDelegationPreflight,
   SharingServiceConfig,
