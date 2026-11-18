@@ -3309,5 +3309,23 @@
       "ceiling": { "index.mjs": 1526263, "index.cjs": 1460677 }
     },
     "reason": "TinyCloudNode.delegateTo takes an optional notBefore that is validated and passed through to the delegation's nbf, with the refusals for an invalid date, a time at or after expiry, and a future start; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1025 (0fab85aa, based on master 875e26ac) measured index.mjs 1526263 and index.cjs 1460677 gzip -9 bytes: +173 and +160 over the TC-3168 ceilings 1526090 and 1460517. No other ceiling moves. Details: TC-3172"
+  },
+  "tc3243SdkOwnsBusyRetryRoot": {
+    "label": "account registry sync leaves busy retries to the SDK (TC-3243)",
+    "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3172 pattern for #1038's exact canonical CI bytes; index.mjs +124 B and index.cjs +112 B over the TC-3172 ceilings, each under the 800 B per-row cap. Details: TC-3243",
+    "base": "0b5a6bc84b7c3e3fdbd9f392d009ca1e08e42d1f",
+    "sourceCommits": ["c858367f361bd777ee154cb084114956bbf68729"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44205168251",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44205168251/job/134469120955",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44205168251/job/134469121387"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 124, "index.cjs": 112 },
+      "ceiling": { "index.mjs": 1526387, "index.cjs": 1460789 }
+    },
+    "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (c858367f, based on master 0b5a6bc8) measured index.mjs 1526387 and index.cjs 1460789 gzip -9 bytes: +124 and +112 over the TC-3172 ceilings 1526263 and 1460677. No other ceiling moves. Details: TC-3243"
   }
 }
