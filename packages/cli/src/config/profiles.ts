@@ -34,6 +34,7 @@ import {
 } from "./storage.js";
 import { resolveProfilePosture, type GlobalConfig, type ProfileConfig, type CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
+import { unwritableStateFolder } from "./state-permission.js";
 
 export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
@@ -65,8 +66,12 @@ export class ProfileManager {
    */
   static async ensureConfigDir(): Promise<void> {
     for (const directory of [CONFIG_DIR, PROFILES_DIR]) {
-      await ensureDir(directory);
-      await chmod(directory, PRIVATE_DIR_MODE);
+      try {
+        await ensureDir(directory);
+        await chmod(directory, PRIVATE_DIR_MODE);
+      } catch (error) {
+        throw unwritableStateFolder(error, directory);
+      }
     }
   }
 
@@ -79,8 +84,12 @@ export class ProfileManager {
     }
     await ProfileManager.ensureConfigDir();
     await assertRealProfileDirectory(name);
-    await ensureDir(profileDir);
-    await chmod(profileDir, PRIVATE_DIR_MODE);
+    try {
+      await ensureDir(profileDir);
+      await chmod(profileDir, PRIVATE_DIR_MODE);
+    } catch (error) {
+      throw unwritableStateFolder(error, profileDir);
+    }
     return profileDir;
   }
 
