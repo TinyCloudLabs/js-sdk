@@ -484,6 +484,20 @@ async function discoverRefusedAsExpired(entry: PendingApproval, response: Respon
 }
 
 /**
+ * One status check of a stored request that is long past its expiry: whether OpenKey confirms it expired unapproved
+ * (the 400 `invalid_request` of production, or its own `expired_request`). Not being able to ask, an approved or still-open
+ * answer and any other refusal are all "no", so the caller takes its normal path and nothing is dropped on a guess.
+ */
+async function openKeySaysExpired(entry: PendingApproval, signingKey: Ed25519PrivateJwk): Promise<boolean> {
+  let response: Response;
+  try { response = await post(entry, "discover", signingKey); } catch { return false; }
+  if (response.ok) return false;
+  if (await discoverRefusedAsExpired(entry, response, Date.now())) return true;
+  const body: unknown = await response.clone().json().catch(() => null);
+  return typeof body === "object" && body !== null && "code" in body && body.code === "expired_request";
+}
+
+/**
  * The pause between two attempts to learn the outcome. Without a deadline it is the fixed 2 s. With one, the pause
  * ends at the deadline, after which one last attempt is made. Once the owner has approved (a result reference
  * exists) the deadline no longer applies: collecting the result gets a bounded grace and ends as "result
@@ -565,13 +579,23 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     });
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
-  let entry = matching[0];
-  const isNewRequest = entry === undefined;
-  // Under --timeout a stored request that holds no result and expired so long ago that OpenKey cannot serve one any
-  // more is decided here, before OpenKey is asked and before its dead link is shown again. A younger expired request
-  // is left to OpenKey: it may be an approval given just before the expiry.
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
+  let entry: PendingApproval | undefined = matching[0];
+  let isNewRequest = entry === undefined;
+  // A stored request that holds no result and expired so long ago that OpenKey cannot serve one any more (past the result
+  // retention) is decided here, before its dead link is shown again. A younger expired request is left to OpenKey: it may
+  // be an approval given just before the expiry.
+  // Under --timeout the command ends with exit 3 and the next run makes the new request (callers pace links by exit code).
+  // Without a deadline nobody is waiting on that exit code: OpenKey is asked once, and if it confirms the request expired
+  // unapproved the entry is dropped and a new request is made in this run, so the owner is never sent a link that cannot
+  // be approved. Any other answer (an approved result, still open, no answer) takes the normal path below.
+  if (entry && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait?.now ?? Date.now)())) {
+    if (approvalWait) throw await expiredRequest(profile, entry, true);
+    if (await openKeySaysExpired(entry, signingKey)) {
+      const staleRequestId = entry.requestId;
+      await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+      entry = undefined;
+      isNewRequest = true;
+    }
   }
   if (!entry) {
     const relay = createECDH("prime256v1");
@@ -590,7 +614,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
     options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\n`);
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\nThe link is valid until ${entry.requestExpiresAt}.\n`);
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }

@@ -504,16 +504,15 @@ if (seam === "after-save") {
     const second = await openLink("lapsed", await startAndKill("lapsed"));
     expect(second.id).not.toBe(entry.id);
 
-    // Well past the expiry: one OpenKey call answers 400, the entry goes, and the run after is new again.
+    // Well past the expiry (test-ruling: TC-3153): without --timeout one OpenKey call answers 400, the entry goes, and the same run
+    // makes a new link (shown, then killed). Under --timeout the run still ends in exit 3 without asking (the timeout e2e files).
     await setExpiry(second.id, 20 * 60_000);
     second.invalidRequest = true;
     const before = second.polls;
-    const late = await run("lapsed", ["onboard"]);
-    expect(late.exitCode, late.stderr).toBe(3);
-    expect(late.stdout + late.stderr).toContain("APPROVAL_REQUEST_EXPIRED");
+    const fresh = await openLink("lapsed", await startAndKill("lapsed"));
+    expect(fresh.id).not.toBe(second.id);
     expect(second.polls).toBe(before + 1);
-    expect((await savedState("lapsed")).pending).toEqual([]);
-    expect((await openLink("lapsed", await startAndKill("lapsed"))).id).not.toBe(second.id);
+    expect((await savedState("lapsed")).pending.map((item) => item.requestId)).toEqual([fresh.id]);
   });
 
   test("a request that is still open keeps its link: a second run shows the same link and no new request is made", async () => {

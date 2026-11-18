@@ -650,6 +650,8 @@ five-minute, single-use return code, not the automatic short-link transport.
 
 A resumed approval completes at least one status check of OpenKey whatever the `--timeout`, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that check it exits 6 instead of reporting the approval as pending.
 
+Without `--timeout`, a saved approval request that has no result and expired more than 11 minutes ago (past OpenKey's result retention) is checked once with OpenKey, and if OpenKey confirms it expired unapproved it is replaced in the same run: the command drops it and prints a new link, never the dead one, then waits as usual. If OpenKey cannot be asked, or answers anything else (an approved result, still open), the saved request is used as before. A request that expired more recently still gets one OpenKey check (it may have been approved just before the expiry) and then exits 3 as above. The printed link now says when it stops being valid (`The link is valid until <ISO time>.`, on the line after the link). With `--timeout`, nothing changes: exit 3, and the next run makes the new request.
+
 For chat approvals, use CLI 1.5.0 or later and send the complete `/a/...#...`
 URL on its own line. For a scoped grant, run
 `tinycloud auth request ... --grant --no-popup` with the intended scope flags
