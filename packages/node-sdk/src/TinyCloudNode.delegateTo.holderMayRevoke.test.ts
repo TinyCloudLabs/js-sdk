@@ -41,3 +41,39 @@ test("holderMayRevoke is refused before anything is signed for a wallet-signed d
   await expect(fixture.owner.delegateTo(`did:pkh:eip155:1:${"0x".padEnd(42, "1")}`, [...fixture.permissions], { holderMayRevoke: true })).rejects.toThrow("did:key");
   expect(fixture.nativeBearerStats().delegationAttempts).toBe(before);
 });
+
+/** Answer the Nth `/delegate` POST (1-based, from now) with `status`; the others reach the node. */
+function failDelegateNumber(n: number, status: number, body: string): () => void {
+  const real = globalThis.fetch;
+  let seen = 0;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+    if (url.endsWith("/delegate") && (init?.method ?? "GET") === "POST" && ++seen === n) return new Response(body, { status });
+    return real(input, init);
+  }) as typeof fetch;
+  return () => { globalThis.fetch = real; };
+}
+
+test("a node that refuses the revoke grant with 401 marks the error revokeControlRefused and hands back the live delegation", async () => {
+  const restore = failDelegateNumber(2, 401, "Cannot find parent delegation");
+  try {
+    const failure = await fixture.owner.delegateTo(audience(), [...fixture.permissions], { expiry: "1h", holderMayRevoke: true })
+      .then(() => undefined, (error: unknown) => error as { revokeControlRefused?: boolean; delegation?: { cid: string } });
+    expect(failure?.revokeControlRefused).toBe(true);
+    expect(typeof failure?.delegation?.cid).toBe("string");
+  } finally {
+    restore();
+  }
+});
+
+test("any other answer to the revoke grant (500) leaves the error unmarked", async () => {
+  const restore = failDelegateNumber(2, 500, "boom");
+  try {
+    const failure = await fixture.owner.delegateTo(audience(), [...fixture.permissions], { expiry: "1h", holderMayRevoke: true })
+      .then(() => undefined, (error: unknown) => error as { revokeControlRefused?: boolean; delegation?: { cid: string } });
+    expect(failure?.revokeControlRefused).toBeUndefined();
+    expect(typeof failure?.delegation?.cid).toBe("string");
+  } finally {
+    restore();
+  }
+});

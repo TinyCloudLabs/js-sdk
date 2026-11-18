@@ -7,7 +7,7 @@ import { handleError, CLIError, cliErrorFromService } from "../output/errors.js"
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
-import { findRevokeControl, removeHeldDelegation, removeRevokeControl, type StoredRevokeControl } from "../lib/revoke-controls.js";
+import { delegateWithGiveBack, findRevokeControl, removeHeldDelegation, removeRevokeControl, type StoredRevokeControl } from "../lib/revoke-controls.js";
 import { parseExpiry } from "../lib/duration.js";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { PermissionNotInManifestError, type AccountDelegationRecord, type TinyCloudNode } from "@tinycloud/node-sdk";
@@ -207,15 +207,16 @@ export function registerDelegationCommand(
         // (POST /delegate); the node does not serve tinycloud.delegation/create.
         // The space must be explicit: an entry without one targets the
         // "applications" space, not the session's default space.
-        const { delegation: created, revokeControl } = await node.delegateTo(
-          recipient,
-          Object.entries(byService).map(([service, serviceActions]) => ({
-            service,
-            space: "default",
-            path: options.path,
-            actions: serviceActions,
-          })),
-          { expiry: expiry.getTime() - Date.now(), requireActivation: true, ...(options.holderMayRevoke === true ? { holderMayRevoke: true } : {}) },
+        const entries = Object.entries(byService).map(([service, serviceActions]) => ({
+          service,
+          space: "default",
+          path: options.path,
+          actions: serviceActions,
+        }));
+        const delegateOptions = { expiry: expiry.getTime() - Date.now(), requireActivation: true };
+        const { delegation: created, revokeControl } = await (options.holderMayRevoke === true
+          ? delegateWithGiveBack(node, recipient, entries, delegateOptions, (cid) => `${CLI_NAME} delegation revoke ${cid}`)
+          : node.delegateTo(recipient, entries, delegateOptions)
         ).catch((error: unknown) => {
           if (error instanceof PermissionNotInManifestError) {
             const needed = error.missing

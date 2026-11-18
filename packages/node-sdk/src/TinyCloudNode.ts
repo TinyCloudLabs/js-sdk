@@ -1146,6 +1146,14 @@ export interface RevokeControl {
 }
 
 /** The longest a revoke grant can last: the signer's limit for a proofless compact UCAN. */
+/**
+ * The status a node answers with when it does not admit a revoke-only grant from a delegation's issuer to its recipient
+ * (node refusal `Unauthorized Delegator` / `Cannot find parent delegation`, both 401). Only this answer marks the
+ * error `revokeControlRefused`; a network failure or any other status does not.
+ */
+const REVOKE_CONTROL_REFUSED_STATUS = 401;
+
+/** The longest delegation `holderMayRevoke` is issued for. */
 const REVOKE_CONTROL_MAX_SECONDS = 31 * 24 * 60 * 60;
 
 /**
@@ -8675,6 +8683,8 @@ export class TinyCloudNode {
     signer: Pick<TinyCloudSession, "jwk" | "verificationMethod">,
   ): Promise<RevokeControl> {
     const graph = this._serviceGraph;
+    // Set only when the node answers the revoke grant's activation with `REVOKE_CONTROL_REFUSED_STATUS`: it won't admit it.
+    let refused = false;
     try {
       const nowSecs = Math.floor(Date.now() / 1000);
       const control = await signCompactUcanRootAuthorization({
@@ -8689,7 +8699,10 @@ export class TinyCloudNode {
       });
       const result = await this.activateResourceSession({ Authorization: control.authorization }, [delegation.spaceId], graph.signal);
       graph.assertActive();
-      if (!result.success) throw new Error(describeHostFailure(result));
+      if (!result.success) {
+        refused = result.status === REVOKE_CONTROL_REFUSED_STATUS;
+        throw new Error(describeHostFailure(result));
+      }
       return {
         cid: control.cid,
         targetCid: delegation.cid,
@@ -8701,7 +8714,7 @@ export class TinyCloudNode {
     } catch (cause) {
       throw Object.assign(
         new Error(`The delegation ${delegation.cid} was activated, but its revoke grant could not be issued: ${cause instanceof Error ? cause.message : String(cause)}`),
-        { cause, delegation },
+        { cause, delegation, ...(refused ? { revokeControlRefused: true } : {}) },
       );
     }
   }

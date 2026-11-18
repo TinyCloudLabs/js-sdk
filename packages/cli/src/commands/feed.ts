@@ -21,6 +21,8 @@ import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runne
 import { connectFeedAgent } from "../feed/connection.js";
 import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
+import { delegateWithGiveBack } from "../lib/revoke-controls.js";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
 
@@ -147,11 +149,11 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
-          const granted = await node.delegateTo(did, [
+          const granted = await delegateWithGiveBack(node, did, [
             { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
             { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
             { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] },
-          ], { expiry, requireActivation: true, holderMayRevoke: true }).catch(async (error: unknown) => {
+          ], { expiry, requireActivation: true }, () => `${CLI_NAME} feed disconnect --agent ${options.agent}`).catch(async (error: unknown) => {
             // The grant is live but its give-back grant was not issued: no registry row will name it, so withdraw it now.
             const orphan = error !== null && typeof error === "object" && "delegation" in error ? (error as { delegation?: { cid?: unknown } }).delegation?.cid : undefined;
             if (typeof orphan === "string") await revokeIssuedDelegation(node, profile, orphan);

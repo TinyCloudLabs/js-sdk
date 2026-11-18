@@ -8,6 +8,7 @@ import {
   withProfileLock,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
+import type { TinyCloudNode } from "@tinycloud/node-sdk";
 import { fileExists } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 
@@ -99,4 +100,44 @@ export async function removeHeldDelegation(profile: string, cid: string): Promis
     }),
     result: undefined,
   }));
+}
+
+/** What an issuer prints when the node won't let the agent give back its access. `command` is the issuer's own way to revoke. */
+export const NODE_WITHOUT_GIVE_BACK_WARNING = (command: string): string =>
+  `This node doesn't support the agent giving back its access. The connection works, and you can still revoke it yourself with ${command}.`;
+
+/** What an issuer prints when the connection is too long to carry the agent's give-back grant. */
+export const OVER_31_DAYS_WARNING = (command: string): string =>
+  `Connections longer than 31 days can't let the agent give back its access. The connection works, and you can still revoke it yourself with ${command}.`;
+
+/** The longest delegation the agent's give-back grant is issued for (the SDK's limit, restated so this module needs no runtime SDK import). */
+const GIVE_BACK_MAX_MS = 31 * 24 * 60 * 60 * 1000;
+
+/**
+ * `delegateTo` with the agent's give-back grant where the node and the lifetime allow it. A delegation over 31 days is issued
+ * without the grant; a node that answers the grant with its refusal (`revokeControlRefused`) keeps the delegation that is
+ * already live and returns it without the grant. Both print one warning naming `command(cid)`. Any other failure is rethrown unchanged.
+ */
+export async function delegateWithGiveBack(
+  node: Pick<TinyCloudNode, "delegateTo">,
+  recipient: string,
+  permissions: Parameters<TinyCloudNode["delegateTo"]>[1],
+  options: Omit<NonNullable<Parameters<TinyCloudNode["delegateTo"]>[2]>, "holderMayRevoke"> & { expiry: number },
+  command: (cid: string) => string,
+  warn: (line: string) => void = (line) => { process.stderr.write(`${line}\n`); },
+): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>> {
+  if (options.expiry > GIVE_BACK_MAX_MS) {
+    const granted = await node.delegateTo(recipient, permissions, options);
+    warn(OVER_31_DAYS_WARNING(command(granted.delegation.cid)));
+    return granted;
+  }
+  try {
+    return await node.delegateTo(recipient, permissions, { ...options, holderMayRevoke: true });
+  } catch (error) {
+    const live = error !== null && typeof error === "object" && "revokeControlRefused" in error && error.revokeControlRefused === true
+      && "delegation" in error ? error.delegation as Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"] : undefined;
+    if (live === undefined) throw error;
+    warn(NODE_WITHOUT_GIVE_BACK_WARNING(command(live.cid)));
+    return { delegation: live };
+  }
 }
