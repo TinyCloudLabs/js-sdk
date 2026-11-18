@@ -57,6 +57,8 @@ export interface McpStartupSelection {
   readonly beforeOperation?: () => Promise<void>;
   /** Hosted transports may attach a browser approval URL to canonical results. */
   readonly transformOperationResult?: (result: unknown, invocation: McpOperationInvocation) => Promise<unknown>;
+  /** Repeat each tool's title as `annotations.title`, for a directory that takes the listing name from there. */
+  readonly annotationTitles?: boolean;
 }
 
 export interface McpOperationInvocation {
@@ -456,6 +458,7 @@ export function registerTinyCloudTools(
       validator,
     );
     const annotations: ToolAnnotations = {
+      ...(selection.annotationTitles === true ? { title: operation.title } : {}),
       readOnlyHint: binding.readOnlyHint,
       idempotentHint: binding.idempotentHint,
       destructiveHint: binding.destructiveHint,

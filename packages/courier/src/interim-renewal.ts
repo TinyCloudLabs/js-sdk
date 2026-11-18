@@ -2,7 +2,7 @@ import { deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk'
 import type { AccountDelegationRecord, PermissionEntry, PortableDelegation, TinyCloudNode } from '@tinycloud/node-sdk';
 import { canonicalizeRecapCaveats, parseCanonicalRecapResource, parseSignedCompactUcanAttenuation } from '@tinycloud/sdk-core';
 import { canonicalJson } from './canonical.js';
-import { bareDid, siweTimes } from './authority.js';
+import { bareDid, CLOCK_SKEW_MS, siweTimes } from './authority.js';
 import { CourierError } from './errors.js';
 import { cmd } from './program.js';
 import { k, peerReadPermissions } from './keys.js';
@@ -11,6 +11,13 @@ import { getJson, putCreate, putMatch } from './store.js';
 
 const DAY = 86_400_000;
 export const INTERIM_PERIOD_MS = 30 * DAY;
+/** What a Courier 0.5.x peer accepts; also the floor for any peer whose own lifetime is short or unreadable. */
+export const LEGACY_PEER_LIMIT_MS = 7 * DAY;
+/**
+ * Without a signed `nbf`, an inbound is read as long-lived only with more than this left on its signed expiry. A 0.5.x peer signs 7 days
+ * from its own clock, so one whose clock is under a day ahead still reads as 7 days; a healthy 0.6 peer renews at half-life (about 15 days left or more).
+ */
+export const UNSIGNED_LONG_PEER_MIN_REMAINING_MS = 8 * DAY;
 const MAX_ISSUED = 1000;
 
 export interface InterimState {
@@ -20,12 +27,14 @@ export interface InterimState {
   lastAttemptAt?: string;
   unavailableAt?: string;
   inboundRefusedAt?: string;
+  /** CID of the over-long delegation that was replaced by a shorter one. That same delegation is never shortened twice. */
+  shortenedCid?: string;
   cleanup: Record<string, { intentAt: string; revokedAt?: string }>;
 }
 export type InterimPeer = StoredPeer & { interim?: InterimState };
 type LedgerEntry = StoredPeer['outbound'][number] & { priorCid?: string; delegation?: string; revokedAt?: string };
 type Resource = AccountDelegationRecord['resources'][number];
-export type InterimResult = { state: 'live' | 'renewed' | 'lapsed' | 'revoked' | 'owner-revoked' | 'unavailable'; delegation?: PortableDelegation; reason?: 'no-extension' };
+export type InterimResult = { state: 'live' | 'renewed' | 'lapsed' | 'revoked' | 'owner-revoked' | 'unavailable'; delegation?: PortableDelegation; reason?: 'no-extension' | 'overlong' };
 
 /** Per-action canonical equality includes conditions, never just permission subsets. */
 export function issuedAuthority(resources: readonly Resource[]): string {
@@ -77,6 +86,64 @@ export function interimLocalState(peer: InterimPeer, now = Date.now()): InterimR
   const tip = ledgerTip(peer);
   if (!tip || !Number.isFinite(Date.parse(tip.expiresAt)) || Date.parse(tip.expiresAt) <= now) return 'lapsed';
   return 'live';
+}
+
+/** Signed `nbf`/`exp` (ms) of a stored serialized delegation; each is undefined unless it is a signed integer. */
+function signedWindow(serialized: string | undefined): { notBefore?: number; expiresAt?: number } {
+  if (!serialized) return {};
+  try {
+    const parts = deserializeDelegation(serialized).delegationHeader.Authorization.replace(/^Bearer\s+/i, '').split('.');
+    if (parts.length !== 3) return {};
+    const { nbf, exp } = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return { ...(Number.isSafeInteger(nbf) ? { notBefore: nbf * 1000 } : {}), ...(Number.isSafeInteger(exp) ? { expiresAt: exp * 1000 } : {}) };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Longest lifetime this peer is known to accept, from the delegation it gave us:
+ * 7 days (or less, or unknown) means 7 days; longer means that lifetime, capped at INTERIM_PERIOD_MS.
+ * Courier's signed delegations carry no issued-at, so the lifetime is exact only when `nbf` is signed. A signed `nbf` is the
+ * peer's own claim: it must not lie in the future (beyond skew) and must give a lifetime above 0 and at most 30 days (+ skew),
+ * else the inbound is treated as unknown. Without `nbf` the signed expiry still proves a lifetime of at least what remains of
+ * it: more than UNSIGNED_LONG_PEER_MIN_REMAINING_MS left means the peer issues long delegations, and anything else stays at 7 days.
+ */
+function peerAcceptMs(peer: Pick<StoredPeer, 'inbound'>, now: number): number {
+  const { notBefore, expiresAt } = signedWindow(peer.inbound?.delegation);
+  if (expiresAt === undefined) return LEGACY_PEER_LIMIT_MS;
+  let lifetime = expiresAt - now;
+  if (notBefore !== undefined) {
+    lifetime = expiresAt - notBefore;
+    if (notBefore > now + CLOCK_SKEW_MS || lifetime <= 0 || lifetime > INTERIM_PERIOD_MS + CLOCK_SKEW_MS) return LEGACY_PEER_LIMIT_MS;
+  }
+  if (notBefore === undefined) return lifetime > UNSIGNED_LONG_PEER_MIN_REMAINING_MS ? INTERIM_PERIOD_MS : LEGACY_PEER_LIMIT_MS;
+  return lifetime <= LEGACY_PEER_LIMIT_MS + CLOCK_SKEW_MS ? LEGACY_PEER_LIMIT_MS : Math.min(lifetime, INTERIM_PERIOD_MS);
+}
+
+/**
+ * Lifetime to sign for this peer. A limit below INTERIM_PERIOD_MS is signed with a clock-skew margin, because the peer checks
+ * it against its own clock; the 30-day period and the parent end carry no margin.
+ */
+export function peerRenewalLimitMs(peer: Pick<StoredPeer, 'inbound'>, now = Date.now()): number {
+  const accepted = peerAcceptMs(peer, now);
+  return accepted < INTERIM_PERIOD_MS ? accepted - CLOCK_SKEW_MS : accepted;
+}
+
+/**
+ * True when a delegation ending at `end` is longer than the peer accepts (limit plus clock skew), so a shorter one may replace it.
+ * Fires once per over-long delegation: `shortenedCid` names the one already replaced, so a later over-long tip can be repaired again
+ * but the same tip is never shortened in a loop.
+ */
+function outlivesPeerLimit(peer: Pick<StoredPeer, 'inbound' | 'interim'>, tipCid: string, end: number, now: number): boolean {
+  return peer.interim?.shortenedCid !== tipCid && end > now + peerAcceptMs(peer, now) + CLOCK_SKEW_MS;
+}
+
+/** `peer limit 7d` when the peer's limit shortens a renewal below the usual period; undefined otherwise, and for a peer with no inbound yet. */
+export function peerLimitNote(peer: Pick<StoredPeer, 'inbound'>, now = Date.now()): string | undefined {
+  if (!peer.inbound) return undefined;
+  const limit = peerAcceptMs(peer, now);
+  return limit < INTERIM_PERIOD_MS ? `peer limit ${Number((limit / DAY).toFixed(2))}d` : undefined;
 }
 
 function parentOf(node: TinyCloudNode, profile: Profile, now: number): { cid: string; end: number } {
@@ -192,14 +259,14 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
   if (!sameBinding(profile, peer, prior) || !sameBinding(profile, peer, next)
     || issuedAuthority(prior.resources) !== issuedAuthority(next.resources)
     || next.parents.length !== 1 || next.parents[0] !== parent.cid
-    || liveEnd(next.expiresAt, now) <= liveEnd(prior.expiresAt, now)
-    || next.expiresAt!.getTime() > Math.min(now + INTERIM_PERIOD_MS, parent.end)) {
+    || (!outlivesPeerLimit(peer, prior.cid, liveEnd(prior.expiresAt, now), now) && liveEnd(next.expiresAt, now) <= liveEnd(prior.expiresAt, now))
+    || liveEnd(next.expiresAt, now) > Math.min(now + peerRenewalLimitMs(peer, now), parent.end)) {
     throw new CourierError('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   }
 }
 
 /** Issue only our own child. The caller holds withProfileTransaction across every awaited boundary. */
-export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean } = {}): Promise<InterimResult> {
+export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
   const save = () => { profile.version = 4; persist(); };
   const local = interimLocalState(peer);
   if (local !== 'live') return { state: local };
@@ -214,10 +281,15 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   if (started === undefined || !Number.isFinite(started) || started >= end) return { state: 'unavailable' };
   const state = stateOf(peer);
   const now = Date.now();
+  const limitMs = peerRenewalLimitMs(peer, now);
   const lastAttempt = state.lastAttemptAt ? Date.parse(state.lastAttemptAt) : tip.issuedAt?.getTime();
-  if (!options.force && ((!options.manual && now < started + (end - started) / 2)
+  // A current delegation longer than the peer accepts is replaced at once by a shorter one: waiting for its half-life would leave the peer unable to read it.
+  // `extendOnly` (artifact export) never replaces a grant with a shorter one: the receiving `pair accept` refuses it as stale.
+  const outlives = outlivesPeerLimit(peer, tip.cid, end, now);
+  const overlong = !options.extendOnly && outlives;
+  if (!options.force && ((!options.manual && !overlong && now < started + (end - started) / 2)
     || (lastAttempt !== undefined && now - lastAttempt < DAY))) return { state: 'live' };
-  if (Math.floor(Math.min(now + INTERIM_PERIOD_MS, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: 'no-extension' };
+  if (!overlong && Math.floor(Math.min(now + limitMs, parent.end) / 1000) * 1000 <= end) return { state: 'live', reason: options.extendOnly && outlives ? 'overlong' : 'no-extension' };
   state.lastAttemptAt = new Date(now).toISOString();
   save();
   const key = k.peerDelegation(peer.handle, peer.sessionId);
@@ -232,7 +304,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
   // No grace: recheck the original and parent immediately before delegateTo signs.
   liveEnd(tip.expiresAt, Date.now());
   parentOf(node, profile, Date.now());
-  const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), { expiry: INTERIM_PERIOD_MS, requireActivation: true });
+  const result = await node.delegateTo(peer.courierDid, permissions(tip.resources), { expiry: limitMs, requireActivation: true });
   const next = result.delegation;
   if (next.cid === tip.cid) return { state: 'live', reason: 'no-extension' };
   const record = { cid: next.cid, priorCid: tip.cid, issuedAt: new Date().toISOString(), expiresAt: next.expiry.toISOString(), delegation: serializeDelegation(next) };
@@ -246,6 +318,7 @@ export async function maintainOutbound(node: TinyCloudNode, profile: Profile, pe
     liveEnd(tip.expiresAt, Date.now());
     parentOf(node, profile, Date.now());
     await putMatch(node.kv, key, { v: 0, delegation: record.delegation, issuedAt: record.issuedAt }, before.etag);
+    if (overlong) { state.shortenedCid = tip.cid; save(); }
     return { state: 'renewed', delegation: next };
   } catch (error) {
     await cleanup(node, peer, next.cid, save);

@@ -529,6 +529,7 @@ export {
   DelegationManager,
   SharingService,
   createSharingService,
+  inspectShareToken,
   DelegationErrorCodes,
 } from "@tinycloud/sdk-core";
 
