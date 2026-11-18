@@ -533,10 +533,16 @@ export type IngestOptions = z.infer<typeof IngestOptionsSchema>;
  */
 export const GenerateShareParamsSchema = z.object({
   includePlacement: z.boolean().optional(),
-  /** Resource path to share */
-  path: z.string(),
-  /** Actions to authorize */
+  /** Resource path to share. Give either `path` (with `actions`) or `resources`. */
+  path: z.string().optional(),
+  /** Actions to authorize on `path` */
   actions: z.array(z.string()).optional(),
+  /**
+   * Several resources in one share: one root delegation and one link cover them all
+   * (e.g. a transcript key and an audio prefix). Paths get `pathPrefix` like `path`;
+   * omitted actions default like `actions`. At most 16, no duplicate paths.
+   */
+  resources: z.array(z.object({ path: z.string(), actions: z.array(z.string()).optional() })).optional(),
   /** When the share link expires */
   expiry: z.coerce.date().optional(),
   /** Encoding schema for the link */

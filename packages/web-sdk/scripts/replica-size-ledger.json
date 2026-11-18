@@ -3273,5 +3273,95 @@
       "ceiling": { "index.mjs": 1525966, "index.cjs": 1460319 }
     },
     "reason": "useDelegation, createSubDelegation and grantRuntimePermissions hold a child's expiry to its parent's whole second, through one rounding helper and a refusal for a delegation with under a second left; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #993 (711903b3, based on master ef1c9d3b) measured index.mjs 1525966 and index.cjs 1460286 gzip -9 bytes: +76 over the TC-3030 ceiling 1525890 for index.mjs, and index.cjs is under its ceiling 1460319, which stays. No other ceiling moves. Details: TC-3076"
+  },
+  "tc3168V1DefaultNodeRoot": {
+    "label": "v1-only owner on the default node keeps its 3.11 route (TC-3168)",
+    "ruling": "TC-3168 size ruling: a ratchet row in the TC-3076 pattern for #1024's exact canonical CI bytes; index.mjs +124 B and index.cjs +198 B over the TC-3076 ceilings, each under the 800 B per-row cap. Details: TC-3168",
+    "base": "d8f2d10a36fb4ebe201ae33d27b21ff39cbc24e5",
+    "sourceCommits": ["47ea08a52142a303152d38c290f2361f763f3e8e"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800/job/134224638801",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44135735800/job/134224638829"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 124, "index.cjs": 198 },
+      "ceiling": { "index.mjs": 1526090, "index.cjs": 1460517 }
+    },
+    "reason": "A verified v1-only registry record that names only the default node routes there as in 3.11, through an explicit legacy marker on the registered verdict and the node-sdk automatic-setup gate; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1024 (47ea08a5, based on master d8f2d10a) measured index.mjs 1526090 and index.cjs 1460517 gzip -9 bytes: +124 and +198 over the TC-3076 ceilings 1525966 and 1460319. No other ceiling moves. Details: TC-3168"
+  },
+  "tc3172DelegateNotBeforeRoot": {
+    "label": "delegateTo notBefore option on the node-sdk (TC-3172)",
+    "ruling": "TC-3172 size ruling: a ratchet row in the TC-3168 pattern for #1025's exact canonical CI bytes; index.mjs +173 B and index.cjs +160 B over the TC-3168 ceilings, each under the 800 B per-row cap. Details: TC-3172",
+    "base": "875e26acdc1444d4f1c144efbf692d68c8ba2cb8",
+    "sourceCommits": ["0fab85aac8cf09b4bace5c3460b0788c1d6de980"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329745596",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44165332811/job/134329747802"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 173, "index.cjs": 160 },
+      "ceiling": { "index.mjs": 1526263, "index.cjs": 1460677 }
+    },
+    "reason": "TinyCloudNode.delegateTo takes an optional notBefore that is validated and passed through to the delegation's nbf, with the refusals for an invalid date, a time at or after expiry, and a future start; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1025 (0fab85aa, based on master 875e26ac) measured index.mjs 1526263 and index.cjs 1460677 gzip -9 bytes: +173 and +160 over the TC-3168 ceilings 1526090 and 1460517. No other ceiling moves. Details: TC-3172"
+  },
+  "tc3194NativeShareLinksRoot": {
+    "label": "native share links on the sdk-core (TC-3194)",
+    "ruling": "Naomi's TC-3194 size ruling (policy review): a ratchet row in the TC-3172 pattern for #1033's exact canonical CI bytes; index.mjs +2196 B and index.cjs +1288 B over the TC-3172 ceilings, approved above the 800 B per-row cap for native share links instead of lazy-loading them. Details: TC-3194",
+    "base": "0b5a6bc84b7c3e3fdbd9f392d009ca1e08e42d1f",
+    "sourceCommits": ["ffa4b6a082609de3b57cedf4d747fad2e2f5d253"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959549",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959979"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 2196, "index.cjs": 1288 },
+      "ceiling": { "index.mjs": 1528459, "index.cjs": 1461965 }
+    },
+    "reason": "SharingService grants several resources in one share, signs one recipient child over all of them, and adds inspectShareToken, which checks a share token offline against the owner's wallet signature and returns the owner, the resources, when access ends and the root CID; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1033 (ffa4b6a0, based on master 0b5a6bc8) measured index.mjs 1528459 and index.cjs 1461965 gzip -9 bytes: +2196 and +1288 over the TC-3172 ceilings 1526263 and 1460677. No other ceiling moves. Details: TC-3194"
+  },
+  "tc3243SdkOwnsBusyRetryRoot": {
+    "label": "account registry sync leaves busy retries to the SDK (TC-3243)",
+    "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3194 pattern for #1038's exact canonical CI bytes over #1033's ceilings; index.mjs +150 B and index.cjs +108 B over the TC-3194 ceilings, each under the 800 B per-row cap. Details: TC-3243",
+    "base": "23953408e6724fa5f488e67e6c418c50bca83fb3",
+    "sourceCommits": ["42eeab4a2f342a2c6213cc69340eb8c87413147d"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228469",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228412"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 150, "index.cjs": 108 },
+      "ceiling": { "index.mjs": 1528609, "index.cjs": 1462073 }
+    },
+    "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
+  },
+  "tc3285SecretTypesRoot": {
+    "label": "optional secret type and getEntry (TC-3285)",
+    "ruling": "TC-3285 size ruling (Naomi): a ratchet row in the TC-3243 pattern for #1042's exact canonical CI bytes over the TC-3243 ceilings; index.mjs +227 B and index.cjs +219 B, each under the 800 B per-row cap. Details: TC-3285",
+    "base": "b758e712acf147bc3b2f801418b78c3bea4bf917",
+    "sourceCommits": ["342ac278df3699db027e0ab54ae2340d3d05f3b5"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056649418",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44376412165/job/135056650074"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 227, "index.cjs": 219 },
+      "ceiling": { "index.mjs": 1528836, "index.cjs": 1462292 }
+    },
+    "reason": "SecretsService reads a secret's optional type (getEntry) and validates the type on put; sdk-services, sdk-core, node-sdk and web-sdk expose it and are bundled into the web-sdk root. The TOTP helpers are a separate subpath and are not in the root. Canonical Node 22/Bun 1.3.14 CI on #1042 (342ac278, based on master ae9a23c9) measured index.mjs 1528836 and index.cjs 1462292 gzip -9 bytes: +227 and +219 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3285"
   }
 }

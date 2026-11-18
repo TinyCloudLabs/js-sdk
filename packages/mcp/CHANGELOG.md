@@ -1,5 +1,200 @@
 # @tinycloud/mcp
 
+## 0.10.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [b758e71]
+  - @tinycloud/node-sdk@3.13.0-beta.2
+  - @tinycloud/operations@0.9.1-beta.3
+
+## 0.10.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+  - @tinycloud/operations@0.9.1-beta.2
+
+## 0.10.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+  - @tinycloud/operations@0.9.1-beta.1
+
+## 0.10.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [ca8ae20]
+  - @tinycloud/operations@0.9.1-beta.0
+
+## 0.10.0
+
+### Minor Changes
+
+- 592136c: Personal-app context accepts an optional `app` and `access` (`read` or `change`, default `change`) to request the app's folder and app list together in one approval. Omitting `app` retains per-call approvals. New apps separately check the older catalog when needed.
+
+  Details: TC-2416
+
+- 2a1ac15: The optional personal-app context `app` input accepts `healthlog` and `recipes`. Health Log requests its app-list and database access in one approval, with read-only access when requested. Recipes bundles read access to its notes and requests database reads separately after learning the database name. Tool input descriptions explain `app` and `access`.
+
+  Details: TC-2416
+
+- b09d4c0: The hosted personal-records tools keep new apps in the owner's `applications` space under `xyz.tinycloud.tinyapps.<app>/`, with a discovery entry, so records saved through the connector match the CLI skill's (`tc-apps` 0.3.10). Apps already in the `default` space under `xyz.tinycloud.agent-data/` stay there. The approval screens change: first use asks for the app list (`xyz.tinycloud.tinyapps.catalog/`); a new app asks for its own folder (`xyz.tinycloud.tinyapps.<app>/`), then for a read-only look at the older catalog (`xyz.tinycloud.agent-data/catalog/`) unless an older grant covers it, because OpenKey signs one space per delegation; later apps ask for their own folder only. The fast copy is one database per app, `xyz.tinycloud.tinyapps.<app>/index`. `tinycloud_apps_query` covers one app per call and takes an optional `layout` (omitted means `new`); `tinycloud_apps_context` returns `apps` and `legacy`.
+  Details: TC-2416
+- 3319ede: New personal apps from the hosted tools go in one layout: the owner's `applications` space, one folder per app (`xyz.tinycloud.tinyapps.<app>/`) with a discovery entry, which is where the `tc-apps` skill puts a new app. Apps already in the older `default`-space folder `xyz.tinycloud.agent-data/` stay there and keep working. `tinycloud_apps_move` (and the `tinycloud.apps.move` operation) is removed.
+
+  What breaks for callers: the package no longer exports `isTcAppsPermission`. The `tinycloud_apps_context` and `tinycloud_apps_query` tools are no longer annotated destructive, because neither deletes a saved record.
+
+  Same-name apps: if the command-line skill created an older-layout app and a chat app then creates an app with the same name, the skill lists the new app (a discovery entry means the new layout) and not the older records of that name. They are not deleted.
+
+  Details: TC-2416
+
+### Patch Changes
+
+- 166e3a3: Keep `tinycloud_apps_context` inside the hosted 100,000-character result limit for owners with large `default/xyz.tinycloud.agent-data/` catalogs. Past a 60,000-character budget the context inlines only the app catalogs and leaves kind catalogs listed in `catalog.keys` for `tinycloud_apps_read`; every existing app is still listed with its title.
+
+  Details: TC-2416
+
+- b6a8491: Hosted MCP approval links now pass their configured public origin to OpenKey. With the matching OpenKey API/web update, the prepared SIWE and consent label identify TinyCloud MCP (or the actual custom host), not TinyCloud CLI. This remains caller-reported attribution, not verified app identity. Shared approval reasons identify the TinyCloud connector rather than Claude and describe each scope's actual actions.
+
+  Generic personal-app change grants retain catalog-root get/list and app-folder CRUD, but discovery get/put is limited to `xyz.tinycloud.tinyapps.catalog/<app>/entry`. Sibling entries require separate authority. No-app discovery and read-only requests do not add catalog writes; Health Log and Recipes retain their dedicated scopes.
+
+  The exported `TC_APPS_DISCOVERY_ACTIONS` broad-write constant is removed. Consumers must use read-only discovery permissions and exact app-entry permissions instead. Previously signed broad grants are not narrowed or revoked by this update: revoke them or let them expire, then approve the narrower request. Deploy matching OpenKey API/web support before the MCP update; this changeset performs no deployment or grant revocation.
+
+  Details: TC-2416, TC-2526
+
+- f21bd18: `/claude/mcp` now repeats each tool's title as `annotations.title`. Anthropic's directory portal reads a tool's listing name from there and showed "Missing title annotation. Add annotations.title" for all five tools. Each `annotations.title` equals the tool's existing top-level `title`.
+
+  Only that address changes: `/mcp`, `/chatgpt/mcp`, `/grok/mcp` and `/muse/mcp` list their tools exactly as before. `McpStartupSelection` gains an optional `annotationTitles` flag for this; it is off unless set.
+
+  Details: TC-2416
+
+- 16bce3e: The hosted server serves its restricted personal-record surface at three more addresses, one each for the Claude, Grok and Muse directory listings: `/claude/mcp`, `/grok/mcp` and `/muse/mcp`. Each registers the same five tools as `/chatgpt/mcp` (`tinycloud_connect` and the four `tinycloud_apps_*` tools) and is its own OAuth resource, with its own protected-resource metadata, 401 challenge, approval route and tenant state. A token or approval link issued for one address is refused at every other.
+
+  `/mcp` and `/chatgpt/mcp` are unchanged: their tool lists, schemas, descriptions, annotations, instructions and discovery documents are byte-identical to the previous release.
+
+  A new address serves requests only after the matching OpenKey release issues tokens for its audience and accepts its approval callback, and the server's token-status client is registered for the new resources. This changeset performs no deployment.
+
+  Details: TC-2416
+
+- 2139b24: Send only the public session key to OpenKey during sign-in.
+
+  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+
+  Details: TC-2582
+
+- 09f6dbf: Restore discovery, reads, conditional writes and SQL queries for existing personal apps in `default/xyz.tinycloud.agent-data/`. Existing connections reuse their permissions and records in place instead of requiring approval for a new layout or silently creating replacement apps. Query layout selection is restored; the new-layout default, exact discovery-entry grants, and hosted/public tool sets remain unchanged.
+
+  Keep existing matching legacy record kinds in their original app, while retaining explicit Health Log and Recipes catalog routing. Give stale-copy markers a unique revision so concurrent same-day writes cannot be cleared by an older rebuild.
+
+  Details: TC-2416
+
+- b72604f: The restricted personal-record addresses (`/chatgpt/mcp`, `/claude/mcp`, `/grok/mcp`, `/muse/mcp`) no longer offer or accept a catalog app. They have no SQL or knowledge tools, so nothing there can work with Health Log or Recipes, yet `tinycloud_apps_context` advertised `healthlog` and `recipes` in its `app` description and answered either with an approval request, for example to read and change "your whole Health Log database".
+
+  On those addresses the `app` description now reads "Pass one existing personal app id to request its task access together.", and `app: "healthlog"` or `app: "recipes"` returns `INPUT_INVALID` with `details.reason: "catalog_app_unavailable"`, the app's name and its tiny-app link. No approval is requested and the account is not consulted.
+
+  `/mcp` is unchanged: same tool list, and catalog apps are approved there as before. On the restricted addresses nothing else in the tool list changes, and the rules text `tinycloud_apps_context` returns is the same.
+
+  Details: TC-2416
+
+- 6529505: After an approval is revoked at the node, the hosted connector asks for a new one again. Since node 1.25.17 a revocation refusal is `401 {"code": "delegation_revoked", "error": "delegation-revoked: <cid>"}`. The connector understood only the older plain-text body, so a revoked approval looked like an unexplained 401: tools answered `AUTH_REQUIRED` with no approval link, and once the connection approval was revoked `tinycloud_connect` answered "TinyCloud is unavailable" for good.
+
+  `nodeRevocationOf` and `isRevokedGrantRefusal` now read the refusal text from that exact envelope as well as from a plain body, and `nodeRevocationOf` also classifies the SQL service's 401. A revoked per-request approval (records, the searchable copy, a SQL database) is dropped and requested again with `authority_required`, as a missing one is; a revoked connection approval starts a fresh connection approval. The CLI says a grant was revoked for the new body too.
+
+  Plain-text refusals, every other 401, and the results of approvals that are still valid are unchanged. No tool name, schema, description or annotation changes.
+
+  Details: TC-1627, TC-2381
+
+- 359eac1: A call refused for invalid input now says which field failed and what it accepts, for example `The operation input is invalid. timezone: An IANA timezone is required.` or `... sql: SQL must be one SELECT or WITH query.` Until now every such call answered only `The operation input is invalid.`, which gave an assistant nothing to correct.
+
+  The message is built from schema-owned text only: the declared top-level field, array positions, the schema's own message, a type or a limit. Keys and values from the input never appear in it. Refusals of a personal-record key or prefix now describe the accepted layout.
+
+  Error codes, `details.issues`, `retryable`, result shapes and the MCP `isError` behaviour are unchanged. No tool name, schema, description or annotation changes, so `tools/list` is byte-identical on every hosted address.
+
+  Details: TC-2416
+
+- 592136c: `tinycloud_apps_context` and `tinycloud_apps_query` are annotated as not destructive but also not read-only. Context can replace the saved timezone, and a query refresh deletes and reinserts rows in the derived SQL copy. The query accepts one read-only SELECT and doesn't change canonical records; context changes the timezone only when one is supplied. Only `tinycloud_apps_write` changes app records, and it is annotated destructive.
+  Details: TC-2416
+- 951de44: Use client-neutral guidance on unavailable approval links and log approval GET reason codes with the pathname only.
+  Details: TC-2416
+- ce43b59: The hosted MCP endpoint now lets browser clients read the `Mcp-Session-Id` and `Mcp-Protocol-Version` response headers, as well as `WWW-Authenticate` (`Access-Control-Expose-Headers`). Before, only `WWW-Authenticate` was exposed, so a browser MCP client could not read either header even though a preflight already allows them in requests. Today's stateless server does not set them on responses, so current clients see no change.
+
+  Details: TC-2461
+
+- 39b5425: The hosted MCP approval reason no longer ends with "approve only if that is you". It still names the requesting TinyCloud account. The callback already refuses an approval signed by any other account (`approval_owner_mismatch`), so the approver isn't asked to make that check.
+
+  Details: TC-2526
+
+- 56df81d: Accept both production node names for hosted grants and migrate production tenant hosts to TC_HOST.
+
+  Details: TC-2924
+
+- Updated dependencies [166e3a3]
+- Updated dependencies [b6a8491]
+- Updated dependencies [85095e8]
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [09f6dbf]
+- Updated dependencies [b72604f]
+- Updated dependencies [6529505]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [359eac1]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [592136c]
+- Updated dependencies [2a1ac15]
+- Updated dependencies [2a1ac15]
+- Updated dependencies [3319ede]
+- Updated dependencies [e7a370e]
+- Updated dependencies [ccf3347]
+- Updated dependencies [01f5fb6]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [e409bef]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [f3df7de]
+- Updated dependencies [d4366f9]
+- Updated dependencies [728b25c]
+- Updated dependencies [56df81d]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+- Updated dependencies [711903b]
+- Updated dependencies [5fe6cff]
+- Updated dependencies [88a5f28]
+- Updated dependencies [273491d]
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/operations@0.9.0
+  - @tinycloud/sdk-core@3.12.0
+  - @tinycloud/node-sdk@3.12.0
+  - @tinycloud/node-sdk-wasm@1.7.9
+
+## 0.10.0-beta.51
+
+### Patch Changes
+
+- f21bd18: `/claude/mcp` now repeats each tool's title as `annotations.title`. Anthropic's directory portal reads a tool's listing name from there and showed "Missing title annotation. Add annotations.title" for all five tools. Each `annotations.title` equals the tool's existing top-level `title`.
+
+  Only that address changes: `/mcp`, `/chatgpt/mcp`, `/grok/mcp` and `/muse/mcp` list their tools exactly as before. `McpStartupSelection` gains an optional `annotationTitles` flag for this; it is off unless set.
+
+  Details: TC-2416
+
 ## 0.10.0-beta.50
 
 ### Patch Changes

@@ -416,7 +416,9 @@ export type {
   VaultError,
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ResolvedSecretPath,
   ParsedSecretCatalogKey,
@@ -529,6 +531,7 @@ export {
   DelegationManager,
   SharingService,
   createSharingService,
+  inspectShareToken,
   DelegationErrorCodes,
 } from "@tinycloud/sdk-core";
 
