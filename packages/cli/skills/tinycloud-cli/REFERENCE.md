@@ -184,6 +184,7 @@ tinycloud secrets network show
 tinycloud secrets network grant did:pkh:eip155:1:0xRecipient...
 
 printf '%s' "$ANTHROPIC_API_KEY" | tinycloud secrets put ANTHROPIC_API_KEY --stdin   # keeps the value out of argv and shell history
+printf '%s' "$TOTP_SEED" | tinycloud secrets put GITHUB_TOTP --type totp --stdin   # types: secret (default), totp, username, password; the Secrets app shows a live code for totp
 tinycloud secrets get ANTHROPIC_API_KEY
 tinycloud secrets get ANTHROPIC_API_KEY -o key.txt   # atomic owner-only (0600) replacement
 tinycloud secrets list

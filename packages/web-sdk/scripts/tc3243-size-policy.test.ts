@@ -29,7 +29,7 @@ test("TC-3243 records the exact canonical CI root bytes of #1038 within the 800-
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(800);
-    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc3243SdkOwnsBusyRetryRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3285SecretTypesRoot: undefined }, format)).toEqual({ row: "tc3243SdkOwnsBusyRetryRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
