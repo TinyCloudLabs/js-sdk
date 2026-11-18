@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unwritableStateFolder, type StateFolderContext } from "./state-permission.js";
@@ -70,6 +70,15 @@ describe("the profile folder cannot be written", () => {
     expect(message).not.toContain("\n");
     expect(commands(message)).toBe(false);
     expect(message).toContain("its name has control characters");
+  });
+
+  test.skipIf(skip)("a ~/.tinycloud that is a link to a system folder gets no command, since chmod would follow the link", () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "tc-state-perm-")));
+    made.push(home);
+    symlinkSync("/usr", join(home, ".tinycloud"));
+    const message = messageOf(unwritableStateFolder(errno("EACCES"), join(home, ".tinycloud", "profiles"), posix(home)));
+    expect(commands(message)).toBe(false);
+    expect(message).toContain("Ask the person who manages this computer to give your user write access to it.");
   });
 
   test("on Windows the fix is an icacls grant, single-quoted for PowerShell, only below the home", () => {

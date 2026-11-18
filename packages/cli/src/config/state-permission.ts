@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { CLIError } from "../output/errors.js";
@@ -36,6 +36,14 @@ const shown = (text: string): string => text.replace(/[\u0000-\u001f\u007f]/g, "
 const posixQuoted = (folder: string): string => `'${folder.replace(/'/g, "'\\''")}'`;
 const powershellQuoted = (folder: string): string => `'${folder.replace(/'/g, "''")}'`;
 
+function realOr(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return file;
+  }
+}
+
 /** The nearest folder at or above `target` that exists: the one that refused the write. */
 function refusing(target: string, api: path.PlatformPath, exists: (file: string) => boolean): string {
   let at = target;
@@ -54,7 +62,9 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
   const api = windows ? path.win32 : path;
   const folder = refusing(target, api, context.exists ?? existsSync);
   const fold = (file: string): string => (windows ? file.toLowerCase() : file);
-  const relative = api.relative(fold(api.resolve(context.home)), fold(api.resolve(folder)));
+  // Real paths (symlinks resolved), so a folder that links out of the home gets no command.
+  const [resolvedFolder, resolvedHome] = windows ? [folder, context.home] : [realOr(folder), realOr(context.home)];
+  const relative = api.relative(fold(api.resolve(resolvedHome)), fold(api.resolve(resolvedFolder)));
   const isHome = relative === "";
   const inside = !isHome && !relative.startsWith("..") && !api.isAbsolute(relative);
   const again = "Then run the same command again; nothing was changed.";
