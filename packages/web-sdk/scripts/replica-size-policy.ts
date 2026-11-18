@@ -482,6 +482,8 @@ export type Ledger = {
   tc3076ChildExpiryRoot?: LogoutRatchet;
   tc3168V1DefaultNodeRoot?: LogoutRatchet;
   tc3172DelegateNotBeforeRoot?: LogoutRatchet;
+  tc3194NativeShareLinksRoot?: LogoutRatchet;
+  tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1118,6 +1120,8 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3076ChildExpiryRoot !== undefined) pins.push({ row: "tc3076ChildExpiryRoot", pin: root.tc3076ChildExpiryRoot.sourceCommits.at(-1)! });
   if (root.tc3168V1DefaultNodeRoot !== undefined) pins.push({ row: "tc3168V1DefaultNodeRoot", pin: root.tc3168V1DefaultNodeRoot.sourceCommits.at(-1)! });
   if (root.tc3172DelegateNotBeforeRoot !== undefined) pins.push({ row: "tc3172DelegateNotBeforeRoot", pin: root.tc3172DelegateNotBeforeRoot.sourceCommits.at(-1)! });
+  if (root.tc3194NativeShareLinksRoot !== undefined) pins.push({ row: "tc3194NativeShareLinksRoot", pin: root.tc3194NativeShareLinksRoot.sourceCommits.at(-1)! });
+  if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1224,6 +1228,8 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3076ChildExpiryRoot", root.tc3076ChildExpiryRoot?.root.ceiling],
     ["tc3168V1DefaultNodeRoot", root.tc3168V1DefaultNodeRoot?.root.ceiling],
     ["tc3172DelegateNotBeforeRoot", root.tc3172DelegateNotBeforeRoot?.root.ceiling],
+    ["tc3194NativeShareLinksRoot", root.tc3194NativeShareLinksRoot?.root.ceiling],
+    ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3558,6 +3564,46 @@ export const approvedTc3172DelegateNotBeforeRoot: LogoutRatchet = {
   "reason": "TinyCloudNode.delegateTo takes an optional notBefore that is validated and passed through to the delegation's nbf, with the refusals for an invalid date, a time at or after expiry, and a future start; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1025 (0fab85aa, based on master 875e26ac) measured index.mjs 1526263 and index.cjs 1460677 gzip -9 bytes: +173 and +160 over the TC-3168 ceilings 1526090 and 1460517. No other ceiling moves. Details: TC-3172"
 };
 
+/** The exact TC-3194 native share links root allowance from canonical CI. */
+export const approvedTc3194NativeShareLinksRoot: LogoutRatchet = {
+  "label": "native share links on the sdk-core (TC-3194)",
+  "ruling": "Naomi's TC-3194 size ruling (policy review): a ratchet row in the TC-3172 pattern for #1033's exact canonical CI bytes; index.mjs +2196 B and index.cjs +1288 B over the TC-3172 ceilings, approved above the 800 B per-row cap for native share links instead of lazy-loading them. Details: TC-3194",
+  "base": "0b5a6bc84b7c3e3fdbd9f392d009ca1e08e42d1f",
+  "sourceCommits": ["ffa4b6a082609de3b57cedf4d747fad2e2f5d253"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959549",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44203379707/job/134462959979"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 2196, "index.cjs": 1288 },
+    "ceiling": { "index.mjs": 1528459, "index.cjs": 1461965 }
+  },
+  "reason": "SharingService grants several resources in one share, signs one recipient child over all of them, and adds inspectShareToken, which checks a share token offline against the owner's wallet signature and returns the owner, the resources, when access ends and the root CID; sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1033 (ffa4b6a0, based on master 0b5a6bc8) measured index.mjs 1528459 and index.cjs 1461965 gzip -9 bytes: +2196 and +1288 over the TC-3172 ceilings 1526263 and 1460677. No other ceiling moves. Details: TC-3194"
+};
+
+/** The exact TC-3243 account registry sync busy-retry root allowance from canonical CI. */
+export const approvedTc3243SdkOwnsBusyRetryRoot: LogoutRatchet = {
+  "label": "account registry sync leaves busy retries to the SDK (TC-3243)",
+  "ruling": "TC-3243 size ruling (Naomi): a ratchet row in the TC-3194 pattern for #1038's exact canonical CI bytes over #1033's ceilings; index.mjs +150 B and index.cjs +108 B over the TC-3194 ceilings, each under the 800 B per-row cap. Details: TC-3243",
+  "base": "23953408e6724fa5f488e67e6c418c50bca83fb3",
+  "sourceCommits": ["42eeab4a2f342a2c6213cc69340eb8c87413147d"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228469",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44226922450/job/134542228412"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 150, "index.cjs": 108 },
+    "ceiling": { "index.mjs": 1528609, "index.cjs": 1462073 }
+  },
+  "reason": "TinyCloudNode's account registry sync stops, with a warning, on a node busy or timeout answer that the SDK has already retried, instead of retrying it again; node-sdk is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1038 (42eeab4a, based on master 23953408) measured index.mjs 1528609 and index.cjs 1462073 gzip -9 bytes: +150 and +108 over the TC-3194 ceilings 1528459 and 1461965. No other ceiling moves. Details: TC-3243"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3661,6 +3707,8 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3076ChildExpiryRoot: approvedTc3076ChildExpiryRoot,
   tc3168V1DefaultNodeRoot: approvedTc3168V1DefaultNodeRoot,
   tc3172DelegateNotBeforeRoot: approvedTc3172DelegateNotBeforeRoot,
+  tc3194NativeShareLinksRoot: approvedTc3194NativeShareLinksRoot,
+  tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4134,6 +4182,16 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3168V1DefaultNodeRoot ||
         JSON.stringify(value.tc3172DelegateNotBeforeRoot) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot))) {
     throw new Error("Only the exact TC-3172 root admission is approved.");
+  }
+  if (value.tc3194NativeShareLinksRoot !== undefined &&
+      (!value.tc3172DelegateNotBeforeRoot ||
+        JSON.stringify(value.tc3194NativeShareLinksRoot) !== JSON.stringify(approvedTc3194NativeShareLinksRoot))) {
+    throw new Error("Only the exact TC-3194 root admission is approved.");
+  }
+  if (value.tc3243SdkOwnsBusyRetryRoot !== undefined &&
+      (!value.tc3194NativeShareLinksRoot ||
+        JSON.stringify(value.tc3243SdkOwnsBusyRetryRoot) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot))) {
+    throw new Error("Only the exact TC-3243 root admission is approved.");
   }
 }
 
@@ -5035,5 +5093,21 @@ export function validateTc3172DelegateNotBeforeRootTransition(base?: LogoutRatch
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3172DelegateNotBeforeRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3172 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3194 native share links root admission is introduced once and immutable. */
+export function validateTc3194NativeShareLinksRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3194NativeShareLinksRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3194 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3243 account registry sync busy-retry root admission is introduced once and immutable. */
+export function validateTc3243SdkOwnsBusyRetryRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3243SdkOwnsBusyRetryRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3243 root admission may be introduced once and cannot change later.");
   }
 }

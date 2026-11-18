@@ -29,7 +29,7 @@ test("TC-3172 records the exact canonical CI root bytes of #1025 within the 800-
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(800);
-    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc3172DelegateNotBeforeRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3194NativeShareLinksRoot: undefined, tc3243SdkOwnsBusyRetryRoot: undefined }, format)).toEqual({ row: "tc3172DelegateNotBeforeRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({

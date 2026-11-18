@@ -254,6 +254,8 @@ export {
   // SharingService
   SharingService,
   createSharingService,
+  inspectShareToken,
+  type InspectedShareToken,
   type ISharingService,
   type SharingServiceConfig,
   type EncodedShareData,
