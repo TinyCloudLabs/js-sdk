@@ -12,6 +12,7 @@ import {
 } from "@tinycloud/node-sdk";
 import {
   appSecretScope,
+  isSecretNamedKeyPath,
   resolveSecretPath as resolveSdkSecretPath,
   secretNamedKeyPath,
   SECRET_TYPES,
@@ -1133,8 +1134,8 @@ async function readDelegatedIsolatedSecret(params: {
           permission.actions.includes(SECRET_KV_ABILITIES.get),
         );
         if (kv?.space === undefined) return false;
-        const keyPath = secretNamedKeyPath(kv.space, target.vaultKey);
-        if (keyPath === undefined) return false;
+        const keyStem = secretNamedKeyPath(kv.space, target.vaultKey);
+        if (keyStem === undefined) return false;
         const network = parseEncryptionResource(node.getEncryptionNetworkIdForSpace(kv.space));
         if (network.kind !== "network") return false;
         const matchesKey = permissions.some((permission) => {
@@ -1144,7 +1145,7 @@ async function readDelegatedIsolatedSecret(params: {
             const resource = parseEncryptionResource(permission.path);
             return resource.kind === "key" &&
               resource.networkId === network.networkId &&
-              resource.path === keyPath;
+              isSecretNamedKeyPath(keyStem, resource.path);
           } catch {
             return false;
           }

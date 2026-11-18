@@ -199,7 +199,6 @@ import {
   principalDidEquals,
   parseNetworkId,
   resolveSecretPath,
-  secretNamedKeyPath,
   SECRET_KEY_APP_ID,
   type BuildDecryptInvocationInput,
   type BuiltDecryptInvocation,
@@ -7482,14 +7481,13 @@ export class TinyCloudNode {
   ): Promise<DelegateToResult> {
     const space = this.ownedSpaceId("secrets");
     const secret = resolveSecretPath(name, { scope: options.scope, isolated: true });
-    const found = await this.kvForSpace(space).head(secret.permissionPaths.vault);
-    if (!found.ok) {
-      throw Object.assign(new Error("Cannot grant access to this isolated secret"), { cause: found.error });
-    }
+    // Use the generation captured in the current envelope. If the row changes
+    // before activation, this grant still cannot decrypt the replacement.
+    const keyPath = await this.getBaseVault(space).readIsolatedKeyPath(secret.vaultKey);
 
     const key = formatKeyResource(
       parseEncryptionResource(this.getEncryptionNetworkIdForSpace(space)).networkId,
-      secretNamedKeyPath(space, secret.vaultKey)!,
+      keyPath,
     );
     return this.delegateTo(recipientDid, [
       { service: "tinycloud.kv", space, path: secret.permissionPaths.vault, actions: ["get"], skipPrefix: true },
@@ -7504,8 +7502,8 @@ export class TinyCloudNode {
 
   /**
    * Read a secret from an explicit target space without requesting or
-   * auto-signing authority. Active runtime delegations are selected by the
-   * normal KV and encryption invocation paths.
+   * auto-signing authority. An isolated read binds both requests to one
+   * installed grant, never a broader session or a mix of grants.
    */
   async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope, isolated: input.isolated });
@@ -7513,24 +7511,36 @@ export class TinyCloudNode {
       ? input.space
       : this.ownedSpaceId(input.space);
     const vault = this.getBaseVault(targetSpace);
-    let result;
-    if (input.delegationCid === undefined) {
+    let result: Awaited<ReturnType<DataVaultService["readNetworkEncrypted"]>> | undefined;
+    if (!input.isolated) {
+      if (input.delegationCid !== undefined) return { status: "read_failed" };
       result = await vault.readNetworkEncrypted(resolved.vaultKey);
     } else {
-      if (!input.isolated) return { status: "read_failed" };
-      const proof = this.secretReadProof(input.delegationCid);
-      if (!proof || !proof.operations.some((operation) =>
-        operation.service === "kv" && operation.action === "tinycloud.kv/get" &&
-        operation.path === resolved.permissionPaths.vault && operation.spaceId !== undefined &&
-        this.spaceIdsEqual(operation.spaceId, targetSpace) && !operation.caveats?.length)) {
-        return { status: "read_failed" };
+      this.pruneExpiredRuntimePermissionGrants();
+      const grants = this.runtimePermissionGrants;
+      for (let index = grants.length - 1; index >= 0; index -= 1) {
+        const proof = grants[index]!;
+        const cid = proof.delegation.cid;
+        if (proof.provenance !== "delegated" || (input.delegationCid !== undefined && cid !== input.delegationCid) ||
+            !proof.operations.some((operation) =>
+              operation.service === "kv" && operation.action === "tinycloud.kv/get" &&
+              operation.path === resolved.permissionPaths.vault && operation.spaceId !== undefined &&
+              this.spaceIdsEqual(operation.spaceId, targetSpace) && !operation.caveats?.length)) {
+          continue;
+        }
+        // Keep the named-key implementation out of the base browser bundle.
+        const { createNamedKeyClient } = await import("./encryption-keys.js");
+        result = await vault.readNetworkEncrypted(resolved.vaultKey, undefined, {
+          kv: this.createSpaceScopedKVService(targetSpace, this.grantSessionForSpace(proof, targetSpace)),
+          namedKeys: createNamedKeyClient(this, { delegationCid: cid }),
+        });
+        // An older grant may still read the row but not decrypt its new key.
+        if (input.delegationCid !== undefined ||
+            (result.status !== "read_failed" && result.status !== "decrypt_failed" && result.status !== "permission_required")) {
+          break;
+        }
       }
-      // Keep the named-key implementation out of the base browser bundle.
-      const { createNamedKeyClient } = await import("./encryption-keys.js");
-      result = await vault.readNetworkEncrypted(resolved.vaultKey, undefined, {
-        kv: this.createSpaceScopedKVService(targetSpace, this.grantSessionForSpace(proof, targetSpace)),
-        namedKeys: createNamedKeyClient(this, { delegationCid: input.delegationCid }),
-      });
+      if (result === undefined) return { status: "read_failed" };
     }
 
     if (result.status !== "ok") {

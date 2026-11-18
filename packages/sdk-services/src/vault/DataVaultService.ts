@@ -26,14 +26,20 @@ import { authorizationVerdictOf, parsePermissionHint, wrapError } from "../error
 import { routingFailure } from "../resourceRouting";
 import type { IKVService } from "../kv/IKVService";
 import type { KVService } from "../kv/KVService";
+import type { KVPutOptions } from "../kv/types";
 import type {
   DecryptCapabilityProof,
   InlineEncryptedEnvelope,
 } from "../encryption";
 import { base64Decode as envelopeBase64Decode } from "../encryption/canonical";
-import type { NamedKeyClient, NamedKeyEnvelope } from "../encryption/namedKeys";
+import {
+  NAMED_KEY_ENVELOPE_VERSION,
+  NamedKeyError,
+  type NamedKeyClient,
+  type NamedKeyEnvelope,
+} from "../encryption/namedKeys";
 import { parseEncryptionResource } from "../encryption/resource";
-import { secretNamedKeyPath } from "../secrets/paths";
+import { isSecretNamedKeyPath, secretNamedKeyPath } from "../secrets/paths";
 import type { IDataVaultService } from "./IDataVaultService";
 import {
   DataVaultConfig,
@@ -176,6 +182,11 @@ function hasHttpResponse(error: { meta?: Record<string, unknown> }): boolean {
   return typeof error.meta?.status === "number";
 }
 
+function isMissingKVRow(error: ServiceError): boolean {
+  return (error.code === ErrorCodes.KV_NOT_FOUND || error.code === ErrorCodes.NOT_FOUND) &&
+    !hasHttpResponse(error);
+}
+
 function isUnlockSigner(
   signer: unknown
 ): signer is { signMessage(message: string): Promise<string> } {
@@ -292,6 +303,7 @@ function checkEnvelopeAad(
  * a gateway or proxy can answer for a write the node committed.
  */
 const AMBIGUOUS_WRITE_STATUSES = [500, 502, 503, 504, 520, 522, 524];
+const STRONG_ETAG_RE = /^"[^"\s]+"$/;
 
 /**
  * Classify a failed `ifMatch` write into a distinct vault code. Returns
@@ -330,6 +342,19 @@ function ifMatchWriteError(
     message: error.message,
     ...(error.meta !== undefined ? { meta: error.meta } : {}),
     cause: typedKvCause(error),
+  });
+}
+
+function isolatedPreconditionError(
+  code: "ETAG_MISMATCH" | "ALREADY_EXISTS",
+  key: string,
+  message: string,
+): Result<never, VaultError> {
+  return vaultError({
+    code,
+    key,
+    message,
+    cause: typedKvCause({ code: ErrorCodes.KV_PRECONDITION_FAILED, service: "kv", message }),
   });
 }
 
@@ -744,7 +769,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
           cause: new Error("ifMatch cannot be combined with ifNoneMatch"),
         });
       }
-      if (!/^"[^"\s]+"$/.test(options.ifMatch)) {
+      if (!STRONG_ETAG_RE.test(options.ifMatch)) {
         return vaultError({
           code: "INVALID_ETAG",
           key,
@@ -756,6 +781,42 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     }
 
     try {
+      const valuePath = `vault/${key}`;
+      let putOptions: Pick<KVPutOptions, "ifMatch" | "ifNoneMatch"> | undefined = options?.ifMatch !== undefined
+        ? { ifMatch: options.ifMatch }
+        : options?.ifNoneMatch !== undefined
+          ? { ifNoneMatch: options.ifNoneMatch }
+          : undefined;
+      const stem = secretNamedKeyPath(this.vaultConfig.spaceId, key);
+      const networkId = stem === undefined ? config.networkId : parseEncryptionResource(config.networkId).networkId;
+      let keyPath: string | undefined;
+      if (stem !== undefined) {
+        const current = await this.tc.kv.get<string>(valuePath, { raw: true, source: "network" });
+        if (!current.ok) {
+          if (!isMissingKVRow(current.error)) {
+            return kvWriteError("Failed to read current isolated secret", current.error);
+          }
+          if (putOptions?.ifMatch !== undefined) {
+            return isolatedPreconditionError("ETAG_MISMATCH", key, `No value exists at ${key}`);
+          }
+          // The 64-byte digest and 32-byte generation are separate segments.
+          keyPath = `${stem}/${hexEncode(this.crypto.randomBytes(16))}`;
+          putOptions = { ifNoneMatch: "*" };
+        } else {
+          if (putOptions?.ifNoneMatch !== undefined) {
+            return isolatedPreconditionError("ALREADY_EXISTS", key, `A value already exists at ${key}`);
+          }
+          const etag = current.data.headers?.etag;
+          if (etag === undefined || !STRONG_ETAG_RE.test(etag)) {
+            return vaultError({ code: "INVALID_ETAG", key, message: "Isolated secret overwrite requires a current strong ETag" });
+          }
+          if (putOptions?.ifMatch !== undefined && putOptions.ifMatch !== etag) {
+            return isolatedPreconditionError("ETAG_MISMATCH", key, `The current ETag for ${key} does not match ifMatch`);
+          }
+          keyPath = this.parseIsolatedEnvelope(key, stem, networkId, current.data).keyPath;
+          putOptions = { ifMatch: etag };
+        }
+      }
       const { plaintext, contentType } = this.serializeValue(value, options);
       const metadata: Record<string, string> = {
         [VaultHeaders.VERSION]: "2",
@@ -764,13 +825,18 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         ...(options?.metadata ?? {}),
       };
       const aad = toBytes(`tinycloud.vault:${this.vaultConfig.spaceId}:${key}`);
-      const keyPath = secretNamedKeyPath(this.vaultConfig.spaceId, key);
       let envelope: InlineEncryptedEnvelope | NamedKeyEnvelope;
       if (keyPath !== undefined) {
         const keys = config.namedKeys?.();
-        if (keys === undefined) throw new Error("Named-key encryption is unavailable");
-        const networkId = parseEncryptionResource(config.networkId).networkId;
-        envelope = await keys.encrypt(keyPath, plaintext, { networkId, aad, metadata, ensureKey: true });
+        if (keys === undefined) {
+          throw new NamedKeyError("NAMED_KEYS_UNSUPPORTED", "Named-key encryption is unavailable");
+        }
+        envelope = await keys.encrypt(keyPath, plaintext, {
+          networkId,
+          aad,
+          metadata,
+          keyMode: putOptions?.ifNoneMatch === undefined ? "existing" : "create",
+        });
       } else {
         const envelopeResult = await config.service.encryptToNetwork(config.networkId, plaintext, { aad, metadata });
         if (!envelopeResult.ok) {
@@ -784,19 +850,13 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         envelope = envelopeResult.data;
       }
 
-      const valuePath = `vault/${key}`;
       const valueBody = JSON.stringify(envelope);
-      const putOptions = options?.ifMatch !== undefined
-        ? { ifMatch: options.ifMatch }
-        : options?.ifNoneMatch !== undefined
-          ? { ifNoneMatch: options.ifNoneMatch }
-          : undefined;
       const valuePutResult = putOptions !== undefined
         ? await this.tc.kv.put(valuePath, valueBody, putOptions)
         : await this.tc.kv.put(valuePath, valueBody);
       if (!valuePutResult.ok) {
         if (
-          options?.ifNoneMatch !== undefined &&
+          putOptions?.ifNoneMatch !== undefined &&
           valuePutResult.error.code === ErrorCodes.KV_PRECONDITION_FAILED
         ) {
           return vaultError({
@@ -808,7 +868,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
             cause: typedKvCause(valuePutResult.error),
           });
         }
-        if (options?.ifMatch !== undefined) {
+        if (putOptions?.ifMatch !== undefined) {
           const classified = ifMatchWriteError(key, valuePutResult.error);
           if (classified !== undefined) return classified;
         }
@@ -826,19 +886,64 @@ export class DataVaultService extends BaseService implements IDataVaultService {
     }
   }
 
+  private isIsolatedEnvelope(
+    key: string,
+    stem: string,
+    networkId: string,
+    value: unknown,
+  ): value is NamedKeyEnvelope {
+    const envelope = value as Partial<NamedKeyEnvelope> | null | undefined;
+    return envelope?.v === NAMED_KEY_ENVELOPE_VERSION &&
+      typeof envelope.keyPath === "string" &&
+      isSecretNamedKeyPath(stem, envelope.keyPath) &&
+      envelope.networkId === networkId &&
+      checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key) === "ok";
+  }
+
+  private parseIsolatedEnvelope(
+    key: string,
+    stem: string,
+    networkId: string,
+    response: unknown,
+  ): NamedKeyEnvelope {
+    const raw = unwrapKVData(response);
+    let value: unknown;
+    try {
+      value = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch {
+      throw new NamedKeyError("INVALID_ENVELOPE", "Invalid isolated secret envelope");
+    }
+    if (!this.isIsolatedEnvelope(key, stem, networkId, value)) {
+      throw new NamedKeyError("INVALID_ENVELOPE", "Invalid isolated secret envelope");
+    }
+    return value;
+  }
+
+  /** Read the current isolated row over the owner KV connection before delegating its key. */
+  async readIsolatedKeyPath(key: string): Promise<string> {
+    const config = this.networkEncryption;
+    const stem = secretNamedKeyPath(this.vaultConfig.spaceId, key);
+    if (!config || stem === undefined || !this.requireAuth()) {
+      throw new Error("Isolated secret key resolution requires an authenticated network vault");
+    }
+    const current = await this.tc.kv.get<string>(`vault/${key}`, { raw: true, source: "network" });
+    if (!current.ok) throw typedKvCause(current.error);
+    const networkId = parseEncryptionResource(config.networkId).networkId;
+    return this.parseIsolatedEnvelope(key, stem, networkId, current.data).keyPath;
+  }
+
   private async decryptNetworkEnvelope(
     key: string,
     envelope: InlineEncryptedEnvelope | NamedKeyEnvelope,
     namedKeys?: Pick<NamedKeyClient, "decrypt">,
   ) {
     const config = this.networkEncryption!;
-    const keyPath = secretNamedKeyPath(this.vaultConfig.spaceId, key);
-    if (keyPath === undefined) {
+    const stem = secretNamedKeyPath(this.vaultConfig.spaceId, key);
+    if (stem === undefined) {
       return config.service.decryptEnvelope(envelope as InlineEncryptedEnvelope, await this.decryptCapabilityProof());
     }
-    if (envelope?.v !== 2 || !("keyPath" in envelope) || envelope.keyPath !== keyPath ||
-        envelope.networkId !== parseEncryptionResource(config.networkId).networkId ||
-        checkEnvelopeAad(envelope, this.vaultConfig.spaceId, key) !== "ok") {
+    const networkId = parseEncryptionResource(config.networkId).networkId;
+    if (!this.isIsolatedEnvelope(key, stem, networkId, envelope)) {
       return { ok: false as const, error: { code: "INVALID_ENVELOPE", message: "Invalid isolated secret envelope" } };
     }
     const keys = namedKeys ?? config.namedKeys?.();
@@ -963,11 +1068,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       if (valueResult.error.code === "AUTH_UNAUTHORIZED" && permissionHint !== undefined) {
         return { status: "permission_required", hint: permissionHint };
       }
-      if (
-        (valueResult.error.code === "NOT_FOUND" ||
-          valueResult.error.code === "KV_NOT_FOUND") &&
-        !hasHttpResponse(valueResult.error)
-      ) {
+      if (isMissingKVRow(valueResult.error)) {
         return { status: "not_found" };
       }
       if (

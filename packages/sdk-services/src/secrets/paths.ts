@@ -148,13 +148,23 @@ export function resolveSecretPath(
   };
 }
 
-/** Named key for an isolated vault row. Legacy paths never select a named key. */
+/** Named-key stem for an isolated vault row. Legacy paths never select a named key. */
 export function secretNamedKeyPath(spaceId: string, vaultKey: string): string | undefined {
   if (!vaultKey.startsWith(ISOLATED_SECRET_PREFIX)) return undefined;
   const canonicalSpace = spaceId.replace(/^(tinycloud:(?:did:)?pkh:eip155:\d+:)(0x[0-9a-fA-F]{40}):/, (_, prefix, address) =>
     `${prefix.replace("tinycloud:did:", "tinycloud:")}${address.toLowerCase()}:`);
   const digest = bytesToHex(sha256(new TextEncoder().encode(`${canonicalSpace}\0${vaultKey}`)));
   return `apps/${SECRET_KEY_APP_ID}/${digest}`;
+}
+
+/** Match a legacy stable key or an exact generation below its stem. */
+export function isSecretNamedKeyPath(stem: string, candidate: string): boolean {
+  return candidate === stem || (
+    candidate.length === stem.length + 33 &&
+    candidate.startsWith(stem) &&
+    candidate[stem.length] === "/" &&
+    /^[0-9a-f]{32}$/.test(candidate.slice(stem.length + 1))
+  );
 }
 
 export function resolveSecretListPrefix(

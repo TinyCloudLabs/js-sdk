@@ -1,7 +1,5 @@
 import { z } from "zod";
 import type { SecretReadResult } from "@tinycloud/node-sdk";
-import { secretNamedKeyPath } from "@tinycloud/sdk-core";
-import { formatKeyResource, parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 import { CLI_NAME } from "../cli-name.js";
 import {
@@ -96,8 +94,17 @@ async function planSecretGet(
     context.runtime.node,
     context.summary.space,
   );
+  const getRequirement: CapabilityRequirement = {
+    service: "tinycloud.kv",
+    space: reference.space,
+    path: reference.permissionPath,
+    actions: ["tinycloud.kv/get"],
+  };
+  // The SDK verifies decrypt authority for the record's key under the same grant.
+  if (reference.isolated === true) return [getRequirement];
+
   let networkSpace = reference.space;
-  if (input.space === undefined && reference.isolated !== true) {
+  if (input.space === undefined) {
     try {
       networkSpace = operationSpaceResolver(
         context.runtime.node,
@@ -108,20 +115,11 @@ async function planSecretGet(
       // the runtime path supplies the owner space before production planning.
     }
   }
-  const resource = reference.isolated === true
-    ? resolveIsolatedKeyResource(context.runtime.node, reference)
-    : resolveEncryptionNetworkId(context.runtime.node, networkSpace);
-
   return [
-    {
-      service: "tinycloud.kv",
-      space: reference.space,
-      path: reference.permissionPath,
-      actions: ["tinycloud.kv/get"],
-    },
+    getRequirement,
     {
       service: "tinycloud.encryption",
-      path: resource,
+      path: resolveEncryptionNetworkId(context.runtime.node, networkSpace),
       actions: ["tinycloud.encryption/decrypt"],
     },
   ];
@@ -282,21 +280,6 @@ function missingSecretOutcome(
   };
 }
 
-function resolveIsolatedKeyResource(node: unknown, reference: SecretReference): string {
-  const candidate = node as Pick<SecretReadingNode, "getEncryptionNetworkIdForSpace">;
-  try {
-    const networkId = candidate.getEncryptionNetworkIdForSpace?.(reference.space);
-    const keyPath = secretNamedKeyPath(reference.space, reference.vaultKey);
-    if (typeof networkId === "string" && keyPath !== undefined) {
-      const network = parseEncryptionResource(networkId);
-      if (network.kind === "network") return formatKeyResource(network.networkId, keyPath);
-    }
-  } catch {
-    // Isolated reads must use the target space's network, not a default fallback.
-  }
-  throw unresolvedEncryptionNetwork();
-}
-
 function resolveEncryptionNetworkId(node: unknown, space: string): string {
   const candidate = node as {
     getEncryptionNetworkIdForSpace?: (spaceId: string) => unknown;
@@ -338,6 +321,4 @@ interface SecretReadingNode {
     scope?: string;
     isolated?: boolean;
   }): Promise<SecretReadResult>;
-  getEncryptionNetworkIdForSpace?: (spaceId: string) => unknown;
-  getDefaultEncryptionNetworkId?: () => unknown;
 }

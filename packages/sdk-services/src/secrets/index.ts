@@ -17,6 +17,7 @@ export {
   resolveSecretListPrefix,
   resolveSecretPath,
   secretNamedKeyPath,
+  isSecretNamedKeyPath,
   SECRET_KEY_APP_ID,
 } from "./paths";
 export type {

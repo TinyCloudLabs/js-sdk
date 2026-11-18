@@ -10,6 +10,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { createNamedKeyClient, type NamedKeyEnvelope } from "./encryption-keys";
 import { pkhDid } from "@tinycloud/bootstrap";
+import { secretNamedKeyPath } from "@tinycloud/sdk-core";
 import { formatKeyResource } from "@tinycloud/sdk-services/encryption/resource";
 import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
@@ -200,7 +201,7 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
         includePublicSpace: false,
         permissions: [
           { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["get", "put", "list", "metadata"], skipPrefix: true },
-          { service: "tinycloud.kv", space: "secrets", path: "vault/secrets-isolated/", actions: ["get", "put", "metadata"], skipPrefix: true },
+          { service: "tinycloud.kv", space: "secrets", path: "vault/secrets-isolated/", actions: ["get", "put", "del", "metadata"], skipPrefix: true },
           { service: "tinycloud.encryption", path: networkId, actions: ["network.create", "decrypt"] },
         ],
         keys: [{ prefix: `apps/${appId}/`, abilities: ["key.create", "decrypt"] }],
@@ -328,6 +329,69 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
       .toEqual({ status: "ok", value: "synthetic B" });
     expect(await otherRecipient.readSecret({ space, name: "A", ...isolated, delegationCid: otherGrantA.delegation.cid }))
       .toEqual({ status: "ok", value: "synthetic A" });
+  }, 30_000);
+
+  test("TC-3284: a replacement at the same name has independent read authority", async () => {
+    const { owner, space } = await secretOwner();
+    const recipient = await secretRecipient();
+    const name = "RECREATE";
+    const create = (value: string) => owner.secrets.put(name, value, { ...isolated, ifAbsent: true });
+
+    expect(await create("synthetic first")).toMatchObject({ ok: true });
+    const old = (await owner.delegateSecretRead(recipientDid(recipient), name)).delegation;
+    await recipient.useRuntimeDelegation(old);
+    const read = (cid?: string) => recipient.readSecret({
+      space, name, ...isolated, ...(cid === undefined ? {} : { delegationCid: cid }),
+    });
+    expect(await read(old.cid)).toEqual({ status: "ok", value: "synthetic first" });
+    expect(await owner.secrets.put(name, "synthetic rotated", isolated)).toMatchObject({ ok: true });
+    expect(await read(old.cid)).toEqual({ status: "ok", value: "synthetic rotated" });
+    const beforeDelete = await owner.kvForSpace(space).get(physicalPath(name), { raw: true, source: "network" });
+    const previousEtag = beforeDelete.ok ? beforeDelete.data.headers?.etag : undefined;
+    if (!previousEtag) throw new Error("rotation did not leave an ETag");
+
+    expect(await owner.secrets.delete(name, isolated)).toMatchObject({ ok: true });
+    expect(await create("synthetic replacement")).toMatchObject({ ok: true });
+    expect(await owner.secrets.vault.put(physicalPath(name).slice("vault/".length), {
+      value: "synthetic stale rotation",
+    }, { ifMatch: previousEtag })).toMatchObject({ ok: false, error: { code: "ETAG_MISMATCH" } });
+    const replacement = (await owner.delegateSecretRead(recipientDid(recipient), name)).delegation;
+    const decryptResource = (grant: typeof old) =>
+      grant.resources?.find((entry) => entry.service === "encryption")?.path;
+    expect(decryptResource(replacement)).toEqual(expect.any(String));
+    expect(decryptResource(replacement)).not.toBe(decryptResource(old));
+    expect(await read(old.cid)).toEqual({ status: "decrypt_failed" });
+
+    await recipient.useRuntimeDelegation(replacement);
+    expect(await read(old.cid)).toEqual({ status: "decrypt_failed" });
+    expect(await read(replacement.cid)).toEqual({ status: "ok", value: "synthetic replacement" });
+    expect(await read()).toEqual({ status: "ok", value: "synthetic replacement" });
+  }, 30_000);
+
+  test("TC-3284: an existing isolated row and its grant still work and rotate after upgrade", async () => {
+    const { owner, space, networkId } = await secretOwner();
+    const name = "BEFORE_UPGRADE";
+    const path = physicalPath(name);
+    const vaultKey = path.slice("vault/".length);
+    const keyPath = secretNamedKeyPath(space, vaultKey)!;
+    const encode = (value: string) => new TextEncoder().encode(value);
+    const now = new Date(0).toISOString();
+    const original = await owner.keys.encrypt(
+      keyPath,
+      encode(JSON.stringify({ value: "synthetic before upgrade", createdAt: now, updatedAt: now })),
+      { networkId, aad: encode(`tinycloud.vault:${space}:${vaultKey}`), ensureKey: true },
+    );
+    expect(await owner.kvForSpace(space).put(path, JSON.stringify(original))).toMatchObject({ ok: true });
+
+    const recipient = await secretRecipient();
+    const { delegation } = await owner.delegateSecretRead(recipientDid(recipient), name);
+    expect(delegation.resources?.find((entry) => entry.service === "encryption")?.path)
+      .toBe(formatKeyResource(networkId, keyPath));
+    await recipient.useRuntimeDelegation(delegation);
+    const read = () => recipient.readSecret({ space, name, ...isolated, delegationCid: delegation.cid });
+    expect(await read()).toEqual({ status: "ok", value: "synthetic before upgrade" });
+    expect(await owner.secrets.put(name, "synthetic rotated", isolated)).toMatchObject({ ok: true });
+    expect(await read()).toEqual({ status: "ok", value: "synthetic rotated" });
   }, 30_000);
 
   test("TC-3284: a full app key prefix refuses the write without storing a legacy envelope", async () => {

@@ -618,6 +618,7 @@ export {
   resolveSecretListPrefix,
   resolveSecretPath,
   secretNamedKeyPath,
+  isSecretNamedKeyPath,
   SECRET_KEY_APP_ID,
   type ISecretsService,
   type SecretCatalogEntry,
