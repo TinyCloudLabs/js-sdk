@@ -831,7 +831,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
   allowsAutomaticSetup(resource: string): boolean {
     const verdict = this.registryVerdict;
     if (verdict === undefined || verdict.status === "unregistered") return true;
-    if (verdict.status !== "registered" || verdict.record === undefined) return false;
+    if (verdict.status !== "registered") return false;
+    // A v1-only owner on the default node (TC-3168) gets 3.11's setup there; no other record-less verdict does.
+    if (verdict.record === undefined) return verdict.legacy === "v1-default-node";
     if (resource.startsWith("urn:tinycloud:encryption:")) return verdict.record.encryptionNode !== null;
     const identity = pkhSpaceIdentity(resource);
     return verdict.record.spaces.some((space) =>
