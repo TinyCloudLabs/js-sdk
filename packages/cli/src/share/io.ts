@@ -5,7 +5,11 @@ import { basename, join, resolve, sep } from "node:path";
 import { canonicalShareFilename, hasUnsafeFilenameCodePoint } from "@tinycloud/share-sdk";
 import { CLIError } from "../output/errors.js";
 
-export const MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+/**
+ * The largest share the node accepts: its upload body cap is 95 MiB (99,614,720 bytes, tinycloud-node
+ * MAX_UPLOAD_BODY_BYTES), and a public share uploads the file's bytes unchanged, so the largest file that fits is 95 MiB.
+ */
+export const MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
 export const MAX_SHARE_URL_BYTES = 64 * 1024;
 
 export async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES): Promise<Uint8Array> {

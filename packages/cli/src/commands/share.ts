@@ -54,6 +54,7 @@ const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 const INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 const NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
+const SHARE_TOO_LARGE_MESSAGE = "Shared files must be under 95 MB. Use a smaller file or split it.";
 
 export interface ShareCommandServices {
   readonly targetAdapter?: TargetPublishAdapter;
@@ -300,7 +301,7 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.
-  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
+  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped?.code === "MAX_BYTES_EXCEEDED" ? SHARE_TOO_LARGE_MESSAGE : mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
 
 function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
@@ -403,7 +404,7 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
 function byteLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 95 MiB", 7);
   return parsed;
 }
 
