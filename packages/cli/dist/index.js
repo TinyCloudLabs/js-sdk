@@ -17079,6 +17079,16 @@ function bodyCutOff(error) {
 function lapsedPastRetention(entry, now) {
   return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
 }
+async function showApprovalLink(options, entry) {
+  options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+  if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+The link is valid until ${entry.requestExpiresAt}.
+`);
+  if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+    await tryOpenBrowser(entry.approvalUrl);
+  }
+}
 async function expiredRequest(profile, entry, drop) {
   if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
   return new CLIError(
@@ -17178,13 +17188,19 @@ async function acquireApprovalRequest(_did, options) {
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
   let isNewRequest = entry === void 0;
-  if (entry && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait?.now ?? Date.now)())) {
-    if (approvalWait) throw await expiredRequest(profile, entry, true);
-    if (await openKeySaysExpired(entry, signingKey)) {
-      const staleRequestId = entry.requestId;
-      await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
-      entry = void 0;
-      isNewRequest = true;
+  const clock = approvalWait?.now ?? Date.now;
+  let linkWithheld = false;
+  if (entry && !entry.resultRef && !entry.resultEnvelope && clock() >= Date.parse(entry.requestExpiresAt)) {
+    linkWithheld = true;
+    if (lapsedPastRetention(entry, clock())) {
+      if (approvalWait) throw await expiredRequest(profile, entry, true);
+      if (await openKeySaysExpired(entry, signingKey)) {
+        const staleRequestId = entry.requestId;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+        entry = void 0;
+        isNewRequest = true;
+        linkWithheld = false;
+      }
     }
   }
   if (!entry) {
@@ -17220,14 +17236,8 @@ async function acquireApprovalRequest(_did, options) {
     await updatePending(profile, (items) => [...items, entry]);
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
-    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
-${entry.approvalUrl}
-The link is valid until ${entry.requestExpiresAt}.
-`);
-    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
-      await tryOpenBrowser(entry.approvalUrl);
-    }
+    if (!linkWithheld) await showApprovalLink(options, entry);
+    else if (!options.onApprovalRequest) console.error("Checking the saved request with OpenKey...");
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
@@ -17251,6 +17261,10 @@ The link is valid until ${entry.requestExpiresAt}.
       }
       answered = true;
       if (response.status === 202) {
+        if (linkWithheld) {
+          linkWithheld = false;
+          await showApprovalLink(options, entry);
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
