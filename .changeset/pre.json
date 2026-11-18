@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
+    "auth-request-fresh",
     "auth-request-grant-timeout",
     "auth-request-stale-link",
     "auth-retry-grant-hint",

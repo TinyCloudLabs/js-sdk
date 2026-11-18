@@ -8267,8 +8267,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
         if (this.#readonlySnapshot) {
           throw new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, "A read-only replica snapshot cannot mutate the shared database.");
         }
-        const read5 = activeReadSection.getStore();
-        if (read5?.active && read5.controller === this) {
+        const read6 = activeReadSection.getStore();
+        if (read6?.active && read6.controller === this) {
           throw new ReplicaError3(
             ReplicaErrorCode3.STORAGE_ERROR,
             "mutation attempted on the same controller while its readTransaction section is active; this would deadlock"
@@ -9579,9 +9579,9 @@ async function finishLegacyReplicaCleanup(name, approval, discardLocalChanges = 
   return removed;
 }
 async function gateHeldByAnotherAccount(name, principal) {
-  const read5 = await readLogoutGate(profilePath4(name));
-  if (read5 === void 0) return false;
-  const { state: state2 } = read5;
+  const read6 = await readLogoutGate(profilePath4(name));
+  if (read6 === void 0) return false;
+  const { state: state2 } = read6;
   const hash = await principalHashOf(state2.salt, principal);
   return state2.principalHash !== null ? state2.principalHash !== hash : state2.eraseDeferred && state2.deferredPrincipalHash !== hash;
 }
@@ -36322,7 +36322,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     if (salt.length < 16) throw new ShareHistoryUnreadableError();
     return salt;
   };
-  const read5 = async (profile, ready) => {
+  const read6 = async (profile, ready) => {
     const file = await readIfPresent(await path(profile));
     if (file === void 0) {
       const legacy = await readIfPresent(await legacyPath(profile));
@@ -36411,7 +36411,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
         false,
         ["encrypt", "decrypt"]
       );
-      await read5(profile, { salt, key, legacyKey: keys.legacyKey });
+      await read6(profile, { salt, key, legacyKey: keys.legacyKey });
       return true;
     } catch (error) {
       if (error instanceof ShareHistoryUnreadableError) return false;
@@ -36450,7 +36450,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
   return {
     async put(record3) {
       return locked(async (profile, ready) => {
-        const values = await read5(profile, ready);
+        const values = await read6(profile, ready);
         const index = values.findIndex((value4) => value4.shareId === record3.shareId);
         if (index >= 0) values[index] = record3;
         else values.push(record3);
@@ -36459,7 +36459,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     },
     async update(shareId, change) {
       return locked(async (profile, ready) => {
-        const values = await read5(profile, ready);
+        const values = await read6(profile, ready);
         const index = values.findIndex((record3) => record3.shareId === shareId);
         if (index < 0) return void 0;
         const updated = await change(values[index]);
@@ -36469,14 +36469,14 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       }, true);
     },
     async list() {
-      return locked((profile, ready) => read5(profile, ready));
+      return locked((profile, ready) => read6(profile, ready));
     },
     async get(shareId) {
-      return locked(async (profile, ready) => (await read5(profile, ready)).find((record3) => record3.shareId === shareId));
+      return locked(async (profile, ready) => (await read6(profile, ready)).find((record3) => record3.shareId === shareId));
     },
     async delete(shareId) {
       return locked(async (profile, ready) => {
-        await write2(profile, (await read5(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
+        await write2(profile, (await read6(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
       }, true);
     },
     quarantineUnreadable
@@ -36546,6 +36546,32 @@ init_constants();
 init_types();
 init_browser_auth();
 init_approval_wait();
+
+// src/auth/covering-grants.ts
+init_scoped_login();
+import { PermissionEntrySchema } from "@tinycloud/operations/artifacts";
+var CID5 = /^bafkr4i[a-z2-7]{52}$/;
+function read5(value4, key) {
+  return typeof value4 === "object" && value4 !== null ? Reflect.get(value4, key) : void 0;
+}
+function storedGrantsCovering(stored, requested, ownerDid, now = Date.now()) {
+  if (ownerDid === void 0) return [];
+  const found = [];
+  for (const entry of stored) {
+    const delegation = read5(entry, "delegation");
+    const cid = read5(delegation, "cid");
+    const expiry = read5(delegation, "expiry");
+    if (typeof cid !== "string" || !CID5.test(cid) || typeof expiry !== "string" && !(expiry instanceof Date)) continue;
+    const expiresAt = new Date(expiry);
+    if (!Number.isFinite(expiresAt.getTime()) || expiresAt.getTime() <= now) continue;
+    const scope = PermissionEntrySchema.array().safeParse(read5(entry, "permissions"));
+    if (!scope.success || !scopeCovers(scope.data, requested, ownerDid)) continue;
+    if (!found.some((item) => item.cid === cid)) found.push({ cid, expiry: expiresAt.toISOString() });
+  }
+  return found;
+}
+
+// src/commands/auth.ts
 init_approval_request();
 init_device_auth();
 
@@ -36985,7 +37011,7 @@ init_permissions();
 init_sdk();
 import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
 import { TinyCloudNode as TinyCloudNode2 } from "@tinycloud/node-sdk";
-import { DelegationRequestBindingSchema, PermissionEntrySchema } from "@tinycloud/operations/artifacts";
+import { DelegationRequestBindingSchema, PermissionEntrySchema as PermissionEntrySchema2 } from "@tinycloud/operations/artifacts";
 import {
   inspectStoredDelegation as inspectStoredDelegation2,
   operationSpaceResolver,
@@ -37275,7 +37301,7 @@ function noteUnneededYes(yes) {
 init_warnings();
 init_errors();
 init_formatter();
-var CID5 = /^bafkr4i[a-z2-7]{52}$/;
+var CID6 = /^bafkr4i[a-z2-7]{52}$/;
 function record(value4) {
   return value4 !== null && typeof value4 === "object" && !Array.isArray(value4) ? value4 : void 0;
 }
@@ -37295,7 +37321,7 @@ async function localContext(options) {
   return { ctx, profile };
 }
 function storedScope(value4) {
-  const parsed = PermissionEntrySchema.array().safeParse(record(value4)?.permissions);
+  const parsed = PermissionEntrySchema2.array().safeParse(record(value4)?.permissions);
   return parsed.success ? parsed.data : [];
 }
 function storedProof(value4) {
@@ -37316,7 +37342,7 @@ async function listedGrant(value4, index, options) {
   const source = storedDelegationSource(value4);
   return {
     index,
-    cid: typeof rawCid === "string" && CID5.test(rawCid) ? rawCid : null,
+    cid: typeof rawCid === "string" && CID6.test(rawCid) ? rawCid : null,
     expiry,
     expired: expiry !== null && Date.parse(expiry) <= Date.now(),
     local: inspection?.local ?? "for_another_key",
@@ -37332,7 +37358,7 @@ async function listedGrant(value4, index, options) {
 function localSessionCid(session, host) {
   const header = record(session.delegationHeader)?.Authorization;
   const cid = session.delegationCid;
-  if (typeof header !== "string" || typeof cid !== "string" || !CID5.test(cid)) return null;
+  if (typeof header !== "string" || typeof cid !== "string" || !CID6.test(cid)) return null;
   try {
     return new TinyCloudNode2({ host }).computeDelegationCid(header) === cid ? cid : null;
   } catch {
@@ -37402,7 +37428,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
           ExitCode.PERMISSION_DENIED
         );
       }
-      if (!CID5.test(cid)) {
+      if (!CID6.test(cid)) {
         throw new CLIError("INVALID_ARGUMENT", "Expected a delegation CID.", ExitCode.USAGE_ERROR);
       }
       const entries = await loadAdditionalDelegations(ctx.profile);
@@ -38362,7 +38388,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeatable`,
     (value4, previous) => [...previous, value4],
     []
-  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options2, cmd) => {
+  ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).option("--fresh", "With --grant on an OpenKey owner profile: ask the owner for a new approval even if the current grants already cover the request. The old grant is kept (not removed, not revoked); the output lists the new CIDs and, from local storage, the stored grants that already covered the request. Revoke is by CID: revoke each to end access").action(async (options2, cmd) => {
     try {
       noteUnneededYes(options2.yes);
       if (options2.timeout !== void 0 && (!options2.grant || options2.paste === true || options2.device === true)) {
@@ -38378,6 +38404,9 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
       }
       if (options2.device && (!options2.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
         throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
+      }
+      if (options2.fresh && (!options2.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
+        throw new CLIError("INVALID_ARGUMENT", "--fresh requires --grant on an OpenKey owner profile: it asks the owner for a new approval although the current grants already cover the request.", ExitCode.USAGE_ERROR);
       }
       const preset = resolveAppsAgentRequest(options2);
       const resolutionOptions = { allowLogicalSpaces: true };
@@ -38413,7 +38442,8 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       await completeApprovalResult(ctx.profile);
       let node;
       if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
-      if (node?.hasRuntimePermissions(requested)) {
+      const existing = options2.fresh ? storedGrantsCovering(await loadAdditionalDelegations(ctx.profile), requested, profile.ownerDid) : [];
+      if (!options2.fresh && node?.hasRuntimePermissions(requested)) {
         outputJson({ changed: false, missing: [], added: [] });
         return;
       }
@@ -38511,7 +38541,8 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           delegationCid: delegationCids2[0],
           delegationCids: delegationCids2,
           expiry: expiry2,
-          ...options2.device ? { declined } : {}
+          ...options2.device ? { declined } : {},
+          ...options2.fresh ? { fresh: true, existingDelegationCids: existing.map((grant) => grant.cid) } : {}
         });
         return;
       }
@@ -47189,15 +47220,15 @@ function assertOnlyInlineCssReferences(css) {
   if (/@import/i.test(text2)) fail("unsupported", "artifact css still imports a stylesheet");
   if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text2) || /(?:^|[^\w-])src\s*\(/i.test(text2)) fail("unsupported", "artifact css uses an unsupported resource function");
   const opened = text2.match(/url\(/gi)?.length ?? 0;
-  let read5 = 0;
+  let read6 = 0;
   for (const match of text2.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
-    read5 += 1;
+    read6 += 1;
     const value4 = match[1] ?? match[2] ?? match[3] ?? "";
     if (!isInlineReference(value4) || value4.includes("\\")) {
       throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value4);
     }
   }
-  if (read5 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
+  if (read6 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
 }
 async function transformCss(sourceText, basePath, context2) {
   if (context2.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
@@ -47641,11 +47672,11 @@ async function readHtmlFolder(directory, limit) {
           continue;
         }
         if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
-        const read5 = await readRegularFile(root, child, path, limit - total, limit);
-        if (read5 instanceof Uint8Array) {
-          total += read5.byteLength;
-          files.push({ path: path.normalize("NFC"), bytes: read5 });
-        } else problems.push(read5);
+        const read6 = await readRegularFile(root, child, path, limit - total, limit);
+        if (read6 instanceof Uint8Array) {
+          total += read6.byteLength;
+          files.push({ path: path.normalize("NFC"), bytes: read6 });
+        } else problems.push(read6);
       }
     }
   };
