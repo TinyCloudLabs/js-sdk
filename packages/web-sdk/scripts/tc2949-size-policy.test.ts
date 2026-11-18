@@ -29,7 +29,7 @@ test("TC-2949 records the exact canonical CI root bytes within its 150-byte caps
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(150);
-    expect(rootCeilingFor({ ...ledger, tc2970RegistryVerdictCacheRoot: undefined, tc2913OpenKeyContinuationRoot: undefined, tc2987RegistryAbsentReadsRoot: undefined, tc2937SharePlacementRoot: undefined, tc3030FirstPartyOriginsRoot: undefined, tc3076ChildExpiryRoot: undefined, tc3168V1DefaultNodeRoot: undefined, tc3172DelegateNotBeforeRoot: undefined, tc3243SdkOwnsBusyRetryRoot: undefined }, format)).toEqual({ row: "tc2949PanelChunkRecoveryRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2970RegistryVerdictCacheRoot: undefined, tc2913OpenKeyContinuationRoot: undefined, tc2987RegistryAbsentReadsRoot: undefined, tc2937SharePlacementRoot: undefined, tc3030FirstPartyOriginsRoot: undefined, tc3076ChildExpiryRoot: undefined, tc3168V1DefaultNodeRoot: undefined, tc3172DelegateNotBeforeRoot: undefined }, format)).toEqual({ row: "tc2949PanelChunkRecoveryRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
