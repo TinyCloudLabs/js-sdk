@@ -33,3 +33,21 @@ export function onboardNextLine(context: SkillContext, cli: string = CLI_NAME): 
     return undefined;
   }
 }
+
+/** A fact, not a step: where the guide for agents is served. */
+export const GUIDE_URL_LINE = "The TinyCloud CLI guide for agents is at https://agents.tinycloud.xyz/skills/cli.md.";
+
+/**
+ * The one line printed after `onboard`: the guide's URL while no guide is saved on this computer (including when no
+ * agent's skills folder is found); the `skill save` offer when a saved guide is from an older CLI; nothing when the
+ * guide is saved and current or a skills folder holds files TinyCloud did not write.
+ */
+export function onboardGuideLine(context: SkillContext, cli: string = CLI_NAME): string | undefined {
+  let state: string;
+  try {
+    ({ state } = checkSkill({ context }));
+  } catch {
+    return GUIDE_URL_LINE;
+  }
+  return state === "missing" ? GUIDE_URL_LINE : onboardNextLine(context, cli);
+}

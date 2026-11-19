@@ -15,7 +15,7 @@ import { ensureAuthenticated } from "../lib/sdk.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { output } from "../output/formatter.js";
 import { ensureDelegationAuthority, refreshOpenKeySession, type OpenKeyAcquisition } from "./auth.js";
-import { onboardNextLine } from "../output/next.js";
+import { onboardGuideLine } from "../output/next.js";
 import { createKeyOnlyProfile } from "./init.js";
 
 /** Lifetime of every onboarding approval: OpenKey's maximum. */
@@ -139,7 +139,7 @@ export function registerOnboardCommand(program: Command): void {
           expiresAt: storedSessionState(session, profile).expiresAt,
         }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${ONBOARD_STEPS.map(({ asks }) => `  ${asks}`).join("\n")}`);
         if (globalOpts.quiet !== true) {
-          const next = onboardNextLine({ home: homedir(), env: process.env });
+          const next = onboardGuideLine({ home: homedir(), env: process.env });
           if (next !== undefined) process.stderr.write(`${next}\n`);
         }
       } catch (error) {
