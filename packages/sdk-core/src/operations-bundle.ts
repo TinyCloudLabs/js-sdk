@@ -6,5 +6,6 @@ export { parseSpaceUri } from "./spaces/index.js";
 export { registryOwnerKeyV2 } from "./registry-verdict.js";
 export { verifyRegistryCacheEntry } from "./registry-cache.js";
 export { warnRegistryDefaultNode } from "./registry-policy.js";
+export { resolveSecretPath, secretNamedKeyPath } from "@tinycloud/sdk-services";
 
 export { sameTinyCloudNode } from "./tinycloud-node";

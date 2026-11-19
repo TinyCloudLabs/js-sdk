@@ -289,6 +289,8 @@ export interface KeyEncryptOptions extends KeyCallOptions {
   keyWrapV2?: boolean;
   aad?: Uint8Array;
   metadata?: Record<string, string>;
+  /** Provision the key first and use its returned public descriptor. */
+  ensureKey?: boolean;
 }
 
 export type DecryptManyResult =
@@ -683,9 +685,11 @@ export class NamedKeyClient {
   ): Promise<NamedKeyEnvelope> {
     // The node answers a public GET under `apps/` with 404 `key_not_found`, so
     // an app key's public key is read through the authenticated describe.
-    const descriptor = isAppKeyPath(path)
-      ? await this.describePublic(path, options)
-      : await this.getPublicKey(path, options);
+    const descriptor = options?.ensureKey
+      ? await this.ensureKey(path, options)
+      : isAppKeyPath(path)
+        ? await this.describePublic(path, options)
+        : await this.getPublicKey(path, options);
     const { crypto } = this.config;
     const symmetricKey = crypto.randomBytes(32);
     const ciphertext = crypto.authEncrypt(symmetricKey, plaintext, options?.aad);

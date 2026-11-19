@@ -617,6 +617,8 @@ export {
   parseSecretCatalogKey,
   resolveSecretListPrefix,
   resolveSecretPath,
+  secretNamedKeyPath,
+  SECRET_KEY_APP_ID,
   type ISecretsService,
   type SecretCatalogEntry,
   type SecretEntry,

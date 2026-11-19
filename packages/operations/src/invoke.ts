@@ -199,6 +199,10 @@ async function retryWithLocalAuthority(
     );
   }
 
+  // An isolated read only consumes existing grants; the generic local grant
+  // path cannot author the named-key authority.
+  if (prepared.isolatedSecretRead) return executePreparedInvocation(prepared);
+
   const runtimeContext = prepared.runtimeResolution.context;
   if (runtimeContext.runtime === undefined) return internalOperationErrorResult(prepared);
   const operationContext = runtimeContext as RuntimeOperationContext;
@@ -316,6 +320,7 @@ type PreparedInvocation = Readonly<{
   definition: OperationDefinition<any, any>;
   parsedInput: { data: any };
   runtimeResolution: Extract<InvocationRuntimeResolution, { ok: true }>;
+  isolatedSecretRead: boolean;
 }> | Readonly<{
   status: "error";
   result: OperationResult<never>;
@@ -389,6 +394,9 @@ async function prepareInvocation(
     ) };
   }
 
+  const isolatedSecretRead = operationId === "tinycloud.secrets.get" &&
+    operationVersion === 1 && parsedInput.data.isolated === true;
+
   // Only a registered operation with valid input may inspect the pinned
   // profile. Inspection is deliberately node-free, so owner opt-in and status
   // availability are decided before any authentication or external effect.
@@ -433,7 +441,7 @@ async function prepareInvocation(
   const runtimeResolution =
     definition.runtime === "inspection"
       ? inspectionResolution
-      : await resolveRuntime(target, definition.runtime);
+      : await resolveRuntime(target, isolatedSecretRead ? "restored" : definition.runtime);
   if (!runtimeResolution.ok) {
     // Runtime-preparation errors share the execution errors' detail allowlist.
     const result = errorResult(
@@ -474,6 +482,7 @@ async function prepareInvocation(
     definition,
     parsedInput,
     runtimeResolution,
+    isolatedSecretRead,
   };
 }
 
@@ -481,7 +490,7 @@ async function executePreparedInvocation(
   prepared: Exclude<PreparedInvocation, { status: "error" }>,
   options: Readonly<{ deferAuthorityRequest?: boolean }> = {},
 ): Promise<OperationResult<unknown>> {
-  const { operation, definition, parsedInput, runtimeResolution } = prepared;
+  const { operation, definition, parsedInput, runtimeResolution, isolatedSecretRead } = prepared;
   const runtimeContext =
     runtimeResolution.context.runtime === undefined
       ? undefined
@@ -514,8 +523,16 @@ async function executePreparedInvocation(
       (runtimeContext?.runtime.granted ?? []) as unknown as PermissionEntry[],
       required as unknown as PermissionEntry[],
       resolveSpace,
+      isolatedSecretRead,
     );
     if (!evaluation.satisfied) {
+      if (isolatedSecretRead) {
+        return errorResult(
+          operation,
+          runtimeResolution.context.summary,
+          operationError("PERMISSION_DENIED", "An existing grant to read this isolated secret is required."),
+        );
+      }
       if (runtimeContext === undefined) {
         return errorResult(
           operation,

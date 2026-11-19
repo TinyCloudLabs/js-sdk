@@ -218,10 +218,10 @@ export class NodeSecretsService implements ISecretsService {
       : this.service.list(options);
   }
 
-  async listAll(): ReturnType<ISecretsService["listAll"]> {
-    const permission = await this.ensurePermission("", undefined, "list");
+  async listAll(options?: Pick<SecretScopeOptions, "isolated">): ReturnType<ISecretsService["listAll"]> {
+    const permission = await this.ensurePermission("", options, "list");
     if (!permission.ok) return permission;
-    return this.service.listAll();
+    return options === undefined ? this.service.listAll() : this.service.listAll(options);
   }
 
   private get service(): ISecretsService {
@@ -241,7 +241,7 @@ export class NodeSecretsService implements ISecretsService {
         options,
         action,
         this.space,
-        action === "get" ? this.config.getEncryptionNetworkId?.() : undefined,
+        action === "get" && !options?.isolated ? this.config.getEncryptionNetworkId?.() : undefined,
       );
     } catch (error) {
       return secretsError(

@@ -486,6 +486,7 @@ export type Ledger = {
   tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
   tc3285SecretTypesRoot?: LogoutRatchet;
   tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
+  tc3284PerSecretRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1126,6 +1127,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
   if (root.tc3285SecretTypesRoot !== undefined) pins.push({ row: "tc3285SecretTypesRoot", pin: root.tc3285SecretTypesRoot.sourceCommits.at(-1)! });
   if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
+  if (root.tc3284PerSecretRoot !== undefined) pins.push({ row: "tc3284PerSecretRoot", pin: root.tc3284PerSecretRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1236,6 +1238,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
     ["tc3285SecretTypesRoot", root.tc3285SecretTypesRoot?.root.ceiling],
     ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
+    ["tc3284PerSecretRoot", root.tc3284PerSecretRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3650,6 +3653,26 @@ export const approvedTc3286ShareNoDelegationActionsRoot: LogoutRatchet = {
   "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (800a57fb, master 400cf7f1 merged in) measured index.mjs 1528939 and index.cjs 1462340 gzip -9 bytes: +103 and +48 over the TC-3285 ceilings 1528836 and 1462292. No other ceiling moves. Details: TC-3286"
 };
 
+/** The exact TC-3284 per-secret named-key root allowance on the combined source. */
+const approvedTc3284PerSecretRoot: LogoutRatchet = {
+  "label": "per-secret named keys (TC-3284)",
+  "ruling": "test-ruling: TC-858 ratchet row tc3284PerSecretRoot. Naomi approved the exact combined-root gzip bytes after the #1043 master merge, with no margin.",
+  "base": "60d5e44335681892fe2c302a5e521215616b4ba9",
+  "sourceCommits": ["141fa54869c360e55c6b8c4255f19bac989d4b79", "bfd6eb8b0503ab267fb49e514a8beb58674b3bbd"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44418619173",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44418619173/job/135205380689",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44418619173/job/135205380277"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 2064, "index.cjs": 1772 },
+    "ceiling": { "index.mjs": 1531003, "index.cjs": 1464112 }
+  },
+  "reason": "The named-key Secrets APIs and exact read delegation ship in the web-sdk root. The linked SQLite and PostgreSQL CI jobs measured the pre-merge runtime. A local production build with Node 22, Bun 1.3.14 and Rust 1.99.0 on the combined source measured index.mjs 1531003 and index.cjs 1464112 gzip -9 bytes. No non-root ceiling moves."
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3757,6 +3780,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
   tc3285SecretTypesRoot: approvedTc3285SecretTypesRoot,
   tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
+  tc3284PerSecretRoot: approvedTc3284PerSecretRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4250,6 +4274,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc3285SecretTypesRoot ||
         JSON.stringify(value.tc3286ShareNoDelegationActionsRoot) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot))) {
     throw new Error("Only the exact TC-3286 root admission is approved.");
+  }
+  if (value.tc3284PerSecretRoot !== undefined &&
+      (!value.tc3286ShareNoDelegationActionsRoot ||
+        JSON.stringify(value.tc3284PerSecretRoot) !== JSON.stringify(approvedTc3284PerSecretRoot))) {
+    throw new Error("Only the exact TC-3284 per-secret root admission is approved.");
   }
 }
 

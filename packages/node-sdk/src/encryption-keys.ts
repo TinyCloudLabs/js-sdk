@@ -40,6 +40,7 @@ interface NodeSigningInternals {
     networkId: string;
     action: string;
     facts: object;
+    delegationCid?: string;
   }): Promise<{ authorization: string; invocationCid: string }>;
   createEncryptionCrypto(): EncryptionCrypto;
   /** Registry route for the network, mapped to the TEE origin and identity-checked there. */
@@ -53,6 +54,8 @@ export interface CreateNamedKeyClientOptions {
   requireKeyWrapV2?: boolean;
   /** Network used when a call does not name one. Defaults to the node's default network. */
   networkId?: string;
+  /** Use only the installed delegation for named decrypt; never sign with another grant. */
+  delegationCid?: string;
   /** Override `fetch` (tests). */
   fetch?: typeof fetch;
 }
@@ -109,8 +112,12 @@ export function createNamedKeyClient(
         networkId: input.resource,
         action: input.action,
         facts: input.facts,
+        ...(options.delegationCid === undefined ? {} : { delegationCid: options.delegationCid }),
       }),
     decryptRoot: (envelope) => {
+      if (options.delegationCid !== undefined) {
+        return Promise.reject(new Error("An exact named-key proof cannot decrypt a root envelope"));
+      }
       const delegationCid = node.session?.delegationCid;
       if (delegationCid === undefined) {
         return Promise.reject(new Error("Not signed in. Call signIn() first."));
