@@ -38,3 +38,32 @@ test("signed out: requests from before the sign-out are discarded with their key
   expect(signedIn.file.unrecognized).toHaveLength(1);
   expect(signedIn.ops).toEqual([]);
 });
+
+test("signed out: a request whose creation time is missing or unreadable counts as before the sign-out and is discarded", () => {
+  const { createdAt: _createdAt, ...noCreatedAt } = JSON.parse(JSON.stringify(since)) as Record<string, unknown>;
+  const unreadable = ["garbage", "NaN", "2026-13-45T99:00:00.000Z", "", 1_763_500_000_000, null];
+  const raw = {
+    version: 2,
+    entries: [
+      { ...noCreatedAt, requestId: "abcdefghijklmnopqrstuvwxd4" },
+      ...unreadable.map((createdAt, index) => ({ ...noCreatedAt, requestId: `abcdefghijklmnopqrstuvwx${"efghij"[index]}5`, createdAt })),
+      JSON.parse(JSON.stringify(since)),
+    ],
+    // Set aside after the sign-out: its creation time is still unknown.
+    unrecognized: [{ raw: { relayPrivateKey: RELAY_KEY, createdAt: "garbage" }, quarantinedAt: new Date(T0 + 40_000).toISOString() }],
+  };
+  const signedOutAt = T0 + 10_000;
+  const signedOut = loadApprovalFiles({ v2: raw }, { now: NOW, signedOutAt });
+  if (signedOut.kind !== "ok") throw new Error(signedOut.kind);
+  expect(signedOut.file.entries.map((entry) => entry.requestId)).toEqual([since.requestId]);
+  expect(signedOut.file.unrecognized).toEqual([]);
+  expect(signedOut.ops).toEqual([{ op: "write", name: APPROVAL_FILE }]);
+  // Only the request made since keeps a key in what the adapter writes.
+  expect(serializeApprovalFile(signedOut.file).split(RELAY_KEY)).toHaveLength(2);
+
+  // Signed in, the same file loses nothing: the unreadable entries are set aside, not dropped.
+  const signedIn = loadApprovalFiles({ v2: raw }, { now: NOW });
+  if (signedIn.kind !== "ok") throw new Error(signedIn.kind);
+  expect(signedIn.file.entries.map((entry) => entry.requestId)).toEqual([since.requestId]);
+  expect(signedIn.file.unrecognized).toHaveLength(1 + unreadable.length + 1);
+});

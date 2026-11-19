@@ -193,8 +193,9 @@ export interface ApprovalFilesLoadOptions {
   /**
    * Set while the profile is signed out: when it was signed out (epoch ms). A logout by a tc that predates the v2 file deletes only
    * the v1 file and records no time; the adapter passes `now` on the first load that finds the profile signed out without one, and
-   * keeps that time until the profile is signed in again. Entries (and quarantined content) from before it are discarded with their
-   * keys; requests made since, by a sign-in in progress, are kept.
+   * keeps that time until the profile is signed in again. Entries from before it are discarded with their keys; requests made since,
+   * by a sign-in in progress, are kept. A creation time that is missing or cannot be read counts as before: an entry without a
+   * readable `createdAt` is quarantined, and quarantined content is always discarded here.
    */
   readonly signedOutAt?: number;
 }
@@ -209,8 +210,11 @@ export function loadApprovalFiles(input: ApprovalFilesInput, options: ApprovalFi
   const loaded = loadBoth(input, options);
   if (loaded.kind !== "ok" || options.signedOutAt === undefined) return loaded;
   const signedOutAt = options.signedOutAt;
-  const entries = loaded.file.entries.filter((entry) => Date.parse(entry.createdAt) > signedOutAt);
-  const unrecognized = loaded.file.unrecognized.filter((item) => Date.parse(item.quarantinedAt) > signedOutAt);
+  const entries = loaded.file.entries.filter((entry) => {
+    const created = Date.parse(entry.createdAt);
+    return Number.isFinite(created) && created > signedOutAt;
+  });
+  const unrecognized: QuarantinedEntry[] = [];
   const discarded = loaded.file.entries.filter((entry) => !entries.includes(entry)).map((entry) => entry.requestId);
   if (entries.length === loaded.file.entries.length && unrecognized.length === loaded.file.unrecognized.length) return loaded;
   return {
