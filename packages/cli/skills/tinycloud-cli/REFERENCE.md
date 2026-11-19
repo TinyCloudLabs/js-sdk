@@ -28,7 +28,7 @@ tinycloud --version
 | Flag | Description |
 |------|-------------|
 | `-p, --profile <name>` | Profile to use |
-| `-H, --host <url>` | Node URL override (default `https://tee.node.tinycloud.xyz`) |
+| `-H, --host <url>` | Node URL override (default `https://node.tinycloud.xyz`) |
 | `-v, --verbose` | Verbose output |
 | `-q, --quiet` | Suppress non-essential output |
 | `--no-cache` | Disable caching |
