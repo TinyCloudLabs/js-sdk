@@ -23,6 +23,14 @@ test("signed out: requests from before the sign-out are discarded with their key
   expect(written).not.toContain(before.requestId);
   expect(written.split(RELAY_KEY)).toHaveLength(2);
 
+  // Signed out with no recorded time (a tc that predates the v2 file signed out): the adapter passes now, so every request goes.
+  const unrecorded = loadApprovalFiles({ v2 }, { now: NOW, signedOutAt: NOW });
+  if (unrecorded.kind !== "ok") throw new Error(unrecorded.kind);
+  expect(unrecorded.discarded).toEqual([before.requestId, since.requestId]);
+  expect(unrecorded.file).toEqual({ version: 2, entries: [], unrecognized: [] });
+  expect(unrecorded.ops).toEqual([{ op: "write", name: APPROVAL_FILE }]);
+  expect(serializeApprovalFile(unrecorded.file)).not.toContain(RELAY_KEY);
+
   const signedIn = loadApprovalFiles({ v2 }, { now: NOW });
   if (signedIn.kind !== "ok") throw new Error(signedIn.kind);
   expect(signedIn.discarded).toEqual([]);
