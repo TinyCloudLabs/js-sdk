@@ -27,8 +27,10 @@ import {
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
+  GENERIC_APP_ID_WITHOUT_HOST,
   genericAppManifest,
   genericAppManifestWarning,
+  warnOnceWithoutAppHost,
   principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
@@ -961,11 +963,17 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._capabilityRequest;
   }
 
-  /** One console line per sign-in that falls back to the generic manifest. */
+  /**
+   * One console line per sign-in that falls back to the generic manifest, and
+   * once per process when that folder is the shared one for apps without a domain.
+   */
   private warnIfGenericManifest(): void {
     const request = this.getCapabilityRequest();
     if (request !== undefined && request === this.genericRequest?.request) {
       console.warn(genericAppManifestWarning(this.genericRequest.manifest));
+      if (this.genericRequest.manifest.app_id === GENERIC_APP_ID_WITHOUT_HOST) {
+        warnOnceWithoutAppHost(GENERIC_APP_ID_WITHOUT_HOST);
+      }
     }
   }
 
