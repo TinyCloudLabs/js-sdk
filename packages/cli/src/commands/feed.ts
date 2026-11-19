@@ -19,6 +19,8 @@ import { openFeedHandoff } from "../feed/local.js";
 import type { LocalFeedHandoff } from "../feed/local.js";
 import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runner.js";
 import { connectFeedAgent } from "../feed/connection.js";
+import { disconnectFeedAgent } from "../feed/disconnect.js";
+import { revokeIssuedDelegation } from "./delegation.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
 
@@ -152,6 +154,21 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           return delegation;
         });
         outputJson({ source, delegation });
+      } catch (error) { return handleError(error); }
+    });
+
+  agentOptions(feed.command("disconnect").description("Owner: revoke an agent's feed grant and remove it from the registry"))
+    .addHelpText("after", `
+Reads the grant ID from the owner registry and revokes it with this profile's own key, so no OpenKey approval is
+needed. Run it with the profile that ran feed connect: a profile can revoke only grants its own key issued. The registry
+row is removed only after the revoke succeeds; the token stays reserved for the same agent DID.
+`)
+    .action(async (options, command) => {
+      try {
+        const { node, sql, profile } = await context(command);
+        outputJson(await disconnectFeedAgent(sql.db(REGISTRY), options.agent, async (cid) => {
+          await revokeIssuedDelegation(node, profile, cid);
+        }));
       } catch (error) { return handleError(error); }
     });
 
