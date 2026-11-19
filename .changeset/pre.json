@@ -33,6 +33,7 @@
     "auth-request-grant-timeout",
     "auth-request-stale-link",
     "auth-retry-grant-hint",
+    "card-md-cli",
     "feed-disconnect",
     "mcp-agent-discovery",
     "native-share-recording-links",
