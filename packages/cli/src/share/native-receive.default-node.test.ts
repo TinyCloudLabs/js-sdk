@@ -7,7 +7,7 @@ import type { HermeticEncryptedNode } from "../../../node-sdk/src/test-support/h
 import type { ProfileConfig } from "../config/types";
 import type { ProfileManager as ProfileManagerType } from "../config/profiles.js";
 import type { createShareAuthorityAdapters as ShareAuthorityAdapterFactory } from "./adapters.js";
-import { DEFAULT_TINYCLOUD_FALLBACK_HOST, pkhDid, registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
+import { DEFAULT_TINYCLOUD_FALLBACK_HOST, endToEndNodeHost, pkhDid, registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
 import { createNativeShare } from "@tinycloud/share-sdk";
 
 // TC-3181: a bearer link whose sender the registry verifies has no record (an OpenKey
@@ -137,7 +137,7 @@ beforeAll(async () => {
   originalFetch = passthrough;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin === DEFAULT_TINYCLOUD_FALLBACK_HOST) {
+    if (url.origin === DEFAULT_TINYCLOUD_FALLBACK_HOST || url.origin === endToEndNodeHost(DEFAULT_TINYCLOUD_FALLBACK_HOST)) {
       defaultNodeRequests.push(url.pathname);
       const target = new URL(`${url.pathname}${url.search}`, fixtureHost).toString();
       return input instanceof Request ? passthrough(new Request(target, input), init) : passthrough(target, init);
