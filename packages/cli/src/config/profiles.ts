@@ -1,5 +1,4 @@
-import { constants as fsConstants } from "node:fs";
-import { chmod, lstat, open, readdir, rm } from "node:fs/promises";
+import { chmod, lstat, readdir, rm } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { join } from "node:path";
 import {
@@ -14,6 +13,7 @@ import {
   withProfileLock,
   writeSession,
   withPinnedProfileDirectory,
+  securePinnedProfileDirectory,
   type ProfileLockOptions,
 } from "@tinycloud/operations/state";
 import {
@@ -35,66 +35,6 @@ import {
 } from "./storage.js";
 import { resolveProfilePosture, type GlobalConfig, type ProfileConfig, type CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
-
-
-function isTransientProfileEntryError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP" || code === "EISDIR";
-}
-
-async function secureProfileDirectory(directory: string): Promise<void> {
-  const rootFlags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY |
-    (process.platform === "linux" ? 0 : fsConstants.O_NOFOLLOW);
-  let root;
-  try {
-    root = await open(directory, rootFlags);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-
-  try {
-    const info = await root.stat();
-    if (!info.isDirectory()) {
-      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
-    }
-    if ((info.mode & 0o777) !== PRIVATE_DIR_MODE) {
-      await root.chmod(PRIVATE_DIR_MODE);
-    }
-
-    const pinnedDirectory = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
-    let entries;
-    try {
-      entries = await readdir(pinnedDirectory, { withFileTypes: true });
-    } catch (error) {
-      if (isTransientProfileEntryError(error)) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      let file;
-      try {
-        file = await open(
-          join(pinnedDirectory, entry.name),
-          fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
-        );
-      } catch (error) {
-        if (isTransientProfileEntryError(error)) continue;
-        throw error;
-      }
-      try {
-        const fileInfo = await file.stat();
-        if (fileInfo.isFile() && (fileInfo.mode & 0o777) !== 0o600) {
-          await file.chmod(0o600);
-        }
-      } finally {
-        await file.close();
-      }
-    }
-  } finally {
-    await root.close();
-  }
-}
 
 export class ProfileManager {
   // ── Initialization ──────────────────────────────────────────────────
@@ -175,7 +115,7 @@ export class ProfileManager {
   static async getProfile(name: string): Promise<ProfileConfig> {
     const profile = await withPinnedProfileDirectory(name, async (directory) => {
       if (!directory) return null;
-      await secureProfileDirectory(directory);
+      await securePinnedProfileDirectory(directory);
       return readJson<ProfileConfig>(join(directory, "profile.json"));
     });
     if (!profile) {
@@ -285,6 +225,7 @@ export class ProfileManager {
   static async getKey(name: string): Promise<object | null> {
     return withPinnedProfileDirectory(name, async (directory) => {
       if (!directory) return null;
+      await securePinnedProfileDirectory(directory);
       const profileFile = join(directory, "profile.json");
       if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
       const key = await readJson<object>(join(directory, "key.json"));
@@ -317,6 +258,7 @@ export class ProfileManager {
   static async getSession(name: string): Promise<object | null> {
     return withPinnedProfileDirectory(name, async (directory) => {
       if (!directory) return null;
+      await securePinnedProfileDirectory(directory);
       const profileFile = join(directory, "profile.json");
       if ((await readJson<ProfileConfig>(profileFile))?.authSignedOut === true) return null;
       const session = await readSession<object>(name);
