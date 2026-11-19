@@ -229,6 +229,8 @@ export class DelegatedAccess {
    * `tinycloud.encryption/decrypt` on (the owner's default network for
    * secrets). Works for a session-only recipient: no wallet or SIWE session of
    * its own is needed.
+   *
+   * `tinycloud.encryption/decrypt` isn't limited to one secret: it covers the owner's default network.
    */
   get encryption(): IEncryptionService {
     if (!this.encryptionFactory) {
