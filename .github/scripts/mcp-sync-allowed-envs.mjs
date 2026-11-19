@@ -10,6 +10,8 @@ const deployEnvKeys = [
   "TC_MCP_NATIVE_SERVICE_CREDENTIAL",
   "CERTBOT_EMAIL",
 ];
+// Public values sent only when set (Meta Muse domain verification).
+const optionalDeployEnvKeys = ["TC_MCP_MUSE_CHALLENGE"];
 
 export function mergeAllowedEnvKeys(currentAllowed, deployKeys) {
   return [...new Set([...currentAllowed, ...deployKeys])];
@@ -45,7 +47,7 @@ async function syncAllowedEnvs() {
   const envs = parseEnvVars(await readFile(envFile, "utf8"));
   const envKeys = envs.map(({ key }) => key);
   const missingRequired = missingKeys(envKeys, deployEnvKeys);
-  const unexpected = envKeys.filter((key) => !deployEnvKeys.includes(key));
+  const unexpected = envKeys.filter((key) => !deployEnvKeys.includes(key) && !optionalDeployEnvKeys.includes(key));
   if (missingRequired.length > 0 || unexpected.length > 0 || envs.some(({ value }) => value.length === 0)) {
     const details = [
       missingRequired.length > 0 ? `missing=${missingRequired.join(",")}` : "",

@@ -228,6 +228,8 @@ jobs:
           TC_MCP_INTROSPECTION_CLIENT_SECRET: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_SECRET }}
           TINYCLOUD_MCP_IMAGE: ${{ needs.resolve.outputs.image }}
           TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
+          # Public Meta Muse domain-verification token (repository or production environment variable); empty means unset.
+          TC_MCP_MUSE_CHALLENGE: ${{ vars.TC_MCP_MUSE_CHALLENGE }}
           CERTBOT_EMAIL: ops@tinycloud.xyz
         shell: bash
         run: |
@@ -238,7 +240,7 @@ jobs:
           export PHALA_CVM_ID=tinycloud-mcp
           unset CLOUDFLARE_API_TOKEN TC_MCP_STATE_SECRET
           unset TC_MCP_INTROSPECTION_CLIENT_ID TC_MCP_INTROSPECTION_CLIENT_SECRET
-          unset TINYCLOUD_MCP_IMAGE TC_MCP_NATIVE_SERVICE_CREDENTIAL CERTBOT_EMAIL
+          unset TINYCLOUD_MCP_IMAGE TC_MCP_NATIVE_SERVICE_CREDENTIAL CERTBOT_EMAIL TC_MCP_MUSE_CHALLENGE
           node "$MCP_DEPLOY_TOOLS/mcp-sync-allowed-envs.mjs"
           # The exact encrypted environment file used for allowlist sync is also used for deploy.
           phala deploy \
@@ -270,3 +272,13 @@ jobs:
           curl --fail --silent --show-error \
             https://mcp.tinycloud.xyz/.well-known/oauth-protected-resource/mcp \
             | jq -e '.resource == "https://mcp.tinycloud.xyz/mcp"'
+      - name: Verify the Muse challenge
+        if: vars.TC_MCP_MUSE_CHALLENGE != ''
+        env:
+          TC_MCP_MUSE_CHALLENGE: ${{ vars.TC_MCP_MUSE_CHALLENGE }}
+        shell: bash
+        run: |
+          token=${TC_MCP_MUSE_CHALLENGE#muse-challenge=}
+          body=$(curl --fail --silent --show-error --max-redirs 0 \
+            "https://mcp.tinycloud.xyz/.well-known/muse-challenge/$token")
+          [ "$body" = "muse-challenge=$token" ] || { echo "::error::The Muse challenge answered with an unexpected body"; exit 1; }

@@ -165,6 +165,21 @@ async function encryptWithPhala(file) {
   }
   await rm(envFile, { force: true });
 
+  const museLine = `muse-challenge=${"f".repeat(64)}`;
+  const withMuse = run("bash", ["-c", writerScript], { ...env, TC_MCP_MUSE_CHALLENGE: museLine });
+  const museEnvFile = withMuse.stdout.trim().split("\n").at(-1);
+  if (withMuse.status !== 0 || !museEnvFile) fail("A set Muse challenge was refused.");
+  const museContents = await readFile(museEnvFile, "utf8");
+  await rm(museEnvFile, { force: true });
+  if (!museContents.split("\n").includes(`TC_MCP_MUSE_CHALLENGE='${museLine}'`)) {
+    fail("A set Muse challenge was not written to the deploy environment file.");
+  }
+  if (contents.includes("TC_MCP_MUSE_CHALLENGE")) fail("An unset Muse challenge was written to the deploy environment file.");
+  const badMuse = run("bash", ["-c", writerScript], { ...env, TC_MCP_MUSE_CHALLENGE: "muse-challenge=a b" });
+  if (badMuse.status === 0 || (await readdir(envDir)).length !== 0) {
+    fail("A malformed Muse challenge was accepted or left a partial env file.");
+  }
+
   const missingCredential = run("bash", ["-c", writerScript], { ...env, TC_MCP_NATIVE_SERVICE_CREDENTIAL: "" });
   if (missingCredential.status === 0 || (await readdir(envDir)).length !== 0) {
     fail("Missing native service credential was accepted or left a partial env file.");
@@ -185,7 +200,7 @@ async function encryptWithPhala(file) {
   const cleanup = run("bash", ["-c", `set -euo pipefail; source "${helper}"; write_mcp_deploy_env_file; printf '%s\\n' "$MCP_DEPLOY_ENV_FILE"`], env);
   if (cleanup.status !== 0 || (await readdir(envDir)).length !== 0) fail("Deploy env file cleanup did not run on shell exit.");
 
-  process.stdout.write("MCP deploy env regression passed: pinned Phala 1.1.22 CLI exact round-trip, state/native bytes, optional-unset omission, no logged values, CRLF injection refusal, allowlist preservation, missing-config refusal, 0600 file, and cleanup.\n");
+  process.stdout.write("MCP deploy env regression passed: pinned Phala 1.1.22 CLI exact round-trip, state/native bytes, optional-unset omission, optional Muse challenge, no logged values, CRLF injection refusal, allowlist preservation, missing-config refusal, 0600 file, and cleanup.\n");
 } finally {
   await rm(testRoot, { recursive: true, force: true });
 }

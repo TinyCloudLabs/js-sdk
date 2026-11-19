@@ -299,6 +299,14 @@ environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, a stable
 32-byte-or-longer `TC_MCP_STATE_SECRET`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
 `TC_MCP_INTROSPECTION_CLIENT_SECRET`, and `TC_MCP_NATIVE_SERVICE_CREDENTIAL`.
 
+`TC_MCP_MUSE_CHALLENGE` is optional and public: Meta's Muse domain-verification
+token, either the bare token or the whole `muse-challenge=<token>` line. When it
+is set, `GET /.well-known/muse-challenge/<token>` answers 200 `text/plain` with
+`muse-challenge=<token>`, without sign-in; any other token, or no variable, is
+not found. In production set it as the GitHub variable `TC_MCP_MUSE_CHALLENGE`
+(repository or `production` environment) and run the workflow; it is sent only
+when set, and the deploy then checks the URL answers.
+
 The workflow writes a mode-`0600` complete application environment file from
 the production values and uses that same file for Phala's encrypted environment
 update and image deploy. The update preserves existing `allowed_envs` names and
