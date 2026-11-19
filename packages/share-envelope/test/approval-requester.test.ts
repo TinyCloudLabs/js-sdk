@@ -58,8 +58,8 @@ const ROWS: readonly Row[] = [
   { name: "200 ack", event: replyEvent({ kind: "acked" }), expect: { committed: drop("completed", 0) } },
   { name: "malformed 200 (discover)", event: replyEvent({ kind: "malformed", call: "discover" }), expect: { open: sleeping } },
   { name: "malformed 200 (fetch)", event: replyEvent({ kind: "malformed", call: "fetch" }), expect: { discovered: go("discovered", "sleep") } },
-  { name: "malformed 200 (ack)", event: replyEvent({ kind: "malformed", call: "ack" }), expect: { committed: stop("completed", 0) } },
-  { name: "network", event: replyEvent({ kind: "network" }), expect: { open: sleeping, discovered: go("discovered", "sleep"), committed: stop("completed", 0) } },
+  { name: "malformed 200 (ack)", event: replyEvent({ kind: "malformed", call: "ack" }), expect: { committed: stop("completed", 6) } },
+  { name: "network", event: replyEvent({ kind: "network" }), expect: { open: sleeping, discovered: go("discovered", "sleep"), committed: stop("completed", 6) } },
   // discover
   { name: "discover 410 expired_request", event: replyEvent(err("discover", "expired_request", 410)), expect: { open: drop("lapsed", 3) } },
   { name: "discover 410 request_denied", event: replyEvent(err("discover", "request_denied", 410)), expect: { open: drop("denied", 3) } },
@@ -90,11 +90,11 @@ const ROWS: readonly Row[] = [
   { name: "ack 409 acknowledged", event: replyEvent(err("ack", "acknowledged", 409)), expect: { committed: drop("completed", 0) } },
   { name: "ack 410 expired_result", event: replyEvent(err("ack", "expired_result", 410)), expect: { committed: drop("completed", 0) } },
   { name: "ack 409 ack_conflict", event: replyEvent(err("ack", "ack_conflict", 409)), expect: { committed: drop("completed", 0) } },
-  { name: "ack 400 invalid_ack", event: replyEvent(err("ack", "invalid_ack")), expect: { committed: stop("completed", 0) } },
+  { name: "ack 400 invalid_ack", event: replyEvent(err("ack", "invalid_ack")), expect: { committed: stop("completed", 6) } },
   { name: "ack 401 invalid_proof, clock 90 s off", event: replyEvent(err("ack", "invalid_proof", 401), NOW, 90_000), expect: { committed: stop("clock", 12, { hold: true }) } },
   { name: "ack 401 invalid_proof, clock sane", event: replyEvent(err("ack", "invalid_proof", 401), NOW, 1_000), expect: { committed: stop("unexpected", 7) } },
-  { name: "ack 400 request_binding", event: replyEvent(err("ack", "request_binding")), expect: { committed: stop("completed", 0) } },
-  { name: "ack 503 unknown", event: replyEvent(err("ack", "unknown", 503)), expect: { committed: stop("completed", 0) } },
+  { name: "ack 400 request_binding", event: replyEvent(err("ack", "request_binding")), expect: { committed: stop("completed", 6) } },
+  { name: "ack 503 unknown", event: replyEvent(err("ack", "unknown", 503)), expect: { committed: stop("completed", 6) } },
   // the caller's verdict on the opened result, and its durable commit
   { name: "verdict ok", event: { type: "verdict", now: NOW, verdict: "ok" }, expect: { fetched: go("fetched", "commit") } },
   { name: "verdict refused", event: { type: "verdict", now: NOW, verdict: "refused" }, expect: { fetched: drop("refused", 5) } },
@@ -112,7 +112,7 @@ const ROWS: readonly Row[] = [
   },
   {
     name: "tick at the purge time", event: (state) => ({ type: "tick", now: purgeAt(state.entry!) }),
-    expect: { open: drop("lapsed", 3), discovered: drop("gone", 3), fetched: drop("gone", 3), committed: drop("completed", 0), acked: drop("completed", 0) },
+    expect: { open: drop("lapsed", 3), discovered: drop("gone", 3), fetched: drop("gone", 3), committed: drop("completed", 6), acked: drop("completed", 0) },
   },
 ];
 
@@ -716,7 +716,7 @@ describe("a reply that was already TERMINAL keeps its own outcome when it lands 
     readonly exit: number;
   }
   const TERMINALS: readonly Terminal[] = [
-    { name: "open + 410 denied", phase: "open", event: (now) => replyEvent(err("discover", "request_denied", 410), now), outcome: { kind: "denied" }, exit: 11 },
+    { name: "open + 410 denied", phase: "open", event: (now) => replyEvent(err("discover", "request_denied", 410), now), outcome: { kind: "denied" }, exit: 3 },
     {
       name: "open + 410 expired_result (the owner approved: the 'maybe granted' notice survives)", phase: "open",
       event: (now) => replyEvent(err("discover", "expired_result", 410), now), outcome: { kind: "gone", reason: "expired_result", grantMayBeLive: "yes" }, exit: 3,
