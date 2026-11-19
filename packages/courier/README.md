@@ -149,7 +149,8 @@ The export requires an already-paired handle and always emits a fresh delegation
 for that same Courier DID, space, mailbox and session scope; it does not read or
 renew the exporting side's inbound delegation. The receiver may install the C
 artifact for that exact existing peer only. The signed peer delegation remains
-limited to its existing mailbox scope and at most seven days.
+limited to its existing mailbox scope and to the peer's limit: 7 days for a
+Courier 0.5.x or unknown peer, up to 30 days otherwise.
 By default, exporting is rate-limited to one renewal per peer in 20 hours. Use
 `--force` only when the same peer needs an immediate additional artifact.
 
@@ -1029,7 +1030,7 @@ Courier accepts only an OpenKey grant whose signed authority exactly equals
 lifetime of at most 30 days. It accepts a peer delegation only when it is
 signed by the courier DID named in the pairing artifact, covers exactly
 `kv get/list` on that peer's mailbox plus the matching hooks subscription, and
-expires within 7 days. A 5-minute clock skew is allowed. Profiles holding a
+expires within 30 days (a Courier 0.5.x peer signs 7). A 5-minute clock skew is allowed. Profiles holding a
 broader or longer grant or delegation from an earlier build are rejected: run
 `init` again, or re-pair.
 
@@ -1086,6 +1087,6 @@ Details: TC-712
 
 ### Pairing access and renewal
 
-Each side of a pairing gives the other read access for up to 30 days at a time. While your own access to TinyCloud is live, Courier renews your side before it runs out. To stop sharing with a peer, revoke the pairing.
+Each side of a pairing gives the other read access for a limited time. A first-time manual pairing (`pair accept`) issues 7 days, so a Courier 0.5.x peer accepts it; renewals are signed for the peer's limit (7 days for a 0.5.x or unknown peer, up to 30 days otherwise); Courier accepts a peer delegation of up to 30 days. A manual pairing made by this version therefore keeps renewing at 7 days, and a side whose Courier is not running lapses 3.5 to 7 days after its last renewal. While your own access to TinyCloud is live, Courier renews your side before it runs out. To stop sharing with a peer, revoke the pairing.
 
 Courier requests owner approval ahead of the owner's grant ending; approve it in OpenKey, then run `courier init --wait`. After access expires, a new pairing is required. A watcher starting with expired owner access makes no network requests; use `courier init --request` for the normal owner approval flow.

@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
 import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
+import { pairAsUnpatched06 } from './support/pair-as-unpatched-06.mjs';
 
 import { peerKv, courierNode } from '../dist/node.js';
 import { loadProfile } from '../dist/profile.js';
@@ -163,10 +164,7 @@ async function runFail(home, args) {
 test('a 0.6 receiver refuses a shorter grant as stale, keeps its stored inbound and still reads on the longer one (TC-3159)', async () => {
   const issuer = await makeHome('issuer', 'issuer', owners.sam);
   const recipient = await makeHome('recipient', 'recipient', owners.mira);
-  const artA = await run(issuer.home, ['pair', 'start', 'to-recipient', '--call-me', 'to-issuer']);
-  const artB = await run(recipient.home, ['pair', 'accept', JSON.stringify(artA)]);
-  const artC = await run(issuer.home, ['pair', 'accept', JSON.stringify(artB)]);
-  await run(recipient.home, ['pair', 'accept', JSON.stringify(artC)]);
+  const { artC } = await pairAsUnpatched06(HOST, issuer, 'to-recipient', recipient, 'to-issuer');
   const shorter = JSON.parse(artC.delegation);
   await new Promise(resolve => setTimeout(resolve, 1100));
   await approveLater(issuer);

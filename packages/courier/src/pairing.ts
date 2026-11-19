@@ -36,7 +36,10 @@ export interface PairArtifact {
   issuedAt: string;
 }
 
+/** The longest peer delegation Courier accepts. What a first-time manual pairing signs is {@link PEER_DELEGATION_ISSUE}. */
 export const PEER_DELEGATION_EXPIRY = '30d';
+/** A Courier 0.5.x peer refuses a longer inbound delegation, so a first-time manual pairing signs this much. */
+export const PEER_DELEGATION_ISSUE = '7d';
 export function validateArtifactIdentity(art: PairArtifact): void {
   if (!/^did:pkh:eip155:\d+:0x[a-fA-F0-9]{40}$/.test(art.from.owner)) {
     throw new CourierError('bad-artifact', 'Artifact owner must be a did:pkh identity.');

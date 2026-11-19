@@ -18,6 +18,7 @@ import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
 import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
+import { pairAsUnpatched06 } from './support/pair-as-unpatched-06.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 const wasm = new NodeWasmBindings();
@@ -168,8 +169,8 @@ const pairAll = async (a, aPeerHandle, b, callMe) => {
 test('paired renewal exports a C artifact without reading stale inbound and installs it only for its original peer scope', async () => {
   const issuer = await makeHome('renew-issuer', 'renew-issuer', owners.sam);
   const recipient = await makeHome('renew-recipient', 'renew-recipient', owners.mira);
-  await pairAll(issuer, 'issuer-one', recipient, 'recipient-one');
-  await pairAll(issuer, 'issuer-two', recipient, 'recipient-two');
+  await pairAsUnpatched06(HOST, issuer, 'issuer-one', recipient, 'recipient-one');
+  await pairAsUnpatched06(HOST, issuer, 'issuer-two', recipient, 'recipient-two');
 
   const issuerProfile = profileAt(issuer.home);
   for (const handle of ['issuer-one', 'issuer-two']) {
