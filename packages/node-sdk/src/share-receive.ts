@@ -49,8 +49,8 @@ function active(envelope: ShareEnvelopeV3, now: number): void {
   if (Date.parse(envelope.expiry) <= now) throw new ShareReceiveError("expired", "share has expired");
 }
 
-/** Resolve the complete URL locally, then request the existing OpenCredentials email code. */
-export async function requestAgentShareEmailProof(link: string, options: AgentShareReceiveOptions): Promise<PendingAgentShareReceive> {
+/** Resolve the complete URL locally and check that its credential requirement is the exact-email one the envelope signs. */
+async function resolveAgentShare(link: string, options: AgentShareReceiveOptions): Promise<{ metadata: ShareMetadata; envelope: ShareEnvelopeV3; requirement: CredentialRequirement }> {
   let envelope: ShareEnvelopeV3 | undefined;
   const metadata = (await inspectShare(link, {
     ...options,
@@ -61,7 +61,32 @@ export async function requestAgentShareEmailProof(link: string, options: AgentSh
   if (await credentialRequirementDigest(requirement) !== (envelope.policy as unknown as UnifiedPolicyV2).credentialRequirement.requirementDigest) {
     throw new ShareReceiveError("envelope-invalid", "share credential requirement is invalid");
   }
+  return { metadata, envelope, requirement };
+}
+
+/** Resolve the complete URL locally, then request the existing OpenCredentials email code. */
+export async function requestAgentShareEmailProof(link: string, options: AgentShareReceiveOptions): Promise<PendingAgentShareReceive> {
+  const { metadata, envelope, requirement } = await resolveAgentShare(link, options);
   const proof = await requestEmailProofCode({ address: requirement.claims.email!, holder: options.holder, fetch: options.fetch, signal: options.signal });
+  return { metadata, envelope, proof };
+}
+
+/**
+ * Rebuild the continuation of {@link requestAgentShareEmailProof} in a later process. The link is resolved again to learn
+ * the one address it is bound to; `findPending` returns the proof the caller persisted for that address. A proof for
+ * another address or another holder key is refused.
+ */
+export async function resumeAgentShareReceive(
+  link: string,
+  findPending: (address: string) => Promise<EmailProofPending | undefined>,
+  options: AgentShareReceiveOptions,
+): Promise<PendingAgentShareReceive> {
+  const { metadata, envelope, requirement } = await resolveAgentShare(link, options);
+  const proof = await findPending(requirement.claims.email!);
+  if (proof === undefined) throw new ShareReceiveError("authorization-denied", "no pending email proof for this share");
+  if (proof.address !== requirement.claims.email || proof.holderDid !== options.holder.did) {
+    throw new ShareReceiveError("authorization-denied", "email proof does not belong to this recipient session");
+  }
   return { metadata, envelope, proof };
 }
 

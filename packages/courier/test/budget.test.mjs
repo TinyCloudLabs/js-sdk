@@ -9,7 +9,7 @@ import { Watcher } from '../dist/watch.js';
 import { buildMessage } from '../dist/a2a.js';
 import { cmdPause, cmdResume, nextNoticeId, postPausedInform, writePauseMarker } from '../dist/pause.js';
 import { createNotifier, noticeText, appendNotice, MAX_NOTICE_LOG_BYTES } from '../dist/notify.js';
-import { k, PREFIX } from '../dist/keys.js';
+import { k, PREFIX, stateKeys } from '../dist/keys.js';
 import { notifyConfig } from '../dist/watch-cmd.js';
 import { parseArgs } from '../dist/args.js';
 import { getJson, putCreate, putMatch } from '../dist/store.js';
@@ -360,11 +360,11 @@ test('pruning drops stale budget and notification state', async () => {
 
 test('human pause checks thread existence; failed inform retries idempotently without another marker', async () => {
   const kv = memoryKv();
-  const profile = { peers: { bob: { handle: 'bob', status: 'paired' } }, ownerDid: 'did:pkh:dummy', courierDid: 'did:key:dummy', label: 'Disposable' };
+  const profile = { peers: { bob: { handle: 'bob', status: 'paired' } }, ownerDid: 'did:pkh:dummy', courierDid: 'did:key:z6MkDisposab1e', label: 'Disposable' };
   const deps = { profile: () => profile, node: async () => ({ kv }) };
   const thread = ulid(); const args = parseArgs(['bob', thread]);
   await assert.rejects(cmdPause(args, deps), { code: 'not-found' });
-  assert.equal(kv.rows.has(k.paused('bob', thread)), false);
+  assert.equal(kv.rows.has(stateKeys(profile.courierDid).paused('bob', thread)), false);
   kv.rows.set(k.threadMeta('bob', thread), { value: { subject: 'test' }, etag: 'meta' });
   const put = kv.put.bind(kv); let fail = true;
   kv.put = async (key, value, options) => {
@@ -372,16 +372,16 @@ test('human pause checks thread existence; failed inform retries idempotently wi
     return put(key, value, options);
   };
   await assert.rejects(cmdPause(args, deps));
-  const id = kv.rows.get(k.paused('bob', thread)).value.informId;
+  const id = kv.rows.get(stateKeys(profile.courierDid).paused('bob', thread)).value.informId;
   await cmdPause(args, deps); await cmdPause(args, deps);
-  assert.equal(kv.rows.get(k.paused('bob', thread)).value.informId, id);
-  assert.equal(kv.rows.get(k.paused('bob', thread)).value.informSent, true);
+  assert.equal(kv.rows.get(stateKeys(profile.courierDid).paused('bob', thread)).value.informId, id);
+  assert.equal(kv.rows.get(stateKeys(profile.courierDid).paused('bob', thread)).value.informSent, true);
   assert.equal([...kv.rows.keys()].filter(key => key.includes('/msg/')).length, 1);
 });
 
 test('a non-412 write failure is not classified as conflict when the key contains "412"', async () => {
   const kv = memoryKv();
-  const profile = { peers: { bob: { handle: 'bob', status: 'paired' } }, ownerDid: 'did:pkh:dummy', courierDid: 'did:key:dummy', label: 'Disposable' };
+  const profile = { peers: { bob: { handle: 'bob', status: 'paired' } }, ownerDid: 'did:pkh:dummy', courierDid: 'did:key:z6MkDisposab1e', label: 'Disposable' };
   const deps = { profile: () => profile, node: async () => ({ kv }) };
   const thread = '01M5DZW1ED8Q95XH7DJ39YG412'; const args = parseArgs(['bob', thread]);
   kv.rows.set(k.threadMeta('bob', thread), { value: { subject: 'test' }, etag: 'meta' });
@@ -391,7 +391,7 @@ test('a non-412 write failure is not classified as conflict when the key contain
     return put(key, value, options);
   };
   await assert.rejects(cmdPause(args, deps), { code: 'KV_WRITE_FAILED' });
-  assert.equal(kv.rows.get(k.paused('bob', thread)).value.informSent, false);
+  assert.equal(kv.rows.get(stateKeys(profile.courierDid).paused('bob', thread)).value.informSent, false);
 });
 
 test('putCreate and putMatch classify conflict from structured fields only', async () => {
@@ -602,10 +602,10 @@ test('owner approval wakes immediately after failed message, pause and restart w
 
 test('human resume posts one idempotent resumed inform before removing the pause marker',async()=>{
   const kv=memoryKv(),thread=ulid();know(kv,'bob',thread);
-  const profile={peers:{bob:{handle:'bob',status:'paired'}},ownerDid:'dummy',courierDid:'dummy',label:'Disposable'};
+  const profile={peers:{bob:{handle:'bob',status:'paired'}},ownerDid:'dummy',courierDid:'did:key:z6MkDisposab1e',label:'Disposable'};
   const deps={profile:()=>profile,node:async()=>({kv})},args=parseArgs(['bob',thread]);
   await cmdPause(args,deps);await cmdResume(args,deps);await cmdResume(args,deps);
-  assert.equal(kv.rows.has(k.paused('bob',thread)),false);
+  assert.equal(kv.rows.has(stateKeys(profile.courierDid).paused('bob',thread)),false);
   const notices=[...kv.rows.entries()].filter(([key])=>key.includes('/msg/')).map(([,row])=>row.value.metadata['https://tinycloud.xyz/ext/courier/v0'].notice);
   assert.deepEqual(notices.sort(),['thread-paused','thread-resumed']);
 });

@@ -1,3 +1,8 @@
+import { approvedTc2931Optional, tc2931OptionalAllowance, validateTc2931OptionalTransition } from "./replica-optional-size-policy";
+import { validateTc2931BootstrapScopeTransition } from "./replica-size-policy";
+import { validateTc2923EncryptionTeeOriginRootTransition } from "./replica-size-policy";
+import { validateTc2934RequestedAccountRootTransition } from "./replica-size-policy";
+import { validateTc2936RestoreCommitRootTransition } from "./replica-size-policy";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdtemp, open, readFile, rm } from "node:fs/promises";
@@ -45,6 +50,15 @@ import { validateTc2594ResourceTransportTransition } from "./replica-size-policy
 import { validateTc2657RegistryPublicationTransition } from "./replica-size-policy";
 import { validateTc2518KeyWrapTransition } from "./replica-size-policy";
 import { validateTc2687PublishedSignInTransition } from "./replica-size-policy";
+import { validateTc2234InvitationPolicyRootTransition, validateTc2773LazyRestoreRootTransition } from "./replica-size-policy";
+import {
+  validateTc2872RenewalKvWorkerTransition,
+  validateTc2872RenewalReplicaWorkerTransition,
+  validateTc2872RenewalRootTransition,
+} from "./replica-size-policy";
+import { validateTc2924NodeAliasesRootTransition } from "./replica-size-policy";
+import { validateTc2904OwnerDirectProofRootTransition } from "./replica-size-policy";
+import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
@@ -125,7 +139,7 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined, ledger.tc2096LazyContentRatchet !== undefined, ledger.tc2481WebRouting !== undefined, ledger.tc2481OfflineReplicaTransport, ledger.tc2931BootstrapScope);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const reading of evaluateOptionalBudget(optionalLedger, ledger, optionalCurrent)) {
   const { format, raw, effective, direct, ceiling } = reading;
@@ -209,6 +223,20 @@ if (prBaseSha) {
     throw new Error(`Unable to read base ${baseLedgerPath}: ${baseLedgerResult.stderr.trim()}`);
   }
   validateLedger(baseLedger, true);
+  validateTc2934RequestedAccountRootTransition(baseLedger.tc2934RequestedAccountRoot, ledger.tc2934RequestedAccountRoot);
+  validateTc2936RestoreCommitRootTransition(baseLedger.tc2936RestoreCommitRoot, ledger.tc2936RestoreCommitRoot);
+  validateTc2931BootstrapScopeTransition(baseLedger.tc2931BootstrapScope, ledger.tc2931BootstrapScope);
+  if (ledger.tc2931BootstrapScope !== undefined && baseLedger.tc2931BootstrapScope === undefined &&
+      (baseLedger.tc2936RestoreCommitRoot === undefined || !hasAncestor(repoRoot, ledger.tc2931BootstrapScope.sourceCommits.at(-1)!))) {
+    console.error("The TC-2931 admission requires the merged TC-2936 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2923EncryptionTeeOriginRootTransition(baseLedger.tc2923EncryptionTeeOriginRoot, ledger.tc2923EncryptionTeeOriginRoot);
+  if (ledger.tc2923EncryptionTeeOriginRoot !== undefined && baseLedger.tc2923EncryptionTeeOriginRoot === undefined &&
+      (baseLedger.tc2931BootstrapScope === undefined || !hasAncestor(repoRoot, ledger.tc2923EncryptionTeeOriginRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2923 admission requires the merged TC-2931 row and its measured source ancestor.");
+    failed = true;
+  }
   validateCiToolchainTransition(baseLedger.canonicalToolchainCorrection, ciCorrection);
   validateMasterMergeResolutionTransition(baseLedger.masterMergeResolution, ledger.masterMergeResolution);
   validateHardeningRatchetTransition(baseLedger.hardeningRatchet, ledger.hardeningRatchet);
@@ -584,7 +612,7 @@ if (prBaseSha) {
     console.error("The TC-2481 cold-device root-only ratchet requires the merged Web routing row and its measured source ancestor.");
     failed = true;
   }
-  validateTc2481OfflineReplicaTransportTransition(baseLedger.tc2481OfflineReplicaTransport, ledger.tc2481OfflineReplicaTransport);
+  validateTc2481OfflineReplicaTransportTransition(baseLedger.tc2481OfflineReplicaTransport, ledger.tc2481OfflineReplicaTransport, ledger.tc2931BootstrapScope);
   const offlineReplicaTransport = ledger.tc2481OfflineReplicaTransport;
   // Both admissions are introduced by this PR; the current cold-root row is
   // already strictly validated, while the measured final source must exist.
@@ -644,6 +672,55 @@ if (prBaseSha) {
       failed = true;
     }
   }
+  validateTc2773LazyRestoreReplicaWorkerTransition(baseLedger.tc2773LazyRestoreReplicaWorker, ledger.tc2773LazyRestoreReplicaWorker);
+  const lazyRestore = ledger.tc2773LazyRestoreReplicaWorker;
+  if (lazyRestore !== undefined && baseLedger.tc2773LazyRestoreReplicaWorker === undefined &&
+      (baseLedger.tc2691HostExpiryReplicaWorker === undefined || !hasAncestor(repoRoot, lazyRestore.sourceCommits.at(-1)!))) {
+    console.error("The TC-2773 replica worker admission requires the merged TC-2691 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2773LazyRestoreRootTransition(baseLedger.tc2773LazyRestoreRoot, ledger.tc2773LazyRestoreRoot);
+  const lazyRestoreRoot = ledger.tc2773LazyRestoreRoot;
+  if (lazyRestoreRoot !== undefined && baseLedger.tc2773LazyRestoreRoot === undefined &&
+      (baseLedger.tc2691HostExpiry === undefined || !hasAncestor(repoRoot, lazyRestoreRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2773 root admission requires the merged TC-2691 row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2234InvitationPolicyRootTransition(baseLedger.tc2234InvitationPolicyRoot, ledger.tc2234InvitationPolicyRoot);
+  const invitationPolicyRoot = ledger.tc2234InvitationPolicyRoot;
+  if (invitationPolicyRoot !== undefined && baseLedger.tc2234InvitationPolicyRoot === undefined &&
+      (baseLedger.tc2773LazyRestoreRoot === undefined || !hasAncestor(repoRoot, invitationPolicyRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2234 root admission requires the merged TC-2773 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2872RenewalRootTransition(baseLedger.tc2872RenewalRoot, ledger.tc2872RenewalRoot);
+  const renewalRoot = ledger.tc2872RenewalRoot;
+  if (renewalRoot !== undefined && baseLedger.tc2872RenewalRoot === undefined &&
+      (baseLedger.tc2234InvitationPolicyRoot === undefined || !hasAncestor(repoRoot, renewalRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 root budget requires the merged TC-2234 root row and its measured source ancestor.");
+    failed = true;
+  }
+  validateTc2872RenewalKvWorkerTransition(baseLedger.tc2872RenewalKvWorker, ledger.tc2872RenewalKvWorker);
+  const renewalKvWorker = ledger.tc2872RenewalKvWorker;
+  if (renewalKvWorker !== undefined && baseLedger.tc2872RenewalKvWorker === undefined &&
+      (ledger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, renewalKvWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 kv-storage worker budget requires the renewal root row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2872RenewalReplicaWorkerTransition(baseLedger.tc2872RenewalReplicaWorker, ledger.tc2872RenewalReplicaWorker);
+  const renewalReplicaWorker = ledger.tc2872RenewalReplicaWorker;
+  if (renewalReplicaWorker !== undefined && baseLedger.tc2872RenewalReplicaWorker === undefined &&
+      (renewalKvWorker === undefined || !hasAncestor(repoRoot, renewalReplicaWorker.sourceCommits.at(-1)!))) {
+    console.error("The TC-2872 replica worker budget requires the kv-storage worker row and its measured source commit.");
+    failed = true;
+  }
+  validateTc2904OwnerDirectProofRootTransition(baseLedger.tc2904OwnerDirectProofRoot, ledger.tc2904OwnerDirectProofRoot);
+  validateTc2924NodeAliasesRootTransition(baseLedger.tc2924NodeAliasesRoot, ledger.tc2924NodeAliasesRoot);
+  if (ledger.tc2904OwnerDirectProofRoot !== undefined && baseLedger.tc2904OwnerDirectProofRoot === undefined &&
+      (baseLedger.tc2872RenewalRoot === undefined || !hasAncestor(repoRoot, ledger.tc2904OwnerDirectProofRoot.sourceCommits.at(-1)!))) {
+    console.error("The TC-2904 root budget requires the TC-2872 root row and its measured source ancestor.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -659,8 +736,9 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined, baseLedger.tc2481WebRouting !== undefined, baseLedger.tc2481OfflineReplicaTransport, baseLedger.tc2931BootstrapScope);
   validateTc2481WebOptionalTransition(baseOptional.tc2481WebRouting, optionalLedger.tc2481WebRouting);
+  validateTc2931OptionalTransition(baseOptional.tc2931, optionalLedger.tc2931);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
@@ -783,8 +861,13 @@ if (prBaseSha) {
           (format === "replica.mjs" || format === "replica.cjs"
             ? offlineReplicaTransport.firstImport.ceiling[format]
             : offlineReplicaTransport.activation.ceiling[format]));
+    const tc2931Transition = baseLedger.tc2936RestoreCommitRoot !== undefined &&
+      baseOptional.tc2931 === undefined && optionalLedger.tc2931 !== undefined &&
+      JSON.stringify(optionalLedger.tc2931) === JSON.stringify(approvedTc2931Optional) &&
+      ledger.tc2931BootstrapScope !== undefined &&
+      optionalFormats.every((format) => optionalLedger.allowance[format] === tc2931OptionalAllowance[format]);
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition) {
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition && !tc2096LazyTransition && !tc2481WebTransition && !tc2481OfflineTransition && !tc2931Transition) {
       console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet, TC-2096 repair-backoff ratchet, TC-2096 lazy content fetch ratchet, TC-2481 Web routing ratchet or final TC-2481 cold-routing and replica admission.`);
       failed = true;
     }
@@ -874,7 +957,10 @@ if (prBaseSha) {
         current["index.mjs"] === entry["index.mjs"] && current["index.cjs"] === entry["index.cjs"] &&
         current.note === entry.note;
     });
-  if (replicaPaths.length === 0) {
+  const tc2931OptionalOnly = replicaPaths.length === 0 && baseOptional.tc2931 === undefined &&
+    JSON.stringify(optionalLedger.tc2931) === JSON.stringify(approvedTc2931Optional) &&
+    ledger.tc2931BootstrapScope !== undefined;
+  if (replicaPaths.length === 0 && !tc2931OptionalOnly) {
     if (!baseEntriesUnchanged) {
       console.error("Non-replica PRs must not append to packages/web-sdk/scripts/replica-size-ledger.json entries[].");
       failed = true;
@@ -962,7 +1048,12 @@ if (prBaseSha) {
         failed = true;
       }
       const appended = ledger.entries.slice(baseLedger.entries.length);
-      if (phase2Introduced) {
+      if (tc2931OptionalOnly) {
+        if (!baseEntriesUnchanged || formats.some((format) => deltas[format] > ledger.tc2931BootstrapScope!.root.delta[format])) {
+          console.error("The exact TC-2931 optional-only admission must keep cumulative root accounting unchanged and fit its named root delta.");
+          failed = true;
+        }
+      } else if (phase2Introduced) {
         // The separately approved row replaces a cumulative #548 entry; #553
         // remains its own unchanged upstream ledger entry.
         if (!prefixMatches) failed = true;
@@ -1081,7 +1172,7 @@ if (prBaseSha) {
           }
         }
       }
-      if (!phase2Introduced && prefixMatches && appended.length !== 1) failed = true;
+      if (!phase2Introduced && !tc2931OptionalOnly && prefixMatches && appended.length !== 1) failed = true;
       console.log(`Replica-owned changes: ${replicaPaths.join(", ")}`);
     } finally {
       try {

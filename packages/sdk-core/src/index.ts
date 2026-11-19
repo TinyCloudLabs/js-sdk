@@ -213,6 +213,8 @@ export {
   MemorySenderShareRecordStorage,
   MemorySenderShareKeyStorage,
   SenderShareStore,
+  assertRenewalNodeIdentity,
+  verifyRenewalHistory,
 } from "./delegations";
 export {
   delegatePortablePolicySession,
@@ -390,6 +392,10 @@ export type {
   SenderShareRecordStorage,
   SenderShareKeyStorage,
   SenderShareRevocationScope,
+  RenewalNodeIdentity,
+  RenewalStampHistoryEntry,
+  VerifyRenewalHistoryInput,
+  VerifiedRenewalHistory,
 } from "./delegations";
 
 // Encryption network identity helpers
@@ -598,6 +604,10 @@ export {
   type VaultError,
   // Secrets Service
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -609,7 +619,9 @@ export {
   resolveSecretPath,
   type ISecretsService,
   type SecretCatalogEntry,
+  type SecretEntry,
   type SecretPayload,
+  type SecretType,
   type SecretsError,
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,
@@ -754,6 +766,7 @@ export {
   DelegationErrorCode,
   // Delegation types
   Delegation,
+  RenewalStampHistory,
   DelegationStatus,
   DelegationRevocationReceipt,
   AccountDelegationResource,
@@ -775,6 +788,8 @@ export {
   // v2 SharingService
   SharingService,
   createSharingService,
+  inspectShareToken,
+  InspectedShareToken,
   ISharingService,
   ShareDelegationPreflight,
   SharingServiceConfig,
@@ -1115,7 +1130,7 @@ export {
   verifyLocationRecordV2,
 } from "./location";
 export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
-export { resolveRegistryResource } from "./registry-policy";
+export { resolveRegistryResource, type RegistryVerdictCache, type RegistryVerdictScope } from "./registry-policy";
 
 export {
   createInMemoryRegistryCacheStore,
@@ -1219,3 +1234,8 @@ export {
   type UnsignedPolicyObject,
   type UnsignedPolicyStatus,
 } from "./policy";
+
+export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
+export { AccountSetupRequiredError } from "./account-setup";
+export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
+export { verifiedDelegationRouting, spaceIdsEqual } from "./delegations/portable";
