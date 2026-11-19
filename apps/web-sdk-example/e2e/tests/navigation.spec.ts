@@ -33,15 +33,6 @@ test.describe('Navigation', () => {
     await expect(instructions).toBeVisible();
   });
 
-  test('should have Advanced Options accordion', async ({ mockWalletPage: page }) => {
-    await page.goto('/');
-    await waitForAppReady(page);
-
-    // Find Advanced Options accordion trigger
-    const advancedOptions = page.getByText('Advanced Options');
-    await expect(advancedOptions).toBeVisible();
-  });
-
   test('should open Advanced Options and show TinyCloud Host input', async ({ mockWalletPage: page }) => {
     await page.goto('/');
     await waitForAppReady(page);
