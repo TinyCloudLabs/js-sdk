@@ -43,7 +43,7 @@ import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
 import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
-import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
+import { MAX_ADDRESSED_SHARE_BYTES, MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
 import { ProfileManager } from "../config/profiles.js";
 import { FOLDER_NOT_AVAILABLE, bundleHtmlFolder, htmlFolderNotice, isDirectoryInput } from "../share/html-folder.js";
@@ -54,6 +54,8 @@ const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 const INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 const NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
+const SHARE_TOO_LARGE_MESSAGE = "Shared files can be up to 95 MiB. Use a smaller file or split it.";
+const ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it.";
 
 export interface ShareCommandServices {
   readonly targetAdapter?: TargetPublishAdapter;
@@ -403,8 +405,27 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
 function byteLimit(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "--max-bytes must be between 1 byte and 95 MiB.", 7);
   return parsed;
+}
+
+/** The most one upload carries for this target: 95 MiB in the clear for a public link, 71 MiB for an addressed share, which is encrypted and so grows. */
+function shareCeiling(target: ShareTarget): number {
+  return target.kind === "bearer" ? MAX_SHARE_STDIN_BYTES : MAX_ADDRESSED_SHARE_BYTES;
+}
+
+/** The refusal for a share over the limit: the ceiling for its target, or the smaller `--max-bytes` the user set. `together` is true when several inputs add up to more than the limit. */
+function shareTooLarge(maxBytes: number | undefined, ceiling: number, together = false): CLIError {
+  const defaultLimit = maxBytes === undefined || maxBytes >= ceiling;
+  const largest = ceiling === MAX_SHARE_STDIN_BYTES ? "95" : "71";
+  const message = together
+    ? defaultLimit
+      ? `These files add up to more than ${largest} MiB. Share fewer at once or use smaller files.`
+      : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to ${largest} MiB.`
+    : defaultLimit
+      ? ceiling === MAX_SHARE_STDIN_BYTES ? SHARE_TOO_LARGE_MESSAGE : ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE
+      : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to ${largest} MiB.`;
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 
 function mediaTypeFor(filename: string): string {
@@ -426,12 +447,12 @@ function requestedActions(values: readonly string[] | undefined): readonly ("rea
   return [...new Set(actions)] as ("read" | "list" | "edit")[];
 }
 
-function assertAggregateInputLimit(inputs: readonly { readonly bytes: Uint8Array }[], maxBytes: number | undefined): void {
-  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+function assertAggregateInputLimit(inputs: readonly { readonly bytes: Uint8Array }[], maxBytes: number | undefined, ceiling: number): void {
+  const limit = Math.min(maxBytes ?? ceiling, ceiling);
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes, ceiling, inputs.length > 1);
   }
 }
 
@@ -471,6 +492,7 @@ export function registerShareCommand(program: Command): void {
         const target = parseShareTarget(options.to);
         if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
         const maxBytes = byteLimit(options.maxBytes);
+        const ceiling = shareCeiling(target);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
         const actions = requestedActions(options.action);
@@ -495,9 +517,11 @@ export function registerShareCommand(program: Command): void {
           for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
           // Refuse unsafe names before touching any source, so stdin is never awaited for one.
           for (const file of files) shareInputFilename(file, name);
-          inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+          inputs = await Promise.all(files.map((file) => readShareInput(file, name, Math.min(maxBytes ?? ceiling, ceiling)).catch((error: unknown) => {
+            throw error instanceof Error && error.message === "MAX_BYTES_EXCEEDED" ? shareTooLarge(maxBytes, ceiling) : error;
+          })));
         }
-        assertAggregateInputLimit(inputs, maxBytes);
+        assertAggregateInputLimit(inputs, maxBytes, ceiling);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
         // A link is read-only: the bearer delegation never carries put, so an edit request would be dropped silently.
         if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
