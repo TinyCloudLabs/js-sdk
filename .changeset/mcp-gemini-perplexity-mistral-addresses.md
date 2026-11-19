@@ -14,3 +14,5 @@ The hosted server serves four more restricted personal-record addresses, one eac
 `/mcp`, `/chatgpt/mcp`, `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are unchanged: their tool lists, schemas, descriptions, annotations, instructions and discovery documents are byte-identical to the previous commit.
 
 A new address serves requests only after the matching OpenKey release issues tokens for its audience and accepts its approval callback, and the server's token-status client is registered for the new resources. This changeset performs no deployment.
+
+Details: TC-2416
