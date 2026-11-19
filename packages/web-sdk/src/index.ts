@@ -254,6 +254,8 @@ export {
   // SharingService
   SharingService,
   createSharingService,
+  inspectShareToken,
+  type InspectedShareToken,
   type ISharingService,
   type SharingServiceConfig,
   type EncodedShareData,
@@ -351,7 +353,9 @@ export {
   type VaultError,
   type ISecretsService,
   type SecretCatalogEntry,
+  type SecretEntry,
   type SecretPayload,
+  type SecretType,
   type SecretsError,
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,

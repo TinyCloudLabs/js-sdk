@@ -1,5 +1,5 @@
 import { appRoot, newApp, parseKey, TC_APPS_DISCOVERY_ROOT, TC_APPS_ID_PREFIX, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT } from "./tc-apps/layout.js";
-import { HEALTHLOG_DATABASE } from "./tc-apps/preamble.js";
+import { HEALTHLOG_DATABASE, HEALTHLOG_LINK, RECIPES_LINK } from "./tc-apps/preamble.js";
 
 export { TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_DATABASE, TC_APPS_LEGACY_ROOT, type Layout } from "./tc-apps/layout.js";
 export const TC_APPS_RECORDS_ACTIONS = ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"] as const;
@@ -11,6 +11,12 @@ export const TC_APPS_COPY_ACTIONS = ["tinycloud.sql/read", "tinycloud.sql/write"
 export const TC_APPS_CATALOG_PERMISSIONS: Readonly<Record<string, { service: string; path: string; actions: readonly string[] }>> = {
   healthlog: { service: "tinycloud.sql", path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
   recipes: { service: "tinycloud.kv", path: "xyz.tinycloud.sample.recipes/knowledge/", actions: TC_APPS_CATALOG_READ_ACTIONS },
+};
+
+/** The same catalog apps by the slug `tinycloud_apps_context` takes as `app`: the name an owner knows each by, and its tiny-app page. */
+export const TC_APPS_CATALOG_APPS: Readonly<Record<string, { title: string; link: string }>> = {
+  healthlog: { title: "Health Log", link: HEALTHLOG_LINK },
+  recipes: { title: "Recipes", link: RECIPES_LINK },
 };
 
 /** What one stored or requested permission entry is, when it is one of the connector's own. */

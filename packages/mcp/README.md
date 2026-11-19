@@ -45,7 +45,7 @@ confirmation flow. Ask for an IANA timezone, not a city or precise location.
 ## Reusable read consent and complete delivery
 
 The private hosted and local surfaces expose `tinycloud_auth_read_scope` and
-`tinycloud_read`. The restricted public ChatGPT surface is unchanged. Native
+`tinycloud_read`. The restricted public surface is unchanged. Native
 connector grants also expose `tinycloud_read`, within their existing read-only
 capability ceiling; they cannot use it to approve broader access.
 
@@ -134,6 +134,17 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
+The hosted server also serves a restricted surface with only `tinycloud_connect`
+and the four personal-record tools, for assistant directories: `/chatgpt/mcp`,
+`/claude/mcp`, `/grok/mcp` and `/muse/mcp` beside `/mcp`. Every address is its
+own OAuth resource with its own protected-resource metadata, approval route
+(`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
+other. An address works only once OpenKey issues tokens for its audience and
+accepts its approval callback, and the server's token-status client is
+registered for it. The addresses list the same five tools. `/claude/mcp` also
+repeats each tool's `title` as `annotations.title`, where Claude's directory
+reads the listing name; the other addresses do not.
+
 For personal records, ask naturally: “Add renew passport to my todos.”
 `tinycloud_apps_context` supplies the rules and the app list, `tinycloud_apps_read`
 reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
@@ -165,8 +176,13 @@ and Health Log database read/write into one task approval; `access: "read"`
 requests read only. A first meal without `app` retains three task approvals.
 `app: "recipes"` bundles app-list and Recipes-notes reads; its database is
 learned from those notes and SQL read access is requested separately.
-Recipes writes remain unsupported. The public ChatGPT surface has no generic
-SQL tools; the catalog rules direct it to the app link when those tools are absent.
+Recipes writes remain unsupported. The restricted public surface has no generic
+SQL or knowledge tools, so it cannot work with either app: there `app`'s
+description names no catalog slug, and `app: "healthlog"` or `app: "recipes"`
+returns `INPUT_INVALID` with `details.reason: "catalog_app_unavailable"` and the
+app's tiny-app link, without requesting any approval. The catalog rules still
+route meals, body weight and recipes to those apps, so the assistant gives the
+link rather than saving that data as generic records.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to

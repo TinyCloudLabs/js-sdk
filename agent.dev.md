@@ -180,6 +180,15 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   canonical write outcomes must not be truncated. Package/review state lives
   under `packages/mcp/plugin`. Default-branch merges and deployment require
   explicit owner approval; never enable auto-merge or bypass that gate.
+- `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are the same restricted surface as
+  `/chatgpt/mcp`, one address per assistant directory (`RESTRICTED_ADDRESS_PREFIXES`
+  in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
+  approval route and tenant state. A new prefix needs the matching OpenKey
+  audience and exact callback, and the connector's token-status client
+  registered for the new resource, before it can serve a request. A change one
+  directory's review asks for goes on that address only: `/claude/mcp` repeats
+  each tool's title as `annotations.title` (`ANNOTATION_TITLE_PREFIXES`), and
+  the other addresses' `tools/list` must stay byte-identical.
 - TC-2393's hosted-client requirements and source/live evidence are in
   `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
   separate from official-directory acceptance; metadata is not authenticated QA.
@@ -245,3 +254,12 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
   (operations/src/operations/sql.ts). Drop that step when onboarding grants
   the schema for catalog apps (TC-2430).
+- A surface that does not register the catalog apps' tools (`CATALOG_APP_TOOLS`
+  in `packages/mcp/src/tools.ts`; today the restricted addresses) neither offers
+  nor accepts a catalog slug: `tinycloud_apps_context`'s `app` description omits
+  them, and `app: "healthlog"` or `"recipes"` is answered before the kernel with
+  `INPUT_INVALID`, `details.reason: "catalog_app_unavailable"` and the tiny-app
+  link, so no approval is planned. `/mcp` and `operations.json` are unaffected.
+  Keep the catalog section in the rules those addresses return: it is what makes
+  an assistant give the app link for a new meal or body-weight request instead
+  of creating a generic app for it.
