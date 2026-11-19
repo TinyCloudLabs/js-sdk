@@ -11,6 +11,8 @@ The same `MissingSpacesError` (every requested space listed, `delegations` empty
 
 A request naming a space this account does not own now throws before any signature is asked for (`code: "SPACE_NOT_OWNED"`, `spaceIds`).
 
+The per-space delegations of one request share one signed SIWE (one cid; its ReCap names every requested space, missing ones included): do not persist or replay them, and revoking one revokes all of them.
+
 `MissingSpacesError` is exported from `@tinycloud/node-sdk`, `@tinycloud/node-sdk/core` and `@tinycloud/web-sdk`.
 
 Details: TC-3338

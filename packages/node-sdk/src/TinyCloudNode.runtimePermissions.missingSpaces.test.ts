@@ -22,9 +22,17 @@ const otherUnlistedSpace = routedSpace.replace(/:[^:]+$/, ":agents");
 const kv = (space: string): PermissionEntry => ({
   service: "tinycloud.kv", space, path: "missing-spaces/", actions: ["tinycloud.kv/get"],
 });
+const network = `urn:tinycloud:encryption:${record.subject}:default`;
+const decrypt: PermissionEntry = {
+  service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"], skipPrefix: true,
+};
 
-/** A signed-in client whose node activates the routed space unless `skipRouted`, and always skips the unlisted one. */
-async function withClient(skipRouted: boolean, run: (node: TinyCloudNode) => Promise<void>) {
+/**
+ * A signed-in client whose nodes always skip the unlisted space; the data node
+ * activates the routed space, skips it (`true`) or answers 404 (`"404-routed"`).
+ */
+async function withClient(mode: boolean | "404-routed", run: (node: TinyCloudNode) => Promise<void>) {
+  const skipRouted = mode === true;
   const original = globalThis.fetch;
   const bindings = new NodeWasmBindings();
   const signer = new PrivateKeySigner(ownerKey);
@@ -41,6 +49,7 @@ async function withClient(skipRouted: boolean, run: (node: TinyCloudNode) => Pro
     if (method === "POST" && url.pathname === "/delegate") {
       const cid = node.computeDelegationCid(new Headers(init?.headers).get("authorization")!);
       if (!signedIn) return Response.json({ cid, activated: [], skipped: [] });
+      if (mode === "404-routed" && target.did === box.did) return new Response("Space not found", { status: 404 });
       const skipped = [unlistedSpace, ...(skipRouted ? [routedSpace] : [])];
       return Response.json({ cid, activated: skipRouted ? [] : [routedSpace], skipped });
     }
@@ -118,5 +127,39 @@ test("a registered owner whose record lists none of the requested spaces gets Mi
       expect((error as MissingSpacesError).delegations).toEqual([]);
       for (const space of requested) expect(node.hasRuntimePermissions([kv(space)])).toBe(false);
     }
+  });
+});
+
+test("a registry-routed node answering 404 is RESOURCE_NOT_ROUTED, not a missing space", async () => {
+  await withClient("404-routed", async (node) => {
+    const signMessage = signMessageCounter(new PrivateKeySigner(ownerKey), () => {});
+    await expect(node.grantRuntimePermissions([kv(routedSpace)], { signMessage }))
+      .rejects.toMatchObject({ code: "RESOURCE_NOT_ROUTED" });
+    expect(node.hasRuntimePermissions([kv(routedSpace)])).toBe(false);
+  });
+});
+
+test("a decrypt grant still installs when the first requested space is missing", async () => {
+  await withClient(false, async (node) => {
+    const signMessage = signMessageCounter(new PrivateKeySigner(ownerKey), () => {});
+    const error = await node.grantRuntimePermissions([kv(unlistedSpace), kv(routedSpace), decrypt], { signMessage })
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(MissingSpacesError);
+    const missing = error as MissingSpacesError;
+    expect(missing.missingSpaceIds).toEqual([unlistedSpace]);
+    expect(missing.delegations.map(({ spaceId }) => spaceId)).toEqual([routedSpace]);
+    expect(missing.delegations[0]!.resources?.some(({ path }) => path === network)).toBe(true);
+    expect(node.hasRuntimePermissions([decrypt])).toBe(true);
+    expect(node.hasRuntimePermissions([kv(routedSpace)])).toBe(true);
+  });
+});
+
+test("a routed skip across the data and encryption nodes stays RESOURCE_NOT_ROUTED", async () => {
+  await withClient(true, async (node) => {
+    const signMessage = signMessageCounter(new PrivateKeySigner(ownerKey), () => {});
+    await expect(node.grantRuntimePermissions([kv(routedSpace), decrypt], { signMessage }))
+      .rejects.toMatchObject({ code: "RESOURCE_NOT_ROUTED" });
+    expect(node.hasRuntimePermissions([kv(routedSpace)])).toBe(false);
+    expect(node.hasRuntimePermissions([decrypt])).toBe(false);
   });
 });

@@ -224,7 +224,9 @@ export class RuntimeDelegationRejectedError extends Error {
  * signed once for every requested space, but the node attaches a delegation
  * only to spaces it hosts and never creates one, so the missing spaces got
  * nothing. `delegations` holds the grants that did activate (for the spaces
- * that exist); they are installed and usable.
+ * that exist); they are installed and usable. They all share one signed SIWE
+ * whose ReCap also names the missing spaces: do not persist or replay them,
+ * and revoking one revokes all of them.
  */
 export class MissingSpacesError extends Error {
   readonly code = "SPACE_NOT_FOUND";

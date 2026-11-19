@@ -178,6 +178,25 @@ describe.skipIf(!nodeBinary)(
     // read; the record's KV grant (above) is what scopes a delegation to one secret.
     test.todo("a named-key grant for secret A decrypts A and is refused on B (needs #1050)");
 
+    test("each access decrypts only with its own delegation", async () => {
+      const recipient = sessionOnlyChild();
+      // X carries decrypt; Y reads the record but has no decrypt of its own.
+      await grant(recipient, secretsEntries("vault/secrets/API_KEY"));
+      const { access: accessY } = await grant(recipient, [secretsEntries("vault/secrets/OTHER_KEY")[0]!]);
+      const result = await accessY.readSecret({ name: "OTHER_KEY" });
+      expect(result.status).toBe("permission_required");
+      expect(result.status === "permission_required" && result.hint.service).toBe("tinycloud.encryption");
+    }, 120_000);
+
+    test("an access with its own decrypt keeps working after another delegation is revoked", async () => {
+      const recipient = sessionOnlyChild();
+      const { delegation: x } = await grant(recipient, secretsEntries("vault/secrets/API_KEY"));
+      const { access: accessY } = await grant(recipient, secretsEntries("vault/secrets/OTHER_KEY"));
+      const receipt = await owner.revokeDelegation(x.cid);
+      expect(receipt.ok, JSON.stringify(receipt.ok ? undefined : receipt.error)).toBe(true);
+      expect(await accessY.readSecret({ name: "OTHER_KEY" })).toEqual({ status: "ok", value: "other-value" });
+    }, 120_000);
+
     test("an expired delegation no longer decrypts", async () => {
       const { access } = await grant(sessionOnlyChild(), secretsEntries(), 5_000);
       expect((await access.readSecret({ name: "API_KEY" })).status).toBe("ok");
