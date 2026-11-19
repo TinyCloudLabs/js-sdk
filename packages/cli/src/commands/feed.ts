@@ -8,7 +8,7 @@ import {
   listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
 } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
-import type { FeedResponse, FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
+import type { FeedDatabase, FeedResponse, FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
 import { ProfileManager } from "../config/profiles.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveFeedSpace } from "../feed/space.js";
@@ -23,6 +23,7 @@ import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
+import { noticeCardMd, readCardMd, ShownCardMdVersions } from "../feed/card-md.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -49,6 +50,22 @@ async function context(command: Command) {
 function agentOptions(command: Command): Command {
   return command.requiredOption("--agent <token>", "Stable owner-scoped agent token")
     .option("--space <name|uri>", "Owner space containing the feed resources", "applications");
+}
+
+async function cardMdState(profileName: string): Promise<ShownCardMdVersions> {
+  return new ShownCardMdVersions(join(await ProfileManager.ensureProfileDir(profileName), "feed-card-md.json"));
+}
+
+/**
+ * Tell the agent once per version when the owner's card.md changed. It runs after the command's own work and never
+ * fails the command: whatever goes wrong here leaves one line on stderr.
+ */
+async function noticeOwnerCardMd(profileName: string, resource: string, responses: FeedDatabase): Promise<void> {
+  try {
+    await noticeCardMd({ responses, shown: await cardMdState(profileName), resource, write: (text) => { process.stderr.write(text); } });
+  } catch {
+    process.stderr.write("Could not read the owner's card.md; this command is not affected.\n");
+  }
 }
 
 async function readPrivatePayload(file: string | undefined): Promise<FeedResponsePayload | undefined> {
@@ -176,9 +193,26 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
     .requiredOption("--file <path>", "Card JSON file")
     .action(async (options, command) => {
       try {
-        const { output } = await context(command);
+        const { profile, output, responses, resources } = await context(command);
         const card = feedCardSchema.parse(JSON.parse(await readFile(options.file, "utf8")));
         outputJson(value(await publishFeedCard(output, card)));
+        await noticeOwnerCardMd(profile.profile, resources.responseResource, responses);
+      } catch (error) { return handleError(error); }
+    });
+
+  agentOptions(feed.command("card-md").description("Agent: read the owner's card.md, the standing instructions for your cards"))
+    .addHelpText("after", `
+Prints {text, version, updatedAt}, or null when the owner has not set one (their Feed delivers it to this agent's response
+database the first time they open it, so a just-connected agent may see null). Marks that version as shown: feed publish
+and feed watch print the text on stderr only when the owner changes it. Read-only; the agent never writes card.md.
+`)
+    .action(async (_options, command) => {
+      try {
+        const { profile, responses, resources } = await context(command);
+        const read = await readCardMd(responses);
+        if (read.kind === "found") await (await cardMdState(profile.profile)).set(resources.responseResource, read.card.version);
+        if (read.kind === "unreadable") process.stderr.write("The owner's card.md in this feed does not match its version, so it was ignored.\n");
+        outputJson(read.kind === "found" ? read.card : null);
       } catch (error) { return handleError(error); }
     });
 
@@ -289,6 +323,7 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
         const { profile, node, space, responses, resources } = await context(command);
         const directory = await ProfileManager.ensureProfileDir(profile.profile);
         local = await openFeedHandoff(options.handoff ?? join(directory, `feed-${options.agent}.sqlite`));
+        await noticeOwnerCardMd(profile.profile, resources.responseResource, responses);
         process.on("SIGINT", stop);
         process.on("SIGTERM", stop);
         const deliver = runner === undefined ? printFeedResponse

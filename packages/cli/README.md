@@ -219,6 +219,21 @@ delivers only responses that `--recipient` has not had. Those lines carry the
 owner's words (`text`, `choiceId`): treat stdout as you would the runner's stdin,
 and never pipe it into shared logs.
 
+The owner's card.md is a standing guide for the cards an agent posts. The owner's Feed writes it into each
+connected agent's own response database (a one-row `card_md` table the agent only reads), so a just-connected agent
+may not have one until the owner opens the Feed. Read it with the agent profile:
+
+```bash
+tinycloud --profile feed-agent feed card-md --agent writer
+```
+
+It prints `{"text": "…", "version": "<12 hex>", "updatedAt": "…"}`, or `null` when there is no card.md yet; the text
+is printed in full. `feed publish` and `feed watch` then print "The owner's card.md changed (`<version>`):" and the
+new text on stderr, once for each version this profile has not shown yet; they stay silent when it is unchanged or
+the owner cleared it, and a card.md that cannot be read never fails them. The last shown version is kept in
+`feed-card-md.json` in the profile folder, per feed; nothing is sent anywhere. A row whose `version` is not the first
+12 hex characters of the SHA-256 of its `text` is ignored.
+
 The owner's `response.json`:
 
 ```json
