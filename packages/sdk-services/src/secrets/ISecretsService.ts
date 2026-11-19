@@ -50,6 +50,10 @@ export interface ISecretsService {
     value: string,
     options?: SecretPutOptions,
   ): Promise<Result<void, SecretsError>>;
+  /**
+   * For `{ isolated: true }`:
+   * Deleting a secret removes its stored value. A read grant you gave for it keeps working until it expires or you revoke it by its CID.
+   */
   delete(
     name: string,
     options?: SecretScopeOptions,
