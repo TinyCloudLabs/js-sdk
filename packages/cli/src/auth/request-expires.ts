@@ -29,7 +29,7 @@ const usage = (code: string, message: string): CLIError => new CLIError(code, me
  * that account: the signed result is checked against it before anything is saved. Every refusal is raised before a request is made.
  */
 export function parseRequestExpires(value: string, context: RequestExpiresContext): number {
-  const form = ` Use a number and a unit, for example 30m or 4h.`;
+  const form = ` A window is a number and a unit s, m, h or d, for example 30m or 4h.`;
   if (context.unusedBy !== undefined) {
     throw usage("INVALID_ARGUMENT", `--request-expires sets the window of the one-tap approval link, which ${context.unusedBy} does not use.`);
   }
@@ -49,10 +49,10 @@ export function parseRequestExpires(value: string, context: RequestExpiresContex
  */
 export function assertRequestWindow(windowMs: number, pinnedOwner: string | undefined): void {
   if (windowMs > REQUEST_WINDOW_MAX_MS) {
-    throw usage("REQUEST_EXPIRES_TOO_LONG", `--request-expires may be at most ${REQUEST_WINDOW_MAX_MS / 3_600_000} hours. Use a shorter window.`);
+    throw usage("REQUEST_EXPIRES_TOO_LONG", `--request-expires may be at most ${REQUEST_WINDOW_MAX_MS / 3_600_000} hours.`);
   }
   if (windowMs > UNPINNED_REQUEST_WINDOW_MAX_MS && pinnedOwner === undefined) {
     throw usage("REQUEST_EXPIRES_NEEDS_OWNER",
-      `A --request-expires window longer than ${UNPINNED_REQUEST_WINDOW_MAX_MS / 3_600_000} hour needs the account pinned with --owner did:pkh:eip155:CHAIN:ADDRESS, so only that account's approval is accepted. Nothing was requested.`);
+      `A --request-expires window longer than ${UNPINNED_REQUEST_WINDOW_MAX_MS / 3_600_000} hour is allowed only with the account pinned by --owner did:pkh:eip155:CHAIN:ADDRESS, so only that account's approval is accepted. Nothing was requested.`);
   }
 }
