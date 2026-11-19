@@ -18,6 +18,8 @@ Request-bound imports keep the original request/profile binding. A differing gra
 
 Sign-in requires a route for the primary space. Automatic account bootstrap, secrets provisioning and account-index sync do not expand a registered owner's selected spaces: optional work without a published writable route is skipped. Canonical bootstrap runs only when its complete target set is available; a skipped subset does not write a completion marker. `bootstrapStatus.reason` reports `registry-scope-limited` for this case. Explicit operations on an unlisted space or encryption service still refuse, and every actual request resolves and checks its destination afresh. No storage settings are published automatically.
 
+The primary space of a manifest sign-in is chosen among the spaces the manifest itself requests (account-registry companion permissions do not count): `applications` when requested, otherwise the first requested space in canonical (sorted space-id) order; an account-only manifest still signs into `account`. Every other requested space stays reachable through `node.space(id)`.
+
 ### Signed registry cache
 
 `registryCacheStore` accepts a `RegistryCacheStore` from `@tinycloud/sdk-core`; the default is in-memory. The store keeps the exact fetched UTF-8 response text separately from `ownerKey`, `sequence` and `fetchedAt` metadata. EOA keys use the canonical EIP-55 address across wallet chains; `did:key` keys remain exact. Every read and replacement comparison reuses the canonical signed-v2 verifier.

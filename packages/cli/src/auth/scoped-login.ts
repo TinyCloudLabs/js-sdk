@@ -679,7 +679,7 @@ export function verifyScopedLogin(
       .filter(permission => !approvedSpaces.has(normalizePkhIdentifier(ownerSpaceId(permission.space ?? "default", signed.ownerDid))))
       .map(permission => permission.space ?? "default"))];
     const message = missingSpaces.length > 0
-      ? `The owner did not approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}. This task needs all requested spaces. Ask the agent to request less. ${notStored}`
+      ? `The owner did not approve access to ${missingSpaces.map(space => `"${space}"`).join(", ")}. This task needs all requested spaces. ${notStored}`
       : `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`;
     throw new CLIError("OPENKEY_APPROVAL_NARROWER", message, ExitCode.PERMISSION_DENIED);
   }

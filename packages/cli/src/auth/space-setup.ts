@@ -247,5 +247,7 @@ export async function ensureSpaceSetup(
   }
   const report = spaceSetupReport(delegation);
   if (!report) return;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+  // Probe the space this delegation was signed for, not the profile's primary.
+  const spaceId = typeof delegation.spaceId === "string" ? delegation.spaceId : undefined;
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore, spaceId), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }

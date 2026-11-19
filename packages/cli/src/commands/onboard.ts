@@ -149,7 +149,7 @@ export function registerOnboardCommand(program: Command): void {
           profile: ctx.profile,
           ownerDid: profile.ownerDid ?? null,
           host: ctx.host,
-          granted: [...new Set(permissions.map(p => p.space))].map(space => ({ space })),
+          granted: [...new Set(permissions.map(p => p.space))].map(space => ({ space, asks })),
           expiresAt: storedSessionState(session, profile).expiresAt,
         }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${steps.map(({ asks }) => `  ${asks}`).join("\n")}`);
       } catch (error) {
