@@ -1,6 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import { createReadStream } from "node:fs";
-import { chmod, lstat, mkdir, open } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -8,12 +8,11 @@ import { stderr, stdin } from "node:process";
 import { Command } from "commander";
 import { CONFIG_DIR } from "../config/constants.js";
 import { CLIError, handleError } from "../output/errors.js";
-import { clearDiagnosticLogs, readDiagnosticLogs, redactDiagnosticLog } from "../lib/diagnostic-logs.js";
+import { BUG_REPORT_REVIEW_DIR_NAME, clearDiagnosticLogs, readDiagnosticLogs, redactDiagnosticLog } from "../lib/diagnostic-logs.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_CONTENT_BYTES = 128 * 1024;
 const ATTACHMENT_URL = "https://bugs.tinycloud.xyz/reports";
-const REVIEW_DIR_NAME = "bug-report-reviews";
 const REVIEW_HASH_PATTERN = /^[0-9a-f]{32}$/;
 
 type BugReportDependencies = {
@@ -97,16 +96,20 @@ function reviewHash(reportId: string, body: Buffer): string {
   return createHash("sha256").update("bug-report-attach\0").update(reportId).update("\0").update(body).digest("hex").slice(0, 32);
 }
 
+function reviewedLogPath(root: string, reportId: string, hash: string): string {
+  return join(root, BUG_REPORT_REVIEW_DIR_NAME, `${reportId}-${hash}.json`);
+}
+
 // Writes the exact request bytes so the owner can read them and `--confirm` can
 // upload those same bytes later; owner-only, like the diagnostic log itself.
 async function saveReviewedLog(root: string, reportId: string, body: Buffer): Promise<{ path: string; hash: string }> {
   const hash = reviewHash(reportId, body);
-  const directory = join(root, REVIEW_DIR_NAME);
+  const directory = join(root, BUG_REPORT_REVIEW_DIR_NAME);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const directoryInfo = await lstat(directory);
   if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw new Error("Couldn't save the CLI log on this computer, so nothing was sent. Try again.");
   await chmod(directory, 0o700);
-  const path = join(directory, `${reportId}-${hash}.json`);
+  const path = reviewedLogPath(root, reportId, hash);
   const file = await open(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o600);
   try {
     await file.chmod(0o600);
@@ -128,7 +131,7 @@ function reviewReadError(reportId: string): CLIError {
 // Returns the saved request bytes only when they still hash to the reviewed identity.
 async function readReviewedLog(root: string, reportId: string, hash: string): Promise<Buffer> {
   if (!REVIEW_HASH_PATTERN.test(hash)) throw missingReviewError(reportId);
-  const directory = join(root, REVIEW_DIR_NAME);
+  const directory = join(root, BUG_REPORT_REVIEW_DIR_NAME);
   try {
     const directoryInfo = await lstat(directory);
     if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw missingReviewError(reportId);
@@ -138,7 +141,7 @@ async function readReviewedLog(root: string, reportId: string, hash: string): Pr
     if (code === "ENOENT" || code === "ENOTDIR") throw missingReviewError(reportId);
     throw reviewReadError(reportId);
   }
-  const path = join(directory, `${reportId}-${hash}.json`);
+  const path = reviewedLogPath(root, reportId, hash);
   let file;
   try {
     file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
@@ -151,7 +154,8 @@ async function readReviewedLog(root: string, reportId: string, hash: string): Pr
   try {
     const details = await file.stat();
     if (!details.isFile()) throw missingReviewError(reportId);
-    if ((details.mode & 0o777) !== 0o600) {
+    // Windows reports 0o666/0o444 for files, so only POSIX can check owner-only mode; the report-bound hash still detects edits there.
+    if (process.platform !== "win32" && (details.mode & 0o777) !== 0o600) {
       throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", `The saved CLI log's permissions changed, so nothing was sent. Run tinycloud bug-report --attach ${reportId} to save it again.`);
     }
     body = await file.readFile();
@@ -217,6 +221,8 @@ async function attachLogs(reportId: string, tokenStdin: boolean, confirmHash: st
     const reviewed = await readReviewedLog(root, reportId, confirmHash);
     const token = await readToken(tokenStdin);
     await sendAttachment(reportId, token, reviewed, output, dependencies);
+    // Uploaded: drop the staged copy so it can't linger or be sent twice.
+    await rm(reviewedLogPath(root, reportId, confirmHash), { force: true }).catch(() => undefined);
     return;
   }
   const raw = await readDiagnosticLogs(root);
@@ -265,8 +271,8 @@ export function registerBugReportCommand(program: Command, dependencies: BugRepo
     .option("--attach <report-id>", "Attach your recent CLI log to this report")
     .option("--confirm <hash>", "Send the CLI log you reviewed, identified by the hash shown when it was saved")
     .option("--token-stdin", "Read the attachment token from standard input")
-    .option("--clear-logs", "Delete the CLI log saved on this computer");
-  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. In a terminal, the redacted log is shown before the send prompt. Without a terminal, the exact upload is saved with owner-only access and a review hash; nothing is sent until you pass that hash to --confirm. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete it, run tinycloud bug-report --clear-logs.\n");
+    .option("--clear-logs", "Delete the CLI log and any saved review copies on this computer");
+  command.addHelpText("after", "\nThe CLI keeps a log of recent commands on this computer (up to 1 MB, readable only by your user account), with sensitive values removed where found. In a terminal, the redacted log is shown before the send prompt. Without a terminal, the exact upload is saved with owner-only access and a review hash; nothing is sent until you pass that hash to --confirm, and the saved copy is deleted once it is sent. To stop recording, set TINYCLOUD_CLI_LOGS=0 or pass --no-diagnostic-logs. To delete the log and any saved review copies, run tinycloud bug-report --clear-logs.\n");
   command.action(async (options) => {
     try {
       if (options.clearLogs && (options.attach || options.confirm)) {
@@ -274,7 +280,7 @@ export function registerBugReportCommand(program: Command, dependencies: BugRepo
       }
       if (options.clearLogs) {
         await clearDiagnosticLogs(root);
-        output("Deleted the CLI log on this computer.\n");
+        output("Deleted the CLI log and any saved review copies on this computer.\n");
         return;
       }
       if (!options.attach) throw new CLIError("BUG_REPORT_USAGE", "Use `tinycloud bug-report --attach <report-id>` or `tinycloud bug-report --clear-logs`.");

@@ -3,6 +3,8 @@ import { mkdir, open, readFile, rm, lstat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const FILE_NAME = "cli-diagnostics.jsonl";
+// Directory of staged upload copies `bug-report --attach` saves for review.
+export const BUG_REPORT_REVIEW_DIR_NAME = "bug-report-reviews";
 const MAX_BYTES = 1024 * 1024;
 let activeCommand: string | undefined;
 let activeArgs: string[] = [];
@@ -223,6 +225,7 @@ export async function readDiagnosticLogs(root: string, maxBytes = MAX_BYTES): Pr
 
 export async function clearDiagnosticLogs(root: string): Promise<void> {
   await rm(join(root, FILE_NAME), { force: true });
+  await rm(join(root, BUG_REPORT_REVIEW_DIR_NAME), { recursive: true, force: true });
 }
 
 export const diagnosticLogPath = (root: string): string => join(root, FILE_NAME);
