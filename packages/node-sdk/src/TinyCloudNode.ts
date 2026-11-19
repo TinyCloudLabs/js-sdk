@@ -2638,13 +2638,17 @@ export class TinyCloudNode {
     const graph = this._serviceGraph;
     const active = await this.activeNodeIdentity();
     graph.assertActive();
-    const response = await this.fetchForGraph(graph)(
-      `${active.origin}/.well-known/tinycloud/node-keys`,
-      { redirect: "error", signal: AbortSignal.timeout(5_000) },
+    const value: unknown = await usingResponse(
+      () => this.fetchForGraph(graph)(
+        `${active.origin}/.well-known/tinycloud/node-keys`,
+        { redirect: "error", signal: AbortSignal.timeout(5_000) },
+      ),
+      async (response) => {
+        graph.assertActive();
+        if (!response.ok) throw await httpResponseError(response, "Failed to fetch node renewal identity");
+        return await response.json();
+      },
     );
-    graph.assertActive();
-    if (!response.ok) throw await httpResponseError(response, "Failed to fetch node renewal identity");
-    const value: unknown = await response.json();
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new Error("Node renewal identity response is invalid");
     }

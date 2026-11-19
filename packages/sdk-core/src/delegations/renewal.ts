@@ -9,6 +9,7 @@ import { decodeCanonicalDagCbor, parseSignedSiweCacao } from "./cacao";
 import { principalDidEquals } from "../identity";
 import { activateSessionWithHost } from "../space";
 import { boundedResponseBytes } from "../location";
+import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 
 const STAMP_DOMAIN = "tinycloud/node/renewal-stamp/v1";
 // Bound browser work to one accepted stamp per minute across the node's one-year lease maximum.
@@ -299,13 +300,15 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
     throw new Error("Owner renewal lease validity bounds are invalid or expired");
   }
   // Check the verified host still advertises the identity being admitted.
-  const response = await fetch(`${input.host}/.well-known/tinycloud/node-keys`, {
-    redirect: "error", signal: input.signal,
-  });
-  if (!response.ok) throw new Error(`Renewal identity discovery failed: ${response.status}`);
-  const bytes = await boundedResponseBytes(response, 16 * 1024);
-  if (bytes === null) throw new Error("Renewal node identity response exceeds 16384 bytes");
-  const current = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as Partial<RenewalNodeIdentity>;
+  const current = await usingResponse(
+    () => fetch(`${input.host}/.well-known/tinycloud/node-keys`, { redirect: "error", signal: input.signal }),
+    async (response) => {
+      if (!response.ok) throw new Error(`Renewal identity discovery failed: ${response.status}`);
+      const bytes = await boundedResponseBytes(response, 16 * 1024);
+      if (bytes === null) throw new Error("Renewal node identity response exceeds 16384 bytes");
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as Partial<RenewalNodeIdentity>;
+    },
+  );
   if (!current || Object.keys(input.nodeIdentity).some((key) =>
     current[key as keyof RenewalNodeIdentity] !== input.nodeIdentity[key as keyof RenewalNodeIdentity])) {
     throw new Error("Renewal node identity changed");
