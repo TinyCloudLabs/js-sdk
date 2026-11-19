@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 import {
   additionalDelegationsPath,
   profileConfigPath,
@@ -5,6 +6,7 @@ import {
   writeJsonAtomic,
 } from "../src/state.js";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { assertPrivateTestEnvironment } from "./private-home.mjs";
 
 export interface StoredRuntimeDelegation {
   readonly cid: string;
@@ -42,6 +44,7 @@ interface HermeticEncryptedNode {
   readonly unrelatedAudience: string;
   /** Every HTTP request the loopback node received, in order. */
   requests(): readonly HermeticRequest[];
+  failDelegate(status: number | null): void;
   /** Every capability of every verified `/invoke` invocation, in order. */
   invocations(): readonly { readonly service: string; readonly action: string; readonly space: string; readonly path: string }[];
   createRotatedRestorableSession(): Promise<HermeticEncryptedNode["restorableSession"]>;
@@ -76,6 +79,7 @@ export interface AuthRuntimeFixture {
 export async function createAuthRuntimeFixture(
   options: AuthRuntimeFixtureOptions = {},
 ): Promise<AuthRuntimeFixture> {
+  assertPrivateTestEnvironment();
   const moduleUrl = new URL(
     "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
     import.meta.url,
@@ -94,6 +98,7 @@ export async function createAuthRuntimeFixture(
     await writeJsonAtomic(profileConfigPath(profile), {
       name: profile,
       host: hermetic.host,
+      tinycloudRegistryUrl: hermetic.host,
       chainId: hermetic.restorableSession.chainId,
       spaceName: "secrets",
       spaceId: hermetic.restorableSession.spaceId,
@@ -108,6 +113,7 @@ export async function createAuthRuntimeFixture(
     await writeJsonAtomic(profileConfigPath(ownerProfile), {
       name: ownerProfile,
       host: hermetic.host,
+      tinycloudRegistryUrl: hermetic.host,
       chainId: hermetic.ownerRestorableSession.chainId,
       spaceName: "secrets",
       spaceId: hermetic.ownerRestorableSession.spaceId,
@@ -138,6 +144,7 @@ export async function persistRuntimeDelegations(
   fixture: AuthRuntimeFixture,
   delegations: readonly StoredRuntimeDelegation[],
 ): Promise<void> {
+  assertPrivateTestEnvironment();
   await writeJsonAtomic(
     additionalDelegationsPath(fixture.profile),
     delegations.map((delegation) => ({

@@ -46,16 +46,35 @@ export function toMcpToolResult(
     ) {
       const sql = options.operationId?.startsWith("tinycloud.sql.") ||
         options.operationId === "tinycloud.apps.query";
+      const readTool = (options.operationId === "tinycloud.kv.get" || options.operationId === "tinycloud.sql.query")
+        ? bindings.find((binding) => binding.operationId === "tinycloud.read")
+        : undefined;
       canonical = {
         status: "error",
         operation: canonical.operation,
         context: canonical.context,
         error: {
           code: sql ? "SQL_RESULT_LIMIT_EXCEEDED" : "KV_RESPONSE_TOO_LARGE",
-          message: sql
-            ? "The result exceeds 100,000 characters. Select fewer columns or rows, add a WHERE filter or a smaller LIMIT, or aggregate the data."
-            : "The result exceeds 100,000 characters. Request fewer keys, narrow the prefix, or use a smaller page size.",
+          message: readTool !== undefined
+            ? `The serialized result exceeds the hosted 100,000-character limit. Use ${readTool.name} with the original ${sql ? "SQL query and parameters" : "space and key"} as a ${sql ? "sql" : "kv"} resource for complete, digest-bound pages.`
+            : options.operationId === "tinycloud.read"
+              ? "The serialized page exceeds the hosted 100,000-character limit. Reduce pageBytes while retaining the same resource and expected binding."
+              : sql
+                ? "The result exceeds 100,000 characters. Select fewer columns or rows, add a WHERE filter or a smaller LIMIT, or aggregate the data."
+                : "The result exceeds 100,000 characters. Request fewer keys, narrow the prefix, or use a smaller page size.",
           retryable: false,
+          ...(readTool === undefined ? {} : {
+            details: {
+              recovery: {
+                action: "read_in_chunks",
+                tool: readTool.name,
+                operationId: "tinycloud.read",
+                operationVersion: 1,
+                resourceKind: sql ? "sql" : "kv",
+                requiresCallerInput: true,
+              },
+            },
+          }),
         },
       };
       serialized = JSON.stringify(canonical);

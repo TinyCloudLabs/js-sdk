@@ -152,7 +152,7 @@ describe("tc share publish ./site/", () => {
       ["<area href>", '<map name="m"><area href="https://other.example/" shape="rect" coords="0,0,1,1"></map>', "UNSUPPORTED_HTML", 2, ["blocked html feature"]],
       ["an escaped url()", '<p style="background:u\\72l(https://other.example/p.png)">x</p>', "UNSUPPORTED_HTML", 2, ["https://other.example/p.png"]],
       ["a link to another page", '<a href="about.html">About</a>', "UNSUPPORTED_HTML", 2, ["links to another page", "about.html"]],
-      ["a traversal reference", '<img src="../secret.png">', "UNSAFE_PATH", 8, ["../secret.png"]],
+      ["a traversal reference", '<img src="../secret.png">', "UNSAFE_PATH", 2, ["../secret.png"]],
       ["a missing file", '<img src="img/nope.png">', "HTML_RESOURCE_MISSING", 2, ["img/nope.png", "not in the folder"]],
       ["a wrong-case reference", '<img src="img/DOT.png">', "HTML_RESOURCE_MISSING", 2, ["img/DOT.png"]],
     ];
@@ -287,7 +287,7 @@ describe("tc share publish ./site/", () => {
       await put("css/Site.css", "x");
       const collision = await run([site]);
       expect(errorOf(collision.stderr).code).toBe("UNSAFE_PATH");
-      expect(collision.exitCode).toBe(8);
+      expect(collision.exitCode).toBe(2);
       await rm(join(site, "css/Site.css"));
       await put("img/cafe\u0301.png", PNG);
       await put("index.html", '<!doctype html><img src="img/caf\u00e9.png">');

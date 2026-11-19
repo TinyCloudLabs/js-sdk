@@ -54,6 +54,13 @@ export const invokeAny: TinyCloudModule['invokeAny'] = (...args) => {
     throw `${msg}: ${e}`;
   }
 };
+export const invokeDelegationStatus: TinyCloudModule["invokeDelegationStatus"] = (...args) => {
+  try {
+    return Reflect.apply(getModule().invokeDelegationStatus, getModule(), args);
+  } catch (e) {
+    throw `${msg}: ${e}`;
+  }
+};
 
 export const generateHostSIWEMessage: TinyCloudModule['generateHostSIWEMessage'] =
   (...args) => {

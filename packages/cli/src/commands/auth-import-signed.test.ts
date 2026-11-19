@@ -66,7 +66,7 @@ beforeAll(async () => {
   for (const [runtime] of runtimes) {
     const profile = `importer-${runtime}`;
     await writeJsonAtomic(profileConfigPath(profile), {
-      name: profile, host: hermetic.host, chainId: 1, spaceName: "secrets", spaceId,
+      name: profile, host: hermetic.host, tinycloudRegistryUrl: hermetic.host, chainId: 1, spaceName: "secrets", spaceId,
       did: hermetic.ownerDid, sessionDid, ownerDid: hermetic.ownerDid,
       authMethod: "openkey", posture: "owner-openkey", operatorType: "human",
       createdAt: "2026-10-04T00:00:00.000Z",

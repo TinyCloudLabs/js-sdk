@@ -103,7 +103,7 @@ async function ownerProfile(name: string, kind: "local" | "openkey"): Promise<{ 
   });
   expect(activated.status).toBe(200);
   await writeJsonAtomic(profileConfigPath(name), {
-    name, host: hermetic.host, chainId: 1, spaceName: "secrets", spaceId,
+    name, host: hermetic.host, tinycloudRegistryUrl: hermetic.host, chainId: 1, spaceName: "secrets", spaceId,
     did: hermetic.ownerDid, sessionDid, ownerDid: hermetic.ownerDid, operatorType: "human",
     createdAt: "2026-10-04T00:00:00.000Z",
     ...(kind === "local"

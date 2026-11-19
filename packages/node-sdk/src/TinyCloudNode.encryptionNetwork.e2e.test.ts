@@ -9,6 +9,7 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 
 // Never touch a real home: point HOME and tool homes at a throwaway dir first.
 const tc1910Home = mkdtempSync("/var/tmp/tc1910.");
@@ -33,8 +34,10 @@ describe.skipIf(!nodeBinary)(
     let host: string;
     let child: ChildProcess | undefined;
 
+    let registry: UnregisteredLocationRegistry;
     beforeAll(async () => {
       directory = await mkdtemp("/var/tmp/tc1910-sdk-network-");
+      registry = startUnregisteredLocationRegistry();
       const server = createServer();
       const port = await new Promise<number>((resolve, reject) => {
         server.once("error", reject);
@@ -91,11 +94,13 @@ describe.skipIf(!nodeBinary)(
         await exited.promise;
       }
       if (directory) await rm(directory, { recursive: true, force: true });
+      registry?.stop(true);
     });
 
     test("sql + kv manifest: network create returns 200 and the network exists", async () => {
       const node = new TinyCloudNode({
         host,
+        tinycloudRegistryUrl: registry.url.origin,
         privateKey: ownerKey,
         wasmBindings: new NodeWasmBindings(),
         domain: "tc1910.test",

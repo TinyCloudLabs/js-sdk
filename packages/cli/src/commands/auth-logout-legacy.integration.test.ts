@@ -12,6 +12,7 @@ import { parseSignedSiweCacao } from "@tinycloud/sdk-core";
 
 const PROFILE = "owner";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
+const NODE_DID = "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq";
 const cliEntry = join(import.meta.dir, "../index.ts");
 const homes: string[] = [];
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
@@ -42,7 +43,9 @@ async function fixture(withReplica = true) {
   const node = Bun.serve({ port: 0, async fetch(request) {
     const path = new URL(request.url).pathname;
     networkPaths.push(path);
-    if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
+    if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [], nodeId: NODE_DID });
+    if (path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
     if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
     if (path === "/revoke" && request.method === "POST") {
       if (paths) atRevoke = {
@@ -64,7 +67,7 @@ async function fixture(withReplica = true) {
   const ownerDid = `did:pkh:eip155:1:${await new PrivateKeySigner(OWNER_KEY).getAddress()}`;
   paths = await withTinyCloudStateRoot(home, async () => {
     await writeJsonAtomic(profileConfigPath(PROFILE), {
-      name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
+      name: PROFILE, host: node.url.origin, tinycloudRegistryUrl: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
     });

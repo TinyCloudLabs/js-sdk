@@ -140,6 +140,19 @@ export type {
 // Context
 export { ServiceContext } from "./context";
 export type { ServiceContextConfig } from "./context";
+export {
+  createResourceRoutingFetch,
+  createResourceTransportInvocationFetch,
+  routeResourceRequest,
+  routingResourceOf,
+  verifyResourceDestination,
+  NodeNotRespondingError,
+  NodeIdentityMismatchError,
+  ResourceNotRoutedError,
+  PartialNodeWriteError,
+  routingFailure,
+} from "./resourceRouting";
+export type { ResourceAccess, ResourceDestination, ResourceNodeInfo, ResourceRoutingConfig, ResourceTransport, ResourceTransportTarget, ResourceTransportOptions } from "./resourceRouting";
 
 // Abort plumbing shared with @tinycloud/node-sdk's service graph (not part of the documented API)
 export { linkAbortSignal, releaseWithBody } from "./abortLink";
@@ -418,6 +431,10 @@ export type {
 
 export {
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -431,7 +448,9 @@ export {
 export type {
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ParsedSecretCatalogKey,
   ResolvedSecretPath,

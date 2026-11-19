@@ -8,6 +8,9 @@
 //   bun scripts/generate-node-release.ts --check            # CI: fail if the file disagrees with upstream
 //
 // Optional GITHUB_TOKEN raises the API rate limit; it is sent only to api.github.com.
+// Optional NODE_RELEASE_CACHE_DIR keeps the release metadata, checksum file and archives of the
+// pinned version on disk; with a warm cache a run makes no request to GitHub. Everything read from
+// the cache is still compared with the pin and the archives are still checked against it.
 import { readFile, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -15,9 +18,12 @@ import { fileURLToPath } from "node:url";
 import { NODE_RELEASE_REPO, parseNodeRelease } from "../src/lib/node-release.js";
 import { measureNodeBinary } from "../src/lib/node-fetch.js";
 import { buildNodeRelease, serializeNodeRelease, type UpstreamRelease } from "../src/lib/node-release-pin.js";
+import { cachingFetch } from "../src/lib/release-cache-fetch.js";
+import type { FetchLike } from "../src/lib/node-fetch.js";
 
 const PIN_PATH = fileURLToPath(new URL("../src/lib/node-release.json", import.meta.url));
 const ATTEMPTS = 3;
+let upstreamFetch: FetchLike = (url, init) => fetch(url, init);
 
 async function getText(url: string, accept: string): Promise<string> {
   const headers: Record<string, string> = { accept, "user-agent": "tinycloud-cli-node-release" };
@@ -28,7 +34,7 @@ async function getText(url: string, accept: string): Promise<string> {
     if (attempt > 1) await sleep((attempt - 1) * 2_000);
     let response: Response;
     try {
-      response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+      response = await upstreamFetch(url, { headers, signal: AbortSignal.timeout(30_000) });
     } catch (error) {
       lastError = error;
       continue;
@@ -61,12 +67,17 @@ if (!version) {
 }
 
 const base = `https://github.com/${NODE_RELEASE_REPO}/releases/download/v${version}`;
+const cacheDir = process.env.NODE_RELEASE_CACHE_DIR;
+if (cacheDir) {
+  const cached = [`${base}/`, `https://api.github.com/repos/${NODE_RELEASE_REPO}/releases/tags/v${version}`];
+  upstreamFetch = cachingFetch({ dir: cacheDir, shouldCache: (url) => cached.some((prefix) => url.startsWith(prefix)) });
+}
 const release = JSON.parse(
   await getText(`https://api.github.com/repos/${NODE_RELEASE_REPO}/releases/tags/v${version}`, "application/vnd.github+json"),
 ) as UpstreamRelease;
 const sumText = await getText(`${base}/sha256.sum`, "text/plain");
 const expected = serializeNodeRelease(
-  await buildNodeRelease(version, release, sumText, (archive) => measureNodeBinary({ artifact: archive })),
+  await buildNodeRelease(version, release, sumText, (archive) => measureNodeBinary({ artifact: archive, fetchImpl: upstreamFetch })),
 );
 
 if (check) {

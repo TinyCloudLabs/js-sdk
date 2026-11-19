@@ -30,6 +30,9 @@ import { signedRestorableSession } from "./test-support/signed-restorable-sessio
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.replication-unit.test";
 
 // ---------------------------------------------------------------------------
 // Fixtures (mirrors TinyCloudNode.delegateTo.test.ts)
@@ -476,7 +479,9 @@ describe("replicationAuthority (§4.2)", () => {
 // ---------------------------------------------------------------------------
 
 function signInFetch() {
-  return (async (input: unknown, init?: RequestInit) => {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) {
       return new Response(
@@ -541,6 +546,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     });
     globalThis.fetch = signInFetch();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: makeSigner(),
       tinycloudHosts: ["https://tinycloud.test"],
@@ -593,6 +599,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       includePublicSpace: false,
     };
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: makeSigner(),
       tinycloudHosts: ["https://tinycloud.test"],

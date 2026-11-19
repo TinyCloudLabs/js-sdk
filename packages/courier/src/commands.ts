@@ -1,20 +1,27 @@
+import { adviceFor, deriveState, heldApproval, recoverInterrupted, rotateKey } from './state.js';
+import { createRuntimeNode, maintainPeerSet } from './interim-runtime.js';
+import { interimLocalState, maintainOutbound, peerLimitNote } from './interim-renewal.js';
 import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
+import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, publicJwk, serializeDelegation } from '@tinycloud/node-sdk';
 import type { PortableDelegation } from '@tinycloud/node-sdk';
-import { cmd } from './program.js';
+import { cmd, tcCmd } from './program.js';
+import { initRequestNextLine } from './next-line.js';
 import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
-  loadProfile, saveProfile, getPeer, profileDir, profileExists, loadKey, saveKey,
+  loadProfile, saveProfile, withProfileTransaction, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
-import { courierNode, peerKv } from './node.js';
+import { revokePeer } from './revoke.js';
+import { courierNode, peerKv, currentInbound, assertInboundLive, renewalBinding } from './node.js';
+import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { assertPendingReadable, clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, readPending, requestApproval, waitApproval } from './grant-request.js';
+import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -23,11 +30,12 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
+import { clearLocalCaches, collectThread, diskOwnerSpaceIndex, diskThreadCache, partialReadText, peerReadError, recordOwnerSpaceWrite, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
 import { requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
-import { requestHash } from './canonical.js';
+import { canonicalJson, requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
@@ -38,10 +46,11 @@ interface Ctx {
   node: TinyCloudNode;
 }
 
-async function ctx(): Promise<Ctx> {
+async function ctx(automatic = false, target?: string, collect = false): Promise<Ctx> {
   const profile = loadProfile();
-  const node = await courierNode(profile);
-  return { profile, node };
+  const node = automatic ? await createRuntimeNode() : await courierNode(profile);
+  if (automatic) await maintainPeerSet(node, target, collect);
+  return { profile: automatic ? loadProfile() : profile, node };
 }
 
 function newAgentKey(): AgentKey {
@@ -110,33 +119,52 @@ export async function cmdInit(args: ParsedArgs) {
   const grantRaw = grantFile === undefined || args.has('request')
     ? undefined
     : grantFile === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(grantFile, 'utf8');
+  // Explicit recovery before any mode acts: finish an interrupted rotation, remove stray key-bearing temp files; then derive once.
+  recoverInterrupted();
+  const state = deriveState();
+  for (const note of state.notes) console.error(`warning: ${note}`);
+  // A profile.json that exists and cannot be read is never treated as absent: `loadProfile` refuses with its own message (an unreadable
+  // profile is replaced only by an explicit `--rotate-key`).
+  if (state.action === 'fix-profile' && !args.has('rotate-key')) { loadProfile(); fail('bad-profile', adviceFor(state)); }
+  // A saved approval without its profile or key is left as it is; `--rotate-key` starts over with a new key.
+  if (state.action === 'refuse' && !args.has('rotate-key')) fail('approval-orphaned', adviceFor(state));
+  // A grant.json that is not owner-only is a saved grant that cannot be used yet: it is neither replaced nor counted as missing. A rotation
+  // discards the grant by design, so it goes on.
+  if (state.grantMode && !args.has('rotate-key')) {
+    const file = path.join(profileDir(), 'grant.json');
+    fail('profile-permissions', `${file} must be owner-only (mode 0600); found mode ${state.grantMode}. It holds a saved grant, so nothing was changed. Run \`chmod 600 ${file}\`, then run the command again.`);
+  }
+  const HELD_APPROVAL_KEPT = `The saved approval request holds an approval from the owner and was kept: run \`${cmd('init --wait')}\` to collect or acknowledge it.`;
   if (args.has('resume')) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
+    // An approval the owner gave, with no grant saved to install first, is collected by `--wait`, never discarded or shadowed by a cleanup.
+    if (state.action === 'wait' && heldApproval(state.inputs.approval) && profile.status !== 'ready') {
+      console.error(`${adviceFor(state)} Continuing as \`${cmd('init --wait')}\`.`);
+      await collectApproval(profile, loadKey(), { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
+      return;
+    }
     if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
       dropOpenRequest();
+      if (heldApproval(state.inputs.approval)) console.error(HELD_APPROVAL_KEPT);
       await finishInit(profile, profile.host);
       return;
     }
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);
     await resumeGrant(profile, loadKey());
     dropOpenRequest();
+    if (heldApproval(state.inputs.approval)) console.error(HELD_APPROVAL_KEPT);
     await finishInit(profile, profile.host);
     return;
   }
 
   const rotate = args.has('rotate-key');
   // A writer must learn that the saved approval is unreadable BEFORE the key, grant or profile is changed.
-  if (args.has('request') || args.has('wait')) assertPendingReadable();
-  // Read before the key is replaced: an approval the owner already gave is bound to the old key and is lost by a rotation.
-  const heldApproval = rotate && (() => { const saved = loadPending(); return saved !== undefined && holdsApproval(saved); })();
+  // Also for a plain `--rotate-key`: an approval that cannot be read may be bound to the old key, and a rotation would leave it there.
+  if (args.has('request') || args.has('wait') || rotate) assertPendingReadable();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
-  // A renewal is asked for with `--request`; `--wait` only collects. Starting a request here would hide its link on stderr.
-  if (args.has('wait') && prior && prior.status !== 'awaiting-grant' && !loadPending()) {
-    fail('usage', prior.status === 'awaiting-space'
-      ? `The grant is saved and the "${COURIER_SPACE}" space is still being set up: run \`${cmd('init --resume')}\`. \`${cmd('init --wait')}\` collects an approval that \`${cmd('init --request')}\` asked for.`
-      : `This profile already has a grant and no approval request is pending. To renew it, run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`);
-  }
+  // A renewal is asked for with `--request`; `--wait` only collects. The derived state says when `--wait` goes on.
+  if (args.has('wait') && !rotate && !state.wait) fail('usage', adviceFor(state));
   const key = prior ? loadKey() : newAgentKey();
   const host = hostFlag ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
   const openkeyHost = openkeyHostFlag ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
@@ -154,42 +182,34 @@ export async function cmdInit(args: ParsedArgs) {
   profile.openkeyHost = openkeyHost;
   profile.label = labelFlag ?? profile.label;
   if (handleFlag) profile.selfHandle = handleFlag;
+  profile.courierDid = bareDid(key.did);
   if (rotate) {
     profile.peers = {};
     profile.ownerDid = undefined;
     profile.spaceId = undefined;
     profile.grantExpiresAt = undefined;
     profile.status = 'awaiting-grant';
-    try { fs.unlinkSync(path.join(profileDir(), 'grant.json')); } catch { /* no prior grant */ }
+    // One journaled step: key, profile, grant and a discarded approval change together, and an interruption is finished by the next init.
+    await rotateKey(key, profile);
+  } else {
+    saveKey(key);
+    saveProfile(profile);
   }
-  profile.courierDid = bareDid(key.did);
-  saveKey(key);
-  saveProfile(profile);
   const request = courierGrantRequest(profile, key, expiry, { openkeyApiHost: apiHostFlag });
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
-  if (heldApproval) console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
 
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
     console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    console.error(initRequestNextLine());
     // A resumed request keeps the lifetime it was made with.
     const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
-    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
+    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: publicJwk(key.jwk), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
     return;
   }
 
   if (args.has('wait')) {
-    const deadline = Date.now() + waitMs;
-    const { pending, resumed } = await waitApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
-    if (!pending.committed) {
-      console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
-    }
-    if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
-      throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
-    }
-    const active = loadProfile();
-    if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
-    await finishInit(active, active.host);
+    await collectApproval(profile, key, { expiry: args.get('expiry'), openkeyApiHost: apiHostFlag, waitMs });
     return;
   }
 
@@ -217,12 +237,12 @@ export async function cmdInit(args: ParsedArgs) {
  */
 function clearPendingQuietly(): void {
   try {
-    const read = readPending();
-    if (read.kind === 'ok' && read.pending.committed) {
+    const phase = approvalPhase(readApprovalEntry());
+    if (phase.phase === 'held' && phase.stage === 'committed') {
       console.error('This grant replaces a saved short-link approval that was already installed: its acknowledgement to OpenKey is never sent (harmless; OpenKey discards the result).');
-    } else if (read.kind === 'ok' && holdsApproval(read.pending)) {
+    } else if (phase.phase === 'held') {
       console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
-    } else if (read.kind === 'unreadable' || read.kind === 'corrupt') {
+    } else if (phase.phase === 'unreadable' || phase.phase === 'corrupt') {
       console.error('This grant replaces the saved short-link request: discarded an unreadable saved approval request (it may have held an approval that was not installed).');
     }
     clearPending();
@@ -241,10 +261,25 @@ function dropOpenRequest(): void {
   if (saved && !holdsApproval(saved)) clearPendingQuietly();
 }
 
+/** `init --wait`: create or resume the approval request, wait for the owner, install the result and acknowledge it. `--resume` hands off here while an approval is saved. */
+async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
+  const deadline = Date.now() + options.waitMs;
+  const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost });
+  if (stageOf(pending) !== 'committed') {
+    console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
+  }
+  if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
+    throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt }, !resumed);
+  }
+  const active = loadProfile();
+  if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
+  await finishInit(active, active.host);
+}
+
 async function finishInit(profile: Profile, host: string): Promise<void> {
   const active = await ctx();
   for (const peer of Object.values(active.profile.peers)) {
-    if (peer.status === 'paired') await renewOutbound(active, peer, true);
+    if (peer.status === 'paired' && interimLocalState(peer) === 'live') await renewOutbound(active, peer, true);
   }
   printJson({ ok: true, profileDir: profileDir(), ownerDid: profile.ownerDid, courierDid: profile.courierDid, spaceId: profile.spaceId, host, grantExpiresAt: profile.grantExpiresAt });
 }
@@ -294,7 +329,7 @@ function readArtifactArg(args: ParsedArgs): string {
 }
 
 
-async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, peer: StoredPeer, serialized: string): Promise<{ delegation: PortableDelegation; cid: string; expiresAt: string }> {
+async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, peer: StoredPeer, serialized: string, original?: Awaited<ReturnType<typeof currentInbound>>): Promise<{ delegation: PortableDelegation; cid: string; expiresAt: string }> {
   const delegation = deserializeDelegation(serialized);
   const ownerAddress = peer.ownerDid.split(':').at(-1)?.toLowerCase();
   if (delegation.spaceId !== peer.spaceId || delegation.ownerAddress.toLowerCase() !== ownerAddress) {
@@ -305,6 +340,9 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
     host: profile.host,
     authorize: (permissions) => {
       assertExactAuthority(permissions, peerReadPermissions(peer.theirHandleForMe!, peer.spaceId, peer.sessionId), 'Pair renewal');
+      if (original && canonicalJson(permissions.map(entry => canonicalJson(entry)).sort()) !== canonicalJson(original.effectivePermissions.map(entry => canonicalJson(entry)).sort())) {
+        fail('bad-delegation', "Couldn't renew: the renewal would change what the peer can access. Nothing changed.");
+      }
       return true;
     },
   });
@@ -329,6 +367,7 @@ async function pairAccept(args: ParsedArgs) {
 
   if (art.step === 'A') {
     const handle = art.callMe;
+    assertNotPaired(profile, handle); // before delegateTo: a refusal after it would leave a live delegation nothing records
     const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     const peer: StoredPeer = {
       handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
@@ -336,7 +375,7 @@ async function pairAccept(args: ParsedArgs) {
     };
     recordOutbound(peer, outbound.delegation);
     profile.peers[handle] = peer;
-    saveProfile(profile);
+    saveAfterDelegation(profile, outbound.delegation);
     await writePeerRecord(node, peer);
     printJson(artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer));
     return;
@@ -359,7 +398,7 @@ async function pairAccept(args: ParsedArgs) {
     const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     recordOutbound(peer, outgoing.delegation);
     peer.status = 'paired';
-    saveProfile(profile);
+    saveAfterDelegation(profile, outgoing.delegation);
     await writePeerRecord(node, peer);
     printJson(artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer));
     return;
@@ -379,12 +418,27 @@ async function pairAccept(args: ParsedArgs) {
   if (!peer.theirHandleForMe || art.peer !== peer.theirHandleForMe) {
     fail('bad-artifact', `Artifact C changes the established mailbox scope for ${peer.handle}.`);
   }
-  const incoming = await validatePeerDelegation(node, profile, peer, art.delegation!);
-  if (peer.status === 'paired') {
-    const currentExpiry = Date.parse(peer.inbound?.expiresAt ?? '');
+  const binding = renewalBinding(profile, peer);
+  const original = peer.status === 'paired' ? await currentInbound(node, profile, peer) : undefined;
+  const incoming = await validatePeerDelegation(node, profile, peer, art.delegation!, original);
+  if (original) {
+    assertInboundLive(peer, original.expiry);
+    const currentExpiry = Math.max(Date.parse(peer.inbound?.expiresAt ?? ''), original.expiry.getTime());
     if (!Number.isFinite(currentExpiry) || Date.parse(incoming.expiresAt) <= currentExpiry) {
       fail('stale-artifact', `Artifact C does not extend the current inbound delegation for ${peer.handle}.`);
     }
+  }
+  if (original) {
+    await withProfileTransaction(async (disk, save) => {
+      const stored = disk.peers[peer.handle];
+      if (renewalBinding(disk, stored) !== binding) fail('peer-changed', 'The pairing changed while Courier was renewing. Run the command again.');
+      assertInboundLive(stored, original.expiry);
+      assertInboundLive(stored, new Date(incoming.expiresAt));
+      stored.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
+      save();
+    });
+    printJson({ ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: incoming.expiresAt });
+    return;
   }
   peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
   peer.status = 'paired';
@@ -393,9 +447,22 @@ async function pairAccept(args: ParsedArgs) {
   printJson({ ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: peer.inbound.expiresAt });
 }
 
+/**
+ * Saves after `delegateTo` made a delegation that is live from that moment. A save that refuses (the pairing completed, or the peer was
+ * revoked, meanwhile) leaves a delegation no profile records: say so, with its CID and where the owner can revoke it, and never publish it.
+ */
+function saveAfterDelegation(profile: Profile, delegation: PortableDelegation): void {
+  try {
+    saveProfile(profile);
+  } catch (error) {
+    console.error(`warning: the delegation ${delegationCid(delegation)} created for this pairing is live and was not saved. Nothing was published. The owner can revoke it at ${REVOKE_URL}.`);
+    throw error;
+  }
+}
+
 function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void {
   const expiresAt = delegation.expiry instanceof Date ? delegation.expiry.toISOString() : new Date(delegation.expiry).toISOString();
-  peer.outbound.push({ cid: delegationCid(delegation), issuedAt: new Date().toISOString(), expiresAt });
+  peer.outbound.push({ cid: delegationCid(delegation), issuedAt: new Date().toISOString(), expiresAt, delegation: serializeDelegation(delegation) });
 }
 
 async function pairRenew(args: ParsedArgs) {
@@ -409,48 +476,57 @@ async function pairRenew(args: ParsedArgs) {
     const peer = peers[0]!;
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
     if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
-    const delegation = await renewOutbound(active, peer, args.has('force'));
-    if (!delegation) fail('renew-throttled', `Outbound delegation for ${peer.handle} was renewed within the last 20 hours; use --force to renew it now.`);
+    const delegation = await renewOutbound(active, peer, args.has('force'), true);
+    if (!delegation) fail('renew-throttled', `Access for ${oneLine(peer.handle)} was renewed in the last 24 hours. Use --force to renew it again now.`);
+    noteLimit(peer);
     printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
     return;
   }
+  const renewed: string[] = [];
   for (const peer of peers) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
-    await renewOutbound(active, peer, args.has('force'));
+    if (await renewOutbound(active, peer, args.has('force'))) { renewed.push(peer.handle); noteLimit(peer); }
     await installInbound(active, peer);
   }
-  printJson({ ok: true, renewed: peers.map((peer) => peer.handle) });
+  printJson({ ok: true, renewed });
 }
 
-async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<PortableDelegation | undefined> {
-  const last = peer.outbound.at(-1);
-  if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return undefined;
-  const { profile, node } = active;
-  const result = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!, peer.sessionId), { expiry: PEER_DELEGATION_EXPIRY });
-  const issuedAt = new Date().toISOString();
-  const serialized = serializeDelegation(result.delegation);
-  const existing = await getJson(node.kv, k.peerDelegation(peer.handle, peer.sessionId));
-  const body = { v: 0, delegation: serialized, issuedAt };
-  if (existing?.etag) await putMatch(node.kv, k.peerDelegation(peer.handle, peer.sessionId), body, existing.etag);
-  else await putCreate(node.kv, k.peerDelegation(peer.handle, peer.sessionId), body);
-  peer.outbound.push({
-    cid: delegationCid(result.delegation),
-    issuedAt,
-    expiresAt: result.delegation.expiry instanceof Date ? result.delegation.expiry.toISOString() : new Date(result.delegation.expiry).toISOString(),
+function noteLimit(peer: StoredPeer): void {
+  const note = peerLimitNote(peer);
+  if (note) console.error(`Renewed access for ${oneLine(peer.handle)} (${note}).`);
+}
+
+async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, artifact = false): Promise<PortableDelegation | undefined> {
+  return withProfileTransaction(async (profile, save) => {
+    const current = getPeer(profile, peer.handle);
+    if (current.courierDid !== peer.courierDid || profile.courierDid !== active.profile.courierDid) {
+      fail('profile-changed', 'Pairing changed while renewal was starting; run the command again.');
+    }
+    return issueOutbound({ profile, node: await courierNode(profile) }, current, force, save, artifact);
   });
-  saveProfile(profile);
+}
+
+async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
+  const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
+  if (result.reason === 'overlong') {
+    fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts${peerLimitNote(peer) ? ` (${peerLimitNote(peer)})` : ''}. A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);
+  }
+  if (result.reason === 'no-extension') {
+    const limit = peerLimitNote(peer);
+    if (artifact && limit) fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs as long as the peer accepts (${limit}), so there is no longer renewal to hand over. Nothing was exported.`);
+    if (artifact) fail('renew-throttled', `Courier can't extend this access under your current approval. Run \`${cmd('init --request')}\` to request a new one.`);
+    console.error(`Courier couldn't extend access for ${oneLine(peer.handle)} yet. Their current access is unchanged.`);
+    return undefined;
+  }
+  if (result.state === 'lapsed') fail('peer-expired', `Sharing with ${oneLine(peer.handle)} has expired. A new pairing is required.`);
+  if (result.state === 'revoked' || result.state === 'owner-revoked') fail('peer-revoked', `Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
+  if (result.state === 'unavailable') fail('renewal-unavailable', "Courier couldn't safely renew access, so your current access is unchanged. Try again later.");
   return result.delegation;
 }
 
 async function installInbound(active: Ctx, peer: StoredPeer): Promise<void> {
   if (!peer.inbound || !peer.theirHandleForMe) return;
-  const kv = await peerKv(active.node, active.profile, peer);
-  const update = await getJson<{ v: number; delegation: string }>(kv, k.peerDelegation(peer.theirHandleForMe, peer.sessionId));
-  if (!update?.value.delegation) return;
-  const incoming = await validatePeerDelegation(active.node, active.profile, peer, update.value.delegation);
-  if (Date.parse(incoming.expiresAt) <= Date.parse(peer.inbound.expiresAt)) return;
-  peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
-  saveProfile(active.profile);
+  await peerKv(active.node, active.profile, peer);
 }
 
 function findPendingPeer(profile: Profile, handle: string): StoredPeer {
@@ -491,17 +567,18 @@ async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
 // ---------- revoke ----------
 
 export async function cmdRevoke(args: ParsedArgs) {
-  const { profile, node } = await ctx();
   const handle = args.positional[0] ?? fail('usage', `Usage: ${cmd('revoke <peer>')}`);
-  const peer = getPeer(profile, handle);
-  delete profile.peers[handle];
-  saveProfile(profile);
-  try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
-  console.log(
-    `Revoked ${handle} (${peer.courierDid}).\n` +
-    `Note: TC-721 prevents immediate revocation; access ends when the current outbound delegation expires (${peer.outbound.at(-1)?.expiresAt ?? 'unknown'}). ` +
-    `Rotating the agent key does not invalidate the old grant; it remains valid until its expiry.`,
-  );
+  const shown = oneLine(handle);
+  await withProfileTransaction(async (profile, save) => {
+    const peer = profile.peers[handle] ?? fail('unknown-peer', `No pairing with ${shown}. If you already revoked it, there's nothing left to do.`);
+    const node = await courierNode(profile);
+    await revokePeer(node, profile, handle, save);
+    delete profile.peers[handle];
+    save();
+    clearLocalCaches();
+    try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
+    console.log(`Revoked ${shown} (${peer.courierDid}). Files you already shared with ${shown} stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).`);
+  });
 }
 
 // ---------- send ----------
@@ -521,6 +598,7 @@ export type SendInput = {
 /** Writes one outbound message (and thread meta for a new thread) to the peer's mirror. Shared by `courier send` and the outbox. */
 export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHandle: string, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
   const { which, threadId, subject, text, intent, asks, constraints, inReplyTo, referenceTaskIds } = input;
+  if (peer.interim?.latchedAt || peer.interim?.inboundRefusedAt) fail('peer-revoked', `Sharing with ${oneLine(peer.handle)} was revoked. A new pairing is required.`);
   const from = { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label };
   if (peer.sessionId && (input.which === 'new' || threadId !== peer.sessionId)) {
     fail('session-mismatch', 'This pairing permits only its invited session. Start or select another session explicitly.');
@@ -551,13 +629,15 @@ export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHan
       createdAt: new Date().toISOString(),
     };
     await putCreate(node.kv, k.threadMeta(peerHandle, threadId), meta);
+    recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, k.threadMeta(peerHandle, threadId));
   }
   await putCreate(node.kv, k.msg(peerHandle, threadId, msg.messageId), msg);
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, k.msg(peerHandle, threadId, msg.messageId));
   return msg;
 }
 
 export async function cmdSend(args: ParsedArgs) {
-  const { profile, node } = await ctx();
+  const { profile, node } = await ctx(true, args.positional[0], true);
   const peerHandle = args.positional[0] ?? fail('usage', sendUsage());
   const peer = getPeer(profile, peerHandle);
   const which = oneOf(args, ['new', 'thread']);
@@ -592,7 +672,7 @@ export function readTextArg(args: ParsedArgs, usage: string): string {
 // ---------- inbox ----------
 
 export async function cmdInbox(args: ParsedArgs) {
-  const { profile, node } = await ctx();
+  const { profile, node } = await ctx(true);
   const collection = await collectInbound({
     selfKv: node.kv,
     peers: Object.values(profile.peers),
@@ -603,70 +683,51 @@ export async function cmdInbox(args: ParsedArgs) {
     notifications: recentNotices(profileDir()),
     items: collection.items.map((item) => ({ authority: 'counterparty', ...item })),
     errors: collection.errors,
+    partial: collection.errors.length > 0,
   };
   const status = output.notifications.length ? `\nRecent notifications (delivery receipts may already be current):\n${output.notifications.map(n => `${n.title}: ${n.body}`).join('\n')}\n` : '';
-  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items) + status);
-  for (const error of collection.errors) console.error(`warning: inbox ${error.peer}: ${error.message}`);
+  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items, collection.errors) + status);
+  for (const error of collection.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
   if (!args.has('peek')) await commitReceipts(node.kv, collection.pending);
 }
 
 // ---------- read ----------
 
-export interface ThreadEntry {
-  kind: 'meta' | 'msg' | 'task';
-  id: string;
-  side: 'me' | 'peer';
-  authority: 'self' | 'counterparty';
-  body: unknown;
-  invalid?: string[];
-}
+export type { ThreadEntry } from './thread.js';
+
+/** How long `courier read` trusts a peer's renewal marker it read (the watcher's renewal schedule). */
+const MARKER_READ_MS = 300_000;
 
 export async function cmdRead(args: ParsedArgs) {
-  const { profile, node } = await ctx();
-  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json]')}`);
-  const entries: ThreadEntry[] = [];
-  const peersToScan = args.get('peer')
-    ? [getPeer(profile, args.get('peer')!)]
-    : Object.values(profile.peers).filter((peer) => peer.status === 'paired' || peer.status === 'awaiting-C');
-
-  for (const peer of peersToScan) {
-    const mine = await listAll(node.kv, `${k.threadRoot(peer.handle, threadId)}/`);
-    for (const key of mine) {
-      const got = await getJson(node.kv, key);
-      if (!got) continue;
-      if (key.endsWith('/meta.json')) entries.push({ kind: 'meta', id: threadId, side: 'me', authority: 'self', body: got.value });
-      else if (/\/msg\/[^/]+\.json$/.test(key)) {
-        const invalid = messageView(got.value).invalid;
-        entries.push({ kind: 'msg', id: msgIdFromKey(key), side: 'me', authority: 'self', body: got.value, ...(invalid.length ? { invalid } : {}) });
-      } else if (/\/task\/[^/]+\.json$/.test(key)) {
-        const invalid = taskView(got.value).invalid;
-        entries.push({ kind: 'task', id: taskIdFromKey(key), side: 'me', authority: 'self', body: got.value, ...(invalid.length ? { invalid } : {}) });
-      }
-    }
-    if (peer.inbound && peer.theirHandleForMe) {
-      const peerSpace = await peerKv(node, profile, peer);
-      const theirs = await listAll(peerSpace, `${PREFIX}/to/${peer.theirHandleForMe}/threads/${threadId}/`);
-      for (const key of theirs) {
-        const got = await getJson(peerSpace, key);
-        if (!got) continue;
-        if (key.endsWith('/meta.json')) entries.push({ kind: 'meta', id: threadId, side: 'peer', authority: 'counterparty', body: got.value });
-        else if (/\/msg\/[^/]+\.json$/.test(key)) {
-          const invalid = messageView(got.value).invalid;
-          entries.push({ kind: 'msg', id: msgIdFromKey(key), side: 'peer', authority: 'counterparty', body: got.value, ...(invalid.length ? { invalid } : {}) });
-        } else if (/\/task\/[^/]+\.json$/.test(key)) {
-          const invalid = taskView(got.value).invalid;
-          entries.push({ kind: 'task', id: taskIdFromKey(key), side: 'peer', authority: 'counterparty', body: got.value, ...(invalid.length ? { invalid } : {}) });
-        }
-      }
-    }
-  }
-  if (!entries.length) fail('not-found', `No thread ${threadId} under any known peer.`);
-  entries.sort((a, b) => (a.id === b.id ? a.kind.localeCompare(b.kind) : a.id < b.id ? -1 : 1));
+  const { profile, node } = await ctx(true, args.get('peer'));
+  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json] [--full]')}`);
+  const full = args.has('full');
+  const cache = diskThreadCache(profile.courierDid, threadId, undefined, full);
+  const result = await collectThread({
+    threadId,
+    selfKv: node.kv,
+    peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
+    exactPeer: Boolean(args.get('peer')),
+    // The peer's renewal marker is read at most every 5 minutes per thread (always with --full).
+    kvFor: (peer) => {
+      const markerId = `marker:${peer.courierDid}:${peer.spaceId}`;
+      const readAt = cache.get(markerId);
+      const renew = full || !(typeof readAt === 'number' && Date.now() - readAt < MARKER_READ_MS);
+      if (renew) cache.set(markerId, Date.now());
+      return peerKv(node, profile, peer, { renew });
+    },
+    cache,
+    ownerSpace: diskOwnerSpaceIndex(profile.courierDid, profile.spaceId!, threadId, full),
+    self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
+  });
+  cache.save();
+  if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
   if (args.has('json')) {
-    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, entries }, null, 2) + '\n');
-    return;
+    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');
+  } else {
+    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors));
   }
-  await writeOut(renderThreadText(threadId, entries));
+  for (const error of result.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
 }
 
 export function renderThreadText(threadId: string, entries: readonly ThreadEntry[]): string {
@@ -677,6 +738,7 @@ export function renderThreadText(threadId: string, entries: readonly ThreadEntry
   }
   for (const entry of entries) {
     if (entry.kind === 'meta') continue;
+    if (entry.peer) lines.push(`Peer: ${oneLine(entry.peer)}`);
     if (entry.kind === 'msg') {
       const view = messageView(entry.body);
       const who = entry.side === 'me' ? 'me →' : `${oneLine(view.from?.label ?? 'peer', 80)} →`;
@@ -699,12 +761,6 @@ export function renderThreadText(threadId: string, entries: readonly ThreadEntry
 }
 
 
-function msgIdFromKey(key: string): string {
-  return /\/msg\/([^/]+)\.json$/.exec(key)![1];
-}
-function taskIdFromKey(key: string): string {
-  return /\/task\/([^/]+)\.json$/.exec(key)![1];
-}
 function indent(s: string): string {
   return s.split('\n').map((l) => `    ${l}`).join('\n');
 }
@@ -712,7 +768,7 @@ function indent(s: string): string {
 // ---------- task ----------
 
 export async function cmdTask(args: ParsedArgs) {
-  const { profile, node } = await ctx();
+  const { profile, node } = await ctx(true, args.get('peer'));
   const taskIdArg = args.positional[0] ?? fail('usage', taskUsage());
   const peerHandle = requireFlag(args, 'peer', taskUsage());
   getPeer(profile, peerHandle);
@@ -746,6 +802,7 @@ export async function cmdTask(args: ParsedArgs) {
   } else {
     await putCreate(node.kv, key, task);
   }
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, key);
   printJson({ ok: true, taskId, threadId, state, updated: Boolean(existing) });
 }
 
@@ -785,6 +842,7 @@ export async function cmdRequest(args: ParsedArgs) {
   const task = authRequiredTask(existing?.value, threadId, taskId);
   if (existing?.etag) await putMatch(node.kv, taskKey, task, existing.etag);
   else await putCreate(node.kv, taskKey, task);
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, taskKey);
   if (!(await getJson<CourierTask>(node.kv, taskKey))) fail('task-missing', `The task ${taskId} is not in ${taskKey}; no request was written.`);
   await putCreate(node.kv, k.request(id), request);
   // `requestHash` is what the view's card shows as its fingerprint (first 8 hex digits) and `courier approval` prints in full.

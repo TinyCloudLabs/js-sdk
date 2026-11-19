@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services-test",
-  "version": "21.0.4",
+  "version": "21.0.5",
   "private": true,
   "description": "Testing utilities for TinyCloud SDK Services",
   "author": "TinyCloud, Inc.",

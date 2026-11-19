@@ -12,7 +12,7 @@ import { inspectReplicaKeyPresence } from "../../../src/kv-storage/lifecycle.js"
 import { injectDenyFailure } from "@tinycloud/replica/kv-storage/testing";
 
 type Mode = "provider" | "readonly" | "none";
-type BootOptions = { host: string; walletKey: string; mode: Mode; prefix: string };
+type BootOptions = { host: string; registryUrl: string; walletKey: string; mode: Mode; prefix: string };
 
 const KV_DATABASE = "tinycloud-replica-kv";
 const TOMBSTONE_KEY = "tinycloud-replica:deny-tombstone";
@@ -88,7 +88,7 @@ const api = {
     tcw = await TinyCloudWeb.create({
       ...(provider === undefined ? {} : { provider }),
       tinycloudHosts: [options.host],
-      tinycloudRegistryUrl: null,
+      tinycloudRegistryUrl: options.registryUrl,
       autoDiscoverLocalNode: false,
       autoCreateSpace: true,
       persistSession: true,

@@ -26,7 +26,6 @@ export async function main(): Promise<void> {
     openkeyHost,
     approvalTtlSeconds: positiveInteger(process.env.TC_MCP_APPROVAL_TTL_SECONDS, 300),
     delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",
-    allowedOrigins: commaList(process.env.TC_MCP_ALLOWED_ORIGINS),
     ...(process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL === undefined
       ? {}
       : { nativeServiceCredential: process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL }),
@@ -83,11 +82,6 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("Expected a positive integer environment value.");
   return parsed;
-}
-
-function commaList(value: string | undefined): string[] | undefined {
-  if (value === undefined) return undefined;
-  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
 }
 
 void main().catch(() => {

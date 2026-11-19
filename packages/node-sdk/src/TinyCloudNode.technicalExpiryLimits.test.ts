@@ -5,7 +5,7 @@
 //    2255-06-05T23:47:34Z, because the WASM builder fails beyond it.
 // A value past either limit is refused with a dated message BEFORE the signer or the WASM is called.
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   MAX_SIWE_EXPIRY_MS,
   MAX_UCAN_EXPIRY_MS,
@@ -16,6 +16,8 @@ import {
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
+import { ownedNodeMetadata, restoredPolicyNode } from "./test-support/restored-policy-node";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
@@ -29,12 +31,27 @@ const WASM_UCAN_RANGE = "Out of valid microsecond-precision range of NumericDate
 
 const PRIVATE_KEY = "1".padStart(64, "0");
 const HOST = "https://node.example";
+const SESSION_SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+const NODE_DID = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
 
 let originalFetch: typeof globalThis.fetch;
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
+
+function registryMetadata(input: string | URL | Request, init?: RequestInit): Promise<Response> | undefined {
+  const url = input instanceof Request ? input.url : String(input);
+  if (url.startsWith(`${registry.url.origin}/`)) return originalFetch(input, init);
+}
+
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify({ activated: [], skipped: [] }), {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+    registryMetadata(input, init) ?? ownedNodeMetadata(input, init, HOST, NODE_DID) ?? new Response(JSON.stringify({ activated: [], skipped: [] }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })) as typeof fetch;
@@ -61,6 +78,7 @@ async function ownerNode() {
   const address = await signer.getAddress();
   const node = new TinyCloudNode({
     host: HOST,
+    tinycloudRegistryUrl: registry.url.origin,
     domain: "limits.test",
     signer,
     wasmBindings: spied.wasm,
@@ -184,7 +202,7 @@ describe("the child token limit", () => {
     });
     const session = spied.wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
     spied.prepareSession.mockClear();
-    const node = new TinyCloudNode({ host: HOST, wasmBindings: spied.wasm });
+    const node = new TinyCloudNode({ host: HOST, tinycloudRegistryUrl: registry.url.origin, wasmBindings: spied.wasm });
     const wasmSession = {
       delegationHeader: session.delegationHeader,
       delegationCid: session.delegationCid,
@@ -276,24 +294,26 @@ function siweWithExpiry(expirationTime: string): string {
 
 function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?: boolean } = {}) {
   const covered = options.covered ?? true;
+  const parseRecap = mock(() =>
+    covered ? [{ service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] }] : []);
   const createDelegation = mock(() => ({
     delegation: "fake-ucan",
     cid: "bafyfake",
     delegateDid: BOB_DID,
     expiry: Math.floor(Date.now() / 1000) + 3600,
-    resources: [{ service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] }],
+    resources: [{ service: "kv", space: SESSION_SPACE, path: "items/", actions: ["tinycloud.kv/get"] }],
   }));
-  const prepareSession = mock((_config: unknown) => ({ siwe: "siwe" }));
+  const prepareSession = mock((config: { spaceId: string }) => ({ siwe: "siwe", spaceId: config.spaceId }));
   const wasm = {
     invoke: mock(() => Promise.resolve({})),
     invokeAny: mock(() => Promise.resolve({})),
     prepareSession,
-    completeSessionSetup: mock(() => ({ delegationCid: "bafysigned", delegationHeader: { Authorization: "signed.header" } })),
+    completeSessionSetup: mock((config: { spaceId: string }) => ({ spaceId: config.spaceId, delegationCid: "bafysigned", delegationHeader: { Authorization: "signed.header" } })),
     ensureEip55: (a: string) => a,
-    makeSpaceId: (a: string, c: number, p: string) => `space://${a}:${c}:${p}`,
+    makeSpaceId: (a: string, c: number, p: string) => `tinycloud:pkh:eip155:${c}:${a}:${p}`,
     createDelegation,
-    parseRecapFromSiwe: mock(() =>
-      covered ? [{ service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] }] : []),
+    parseRecapFromSiwe: parseRecap,
+    parseVerifiedRecapFromSiwe: parseRecap,
     protocolVersion: () => 1,
     createSessionManager: () => ({
       createSessionKey: (id: string) => id,
@@ -305,18 +325,21 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
   } as unknown as IWasmBindings;
   const signMessage = mock(async () => "signature");
   const node = new TinyCloudNode({
+    host: HOST,
+    tinycloudRegistryUrl: registry.url.origin,
     wasmBindings: wasm,
-    ...(options.signer ? { host: HOST, signer: { signMessage } as never } : {}),
+    ...(options.signer ? { signer: { signMessage } as never } : {}),
   });
   Object.assign(node, {
     _address: "0x0000000000000000000000000000000000000001",
     _chainId: 1,
     auth: {
+      resolveResourceDestinations: async () => [{ url: HOST }],
       tinyCloudSession: {
         address: "0x0000000000000000000000000000000000000001",
         chainId: 1,
         sessionKey: "default",
-        spaceId: "space://test",
+        spaceId: SESSION_SPACE,
         delegationCid: "bafyparent",
         delegationHeader: { Authorization: "Bearer parent" },
         verificationMethod: "did:key:z6MkTestSession#z6MkTestSession",
@@ -398,7 +421,7 @@ describe("the wallet-signed paths refuse before the wallet is asked", () => {
   const parentOf = (expiry: Date) => ({
     cid: "parent-cid",
     delegationHeader: { Authorization: "parent.header.signature" },
-    spaceId: "space://test",
+    spaceId: SESSION_SPACE,
     path: "docs",
     actions: ["tinycloud.kv/get"],
     expiry,
@@ -464,28 +487,19 @@ describe("the wallet-signed paths refuse before the wallet is asked", () => {
 });
 
 describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", () => {
-  const SPACE = "tinycloud:pkh:eip155:1:0xD559CCd9EB87c530A9a349262669386dE93cf412:applications";
   const SHARE_URL = `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`;
 
-  function deliveryNode() {
+  async function deliveryNode() {
     const requests: Array<Record<string, unknown>> = [];
-    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const metadata = registryMetadata(input, init);
+      if (metadata) return metadata;
+      const identity = ownedNodeMetadata(input, init, HOST, NODE_DID);
+      if (identity) return identity;
       requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as unknown as typeof fetch;
-    const wasmBindings = {
-      invoke: () => ({ Authorization: "delivery-invocation" }),
-      ensureEip55: (a: string) => a,
-      createSessionManager: () => ({
-        createSessionKey: (id: string) => id,
-        replaceSessionKey: (_jwk: object, id: string) => id,
-        renameSessionKeyId: () => {},
-        getDID: (id: string) => `did:key:z6MkTest-${id}`,
-        jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
-      }),
-    } as unknown as IWasmBindings;
-    const node = new TinyCloudNode({ host: HOST, wasmBindings });
-    Object.assign(node, { _restoredTcSession: { spaceId: SPACE }, _serviceContext: { session: { spaceId: SPACE } } });
+    const node = await restoredPolicyNode({ host: HOST, registryUrl: registry.url.origin });
     const deliver = (expiresAt: string) =>
       node.authorizeShareDeliveryV3({
         envelope: { version: 3 },
@@ -501,7 +515,7 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
   }
 
   test("a string that is not a date is refused cleanly, with no request sent and no RangeError", async () => {
-    const s = deliveryNode();
+    const s = await deliveryNode();
     const refusal = await s.deliver("tomorrow").catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(Error);
     expect(refusal).not.toBeInstanceOf(RangeError);
@@ -510,13 +524,13 @@ describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", 
   });
 
   test("a year past 9999 is refused with the dated message, with no request sent", async () => {
-    const s = deliveryNode();
+    const s = await deliveryNode();
     await expect(s.deliver("+010000-01-01T00:00:00.000Z")).rejects.toThrow(SIWE_DATED);
     expect(s.requests).toEqual([]);
   });
 
   test("the last second of 9999 is sent, normalised to three-digit milliseconds", async () => {
-    const s = deliveryNode();
+    const s = await deliveryNode();
     await s.deliver("9999-12-31T23:59:59Z").catch(() => undefined);
     expect(s.requests[0]?.expiresAt).toBe("9999-12-31T23:59:59.000Z");
   });
@@ -551,7 +565,93 @@ describe("createRootDelegationForSharing (the share link's wallet-signed root)",
     expect(await createRoot(ok, new Date(Date.now() + 100 * YEAR_MS))).toBeDefined();
 
     const failing = await ownerNode();
-    globalThis.fetch = (async () => new Response("denied", { status: 403 })) as typeof fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+      registryMetadata(input, init) ?? new Response("denied", { status: 403 })) as typeof fetch;
     expect(await createRoot(failing, new Date(Date.now() + 100 * YEAR_MS))).toBeUndefined();
+  });
+});
+
+// TC-3076: the node compares a child's expiry with its parent's. A parent signed with milliseconds (a wallet-signed SIWE
+// grant) is read to the whole second, so a child that keeps the milliseconds can sit after it and be refused with
+// "Child delegation expiry exceeds parent expiry". A child held to the parent's whole second is not after the parent under
+// either reading, so it is accepted by a node that compares milliseconds and by one that compares whole seconds.
+describe("a child under a parent with milliseconds is held to the parent's whole second (TC-3076)", () => {
+  const PARENT = new Date("2027-11-15T23:12:08.053Z");
+  const WHOLE = new Date("2027-11-15T23:12:08.000Z");
+  /** The node's rule as it was: the child may not end after the parent, compared in milliseconds. */
+  const acceptsByMilliseconds = (childMs: number, parentMs: number) => childMs <= parentMs;
+  /** The node's rule as it reads now: the parent's expiry is whole seconds. */
+  const acceptsByWholeSeconds = (childMs: number, parentMs: number) => childMs <= Math.floor(parentMs / 1000) * 1000;
+  const received = (expiry: Date, delegateDID: string) => ({
+    cid: "parent-cid",
+    delegationHeader: { Authorization: "parent.header.signature" },
+    spaceId: SESSION_SPACE,
+    path: "router/",
+    actions: ["tinycloud.kv/get"],
+    expiry,
+    delegateDID,
+    ownerAddress: "0x0000000000000000000000000000000000000001",
+    chainId: 1,
+  });
+  const preparedExpiries = (s: { prepareSession: { mock: { calls: unknown[][] } } }) =>
+    s.prepareSession.mock.calls.map((call) => Date.parse((call[0] as { expirationTime: string }).expirationTime));
+
+  test("the rule that refuses a child at the parent's milliseconds accepts the whole-second child", () => {
+    expect(acceptsByMilliseconds(PARENT.getTime(), PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(PARENT.getTime(), PARENT.getTime())).toBe(false);
+    expect(acceptsByMilliseconds(WHOLE.getTime(), PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(WHOLE.getTime(), PARENT.getTime())).toBe(true);
+  });
+
+  test("useDelegation activates its session at the delegation's whole second, accepted by both rules", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    await s.node.useDelegation(received(PARENT, s.node.did) as never);
+    const [child] = preparedExpiries(s);
+    expect(child).toBe(WHOLE.getTime());
+    expect(acceptsByMilliseconds(child!, PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(child!, PARENT.getTime())).toBe(true);
+  });
+
+  test("a delegation that already ends on a whole second is activated at exactly that expiry", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    await s.node.useDelegation(received(WHOLE, s.node.did) as never);
+    expect(preparedExpiries(s)).toEqual([WHOLE.getTime()]);
+  });
+
+  test("a delegation with less than a second left is refused before the wallet is asked", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    const ends = new Date(Math.floor(Date.now() / 1000) * 1000 + 999);
+    await expect(s.node.useDelegation(received(ends, s.node.did) as never)).rejects.toThrow("expires within a second");
+    expect(s.prepareSession).not.toHaveBeenCalled();
+    expect(s.signMessage).not.toHaveBeenCalled();
+  });
+
+  test("createSubDelegation defaults to the parent's whole second and caps a longer request there", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    const target = { path: "router/", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild" };
+    const defaulted = await s.node.createSubDelegation(received(PARENT, "did:key:z6MkReceiver") as never, target);
+    const capped = await s.node.createSubDelegation(received(PARENT, "did:key:z6MkReceiver") as never, { ...target, expiryMs: 10 * YEAR_MS });
+    expect(defaulted.expiry).toEqual(WHOLE);
+    expect(capped.expiry).toEqual(WHOLE);
+    expect(preparedExpiries(s)).toEqual([WHOLE.getTime(), WHOLE.getTime()]);
+  });
+
+  test("createSubDelegation leaves a request shorter than the parent as asked", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
+    const target = { path: "router/", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild", expiryMs: 60_000 };
+    const before = Date.now();
+    const shorter = await s.node.createSubDelegation(received(new Date(before + 3_600_000 + 53), "did:key:z6MkReceiver") as never, target);
+    expect(shorter.expiry.getTime()).toBeGreaterThanOrEqual(before + 60_000);
+    expect(shorter.expiry.getTime()).toBeLessThan(before + 120_000);
+  });
+
+  test("grantRuntimePermissions held to a session that ends on milliseconds ends at the session's whole second", async () => {
+    const s = mockedNode(PARENT.toISOString(), { signer: true, covered: false });
+    await s.node.grantRuntimePermissions([ENTRY], { expiry: 10 * YEAR_MS }).catch(() => undefined);
+    expect(s.prepareSession).toHaveBeenCalled();
+    const [child] = preparedExpiries(s);
+    expect(child).toBe(WHOLE.getTime());
+    expect(acceptsByMilliseconds(child!, PARENT.getTime())).toBe(true);
+    expect(acceptsByWholeSeconds(child!, PARENT.getTime())).toBe(true);
   });
 });
