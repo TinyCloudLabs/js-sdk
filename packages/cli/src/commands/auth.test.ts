@@ -255,6 +255,7 @@ mock.module("../config/profiles.js", () => ({
       recorded.setProfiles.push({ profile: name, data });
     },
     getKey: async (name: string) => keys.get(name) ?? null,
+    getStoredKey: async (name: string) => keys.get(name) ?? null,
     setKey: async (name: string, jwk: object) => {
       keys.set(name, jwk);
       recorded.setKeys.push({ profile: name, jwk });
@@ -903,6 +904,8 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.outputs).toEqual([{
       profile: "owner",
       authenticated: false,
+      keyKept: false,
+      message: "Signed out. The key was deleted; the next sign-in creates a new one.",
       replicasRemoved: [],
       replicasKept: false,
       warning: expect.stringContaining("delegations and grants on the node stay valid until they expire"),
