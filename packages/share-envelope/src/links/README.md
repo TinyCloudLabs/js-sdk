@@ -93,7 +93,7 @@ content there makes it fail on every run. `loadApprovalFiles` reads both names: 
 migrated into the v2 file, the v2 file is written, and only then is the v1 file deleted; a v1 file an older tc writes later is merged
 again on the next load (a repeated `requestId` is set aside). Logout and the key sweep delete both names (`discardApprovalFiles`),
 whatever they hold.
-A signed-out profile keeps no pending request from before its sign-out, including one an older tc left behind (`signedOutAt`).
+After sign-out, a profile drops any pending approval request made before it signed out, including one left by an older CLI. A sign-in started after the sign-out is kept.
 The v2 file is mode 0600 in a 0700 directory, written
 atomically by the adapter. An entry that cannot be read (including a repeated `requestId`, a request life above 24 h, or a
 signing key with fields other than `kty`, `crv`, `x`, `d` and a short `kid`/`alg`/`use`) is moved to `unrecognized` with its raw
