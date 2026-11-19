@@ -51,5 +51,5 @@ export async function cardMdForPublish(db: FeedReadDatabase, directory: string, 
 
 /** What stderr shows once per changed version. An owner who cleared card.md is a change too. */
 export function cardMdChangedText(card: FeedCardMd): string {
-  return card.text === "" ? `card.md changed (${card.version}): it is now empty.` : `card.md changed (${card.version}):\n${card.text}`;
+  return card.text === "" ? `The owner's card.md changed (${card.version}): it's now empty.` : `The owner's card.md changed (${card.version}):\n${card.text}`;
 }

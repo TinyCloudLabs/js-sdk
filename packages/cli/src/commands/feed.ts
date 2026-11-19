@@ -88,8 +88,8 @@ into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
-card-md prints the owner's card.md: {text, version, updatedAt}, or null when the owner has set
-none. publish and watch print the text once on stderr when its version differs from the last
+card-md prints the owner's card.md: {text, version, updatedAt}, or null when the owner hasn't set one.
+publish and watch print the text once on stderr when its version differs from the last
 one this profile saw for the agent. publish also adds cardMd {version} to its JSON each time.
 An agent connected before card.md existed reads it with the same grant.
 

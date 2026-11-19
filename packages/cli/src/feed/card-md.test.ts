@@ -38,7 +38,7 @@ test("an owner who cleared card.md is a change, and says so", async () => {
   await cardMdForPublish(row("Old.", "aaaaaaaaaaaa"), dir, "agent_one");
   const cleared = await cardMdForPublish(row("", "e3b0c44298fc"), dir, "agent_one");
   expect(cleared.cardMd).toEqual({ version: "e3b0c44298fc" });
-  expect(cardMdChangedText(cleared.changed!)).toBe("card.md changed (e3b0c44298fc): it is now empty.");
+  expect(cardMdChangedText(cleared.changed!)).toBe("The owner's card.md changed (e3b0c44298fc): it's now empty.");
 });
 
 test("an unset, unreadable or refused card.md leaves the publish result alone", async () => {
