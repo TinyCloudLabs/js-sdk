@@ -247,7 +247,6 @@ export async function ensureSpaceSetup(
   }
   const report = spaceSetupReport(delegation);
   if (!report) return;
-  // Probe the space this delegation was signed for, not the profile's primary.
-  const spaceId = typeof delegation.spaceId === "string" ? delegation.spaceId : undefined;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore, spaceId), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+  // A single-space login saved its session for this delegation's space, so the restored node's primary space is the one to read.
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions, restore), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }
