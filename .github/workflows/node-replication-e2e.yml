@@ -111,6 +111,11 @@ jobs:
           TC_TERMINAL_DELEGATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/TinyCloudNode.terminalDelegation.e2e.test.ts
 
+      - name: Run delegated encryption and multi-space runtime grant e2e
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/DelegatedAccess.encryption.e2e.test.ts packages/node-sdk/src/TinyCloudNode.runtimePermissions.multiSpace.e2e.test.ts
+
       - name: Run knowledge CLI e2e (apps-agent preset, knowledge list|read)
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud

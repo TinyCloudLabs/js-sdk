@@ -39,6 +39,26 @@
         "default": "./dist/space-hosting.cjs"
       }
     },
+    "./runtime-grants": {
+      "import": {
+        "types": "./dist/runtime-grants.d.ts",
+        "default": "./dist/runtime-grants.js"
+      },
+      "require": {
+        "types": "./dist/runtime-grants.d.cts",
+        "default": "./dist/runtime-grants.cjs"
+      }
+    },
+    "./secret-read": {
+      "import": {
+        "types": "./dist/secret-read.d.ts",
+        "default": "./dist/secret-read.js"
+      },
+      "require": {
+        "types": "./dist/secret-read.d.cts",
+        "default": "./dist/secret-read.cjs"
+      }
+    },
     "./credential-pending-store": {
       "types": "./dist/credential-pending-store.d.ts",
       "import": "./dist/credential-pending-store.js",
