@@ -219,29 +219,27 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard re-run, the session's space is re-
     } finally { activeChildren.delete(child); }
   }
 
-  function spaceOf(request: OpenKeyApprovalRequestV1): string {
-    const spaces = [...new Set(request.permissions.map((permission) => permission.space?.split(":").at(-1)))];
-    if (spaces.length !== 1 || !spaces[0]) throw new Error("Onboarding approval did not name exactly one space");
-    return spaces[0];
-  }
-
+  /** One approval for every requested space; `relayed` is OpenKey's hosting report, for the approval and for each space. */
   async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner, relayed: Record<string, unknown> = {}) {
-    const abilities: Record<string, Record<string, string[]>> = {};
+    const address = await signer.getAddress();
+    const ownerDid = "did:pkh:eip155:1:" + address;
+    const names = [...new Set(request.permissions.map((permission) => permission.space!.split(":").at(-1)!))].sort();
+    const spaceId = wasm.makeSpaceId(address, 1, names.includes("applications") ? "applications" : names[0]!);
+    const spaceAbilities: Record<string, Record<string, Record<string, string[]>>> = {};
     for (const permission of request.permissions) {
+      const abilities = spaceAbilities[wasm.makeSpaceId(address, 1, permission.space!.split(":").at(-1)!)] ??= {};
       const service = permission.service.slice("tinycloud.".length);
       abilities[service] = { ...abilities[service], [permission.path]: [...new Set([...(abilities[service]?.[permission.path] ?? []), ...permission.actions])] };
     }
-    const address = await signer.getAddress();
-    const ownerDid = "did:pkh:eip155:1:" + address;
-    const spaceId = wasm.makeSpaceId(address, 1, spaceOf(request));
     const now = Date.now();
-    const prepared = wasm.prepareSession({ abilities, address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
+    const prepared = wasm.prepareSession({ abilities: spaceAbilities[spaceId], spaceAbilities, address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId,
       jwk: request.targetPublicJwk, issuedAt: new Date(now).toISOString(),
       expirationTime: new Date(now + request.grantLifetimeSeconds * 1000).toISOString() });
     const signature = await signer.signMessage(prepared.siwe);
     const session = wasm.completeSessionSetup({ ...prepared, signature });
     await activateSessionWithHost(host, session.delegationHeader);
-    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature, ...relayed };
+    const requestedSpaces = names.map((space) => ({ space, spaceId: wasm.makeSpaceId(address, 1, space), ...relayed }));
+    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature, requestedSpaces, ...relayed };
     const signedExpiry = prepared.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1];
     const signedIssuedAt = prepared.siwe.match(/^Issued At:\s*(.+)$/m)?.[1];
     if (!signedExpiry || !signedIssuedAt) throw new Error("Fixture grant lacks signed lifetime");
@@ -457,9 +455,8 @@ if (seam === "after-save") {
 
   const lastLink = (stderr: string) => stderr.match(approvalLinkPattern)!.at(-1)!;
   const acksOf = (entry: ApprovalEntry) => ackEvidence.filter((item) => item.requestId === entry.id);
-  const stdoutPending = (stdout: string) => JSON.parse(stdout) as { pending: { step: number; of: number; approvalUrl: string; expiresAt: string } };
 
-  test("a re-run with a usable session on a space the node does not host waits for it and ends as SPACE_SETUP_PENDING, with no step 2 link", async () => {
+  test("a re-run with a usable session on a space the node does not host waits for it and ends as SPACE_SETUP_PENDING, with no new approval link", async () => {
     await mkdir(home("hosting-rerun"), { recursive: true, mode: 0o700 });
     const newOwner = new PrivateKeySigner(randomBytes(32).toString("hex"));
     const first = await run("hosting-rerun", ["onboard", "--timeout", "1s"]);
@@ -470,7 +467,7 @@ if (seam === "after-save") {
     expect(ended.stdout + ended.stderr).toContain("SPACE_SETUP_PENDING");
     const requests = approvalRequests.size;
 
-    // The session is saved and usable; the space is still not hosted. Before TC-2380 this run went on to a step 2 link.
+    // The session is saved and usable; the space is still not hosted. Before TC-2380 this run trusted the session without asking the node.
     const started = Date.now();
     const rerun = await run("hosting-rerun", ["onboard", "--timeout", "1s"]);
     const elapsed = Date.now() - started;
@@ -482,7 +479,7 @@ if (seam === "after-save") {
     expect(elapsed).toBeLessThan(120_000);
   });
 
-  test("a fresh run whose first approval says OpenKey will not host the space goes on to the step 2 link at once, with no wait", async () => {
+  test("a fresh run whose approval says OpenKey will not host the spaces finishes at once, with no wait", async () => {
     await mkdir(home("autosign-off"), { recursive: true, mode: 0o700 });
     const newOwner = new PrivateKeySigner(randomBytes(32).toString("hex"));
     const first = await run("autosign-off", ["onboard", "--timeout", "1s"]);
@@ -493,8 +490,8 @@ if (seam === "after-save") {
     const started = Date.now();
     const second = await run("autosign-off", ["onboard", "--timeout", "1s"]);
     const elapsed = Date.now() - started;
-    expect(second.exitCode, second.stderr).toBe(8);
-    expect(stdoutPending(second.stdout).pending.step).toBe(2);
+    expect(second.exitCode, second.stderr).toBe(0);
+    expect(JSON.parse(second.stdout).onboarded).toBe(true);
     expect(second.stderr).not.toContain("Setting up your space");
     // "No wait" is asserted by the absent setup notice; this only keeps the run clear of the 150 s default wait on a starved runner.
     expect(elapsed).toBeLessThan(120_000);
