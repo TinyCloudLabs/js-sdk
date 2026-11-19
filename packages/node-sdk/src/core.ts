@@ -230,10 +230,12 @@ export {
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
+export type { DelegatedSecretReadInput } from "./DelegatedAccess";
 export {
   activateCompactRuntimeDelegation,
   activateValidatedRuntimeDelegation,
   RuntimeDelegationRejectedError,
+  MissingSpacesError,
   serializeDelegation,
   deserializeDelegation,
 } from "./delegation";

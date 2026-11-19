@@ -152,7 +152,7 @@ var init_constants = __esm({
     CONFIG_DIR = tinycloudHomePath();
     PROFILES_DIR = profilesPath();
     CONFIG_FILE = tinycloudConfigPath();
-    DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
+    DEFAULT_HOST = "https://node.tinycloud.xyz";
     DEFAULT_OPENKEY_HOST = "https://openkey.so";
     DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_PROFILE = "default";
@@ -8194,7 +8194,8 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { constants as fsConstants5 } from "fs";
+import { chmod as chmod3, lstat as lstat6, open as open7, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import { join as join11 } from "path";
 import {
@@ -8210,6 +8211,60 @@ import {
   writeSession,
   withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
+function isTransientProfileEntryError(error) {
+  const code5 = error.code;
+  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP" || code5 === "EISDIR";
+}
+async function secureProfileDirectory(directory) {
+  const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
+  let root;
+  try {
+    root = await open7(directory, rootFlags);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const info = await root.stat();
+    if (!info.isDirectory()) {
+      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+    }
+    if ((info.mode & 511) !== PRIVATE_DIR_MODE) {
+      await root.chmod(PRIVATE_DIR_MODE);
+    }
+    const pinnedDirectory2 = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir5(pinnedDirectory2, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file;
+      try {
+        file = await open7(
+          join11(pinnedDirectory2, entry.name),
+          fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const fileInfo = await file.stat();
+        if (fileInfo.isFile() && (fileInfo.mode & 511) !== 384) {
+          await file.chmod(384);
+        }
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
 var ProfileManager;
 var init_profiles = __esm({
   "src/config/profiles.ts"() {
@@ -8286,7 +8341,11 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, async (directory) => {
+          if (!directory) return null;
+          await secureProfileDirectory(directory);
+          return readJson(join11(directory, "profile.json"));
+        });
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -14844,7 +14903,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open7(blob, key32) {
+async function open8(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -15261,7 +15320,7 @@ async function openRecordChecked(record2, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open7(body, key);
+    plaintext = await open8(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -16066,11 +16125,11 @@ var init_duration = __esm({
 });
 
 // src/lib/browser.ts
-import open12 from "open";
+import open13 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open12(url);
+    launcher = await open13(url);
   } catch {
     return false;
   }
@@ -16466,8 +16525,8 @@ var init_scoped_login = __esm({
 
 // src/auth/pending-code.ts
 import { createHash as createHash2 } from "crypto";
-import { constants as fsConstants5 } from "fs";
-import { open as open13, rm as rm8 } from "fs/promises";
+import { constants as fsConstants6 } from "fs";
+import { open as open14, rm as rm8 } from "fs/promises";
 import { join as join15 } from "path";
 import { profilePath as profilePath6 } from "@tinycloud/operations/state";
 var init_pending_code = __esm({
@@ -16851,7 +16910,7 @@ var init_invitation_key_grant = __esm({
 
 // src/auth/approval-request.ts
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes6, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open14 } from "fs/promises";
+import { open as open15 } from "fs/promises";
 import { join as join17 } from "path";
 import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath, profilePath as profilePath9 } from "@tinycloud/operations/state";
@@ -17079,6 +17138,16 @@ function bodyCutOff(error) {
 function lapsedPastRetention(entry, now) {
   return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
 }
+async function showApprovalLink(options, entry) {
+  options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+  if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+The link is valid until ${entry.requestExpiresAt}.
+`);
+  if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+    await tryOpenBrowser(entry.approvalUrl);
+  }
+}
 async function expiredRequest(profile, entry, drop) {
   if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
   return new CLIError(
@@ -17091,6 +17160,18 @@ async function discoverRefusedAsExpired(entry, response, now) {
   if (response.status !== 400 || entry.resultRef !== void 0 || now < Date.parse(entry.requestExpiresAt)) return false;
   const body = await response.clone().json().catch(() => null);
   return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
+}
+async function openKeySaysExpired(entry, signingKey) {
+  let response;
+  try {
+    response = await post2(entry, "discover", signingKey);
+  } catch {
+    return false;
+  }
+  if (response.ok) return false;
+  if (await discoverRefusedAsExpired(entry, response, Date.now())) return true;
+  const body = await response.clone().json().catch(() => null);
+  return typeof body === "object" && body !== null && "code" in body && body.code === "expired_request";
 }
 async function pauseBetweenAttempts(profile, entry, approvalWait, reached = false) {
   if (!approvalWait) {
@@ -17165,9 +17246,21 @@ async function acquireApprovalRequest(_did, options) {
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
-  const isNewRequest = entry === void 0;
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
+  let isNewRequest = entry === void 0;
+  const clock = approvalWait?.now ?? Date.now;
+  let linkWithheld = false;
+  if (entry && !entry.resultRef && !entry.resultEnvelope && clock() >= Date.parse(entry.requestExpiresAt)) {
+    linkWithheld = true;
+    if (lapsedPastRetention(entry, clock())) {
+      if (approvalWait) throw await expiredRequest(profile, entry, true);
+      if (await openKeySaysExpired(entry, signingKey)) {
+        const staleRequestId = entry.requestId;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+        entry = void 0;
+        isNewRequest = true;
+        linkWithheld = false;
+      }
+    }
   }
   if (!entry) {
     const relay = createECDH2("prime256v1");
@@ -17202,13 +17295,8 @@ async function acquireApprovalRequest(_did, options) {
     await updatePending(profile, (items) => [...items, entry]);
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
-    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
-${entry.approvalUrl}
-`);
-    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
-      await tryOpenBrowser(entry.approvalUrl);
-    }
+    if (!linkWithheld) await showApprovalLink(options, entry);
+    else if (!options.onApprovalRequest) console.error("Checking the saved request with OpenKey...");
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
@@ -17232,6 +17320,10 @@ ${entry.approvalUrl}
       }
       answered = true;
       if (response.status === 202) {
+        if (linkWithheld) {
+          linkWithheld = false;
+          await showApprovalLink(options, entry);
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
@@ -28534,7 +28626,7 @@ async function seal2(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH2 + nonce.length);
   return { blob, cid: await computeCid2(blob) };
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -29110,7 +29202,7 @@ async function resolveLegacyV2(link4, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open8(sealed, parsed.key32);
+      plaintext = await open9(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -29215,7 +29307,7 @@ async function receiveLegacyV2(link4, options) {
   }
   return { metadata: metadataFor(envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "compact" }, bytes: bytes3, ...text === void 0 ? {} : { text } };
 }
-var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+var SHARE_CONTENT_LIMIT = 95 * 1024 * 1024;
 var SHARE_PUBLISH_RESULT_VERSION = 1;
 var DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
 function redactPublishedShare(result) {
@@ -32659,11 +32751,12 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open9, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
+import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open10, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
-var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+var MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
+var MAX_ADDRESSED_SHARE_BYTES = 71 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
@@ -32735,7 +32828,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve4(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open9(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open10(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
   const outputPath = join12(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -32759,7 +32852,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open9(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open10(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -32974,12 +33067,13 @@ init_constants();
 init_errors();
 init_session_expired();
 init_warnings();
-import { chmod as chmod4, link as link3, open as open10, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
+import { chmod as chmod4, link as link3, open as open11, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
 import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
+  DEFAULT_TINYCLOUD_FALLBACK_HOST,
   LocationRecordValidationError,
   LocationRegistryHttpError,
   parseSignedCompactUcanAttenuation,
@@ -33338,7 +33432,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       await link3(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink5(found.file);
-      const directory = await open10(dirname5(found.file), "r");
+      const directory = await open11(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -33959,7 +34053,7 @@ function createShareAuthorityAdapters(input = {}) {
       };
       sharing = () => new TinyCloudNode2({
         ...registry,
-        newUserHost: null,
+        newUserHost: DEFAULT_TINYCLOUD_FALLBACK_HOST,
         autoDiscoverLocalNode: false,
         onRegistryFallback: recordRegistryFallbackWarning
       }).sharing;
@@ -33969,17 +34063,6 @@ function createShareAuthorityAdapters(input = {}) {
     const received = await share.receive(token, { autoSubdelegate: false, useSessionKey: false });
     const value = received.ok ? await received.data.kv.get("", { binary: true }) : void 0;
     const failure = !received.ok ? received.error : value !== void 0 && !value.ok ? value.error : void 0;
-    const cause = failure?.cause;
-    if (failure?.code === "node_not_found" && typeof cause === "object" && cause !== null && "code" in cause && cause.code === "node_not_found" && "verdict" in cause) {
-      const verdict = cause.verdict;
-      if (typeof verdict === "object" && verdict !== null && "status" in verdict && verdict.status === "unregistered" && !("offline" in verdict && verdict.offline === true)) {
-        throw new CLIError(
-          "SHARE_SENDER_UNREGISTERED",
-          "The account that shared this hasn't published its storage settings. Ask them to publish them (with tinycloud registry publish), then try again.",
-          ExitCode.NOT_FOUND
-        );
-      }
-    }
     if (failure?.meta?.status === 401 && /: 401 - (?:Invalid invocation: )?delegation-revoked: [A-Za-z0-9]+\s*$/.test(failure.message)) {
       throw new CLIError("SHARE_REVOKED", "This share link has been revoked by its sender.", ExitCode.NOT_FOUND);
     }
@@ -34034,7 +34117,7 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync } from "fs";
-import { lstat as lstat8, open as open11, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
+import { lstat as lstat8, open as open12, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
 import { basename as basename3, dirname as dirname6, isAbsolute, join as join14, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
@@ -34389,9 +34472,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open15 = html.indexOf("<", index);
-    if (open15 === -1) return;
-    index = open15 + 1;
+    const open16 = html.indexOf("<", index);
+    if (open16 === -1) return;
+    index = open16 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -34992,7 +35075,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat8(path);
     await hooks.afterLstat?.();
-    handle = await open11(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open12(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -35051,7 +35134,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open11(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open12(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -35204,6 +35287,8 @@ var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 var INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 var NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
+var SHARE_TOO_LARGE_MESSAGE = "Shared files can be up to 95 MiB. Use a smaller file or split it.";
+var ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it.";
 var ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
 function artifactRequest(options, actions, inputCount) {
   if (options.artifact === void 0) {
@@ -35470,8 +35555,17 @@ async function notifyRecordedShare(record2, recipient, adapter, storage, publish
 function byteLimit(value) {
   if (value === void 0) return void 0;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "--max-bytes must be between 1 byte and 95 MiB.", 7);
   return parsed;
+}
+function shareCeiling(target) {
+  return target.kind === "bearer" ? MAX_SHARE_STDIN_BYTES : MAX_ADDRESSED_SHARE_BYTES;
+}
+function shareTooLarge(maxBytes, ceiling, together = false) {
+  const defaultLimit = maxBytes === void 0 || maxBytes >= ceiling;
+  const largest = ceiling === MAX_SHARE_STDIN_BYTES ? "95" : "71";
+  const message = together ? defaultLimit ? `These files add up to more than ${largest} MiB. Share fewer at once or use smaller files.` : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to ${largest} MiB.` : defaultLimit ? ceiling === MAX_SHARE_STDIN_BYTES ? SHARE_TOO_LARGE_MESSAGE : ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to ${largest} MiB.`;
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 function mediaTypeFor(filename) {
   const extension = filename.toLowerCase().split(".").at(-1);
@@ -35482,12 +35576,12 @@ function requestedActions(values) {
   if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
-function assertAggregateInputLimit(inputs, maxBytes) {
-  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+function assertAggregateInputLimit(inputs, maxBytes, ceiling) {
+  const limit = Math.min(maxBytes ?? ceiling, ceiling);
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes, ceiling, inputs.length > 1);
   }
 }
 function registerShareCommand(program2) {
@@ -35499,6 +35593,7 @@ function registerShareCommand(program2) {
       const target = parseShareTarget(options.to);
       if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
       const maxBytes = byteLimit(options.maxBytes);
+      const ceiling = shareCeiling(target);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
       const actions = requestedActions(options.action);
@@ -35519,9 +35614,11 @@ function registerShareCommand(program2) {
       } else {
         for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
         for (const file of files) shareInputFilename(file, name);
-        inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+        inputs = await Promise.all(files.map((file) => readShareInput(file, name, Math.min(maxBytes ?? ceiling, ceiling)).catch((error) => {
+          throw error instanceof Error && error.message === "MAX_BYTES_EXCEEDED" ? shareTooLarge(maxBytes, ceiling) : error;
+        })));
       }
-      assertAggregateInputLimit(inputs, maxBytes);
+      assertAggregateInputLimit(inputs, maxBytes, ceiling);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);

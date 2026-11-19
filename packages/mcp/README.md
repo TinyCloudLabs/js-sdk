@@ -141,7 +141,9 @@ own OAuth resource with its own protected-resource metadata, approval route
 (`/<prefix>/connect`) and tenant state, so a token or approval for one opens no
 other. An address works only once OpenKey issues tokens for its audience and
 accepts its approval callback, and the server's token-status client is
-registered for it.
+registered for it. The addresses list the same five tools. `/claude/mcp` also
+repeats each tool's `title` as `annotations.title`, where Claude's directory
+reads the listing name; the other addresses do not.
 
 For personal records, ask naturally: “Add renew passport to my todos.”
 `tinycloud_apps_context` supplies the rules and the app list, `tinycloud_apps_read`
@@ -269,7 +271,7 @@ cookies), the `Host` header must match `TC_MCP_PUBLIC_URL` (a guard against
 DNS rebinding), responses never allow credentials, and only
 `WWW-Authenticate`, `Mcp-Session-Id` and `Mcp-Protocol-Version` are exposed to
 scripts. There is no Origin allowlist to configure. The
-default TinyCloud node is `https://tee.node.tinycloud.xyz`.
+default TinyCloud node is `https://node.tinycloud.xyz`.
 The MCP server asks OpenKey's resource-server token introspection endpoint
 (RFC 7662) about each access token before serving a call.
 `TC_MCP_INTROSPECTION_URL` (the endpoint; HTTPS outside localhost),
