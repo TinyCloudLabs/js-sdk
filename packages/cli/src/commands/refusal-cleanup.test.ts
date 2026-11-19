@@ -742,7 +742,7 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     await expect(ensure(profile, [request("default"), request("applications")], { openKeyAcquisition: omittedDefault as never }))
       .rejects.toMatchObject({
         code: "OPENKEY_APPROVAL_NARROWER",
-        message: expect.stringContaining('The owner didn\'t approve access to "default", and this task needs every requested space, so no session was saved.'),
+        message: expect.stringContaining('The owner didn\'t approve access to "default", and this task needs every requested space, so no grant was stored.'),
       });
     expect(approvals).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });

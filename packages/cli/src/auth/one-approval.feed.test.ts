@@ -11,6 +11,9 @@ const { sqliteHandle, unwrap } = await import(new URL("../../../sdk-services/src
 import { connectFeedAgent } from "../feed/connection.js";
 import { onboardingPermissions } from "./onboarding-scope.js";
 import { permissionTuples, scopedLoginPermissions } from "./scoped-login.js";
+import { unregisteredLocationRegistryResponse } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+
+const REGISTRY = "https://registry.fixture.test";
 
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -33,7 +36,7 @@ async function parent(withHooks = true) {
   const prepared = wasm.prepareSession({ address, chainId: 1, domain: "feed.test", spaceId: space, jwk: key, spaceAbilities,
     abilities: spaceAbilities[space], issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: expiry.toISOString() });
   const signature = await signer.signMessage(prepared.siwe);
-  const node = new TinyCloudNode({ host: "https://node.test", wasmBindings: wasm, autoBootstrapAccount: false });
+  const node = new TinyCloudNode({ host: "https://node.test", tinycloudRegistryUrl: REGISTRY, wasmBindings: wasm, autoBootstrapAccount: false });
   await node.restoreSession({ ...wasm.completeSessionSetup({ ...prepared, signature }), jwk: key, verificationMethod: did,
     address, chainId: 1, spaceId: space, siwe: prepared.siwe, signature });
   return { node, expiry };
@@ -42,7 +45,9 @@ async function parent(withHooks = true) {
 test("Home-only scope initializes feed tables and issues the exact child without generic app authority", async () => {
   const { node, expiry } = await parent();
   const registry = sqliteHandle(), output = sqliteHandle(), responses = sqliteHandle();
-  const fetch = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ activated: [], skipped: [] }));
+  // The fixture owner has no location record; every other request answers as the node.
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) =>
+    unregisteredLocationRegistryResponse(input, REGISTRY, init) ?? Response.json({ activated: [], skipped: [] }), { preconnect: globalThis.fetch.preconnect }));
   try {
     for (const path of ["xyz.tinycloud.tinychat/home_feed", resources.outputResource, resources.responseResource]) {
       expect(node.hasRuntimePermissions([{ service: "tinycloud.sql", space, path, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] }])).toBe(true);
