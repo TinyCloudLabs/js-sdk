@@ -220,9 +220,8 @@ test("a session that cannot list delegations says so and where to revoke instead
   const response = await revoke(cid);
   expect(response).toMatchObject({ error: { code: "TARGET_NOT_FOUND" } });
   const message = String((response as { error: { message: string } }).error.message);
-  expect(message).toContain("cannot list the owner's delegations");
-  expect(message).toContain("profile that created the grant");
-  expect(message).toContain("Delegations screen");
+  expect(message).toContain("can't look up");
+  expect(message).toContain("doesn't list it among the delegations this profile's key issued");
   expect(openKey.requests).toEqual([]);
   expect(fixture.nativeBearerStats().revocations).toBe(before);
 });
