@@ -251,6 +251,18 @@ docker run --rm -p 3000:3000 \
   ghcr.io/tinycloudlabs/tinycloud-mcp:latest
 ```
 
+Rate limiting is off by default. `TC_MCP_RATE_LIMIT=on` turns it on, in process memory
+(a restart resets the counters; run one instance, or put a shared limiter in front).
+Each OpenKey user gets a budget per tool class (connect 6/min, read 60/min, write 30/min,
+each with a burst) and an overall 240 requests/min; an OAuth client gets a 6000/min
+aggregate cap; a client address gets 60/min on the approval routes and for bearer tokens the
+server rejects. `/mcp` itself is never limited by address, because ChatGPT's users share
+its egress addresses. A refused tool call is a retryable `RATE_LIMITED` tool error;
+everything else is HTTP 429 with `Retry-After`. The numbers are starting points, not tuned:
+override with `TC_MCP_RATE_LIMIT_{CONNECT,READ,WRITE,SUBJECT,CLIENT,IP}_PER_MINUTE`.
+`TC_MCP_TRUSTED_PROXY_HOPS` (default 1) is how many entries from the right of
+`X-Forwarded-For` belong to your own proxies; `0` turns address limits off.
+
 Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer. The HTTP
 endpoint, hosted or self-hosted, answers calls and CORS preflights from any
 browser Origin: a call is authorized only by an OAuth access token for

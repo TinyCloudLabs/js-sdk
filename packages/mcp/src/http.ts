@@ -16,6 +16,16 @@ import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 import { WEBMCP_SCRIPT_PATH, agentDiscoveryRoutes } from "./agent-discovery.js";
 import { createOpenKeyTokenVerifier } from "./oauth.js";
 import { createTokenStatusChecker, type TokenStatusChecker, type TokenStatusConfig } from "./token-status.js";
+import {
+  createRateLimits,
+  rateLimitedToolResult,
+  refuseAddress,
+  refundAddress,
+  refuseAuthenticated,
+  refuseTool,
+  type RateLimitConfig,
+  type RateLimits,
+} from "./rate-limit.js";
 import { logToolCall } from "./logging.js";
 import {
   ApprovalOwnerMismatchError,
@@ -58,6 +68,11 @@ export interface HostedMcpConfig extends RemoteStoreConfig {
    * signed token claims are checked.
    */
   readonly introspection?: Omit<TokenStatusConfig, "resourceUrl">;
+  /**
+   * Rate limits for the public connector. Omit to turn limiting off (the default); see `rate-limit.ts`.
+   * State is in memory and per process.
+   */
+  readonly rateLimit?: RateLimitConfig;
 }
 
 export interface HostedMcpApp {
@@ -91,7 +106,8 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     config.introspection === undefined
       ? undefined
       : createTokenStatusChecker({ ...config.introspection, resourceUrl: resource.toString() });
-  const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
+  const limits = config.rateLimit === undefined ? undefined : createRateLimits(config.rateLimit);
+  const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl), false, limits);
   const surfaces = [hosted];
   const restrictedByPath = new Map<string, HostedMcpApp>();
   for (const prefix of RESTRICTED_ADDRESS_PREFIXES) {
@@ -102,7 +118,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       nativeServiceCredential: undefined,
       stateDir: join(config.stateDir, prefix),
       approvalPath: connectUrl.pathname,
-    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
+    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix), limits);
     surfaces.push(restricted);
     for (const owned of [
       restrictedUrl,
@@ -127,6 +143,7 @@ function createHostedSurface(
   surface: "hosted" | "public",
   tokenStatus: TokenStatusChecker | undefined,
   annotationTitles = false,
+  limits: RateLimits | undefined = undefined,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
   const callbackPath = `${connectPath}/callback`;
@@ -184,12 +201,16 @@ function createHostedSurface(
       beforeOperation: nativeOwner === undefined
         ? () => store.validateTenant(subject, ownerDids)
         : () => store.assertNativeGrantActive(nativeOwner),
+      ...(nativeOwner === undefined && limits !== undefined ? {
+        rateLimit: (tool: { readonly name: string; readonly destructive: boolean }) =>
+          refuseTool(limits, subject, tool.name, tool.destructive),
+      } : {}),
       ...(nativeOwner === undefined ? {
         transformOperationResult: (result: unknown, invocation: McpOperationInvocation) =>
           store.decorateAuthorityResult(subject, ownerDids, result, invocation),
       } : {}),
     }, validator);
-    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles);
+    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles, limits);
     return server;
   }, {
     legacy: "stateless",
@@ -418,6 +439,13 @@ function createHostedSurface(
           ? json({ ok: true })
           : methodNotAllowed("GET");
       }
+      if (limits !== undefined && request.method !== "OPTIONS" &&
+        (url.pathname === connectPath || url.pathname === callbackPath)) {
+        const blocked = refuseAddress(limits, request, "approval");
+        if (blocked !== undefined) {
+          return url.pathname === callbackPath ? callbackCors(blocked, config.openkeyHost) : blocked;
+        }
+      }
       if (url.pathname === connectPath) {
         if (request.method !== "GET") return methodNotAllowed("GET");
         try {
@@ -559,7 +587,25 @@ function createHostedSurface(
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
       if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
-      const auth = await authenticate(request);
+      // Bearer tokens the server must reject cost an OpenKey lookup, so they spend the address's budget. The call is
+      // charged BEFORE the lookup and given back for a token that proves valid: a check-then-charge would let any
+      // number of concurrent bad tokens through before the first one is counted. A request with no token is a cheap
+      // discovery 401 and does not spend: every ChatGPT user shares OpenAI's addresses.
+      const presented = request.headers.has("authorization");
+      if (limits !== undefined && presented) {
+        const blocked = refuseAddress(limits, request, "bad-token");
+        if (blocked !== undefined) return mcpCors(blocked, request);
+      }
+      const auth = await authenticate(request).catch((error: unknown) => {
+        // An unexpected failure is not evidence of a bad token: do not charge the address for it.
+        if (limits !== undefined && presented) refundAddress(limits, request, "bad-token");
+        throw error;
+      });
+      if (limits !== undefined && !(auth instanceof Response)) {
+        if (presented) refundAddress(limits, request, "bad-token");
+        const blocked = refuseAuthenticated(limits, auth.clientId, auth.extra?.subject);
+        if (blocked !== undefined) return mcpCors(blocked, request);
+      }
       return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
     close: () => handler.close(),
@@ -573,6 +619,7 @@ function registerConnectTool(
   identity: OAuthIdentity,
   surface: "hosted" | "public",
   annotationTitles: boolean,
+  limits: RateLimits | undefined,
 ): void {
   const title = "Connect TinyCloud";
   const inputSchema = fromJsonSchema({ type: "object", properties: {}, additionalProperties: false }, validator);
@@ -607,6 +654,11 @@ function registerConnectTool(
       let code = "INTERNAL_ERROR";
       let text: string;
       try {
+        const refused = limits === undefined ? undefined : refuseTool(limits, identity.subject, "tinycloud_connect", false);
+        if (refused !== undefined) {
+          code = "rate_limited";
+          return rateLimitedToolResult(refused) as never;
+        }
         const status = await store.connectStatus(identity.subject, identity.ownerDids);
         if (status.connected) {
           code = "ok";
