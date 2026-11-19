@@ -13,6 +13,7 @@ import {
   type TelemetryConfig,
 } from "@tinycloud/sdk-core";
 import {
+  parsePermissionHint,
   resolveSecretPath,
   type DataVaultService,
   type EncryptionService,
@@ -24,7 +25,7 @@ import {
 } from "@tinycloud/sdk-services";
 import { createServiceContext } from "./recordingServiceContext";
 import { PortableDelegation } from "./delegation";
-import { secretReadResult } from "./secretRead";
+import type { DelegatedSecrets } from "./secret-read";
 import type { SecretReadResult } from "./TinyCloudNode";
 
 /**
@@ -84,8 +85,8 @@ export class DelegatedAccess {
   private _duckdb: DuckDbService;
   private _hooks: HooksService;
   private encryptionFactory: DelegatedEncryptionFactory | undefined;
-  private _encryption: EncryptionService | undefined;
-  private _vault: DataVaultService | undefined;
+  private _encryption: IEncryptionService | undefined;
+  private _secrets: Promise<DelegatedSecrets> | undefined;
 
   /**
    * @param lifetime - Optional owner of this access: its `fetch` is used for
@@ -230,7 +231,20 @@ export class DelegatedAccess {
    * its own is needed.
    */
   get encryption(): IEncryptionService {
-    return this.encryptionService();
+    if (!this.encryptionFactory) {
+      throw new Error("This delegated access was created without encryption.");
+    }
+    // The service itself loads with the secret-read module on the first call.
+    const loaded = async () => (await this.secrets()).encryption;
+    return this._encryption ??= {
+      config: {},
+      initialize() {},
+      onSessionChange() {},
+      onSignOut() {},
+      discoverNetwork: async (...args) => (await loaded()).discoverNetwork(...args),
+      encryptToNetwork: async (...args) => (await loaded()).encryptToNetwork(...args),
+      decryptEnvelope: async (...args) => (await loaded()).decryptEnvelope(...args),
+    };
   }
 
   /**
@@ -242,33 +256,19 @@ export class DelegatedAccess {
    */
   async readSecret(input: DelegatedSecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope });
-    return secretReadResult(await this.secretVault().readNetworkEncrypted<unknown>(resolved.vaultKey));
+    return (await this.secrets()).read(resolved.vaultKey);
   }
 
-  private encryptionService(): EncryptionService {
-    if (!this._encryption) {
-      if (!this.encryptionFactory) {
-        throw new Error("This delegated access was created without encryption.");
-      }
-      const encryption = this.encryptionFactory.encryption();
-      encryption.initialize(this._serviceContext);
-      this._serviceContext.registerService("encryption", encryption);
-      this._encryption = encryption;
-    }
-    return this._encryption;
-  }
-
-  private secretVault(): DataVaultService {
-    if (!this._vault) {
-      const encryption = this.encryptionService();
-      // Vault records sit at full space keys, outside the delegation's KV prefix.
-      const kv = new KVService({});
-      kv.initialize(this._serviceContext);
-      const vault = this.encryptionFactory!.vault(kv, encryption);
-      vault.initialize(this._serviceContext);
-      this._vault = vault;
-    }
-    return this._vault;
+  /** One load and one set of services per access; a failed load is retried by the next call. */
+  private secrets(): Promise<DelegatedSecrets> {
+    return this._secrets ??= (async () => {
+      // Not a static import on purpose: web-sdk's root size budget has no room for it, so bundlers ship it as its own file.
+      const { delegatedSecrets } = await import("./secret-read.js");
+      return delegatedSecrets(this._serviceContext, this.encryptionFactory, new KVService({}), parsePermissionHint);
+    })().catch((error: unknown) => {
+      this._secrets = undefined;
+      throw error;
+    });
   }
 
   /**

@@ -163,3 +163,19 @@ test("a routed skip across the data and encryption nodes stays RESOURCE_NOT_ROUT
     expect(node.hasRuntimePermissions([decrypt])).toBe(false);
   });
 });
+
+test("concurrent first grants share the lazily loaded signing module and each install their own grant", async () => {
+  await withClient(false, async (node) => {
+    let approvals = 0;
+    const signMessage = signMessageCounter(new PrivateKeySigner(ownerKey), () => { approvals += 1; });
+    const other: PermissionEntry = { ...kv(routedSpace), path: "concurrent/" };
+    const [first, second] = await Promise.all([
+      node.grantRuntimePermissions([kv(routedSpace)], { signMessage }),
+      node.grantRuntimePermissions([other], { signMessage }),
+    ]);
+    expect(approvals).toBe(2);
+    expect(first.map(({ spaceId }) => spaceId)).toEqual([routedSpace]);
+    expect(second.map(({ spaceId }) => spaceId)).toEqual([routedSpace]);
+    expect(node.hasRuntimePermissions([kv(routedSpace), other])).toBe(true);
+  });
+});
