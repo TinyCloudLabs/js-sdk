@@ -120,26 +120,26 @@ async function saveReviewedLog(root: string, reportId: string, body: Buffer): Pr
   return { path, hash };
 }
 
-function missingReviewError(reportId: string): CLIError {
-  return new CLIError("BUG_REPORT_REVIEW_MISSING", `There's no reviewed CLI log with that hash, so nothing was sent. Run tinycloud bug-report --attach ${reportId} first.`);
+function missingReviewError(): CLIError {
+  return new CLIError("BUG_REPORT_REVIEW_MISSING", "There's no reviewed CLI log with that hash, so nothing was sent.");
 }
 
-function reviewReadError(reportId: string): CLIError {
-  return new CLIError("BUG_REPORT_REVIEW_READ_FAILED", `Couldn't read the saved CLI log, so nothing was sent. Run tinycloud bug-report --attach ${reportId} to save it again.`);
+function reviewReadError(): CLIError {
+  return new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "Couldn't read the saved CLI log, so nothing was sent.");
 }
 
 // Returns the saved request bytes only when they still hash to the reviewed identity.
 async function readReviewedLog(root: string, reportId: string, hash: string): Promise<Buffer> {
-  if (!REVIEW_HASH_PATTERN.test(hash)) throw missingReviewError(reportId);
+  if (!REVIEW_HASH_PATTERN.test(hash)) throw missingReviewError();
   const directory = join(root, BUG_REPORT_REVIEW_DIR_NAME);
   try {
     const directoryInfo = await lstat(directory);
-    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw missingReviewError(reportId);
+    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) throw missingReviewError();
   } catch (error) {
     if (error instanceof CLIError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") throw missingReviewError(reportId);
-    throw reviewReadError(reportId);
+    if (code === "ENOENT" || code === "ENOTDIR") throw missingReviewError();
+    throw reviewReadError();
   }
   const path = reviewedLogPath(root, reportId, hash);
   let file;
@@ -147,26 +147,26 @@ async function readReviewedLog(root: string, reportId: string, hash: string): Pr
     file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") throw missingReviewError(reportId);
-    throw reviewReadError(reportId);
+    if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") throw missingReviewError();
+    throw reviewReadError();
   }
   let body: Buffer;
   try {
     const details = await file.stat();
-    if (!details.isFile()) throw missingReviewError(reportId);
+    if (!details.isFile()) throw missingReviewError();
     // Windows reports 0o666/0o444 for files, so only POSIX can check owner-only mode; the report-bound hash still detects edits there.
     if (process.platform !== "win32" && (details.mode & 0o777) !== 0o600) {
-      throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", `The saved CLI log's permissions changed, so nothing was sent. Run tinycloud bug-report --attach ${reportId} to save it again.`);
+      throw new CLIError("BUG_REPORT_REVIEW_READ_FAILED", "The saved CLI log's permissions changed, so nothing was sent.");
     }
     body = await file.readFile();
   } catch (error) {
     if (error instanceof CLIError) throw error;
-    throw reviewReadError(reportId);
+    throw reviewReadError();
   } finally {
     await file.close();
   }
   if (reviewHash(reportId, body) !== hash) {
-    throw new CLIError("BUG_REPORT_REVIEW_CHANGED", `The CLI log changed since you reviewed it, so nothing was sent. Run tinycloud bug-report --attach ${reportId} to review it again.`);
+    throw new CLIError("BUG_REPORT_REVIEW_CHANGED", "The CLI log changed since it was saved for review, so nothing was sent.");
   }
   return body;
 }
@@ -258,9 +258,9 @@ async function attachLogs(reportId: string, tokenStdin: boolean, confirmHash: st
   try {
     saved = await saveReviewedLog(root, reportId, Buffer.from(body, "utf8"));
   } catch {
-    throw new CLIError("BUG_REPORT_REVIEW_SAVE_FAILED", "Couldn't save the CLI log on this computer, so nothing was sent. Try again.");
+    throw new CLIError("BUG_REPORT_REVIEW_SAVE_FAILED", "Couldn't save the CLI log on this computer, so nothing was sent.");
   }
-  output(`Nothing was sent. Saved the CLI log for report ${reportId} to ${saved.path} (${bytes} bytes, ${redacted.count} ${valueLabel} hidden). Read it, then send it with: tinycloud bug-report --attach ${reportId} --confirm ${saved.hash}\n`);
+  output(`Nothing was sent. Saved the CLI log for report ${reportId} to ${saved.path} (${bytes} bytes, ${redacted.count} ${valueLabel} hidden). Review hash: ${saved.hash}\n`);
 }
 
 export function registerBugReportCommand(program: Command, dependencies: BugReportDependencies = {}): void {
