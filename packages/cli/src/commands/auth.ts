@@ -34,7 +34,7 @@ import {
 } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { recordRegistryFallbackWarning } from "../output/warnings.js";
-import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
+import { ExitCode, CLI_DEFAULT_SESSION_EXPIRY_MS, DEFAULT_CHAIN_ID, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -939,7 +939,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON")
     .option(
       "--expiry <duration>",
-      "Lifetime of the granted delegation. ms-format string (e.g. \"7d\", \"30m\") or raw milliseconds. Defaults to 7d, capped by the active session's expiry.",
+      "Grant lifetime (e.g. 1h, 7d). Defaults to 30d and never outlasts your session.",
     )
     .option("--emit [file]", "Emit the request artifact to stdout, or write it to file when provided")
     .option("--grant", "Grant the requested permissions immediately with this owner profile; OpenKey shows the permission list separately, and no generated free-text reason is sent")
@@ -1142,7 +1142,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         // anything already covered by the session or an existing grant.
         const delegations = await node.grantRuntimePermissions(
           requested,
-          expiryOption !== undefined ? { expiry: expiryOption } : undefined,
+          { expiry: expiryOption ?? CLI_DEFAULT_SESSION_EXPIRY_MS },
         );
         await persistCurrentLocalSession(ctx.profile, profile, node.restorableSession, node.replicaStamp);
         const delegationCids: string[] = [];
@@ -2165,7 +2165,7 @@ export async function ensureDelegationAuthority(params: {
 
   const delegations = await params.node.grantRuntimePermissions(
     params.requested,
-    params.expiryOption !== undefined ? { expiry: params.expiryOption } : undefined,
+    { expiry: params.expiryOption ?? CLI_DEFAULT_SESSION_EXPIRY_MS },
   );
   if (params.persist === false) return delegations[0];
   for (const delegation of delegations) {
@@ -2776,7 +2776,7 @@ async function refreshPreparedOpenKeySession(params: {
   const space = permissions.find((permission) => permission.service === "tinycloud.kv")?.space ?? ownerSpaceId("default", owner);
   const capabilityRequest = composeManifestRequest([{
     app_id: "tc-cli", name: "TinyCloud CLI", space, prefix: "", defaults: false, includePublicSpace: false,
-    ...(expiry ? { expiry: `${expiry.durationMs}ms` } : {}),
+    expiry: `${expiry?.durationMs ?? CLI_DEFAULT_SESSION_EXPIRY_MS}ms`,
     permissions,
   }], { includeAccountRegistryPermissions: false });
   const node = new TinyCloudNode({
@@ -2788,7 +2788,7 @@ async function refreshPreparedOpenKeySession(params: {
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     replication: replicationConfig,
     ...(namedKeys === undefined ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) }),
-    ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),
+    sessionExpirationMs: expiry?.durationMs ?? CLI_DEFAULT_SESSION_EXPIRY_MS,
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
@@ -2944,7 +2944,7 @@ async function refreshPreparedKeysSession(params: {
     ...ownerFullAccess(),
     additionalRawAbilities: keyAbilitiesFor(namedKeys),
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
-    ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),
+    sessionExpirationMs: expiry?.durationMs ?? CLI_DEFAULT_SESSION_EXPIRY_MS,
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
