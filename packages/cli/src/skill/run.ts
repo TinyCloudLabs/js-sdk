@@ -98,6 +98,8 @@ function foreignFolder(target: string): CLIError | undefined {
   return refusal(target, undefined, []);
 }
 
+const alsoSaved = (count: number): string => (count === 0 ? "" : ` The guide was saved in ${count === 1 ? "1 other folder" : `${count} other folders`}.`);
+
 /**
  * `skill save`: copy the skill this CLI ships into each client's skills folder. A folder holding files TinyCloud did not
  * write is never touched, and nothing is written if any folder is in that state.
@@ -130,7 +132,7 @@ export function saveBundledSkill(options: SkillOptions): SkillSaved {
       saved.push(entry.folder);
     } catch (error) {
       if (error instanceof SkillFolderBusy) {
-        throw new CLIError("SKILL_FOLDER_BUSY", `Another save is writing ${shownPath(dirname(entry.folder))}.`, ExitCode.ERROR, {
+        throw new CLIError("SKILL_FOLDER_BUSY", `Another \`skill save\` is writing ${shownPath(dirname(entry.folder))}.`, ExitCode.ERROR, {
           path: shownPath(dirname(entry.folder)),
           ...(saved.length > 0 ? { saved: saved.map(shownPath) } : {}),
         });
@@ -138,7 +140,12 @@ export function saveBundledSkill(options: SkillOptions): SkillSaved {
       const unwritable = unwritableFolder(error, entry.folder, saved);
       if (unwritable) throw unwritable;
       if (saved.length === 0) throw error;
-      throw new CLIError("SKILL_SAVE_FAILED", `Couldn't write ${shownPath(entry.folder)}.`, ExitCode.ERROR, { path: shownPath(entry.folder), saved: saved.map(shownPath) });
+      const errno = typeof (error as { code?: unknown }).code === "string" && /^[A-Z0-9_]+$/.test((error as { code: string }).code) ? (error as { code: string }).code : undefined;
+      throw new CLIError("SKILL_SAVE_FAILED", `Couldn't write ${shownPath(entry.folder)}${errno ? ` (${errno})` : ""}.${alsoSaved(saved.length)}`, ExitCode.ERROR, {
+        path: shownPath(entry.folder),
+        ...(errno ? { errno } : {}),
+        saved: saved.map(shownPath),
+      });
     }
   }
   return {
