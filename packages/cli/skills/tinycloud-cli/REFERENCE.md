@@ -41,7 +41,7 @@ tinycloud --version
 ```bash
 tinycloud onboard                         # once; every later task reuses this profile
 tinycloud onboard --timeout 60s           # same, bounded: 0 done, 8 pending (JSON on stdout), 3 request expired
-tinycloud onboard --with feed             # Home and the feed only (one approval); --with apps,feed asks for both
+tinycloud onboard --with feed             # the Feed only (one approval, no account listing, 7 days); --with apps,feed asks for both (7 days); --expiry 12h..30d sets the lifetime
 tinycloud auth request --cap SPEC --grant --no-popup   # more access: ask once, send the owner the link
 tinycloud auth request --cap SPEC --grant --no-popup --timeout 60s   # same, bounded: 0 done, 8 pending (link in JSON on stdout; run it again to resume), 3 request expired
 tinycloud auth request --cap SPEC --grant --fresh --no-popup   # grant already covers it but ends soon: ask for a new one beside it (old grant kept; JSON lists both CIDs; revoke is by CID, so revoke every listed CID to end access now)

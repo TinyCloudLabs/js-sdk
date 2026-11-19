@@ -651,7 +651,7 @@ The one-hour request expiry is independent of the requested grant lifetime and
 result retention. A manifest login without `--expiry` requests one hour (seven
 days for `builtin:share-publishing`), a login without a manifest keeps its
 seven-day default, and onboarding requests
-30 days explicitly, in one approval for every task it asks for
+30 days explicitly (7 days when the Feed is among the tasks, or the `--expiry` given, at most 30 days), in one approval for every task it asks for
 (`tinycloud onboard --with apps|feed|apps,feed`; `apps` when omitted). `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 

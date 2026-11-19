@@ -575,4 +575,53 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
     expect(after.session).toBeNull();
     expect(after.grants).toEqual([]);
   });
+
+  test("onboard --with feed: one approval for the feed set for 7 days with no account listing, then an agent connects, imports its grant and publishes a card", async () => {
+    await mkdir(home("feed-owner"), { recursive: true, mode: 0o700 });
+    const onboarded = await onboardWithApprovals("feed-owner", () => ownerSigner, ["onboard", "--with", "feed"]);
+    expect(onboarded.exitCode, onboarded.stderr).toBe(0);
+    expect(onboarded.offered).toHaveLength(1);
+    const approval = onboarded.offered[0]!;
+    expect(approval.request).toMatchObject({ reason: "Set up TinyCloud on this computer: use your Feed, for 7 days." });
+    expect(spacesOf(approval.request!)).toEqual(["applications"]);
+    expect(approval.request!.permissions.map(permission => [permission.service, permission.path])).toEqual([
+      ["tinycloud.capabilities", ""],
+      ["tinycloud.hooks", "sql/xyz.tinycloud.tinychat/feed/"],
+      ["tinycloud.sql", "xyz.tinycloud.tinychat/feed/"],
+      ["tinycloud.sql", "xyz.tinycloud.tinychat/home_feed"],
+    ]);
+    expect(approval.request!.grantLifetimeSeconds).toBe(7 * 86400);
+    expect(approval.signedLifetimeSeconds).toBe(7 * 86400);
+    expect(JSON.parse(onboarded.stdout)).toMatchObject({ onboarded: true });
+    // The owner's own profile holds no kv grant and no account access: only the feed set.
+    expect((await cli("feed-owner", ["kv", "get", "--space", "applications", "anything"])).stderr).toContain("Unauthorized Action");
+    expect((await cli("feed-owner", ["kv", "get", "--space", "account", "spaces/applications"])).stderr).toContain("Unauthorized Action");
+
+    // The /feed guide's steps, with no account step and no second approval before connecting.
+    await mkdir(home("feed-agent"), { recursive: true, mode: 0o700 });
+    const created = await cli("feed-agent", ["profile", "create", "feed-demo", "--posture", "delegate-session", "--operator", "agent"]);
+    expect(created.exitCode, created.stderr).toBe(0);
+    const agentDid = (JSON.parse(created.stdout) as { did: string }).did;
+    const connected = await cli("feed-owner", ["feed", "connect", "--agent", "demo", "--to", agentDid, "--label", "Demo agent", "--space", "applications", "--expiry", "7d"]);
+    expect(connected.exitCode, connected.stderr).toBe(0);
+    const grantFile = join(home("feed-agent"), "feed-demo-grant.json");
+    await writeFile(grantFile, connected.stdout, { mode: 0o600 });
+    const imported = await cli("feed-agent", ["--profile", "feed-demo", "auth", "import", grantFile]);
+    expect(imported.exitCode, imported.stderr).toBe(0);
+    expect(JSON.parse(imported.stdout)).toMatchObject({ imported: true });
+    const cardFile = join(home("feed-agent"), "card.json");
+    await writeFile(cardFile, JSON.stringify({
+      cardId: "demo-card-1", revision: 1, issuanceId: "demo-card-1-r1", kind: "update", needsResponse: false,
+      title: "Feed works", body: "Posted by an agent that onboarded with --with feed.", urgency: 1, createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+      payload: { summary: "Posted without the account step.", agent: { kind: "claude", model: "test", runsOn: "test", job: "e2e" }, priority: 4, render: "post" },
+    }), { mode: 0o600 });
+    const published = await cli("feed-agent", ["--profile", "feed-demo", "feed", "publish", "--agent", "demo", "--file", cardFile]);
+    expect(published.exitCode, published.stderr + published.stdout).toBe(0);
+    const agentList = await cli("feed-agent", ["--profile", "feed-demo", "feed", "list", "--agent", "demo"]);
+    expect(agentList.exitCode, agentList.stderr).toBe(0);
+    expect(agentList.stdout).toContain("demo-card-1");
+    const ownerList = await cli("feed-owner", ["feed", "list", "--agent", "demo", "--space", "applications"]);
+    expect(ownerList.exitCode, ownerList.stderr).toBe(0);
+    expect(ownerList.stdout).toContain("demo-card-1");
+  });
 });
