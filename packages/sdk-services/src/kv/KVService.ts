@@ -1434,9 +1434,22 @@ export class KVService extends BaseService implements IKVService {
               }
             }
           }
-        } else if (this.readThrough === null || options?.entries) {
-          // A replica holds keys and values, not sizes or write times.
+        } else if (this.readThrough === null) {
           page = await network();
+        } else if (options?.entries) {
+          // A replica holds keys and values, not sizes or write times, so
+          // entries come from the node. Offline, list the replica's keys
+          // without entries; the failed read is not sent again.
+          const listed = await network().catch((error) => err(wrapError("kv", error)));
+          page = listed.ok || (listed.error.code !== ErrorCodes.NETWORK_ERROR && listed.error.code !== ErrorCodes.TIMEOUT)
+            ? listed
+            : await this.readThrough.list({
+              space: this.context.session!.spaceId,
+              listPath,
+              options: { ...options, entries: false },
+              signal: request.signal,
+              network: async () => listed,
+            });
         } else {
           page = await this.readThrough.list({
             space: this.context.session!.spaceId,
@@ -1497,8 +1510,11 @@ export class KVService extends BaseService implements IKVService {
     }
     const listed =
       (await this.parseResponse<Array<string | KVListNodeEntry>>(response, options?.raw)) ?? [];
-    // `raw` returns the body text unparsed, as before.
-    const items = Array.isArray(listed) ? listed : undefined;
+    // `raw` returns the body text unparsed, as before. An item that is
+    // neither a key nor an entry with a string key is dropped.
+    const items = Array.isArray(listed)
+      ? listed.filter((item) => typeof item === "string" || typeof item?.key === "string")
+      : undefined;
     const keys = items
       ? items.map((item) => (typeof item === "string" ? item : item.key))
       : (listed as unknown as string[]);

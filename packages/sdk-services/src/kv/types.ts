@@ -233,8 +233,10 @@ export interface KVListOptions {
 
   /**
    * Also return each key's stored size and last-modified time in
-   * {@link KVListResponse.entries}. Read from the network; a node that
-   * doesn't report them returns entries with the key only.
+   * {@link KVListResponse.entries}. Read from the network; offline, a set
+   * replica answers keys only. The node reports them only to the space owner
+   * or a session holding an unexpired `kv/get` covering that key; otherwise,
+   * or from a node that doesn't report them, an entry carries the key only.
    */
   entries?: boolean;
 
@@ -399,8 +401,9 @@ export interface KVResponse<T = unknown> {
 }
 
 /**
- * One listed key with its stored size and last-modified time, when the node
- * reports them.
+ * One listed key with its stored size and last-modified time when the node
+ * reports them. Both are absent, not 0 or null, for a key the caller may not
+ * read or whose size the node doesn't know.
  */
 export interface KVListEntry {
   key: string;
