@@ -10,6 +10,13 @@ import { CLIError } from "../output/errors.js";
  * MAX_UPLOAD_BODY_BYTES), and a public share uploads the file's bytes unchanged, so the largest file that fits is 95 MiB.
  */
 export const MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
+/**
+ * The largest file an addressed share (a named person, mailbox or domain) carries. The file is encrypted first, and the node
+ * counts the whole stored envelope against its 99,614,720-byte (95 MiB) upload cap. The ciphertext is the file plus a 12-byte
+ * nonce and a 16-byte tag, base64-encoded (x 4/3), plus about 1.1 to 1.3 KB of JSON fields: 3 x floor((99,614,720 - F) / 4) - 28
+ * is about 74,710,000 bytes (71.249 MiB). 71 MiB (74,448,896 bytes) leaves room for a long key path.
+ */
+export const MAX_ADDRESSED_SHARE_BYTES = 71 * 1024 * 1024;
 export const MAX_SHARE_URL_BYTES = 64 * 1024;
 
 export async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES): Promise<Uint8Array> {

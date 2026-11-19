@@ -114,4 +114,23 @@ describe("the share size limit is the largest upload the node accepts", () => {
     });
     expect(published).toHaveLength(0);
   });
+
+  // An addressed share is encrypted first: the stored envelope is the file plus 28 bytes, base64-encoded (x 4/3), plus about
+  // 1.1 to 1.3 KB of fields, and the node counts all of it against the same 99,614,720 bytes. That leaves about 74,710,000 bytes
+  // (71.249 MiB) for the file; 71 MiB is the limit the CLI states.
+  const ADDRESSED_LIMIT = 71 * 1024 * 1024;
+  const recipient = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+
+  test("an addressed share takes a file of exactly 71 MiB", async () => {
+    const result = await run([await fileOf(ADDRESSED_LIMIT), "--to", recipient]);
+    expect(result.exitCode).toBe(0);
+    expect(published).toHaveLength(1);
+  });
+
+  test("an addressed share over 71 MiB is refused before anything is published, and says 71 MB", async () => {
+    const result = await run([await fileOf(ADDRESSED_LIMIT + 1), "--to", recipient]);
+    expect(result.exitCode).toBe(7);
+    expect(errorOf(result.stderr)).toEqual({ code: "MAX_BYTES_EXCEEDED", message: "Files shared with specific people must be under 71 MB. Use a smaller file or split it." });
+    expect(published).toHaveLength(0);
+  });
 });
