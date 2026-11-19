@@ -13,6 +13,7 @@ import {
 } from "@modelcontextprotocol/server";
 import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
+import { WEBMCP_SCRIPT_PATH, agentDiscoveryRoutes } from "./agent-discovery.js";
 import { createOpenKeyTokenVerifier } from "./oauth.js";
 import { createTokenStatusChecker, type TokenStatusChecker, type TokenStatusConfig } from "./token-status.js";
 import { logToolCall } from "./logging.js";
@@ -73,6 +74,13 @@ export interface HostedMcpApp {
  */
 const RESTRICTED_ADDRESS_PREFIXES = ["chatgpt", "claude", "grok", "muse"] as const;
 
+/**
+ * Addresses whose tools repeat their title as `annotations.title`. Claude's
+ * directory takes each tool's listing name from there and suggests adding it
+ * when it is missing. The other directories list the tools as they are.
+ */
+const ANNOTATION_TITLE_PREFIXES: ReadonlySet<string> = new Set(["claude"]);
+
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   if (config.nativeServiceCredential !== undefined &&
     Buffer.byteLength(config.nativeServiceCredential, "utf8") < 32) {
@@ -94,7 +102,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       nativeServiceCredential: undefined,
       stateDir: join(config.stateDir, prefix),
       approvalPath: connectUrl.pathname,
-    }, restrictedUrl, "public", statusFor(restrictedUrl));
+    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
     surfaces.push(restricted);
     for (const owned of [
       restrictedUrl,
@@ -118,6 +126,7 @@ function createHostedSurface(
   resourceUrl: URL,
   surface: "hosted" | "public",
   tokenStatus: TokenStatusChecker | undefined,
+  annotationTitles = false,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
   const callbackPath = `${connectPath}/callback`;
@@ -168,6 +177,7 @@ function createHostedSurface(
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
+      annotationTitles,
       ...(nativeOwner === undefined ? {} : {
         allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"] as const,
       }),
@@ -179,7 +189,7 @@ function createHostedSurface(
           store.decorateAuthorityResult(subject, ownerDids, result, invocation),
       } : {}),
     }, validator);
-    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface);
+    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles);
     return server;
   }, {
     legacy: "stateless",
@@ -193,6 +203,9 @@ function createHostedSurface(
     scopesSupported: [REQUIRED_SCOPE],
     resourceName: surface === "public" ? "TinyCloud personal records" : "TinyCloud hosted MCP",
   };
+  const discoveryRoutes = surface === "hosted"
+    ? agentDiscoveryRoutes(resourceUrl, issuer, REQUIRED_SCOPE)
+    : new Map<string, () => Response>();
   const allowedHosts = [resourceUrl.hostname];
 
   return {
@@ -303,9 +316,21 @@ function createHostedSurface(
         ].join("\n") + "\n";
         return publicMetadataCors(publicText(authDoc, "text/markdown; charset=utf-8"), request);
       }
+      const discoveryRoute = discoveryRoutes.get(url.pathname);
+      if (discoveryRoute !== undefined) {
+        if (request.method === "OPTIONS") {
+          return publicMetadataCors(new Response(null, { status: 204 }), request);
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
+        const response = discoveryRoute();
+        return publicMetadataCors(
+          request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response,
+          request,
+        );
+      }
       if (url.pathname === "/robots.txt" && surface === "hosted") {
         return request.method === "GET"
-          ? publicText(`User-agent: *\nAllow: /\nSitemap: ${new URL("/sitemap.xml", resourceUrl)}\nAgentmap: ${new URL("/.well-known/ai-catalog.json", resourceUrl)}\n`, "text/plain; charset=utf-8")
+          ? publicText(`User-agent: *\nAllow: /\nContent-Signal: search=yes, ai-input=yes, ai-train=no\nSitemap: ${new URL("/sitemap.xml", resourceUrl)}\nAgentmap: ${new URL("/.well-known/ai-catalog.json", resourceUrl)}\n`, "text/plain; charset=utf-8")
           : methodNotAllowed("GET");
       }
       if ((url.pathname === "/mcp/server-card" || url.pathname === "/.well-known/mcp/server-card.json") && surface === "hosted") {
@@ -374,17 +399,17 @@ function createHostedSurface(
         const markdown = request.headers.get("accept")?.includes("text/markdown") ?? false;
         const content = markdown
           ? `# TinyCloud MCP\n\nHosted endpoint: <https://mcp.tinycloud.xyz/mcp> (Streamable HTTP, OpenKey OAuth).\n\n[Connection documentation](https://docs.tinycloud.xyz/cli/mcp).\n\nLocal alternative: install \`${LOCAL_CLI_PACKAGE}\` and \`${LOCAL_MCP_PACKAGE}\` and connect the \`tinycloud-mcp\` stdio server.\n`
-          : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="ai-catalog" href="/.well-known/ai-catalog.json"><title>TinyCloud MCP</title></head><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href="https://docs.tinycloud.xyz/cli/mcp">Connection documentation</a></p><p>Local alternative: install <code>${LOCAL_CLI_PACKAGE}</code> and <code>${LOCAL_MCP_PACKAGE}</code> and connect the <code>tinycloud-mcp</code> stdio server.</p></main></html>`;
+          : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="ai-catalog" href="/.well-known/ai-catalog.json"><script src="${WEBMCP_SCRIPT_PATH}" defer></script><title>TinyCloud MCP</title></head><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href="https://docs.tinycloud.xyz/cli/mcp">Connection documentation</a></p><p>Local alternative: install <code>${LOCAL_CLI_PACKAGE}</code> and <code>${LOCAL_MCP_PACKAGE}</code> and connect the <code>tinycloud-mcp</code> stdio server.</p></main></html>`;
         const headers = new Headers({
           "content-type": markdown ? "text/markdown; charset=utf-8" : "text/html; charset=utf-8",
           "cache-control": "public, max-age=300",
-          "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+          "content-security-policy": "default-src 'none'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
           "x-content-type-options": "nosniff",
           vary: "Accept",
         });
         headers.set(
           "link",
-          `<${new URL("/mcp/server-card", resourceUrl)}>; rel="describedby"; type="application/json", <https://docs.tinycloud.xyz/cli/mcp>; rel="service-doc"`,
+          `<${new URL("/mcp/server-card", resourceUrl)}>; rel="describedby"; type="application/json", <https://docs.tinycloud.xyz/cli/mcp>; rel="service-doc", <${new URL("/.well-known/api-catalog", resourceUrl)}>; rel="api-catalog"`,
         );
         return new Response(request.method === "HEAD" ? null : content, { headers });
       }
@@ -547,7 +572,9 @@ function registerConnectTool(
   store: RemoteTenantStore,
   identity: OAuthIdentity,
   surface: "hosted" | "public",
+  annotationTitles: boolean,
 ): void {
+  const title = "Connect TinyCloud";
   const inputSchema = fromJsonSchema({ type: "object", properties: {}, additionalProperties: false }, validator);
   const outputSchema = fromJsonSchema({
     type: "object",
@@ -563,11 +590,12 @@ function registerConnectTool(
   server.registerTool(
     "tinycloud_connect",
     {
-      title: "Connect TinyCloud",
+      title,
       description: "Check the hosted delegate connection and return a one-time OpenKey approval URL when setup is required.",
       inputSchema,
       outputSchema,
       annotations: {
+        ...(annotationTitles ? { title } : {}),
         readOnlyHint: false,
         idempotentHint: true,
         destructiveHint: false,

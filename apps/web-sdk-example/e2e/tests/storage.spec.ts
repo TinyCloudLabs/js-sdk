@@ -64,14 +64,6 @@ test.describe('Storage Operations', () => {
     await expect(prefix).toBeVisible();
   });
 
-  test('should show Add New Content button', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // Find Add New Content button
-    const addButton = page.getByText('Add New Content');
-    await expect(addButton).toBeVisible();
-  });
-
   test('should open add content form when clicking Add New Content', async ({ mockWalletPage: page }) => {
     await signIn(page);
 
@@ -134,16 +126,6 @@ test.describe('Storage Operations', () => {
     // The new key should appear in the list
     const newKeyItem = page.getByText(testKey);
     await expect(newKeyItem).toBeVisible({ timeout: 5000 });
-  });
-
-  test('should list stored keys', async ({ mockWalletPage: page }) => {
-    await signIn(page);
-
-    // The list should be visible (either with items or empty message)
-    const listOrEmpty = page.getByText('Key Value Store').or(
-      page.getByText('No content available')
-    );
-    await expect(listOrEmpty).toBeVisible();
   });
 
   test('should get a stored value', async ({ mockWalletPage: page }) => {

@@ -13,7 +13,18 @@ const keyId = manager.createSessionKey('test-issuer');
 const signingJwk = JSON.parse(manager.jwk(keyId));
 const signingKey = createPrivateKey({ key: signingJwk, format: 'jwk' });
 const profile = { courierDid: manager.getDID(keyId).split('#')[0], spaceId: 'tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:agents' };
-const peer = { handle: 'bob', courierDid: 'did:key:bob', sessionId: 'one-session', status: 'paired', outbound: [{ cid: 'prior', expiresAt: new Date(now + DAY).toISOString() }] };
+
+// Signed 30-day delegation the peer gave us: a long-lived peer, so renewals keep the usual 30-day period (TC-3159).
+const inboundFrom30DayPeer = (() => {
+  const at = Math.floor(Date.now() / 1000) * 1000;
+  const header = { alg: 'EdDSA', typ: 'JWT', ucv: '0.10.0', jwk: { kty: 'OKP', crv: 'Ed25519', x: signingJwk.x } };
+  const payload = { iss: 'did:key:bob', aud: profile.courierDid, nbf: at / 1000, exp: (at + 30 * DAY) / 1000, prf: ['peer-root'], att: {} };
+  const bytes = `${Buffer.from(JSON.stringify(header)).toString('base64url')}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}`;
+  const authorization = `${bytes}.${sign(null, Buffer.from(bytes), signingKey).toString('base64url')}`;
+  const expiry = new Date(at + 30 * DAY);
+  return { delegation: JSON.stringify({ cid: 'peer-inbound', delegationHeader: { Authorization: authorization }, expiry }), cid: 'peer-inbound', expiresAt: expiry.toISOString() };
+})();
+const peer = { handle: 'bob', courierDid: 'did:key:bob', sessionId: 'one-session', status: 'paired', inbound: inboundFrom30DayPeer, outbound: [{ cid: 'prior', expiresAt: new Date(now + DAY).toISOString() }] };
 const resources = peerReadPermissions(peer.handle, profile.spaceId, peer.sessionId).map(entry => ({
   resource: `${entry.space}/${entry.service.replace('tinycloud.', '')}/${entry.path}`, actions: entry.actions, caveats: [],
 }));

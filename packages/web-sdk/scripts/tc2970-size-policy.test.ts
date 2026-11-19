@@ -29,7 +29,7 @@ test("TC-2970 records the exact canonical CI root bytes within its 150-byte caps
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(150);
-    expect(rootCeilingFor({ ...ledger, tc2913OpenKeyContinuationRoot: undefined, tc2987RegistryAbsentReadsRoot: undefined, tc2937SharePlacementRoot: undefined, tc3030FirstPartyOriginsRoot: undefined, tc3076ChildExpiryRoot: undefined }, format)).toEqual({ row: "tc2970RegistryVerdictCacheRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2913OpenKeyContinuationRoot: undefined, tc2987RegistryAbsentReadsRoot: undefined, tc2937SharePlacementRoot: undefined, tc3030FirstPartyOriginsRoot: undefined, tc3076ChildExpiryRoot: undefined, tc3168V1DefaultNodeRoot: undefined, tc3172DelegateNotBeforeRoot: undefined, tc3194NativeShareLinksRoot: undefined, tc3243SdkOwnsBusyRetryRoot: undefined, tc3285SecretTypesRoot: undefined, tc3286ShareNoDelegationActionsRoot: undefined, tc2944VaultPathClassifierRoot: undefined }, format)).toEqual({ row: "tc2970RegistryVerdictCacheRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({

@@ -220,6 +220,27 @@ export class RuntimeDelegationRejectedError extends Error {
 }
 
 /**
+ * A runtime permission request named spaces that do not exist yet. The owner
+ * signed once for every requested space, but the node attaches a delegation
+ * only to spaces it hosts and never creates one, so the missing spaces got
+ * nothing. `delegations` holds the grants that did activate (for the spaces
+ * that exist); they are installed and usable. They all share one signed SIWE
+ * whose ReCap also names the missing spaces: do not persist or replay them,
+ * and revoking one revokes all of them.
+ */
+export class MissingSpacesError extends Error {
+  readonly code = "SPACE_NOT_FOUND";
+
+  constructor(
+    readonly missingSpaceIds: readonly string[],
+    readonly delegations: readonly PortableDelegation[],
+  ) {
+    super(`No permission was granted in spaces that do not exist yet: ${missingSpaceIds.join(", ")}`);
+    this.name = "MissingSpacesError";
+  }
+}
+
+/**
  * Classify an activation failure. Transport failures and transient host
  * statuses (408, 429, 5xx) are `activation_unavailable`; a plain 401 is
  * `activation_unauthenticated`; everything else stays `activation_rejected`.

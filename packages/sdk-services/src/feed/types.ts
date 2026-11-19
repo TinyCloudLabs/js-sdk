@@ -133,6 +133,10 @@ export interface FeedListenerOptions {
   // Return after the first drain that attempted at least one new handoff,
   // so a caller whose runtime wakes on process exit gets one batch per run.
   once?: boolean;
+  // Runs at the start of every drain (the first one, each wake, each reconnect), before responses are listed.
+  // For advice that lives beside the responses, such as the owner's card.md. A throw or rejection is ignored:
+  // it never delays or stops delivery.
+  onWake?: () => void | Promise<void>;
 }
 
 // Registry, view state, and preferences belong to the owner's separate store.

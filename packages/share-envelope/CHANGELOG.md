@@ -1,5 +1,21 @@
 # @tinycloud/share-envelope
 
+## 1.6.0
+
+### Minor Changes
+
+- e3cd63b: Add strict optional owner-renewal intent and chosen renewal metadata to OpenKey approval request/result binding. Recognize explicit task/standing purpose, with missing purpose treated as task without rewriting legacy signed bytes. Consumers must still verify the signed original grant and renewal lease before installing access.
+
+  Details: TC-2904
+
+- e3e4bd7: Internal changes to Courier and `@tinycloud/share-envelope`. Commands and behavior are unchanged. `@tinycloud/share-envelope/links` adds `buildShareInvitationApprovalSpec`, the `ShareInvitationApprovalContext` type, and an optional `context` field on the approval request.
+
+  Details: TC-2234
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
 ## 1.6.0-beta.1
 
 ### Minor Changes

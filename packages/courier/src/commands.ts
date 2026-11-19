@@ -1,6 +1,6 @@
 import { adviceFor, deriveState, heldApproval, recoverInterrupted, rotateKey } from './state.js';
 import { createRuntimeNode, maintainPeerSet } from './interim-runtime.js';
-import { interimLocalState, maintainOutbound } from './interim-renewal.js';
+import { interimLocalState, maintainOutbound, peerLimitNote } from './interim-renewal.js';
 import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,6 +30,7 @@ import {
   messageRole, parseTaskState, taskView,
   type CourierMessage, type CourierTask, type Intent, INTENTS, type ThreadMeta,
 } from './a2a.js';
+import { collectMessages, validateMessageSelection, renderMessageOutcomes, type MessageReadOutcome } from './message-read.js';
 import { clearLocalCaches, collectThread, diskOwnerSpaceIndex, diskThreadCache, partialReadText, peerReadError, recordOwnerSpaceWrite, type ThreadEntry } from './thread.js';
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
@@ -478,16 +479,22 @@ async function pairRenew(args: ParsedArgs) {
     if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
     const delegation = await renewOutbound(active, peer, args.has('force'), true);
     if (!delegation) fail('renew-throttled', `Access for ${oneLine(peer.handle)} was renewed in the last 24 hours. Use --force to renew it again now.`);
+    noteLimit(peer);
     printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
     return;
   }
   const renewed: string[] = [];
   for (const peer of peers) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
-    if (await renewOutbound(active, peer, args.has('force'))) renewed.push(peer.handle);
+    if (await renewOutbound(active, peer, args.has('force'))) { renewed.push(peer.handle); noteLimit(peer); }
     await installInbound(active, peer);
   }
   printJson({ ok: true, renewed });
+}
+
+function noteLimit(peer: StoredPeer): void {
+  const note = peerLimitNote(peer);
+  if (note) console.error(`Renewed access for ${oneLine(peer.handle)} (${note}).`);
 }
 
 async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, artifact = false): Promise<PortableDelegation | undefined> {
@@ -501,8 +508,13 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean, arti
 }
 
 async function issueOutbound(active: Ctx, peer: StoredPeer, force: boolean, save: () => void, artifact: boolean): Promise<PortableDelegation | undefined> {
-  const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true });
+  const result = await maintainOutbound(active.node, active.profile, peer, save, { force, manual: true, extendOnly: artifact });
+  if (result.reason === 'overlong') {
+    fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs longer than the peer accepts${peerLimitNote(peer) ? ` (${peerLimitNote(peer)})` : ''}. A shorter grant is published automatically on the next renewal tick. Nothing was exported.`);
+  }
   if (result.reason === 'no-extension') {
+    const limit = peerLimitNote(peer);
+    if (artifact && limit) fail('renew-throttled', `Access for ${oneLine(peer.handle)} already runs as long as the peer accepts (${limit}), so there is no longer renewal to hand over. Nothing was exported.`);
     if (artifact) fail('renew-throttled', `Courier can't extend this access under your current approval. Run \`${cmd('init --request')}\` to request a new one.`);
     console.error(`Courier couldn't extend access for ${oneLine(peer.handle)} yet. Their current access is unchanged.`);
     return undefined;
@@ -688,33 +700,41 @@ export type { ThreadEntry } from './thread.js';
 const MARKER_READ_MS = 300_000;
 
 export async function cmdRead(args: ParsedArgs) {
+  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--message id]… [--json] [--full]')}`);
+  const messageIds = args.all('message');
+  if (args.has('message')) validateMessageSelection(threadId, args.get('peer'), messageIds);
   const { profile, node } = await ctx(true, args.get('peer'));
-  const threadId = args.positional[0] ?? fail('usage', `Usage: ${cmd('read <threadId> [--peer p] [--json] [--full]')}`);
-  const full = args.has('full');
-  const cache = diskThreadCache(profile.courierDid, threadId, undefined, full);
-  const result = await collectThread({
-    threadId,
-    selfKv: node.kv,
-    peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
-    exactPeer: Boolean(args.get('peer')),
-    // The peer's renewal marker is read at most every 5 minutes per thread (always with --full).
-    kvFor: (peer) => {
-      const markerId = `marker:${peer.courierDid}:${peer.spaceId}`;
-      const readAt = cache.get(markerId);
-      const renew = full || !(typeof readAt === 'number' && Date.now() - readAt < MARKER_READ_MS);
-      if (renew) cache.set(markerId, Date.now());
-      return peerKv(node, profile, peer, { renew });
-    },
-    cache,
-    ownerSpace: diskOwnerSpaceIndex(profile.courierDid, profile.spaceId!, threadId, full),
-    self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
-  });
-  cache.save();
-  if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
-  if (args.has('json')) {
-    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, 2) + '\n');
+  let result: Awaited<ReturnType<typeof collectThread>> & { outcomes?: MessageReadOutcome[] };
+  if (args.has('message')) {
+    result = await collectMessages({ threadId, peer: getPeer(profile, args.get('peer')!), messageIds, selfKv: node.kv,
+      kvFor: (peer) => peerKv(node, profile, peer) });
   } else {
-    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors));
+    const full = args.has('full');
+    const cache = diskThreadCache(profile.courierDid, threadId, undefined, full);
+    result = await collectThread({
+      threadId,
+      selfKv: node.kv,
+      peers: args.get('peer') ? [getPeer(profile, args.get('peer')!)] : Object.values(profile.peers),
+      exactPeer: Boolean(args.get('peer')),
+      // The peer's renewal marker is read at most every 5 minutes per thread (always with --full).
+      kvFor: (peer) => {
+        const markerId = `marker:${peer.courierDid}:${peer.spaceId}`;
+        const readAt = cache.get(markerId);
+        const renew = full || !(typeof readAt === 'number' && Date.now() - readAt < MARKER_READ_MS);
+        if (renew) cache.set(markerId, Date.now());
+        return peerKv(node, profile, peer, { renew });
+      },
+      cache,
+      ownerSpace: diskOwnerSpaceIndex(profile.courierDid, profile.spaceId!, threadId, full),
+      self: { courierDid: profile.courierDid, spaceId: profile.spaceId! },
+    });
+    cache.save();
+    if (!result.entries.length && !result.errors.length) fail('not-found', `No thread ${threadId} under any known peer.`);
+  }
+  if (args.has('json')) {
+    await writeOut(JSON.stringify({ notice: COUNTERPARTY_NOTICE, threadId, ...result }, null, args.has('message') ? undefined : 2) + '\n');
+  } else {
+    await writeOut(renderThreadText(threadId, result.entries) + partialReadText('Thread', result.errors) + (result.outcomes ? renderMessageOutcomes(args.get('peer')!, result.outcomes) : ''));
   }
   for (const error of result.errors) console.error(`Warning: ${peerReadError(error.peer).message}`);
 }
