@@ -24,6 +24,7 @@ import { registerReplicaCommand } from "./commands/replica.js";
 import { registerRegistryCommand } from "./commands/registry.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
 import { registerShareCommand } from "./commands/share.js";
+import { registerSkillCommand } from "./commands/skill.js";
 import { registerSpaceCommand } from "./commands/space.js";
 import { registerSqlCommand } from "./commands/sql.js";
 import { registerStatusCommand } from "./commands/status.js";
@@ -63,4 +64,5 @@ export function registerTinyCloudCommands(program: Command): void {
   registerStatusCommand(program);
   registerAccountCommand(program);
   registerBugReportCommand(program);
+  registerSkillCommand(program);
 }

@@ -4,6 +4,7 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { Command } from "commander";
 import { handleError } from "./output/errors.js";
 import { emitBanner } from "./output/banner.js";
+import { showAboutOnce } from "./output/teach.js";
 import { closeReplication } from "./lib/replication-registry.js";
 
 const { version } = JSON.parse(
@@ -76,6 +77,19 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
   const isShareCommand = parentName === "share" || hookedCommand.name() === "share";
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
+  }
+  // The first command in a config folder says what TinyCloud is and what the CLI can do, once, on stderr.
+  // An explicit --json, --quiet or TC_HIDE_BANNER=1 keeps stderr as it was; a piped stdout alone does not.
+  if (!opts.quiet && opts.json !== true && !isShareCommand && process.env.TC_HIDE_BANNER !== "1") {
+    let signedIn = fullCommandName(actionCommand) === "onboard";
+    if (!signedIn) {
+      try {
+        signedIn = await ProfileManager.profileExists(opts.profile || (await ProfileManager.getConfig()).defaultProfile);
+      } catch {
+        // No config folder yet: this computer is not signed in.
+      }
+    }
+    showAboutOnce({ dir: CONFIG_DIR, cli: CLI_NAME, signedIn });
   }
 
   // Config guard — warn if not configured for auth-required commands

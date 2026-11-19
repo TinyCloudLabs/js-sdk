@@ -136,6 +136,9 @@ export function registerOnboardCommand(program: Command): void {
           granted: ONBOARD_STEPS.map(({ space, asks }) => ({ space, asks })),
           expiresAt: storedSessionState(session, profile).expiresAt,
         }, () => `Onboarded: profile ${ctx.profile} acts for ${profile.ownerDid ?? "the owner"}.\n${ONBOARD_STEPS.map(({ asks }) => `  ${asks}`).join("\n")}`);
+        if (globalOpts.quiet !== true) {
+          process.stderr.write(`Next: \`${CLI_NAME} skill save\` saves a short guide to TinyCloud in your skills folder, so you have it next time.\n`);
+        }
       } catch (error) {
         return handleError(error);
       }
