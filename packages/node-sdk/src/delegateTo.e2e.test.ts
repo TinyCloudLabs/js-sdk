@@ -388,6 +388,9 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
     expect(await owner.secrets.vault.put(physicalPath(name).slice("vault/".length), {
       value: "synthetic stale rotation",
     }, { ifMatch: previousEtag })).toMatchObject({ ok: false, error: { code: "ETAG_MISMATCH" } });
+    const replacementRaw = await owner.kvForSpace(space).get<string>(physicalPath(name), { raw: true, source: "network" });
+    if (!replacementRaw.ok) throw new Error("replacement ciphertext was not stored");
+    const ciphertext: NamedKeyEnvelope = JSON.parse(replacementRaw.data.data);
     const replacement = (await owner.delegateSecretRead(recipientDid(recipient), name)).delegation;
     const decryptResource = (grant: typeof old) =>
       grant.resources?.find((entry) => entry.service === "encryption")?.path;
@@ -397,6 +400,9 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
 
     await recipient.useRuntimeDelegation(replacement);
     expect(await read(old.cid)).toEqual({ status: "decrypt_failed" });
+    await expect(createNamedKeyClient(recipient, { delegationCid: old.cid }).decrypt(ciphertext)).rejects.toThrow();
+    const decrypted = await createNamedKeyClient(recipient, { delegationCid: replacement.cid }).decrypt(ciphertext);
+    expect(JSON.parse(new TextDecoder().decode(decrypted))).toMatchObject({ value: "synthetic replacement" });
     expect(await read(replacement.cid)).toEqual({ status: "ok", value: "synthetic replacement" });
     expect(await read()).toEqual({ status: "ok", value: "synthetic replacement" });
   }, 30_000);
