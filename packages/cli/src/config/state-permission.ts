@@ -17,8 +17,6 @@ export interface StateFolderContext {
   platform: NodeJS.Platform;
   /** The current user's id on platforms that have one. */
   uid: number | undefined;
-  /** The current user's name, when the environment has one. */
-  user?: string | undefined;
   /** Whether a path exists; the real file system unless a test supplies one. */
   exists?: (file: string) => boolean;
   /** The name of the user with this id; the passwd file unless a test supplies one. */
@@ -27,8 +25,7 @@ export interface StateFolderContext {
 
 export function stateFolderContext(): StateFolderContext {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  const user = process.platform === "win32" ? process.env.USERNAME : (process.env.USER ?? process.env.LOGNAME);
-  return { home, platform: process.platform, uid: process.getuid?.(), user };
+  return { home, platform: process.platform, uid: process.getuid?.() };
 }
 
 function errnoOf(error: unknown): string | undefined {
@@ -82,23 +79,22 @@ export function unwritableStateFolder(error: unknown, target: string, context: S
   const relative = api.relative(fold(api.resolve(resolvedHome)), fold(api.resolve(resolvedFolder)));
   const isHome = relative === "";
   const inside = !isHome && !relative.startsWith("..") && !api.isAbsolute(relative);
-  const who = shown(context.user || "your user");
   const head = `The TinyCloud CLI can't write to its folder ${shown(folder)} (${code})`;
   const metadata = { path: shown(folder), errno: code };
   const refuse = (cause: string): CLIError => new CLIError("STATE_FOLDER_NOT_WRITABLE", `${head}: ${cause} Nothing was changed.`, ExitCode.ERROR, metadata);
 
   if (CONTROL.test(folder)) return refuse("its name has control characters.");
   if (!inside && !isHome) return refuse("it's outside the home folder.");
-  if (windows) return refuse(`Windows user ${who} can't write to it.`);
+  if (windows) return refuse("this Windows user can't write to it.");
   let info: ReturnType<typeof statSync>;
   try {
     info = statSync(folder);
   } catch {
     // The cause stays general when the folder cannot be inspected.
-    return refuse(`${who} can't write to it.`);
+    return refuse("this user can't write to it.");
   }
   const mode = (info.mode & 0o777).toString(8);
-  if (info.uid === context.uid) return refuse(`it's read-only for ${who} (mode ${mode}), or the disk is read-only.`);
+  if (info.uid === context.uid) return refuse(`it's read-only for this user (mode ${mode}), or the disk is read-only.`);
   if (isHome) return refuse("the home folder belongs to another user.");
   return refuse(`it belongs to another user (owner ${shown((context.ownerOf ?? passwdOwner)(info.uid))}, mode ${mode}).`);
 }

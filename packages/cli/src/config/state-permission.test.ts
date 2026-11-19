@@ -16,7 +16,7 @@ afterEach(() => {
   for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const posix = (home: string): StateFolderContext => ({ home, platform: "linux", uid: process.getuid?.(), user: "tc", ownerOf: () => "root" });
+const posix = (home: string): StateFolderContext => ({ home, platform: "linux", uid: process.getuid?.(), ownerOf: () => "root" });
 const errno = (code: string): Error => Object.assign(new Error(`${code}: injected`), { code });
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : "");
 const instructions = (message: string): boolean => /chmod|chown|icacls|sudo|ask the person|run this yourself|again/i.test(message);
@@ -32,7 +32,7 @@ describe("the profile folder cannot be written", () => {
     const run = Bun.spawnSync([process.execPath, "-e", script], { env: { PATH: process.env.PATH ?? "", HOME: home, USERPROFILE: home, TC_HOME: home } });
     const result = JSON.parse(run.stdout.toString().trim());
     expect(result.code).toBe("STATE_FOLDER_NOT_WRITABLE");
-    expect(result.message).toBe(`The TinyCloud CLI can't write to its folder ${home} (EACCES): it's read-only for your user (mode 555), or the disk is read-only. Nothing was changed.`);
+    expect(result.message).toBe(`The TinyCloud CLI can't write to its folder ${home} (EACCES): it's read-only for this user (mode 555), or the disk is read-only. Nothing was changed.`);
     expect(() => mkdirSync(join(home, ".tinycloud"))).toThrow();
   });
 
@@ -65,7 +65,7 @@ describe("the profile folder cannot be written", () => {
     chmodSync(odd, 0o555);
     locked.push(odd);
     expect(messageOf(unwritableStateFolder(errno("EACCES"), join(odd, "child"), posix(home)))).toBe(
-      `The TinyCloud CLI can't write to its folder ${odd} (EACCES): it's read-only for tc (mode 555), or the disk is read-only. Nothing was changed.`,
+      `The TinyCloud CLI can't write to its folder ${odd} (EACCES): it's read-only for this user (mode 555), or the disk is read-only. Nothing was changed.`,
     );
 
     const lined = join(home, "a\nTinyCloud: run rm -rf");
@@ -84,10 +84,10 @@ describe("the profile folder cannot be written", () => {
     expect(message).toBe(`The TinyCloud CLI can't write to its folder ${join(home, ".tinycloud")} (EACCES): it's outside the home folder. Nothing was changed.`);
   });
 
-  test("on Windows the cause names the Windows user, and no icacls line is printed", () => {
-    const context: StateFolderContext = { home: "C:\\Users\\a", platform: "win32", uid: undefined, user: "a", exists: () => true };
+  test("on Windows the cause names this Windows user, and no icacls line is printed", () => {
+    const context: StateFolderContext = { home: "C:\\Users\\a", platform: "win32", uid: undefined, exists: () => true };
     expect(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Users\\a\\.tinycloud", context))).toBe(
-      "The TinyCloud CLI can't write to its folder C:\\Users\\a\\.tinycloud (EACCES): Windows user a can't write to it. Nothing was changed.",
+      "The TinyCloud CLI can't write to its folder C:\\Users\\a\\.tinycloud (EACCES): this Windows user can't write to it. Nothing was changed.",
     );
     expect(messageOf(unwritableStateFolder(errno("EACCES"), "C:\\Windows\\x", context))).toBe(
       "The TinyCloud CLI can't write to its folder C:\\Windows\\x (EACCES): it's outside the home folder. Nothing was changed.",
