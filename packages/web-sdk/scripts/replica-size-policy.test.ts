@@ -77,7 +77,7 @@ import { approvedTc2234InvitationPolicyRoot, validateTc2234InvitationPolicyRootT
 import { validateTc2773LazyRestoreReplicaWorkerTransition } from "./replica-size-policy";
 import { validateTc2691HostExpiryTransition } from "./replica-size-policy";
 
-const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2931BootstrapScope" && row !== "tc2923EncryptionTeeOriginRoot" && row !== "tc2949PanelChunkRecoveryRoot" && row !== "tc2970RegistryVerdictCacheRoot" && row !== "tc2913OpenKeyContinuationRoot" && row !== "tc2987RegistryAbsentReadsRoot" && row !== "tc2937SharePlacementRoot" && row !== "tc3030FirstPartyOriginsRoot" && row !== "tc3076ChildExpiryRoot" && row !== "tc3168V1DefaultNodeRoot" && row !== "tc3172DelegateNotBeforeRoot" && row !== "tc3194NativeShareLinksRoot" && row !== "tc3243SdkOwnsBusyRetryRoot" && row !== "tc3285SecretTypesRoot" && row !== "tc3284PerSecretRoot"));
+const approvedLedgerRows = Object.fromEntries(Object.entries(shippedApprovedLedgerRows).filter(([row]) => row !== "tc2934RequestedAccountRoot" && row !== "tc2936RestoreCommitRoot" && row !== "tc2931BootstrapScope" && row !== "tc2923EncryptionTeeOriginRoot" && row !== "tc2949PanelChunkRecoveryRoot" && row !== "tc2970RegistryVerdictCacheRoot" && row !== "tc2913OpenKeyContinuationRoot" && row !== "tc2987RegistryAbsentReadsRoot" && row !== "tc2937SharePlacementRoot" && row !== "tc3030FirstPartyOriginsRoot" && row !== "tc3076ChildExpiryRoot" && row !== "tc3168V1DefaultNodeRoot" && row !== "tc3172DelegateNotBeforeRoot" && row !== "tc3194NativeShareLinksRoot" && row !== "tc3243SdkOwnsBusyRetryRoot" && row !== "tc3285SecretTypesRoot" && row !== "tc3286ShareNoDelegationActionsRoot" && row !== "tc3284PerSecretRoot"));
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
 // This file retains historical snapshots before the TC-2934 and TC-2949 rows; those admissions are tested separately.
@@ -96,6 +96,7 @@ delete shipped.tc3172DelegateNotBeforeRoot;
 delete shipped.tc3194NativeShareLinksRoot;
 delete shipped.tc3243SdkOwnsBusyRetryRoot;
 delete shipped.tc3285SecretTypesRoot;
+delete shipped.tc3286ShareNoDelegationActionsRoot;
 delete shipped.tc3284PerSecretRoot;
 delete shipped.tc3030FirstPartyOriginsRoot;
 const MAX_WORKER_GZIP_BYTES = shipped.tc2872RenewalKvWorker?.worker.ceiling ?? LIVE_MAX_WORKER_GZIP_BYTES;

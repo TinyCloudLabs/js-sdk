@@ -524,6 +524,7 @@ describe("TC-2481 Web routing exact optional admission", () => {
     delete root.tc3194NativeShareLinksRoot;
     delete root.tc3243SdkOwnsBusyRetryRoot;
     delete root.tc3285SecretTypesRoot;
+    delete root.tc3286ShareNoDelegationActionsRoot;
     delete root.tc3284PerSecretRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;
@@ -708,6 +709,7 @@ describe("TC-2481 final3e0 optional accounting admission", () => {
     delete root.tc3194NativeShareLinksRoot;
     delete root.tc3243SdkOwnsBusyRetryRoot;
     delete root.tc3285SecretTypesRoot;
+    delete root.tc3286ShareNoDelegationActionsRoot;
     delete root.tc3284PerSecretRoot;
     delete root.tc3030FirstPartyOriginsRoot;
     delete root.tc2937SharePlacementRoot;

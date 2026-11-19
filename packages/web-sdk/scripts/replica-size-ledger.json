@@ -3364,6 +3364,24 @@
     },
     "reason": "SecretsService reads a secret's optional type (getEntry) and validates the type on put; sdk-services, sdk-core, node-sdk and web-sdk expose it and are bundled into the web-sdk root. The TOTP helpers are a separate subpath and are not in the root. Canonical Node 22/Bun 1.3.14 CI on #1042 (342ac278, based on master ae9a23c9) measured index.mjs 1528836 and index.cjs 1462292 gzip -9 bytes: +227 and +219 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3285"
   },
+  "tc3286ShareNoDelegationActionsRoot": {
+    "label": "share links never carry tinycloud.delegation actions (TC-3286)",
+    "ruling": "TC-3286 size ruling (Naomi): a ratchet row in the #1038 pattern for #1043's exact canonical CI bytes, restated over the TC-3285 ceilings after #1042 merged first; index.mjs +103 B and index.cjs +48 B over the TC-3285 ceilings, each under the 800 B per-row cap. Details: TC-3286",
+    "base": "400cf7f1652d079abb5c8382736f9c2ba8c4cb6a",
+    "sourceCommits": ["800a57fbd0239558c5783d77c761b3132de2da31"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215/job/135112809282",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215/job/135112809572"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 103, "index.cjs": 48 },
+      "ceiling": { "index.mjs": 1528939, "index.cjs": 1462340 }
+    },
+    "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (800a57fb, master 400cf7f1 merged in) measured index.mjs 1528939 and index.cjs 1462340 gzip -9 bytes: +103 and +48 over the TC-3285 ceilings 1528836 and 1462292. No other ceiling moves. Details: TC-3286"
+  },
   "tc3284PerSecretRoot": {
     "label": "per-secret named keys (TC-3284)",
     "ruling": "test-ruling: TC-858 ratchet row tc3284PerSecretRoot. Naomi approved the exact #1050 canonical CI root gzip bytes with no margin.",

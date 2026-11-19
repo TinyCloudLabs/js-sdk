@@ -485,6 +485,7 @@ export type Ledger = {
   tc3194NativeShareLinksRoot?: LogoutRatchet;
   tc3243SdkOwnsBusyRetryRoot?: LogoutRatchet;
   tc3285SecretTypesRoot?: LogoutRatchet;
+  tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
   tc3284PerSecretRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
@@ -1125,6 +1126,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3194NativeShareLinksRoot !== undefined) pins.push({ row: "tc3194NativeShareLinksRoot", pin: root.tc3194NativeShareLinksRoot.sourceCommits.at(-1)! });
   if (root.tc3243SdkOwnsBusyRetryRoot !== undefined) pins.push({ row: "tc3243SdkOwnsBusyRetryRoot", pin: root.tc3243SdkOwnsBusyRetryRoot.sourceCommits.at(-1)! });
   if (root.tc3285SecretTypesRoot !== undefined) pins.push({ row: "tc3285SecretTypesRoot", pin: root.tc3285SecretTypesRoot.sourceCommits.at(-1)! });
+  if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
   if (root.tc3284PerSecretRoot !== undefined) pins.push({ row: "tc3284PerSecretRoot", pin: root.tc3284PerSecretRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -1235,6 +1237,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3194NativeShareLinksRoot", root.tc3194NativeShareLinksRoot?.root.ceiling],
     ["tc3243SdkOwnsBusyRetryRoot", root.tc3243SdkOwnsBusyRetryRoot?.root.ceiling],
     ["tc3285SecretTypesRoot", root.tc3285SecretTypesRoot?.root.ceiling],
+    ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
     ["tc3284PerSecretRoot", root.tc3284PerSecretRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
@@ -3630,6 +3633,26 @@ export const approvedTc3285SecretTypesRoot: LogoutRatchet = {
   "reason": "SecretsService reads a secret's optional type (getEntry) and validates the type on put; sdk-services, sdk-core, node-sdk and web-sdk expose it and are bundled into the web-sdk root. The TOTP helpers are a separate subpath and are not in the root. Canonical Node 22/Bun 1.3.14 CI on #1042 (342ac278, based on master ae9a23c9) measured index.mjs 1528836 and index.cjs 1462292 gzip -9 bytes: +227 and +219 over the TC-3243 ceilings 1528609 and 1462073. No other ceiling moves. Details: TC-3285"
 };
 
+/** The exact TC-3286 share-links-without-delegation-actions root allowance from canonical CI. */
+export const approvedTc3286ShareNoDelegationActionsRoot: LogoutRatchet = {
+  "label": "share links never carry tinycloud.delegation actions (TC-3286)",
+  "ruling": "TC-3286 size ruling (Naomi): a ratchet row in the #1038 pattern for #1043's exact canonical CI bytes, restated over the TC-3285 ceilings after #1042 merged first; index.mjs +103 B and index.cjs +48 B over the TC-3285 ceilings, each under the 800 B per-row cap. Details: TC-3286",
+  "base": "400cf7f1652d079abb5c8382736f9c2ba8c4cb6a",
+  "sourceCommits": ["800a57fbd0239558c5783d77c761b3132de2da31"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215/job/135112809282",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44392278215/job/135112809572"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 103, "index.cjs": 48 },
+    "ceiling": { "index.mjs": 1528939, "index.cjs": 1462340 }
+  },
+  "reason": "SharingService refuses tinycloud.delegation actions in share links (sharing.generate, the child delegation a recipient creates from a received link, and preflightGenerate); sdk-core is bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1043 (800a57fb, master 400cf7f1 merged in) measured index.mjs 1528939 and index.cjs 1462340 gzip -9 bytes: +103 and +48 over the TC-3285 ceilings 1528836 and 1462292. No other ceiling moves. Details: TC-3286"
+};
+
 /** The exact TC-3284 per-secret named-key root allowance from canonical CI. */
 const approvedTc3284PerSecretRoot: LogoutRatchet = {
   "label": "per-secret named keys (TC-3284)",
@@ -3756,6 +3779,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3194NativeShareLinksRoot: approvedTc3194NativeShareLinksRoot,
   tc3243SdkOwnsBusyRetryRoot: approvedTc3243SdkOwnsBusyRetryRoot,
   tc3285SecretTypesRoot: approvedTc3285SecretTypesRoot,
+  tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
   tc3284PerSecretRoot: approvedTc3284PerSecretRoot,
 };
 
@@ -4246,8 +4270,13 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
         JSON.stringify(value.tc3285SecretTypesRoot) !== JSON.stringify(approvedTc3285SecretTypesRoot))) {
     throw new Error("Only the exact TC-3285 root admission is approved.");
   }
-  if (value.tc3284PerSecretRoot !== undefined &&
+  if (value.tc3286ShareNoDelegationActionsRoot !== undefined &&
       (!value.tc3285SecretTypesRoot ||
+        JSON.stringify(value.tc3286ShareNoDelegationActionsRoot) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot))) {
+    throw new Error("Only the exact TC-3286 root admission is approved.");
+  }
+  if (value.tc3284PerSecretRoot !== undefined &&
+      (!value.tc3286ShareNoDelegationActionsRoot ||
         JSON.stringify(value.tc3284PerSecretRoot) !== JSON.stringify(approvedTc3284PerSecretRoot))) {
     throw new Error("Only the exact TC-3284 per-secret root admission is approved.");
   }
@@ -5175,5 +5204,13 @@ export function validateTc3285SecretTypesRootTransition(base?: LogoutRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3285SecretTypesRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3285 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3286 share-links-without-delegation-actions root admission is introduced once and immutable. */
+export function validateTc3286ShareNoDelegationActionsRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3286ShareNoDelegationActionsRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3286 root admission may be introduced once and cannot change later.");
   }
 }
