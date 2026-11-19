@@ -90,6 +90,9 @@ jobs:
       # web-sdk's opt-in replica entries type-check against @tinycloud/replica's
       # built declarations (kv-storage, profile-gate), so build replica first.
       - name: Build node and web SDK declarations
+        env:
+          # web-sdk's webpack build exceeds Node's default ~2 GB heap (TC-2952).
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           bun run --cwd packages/node-sdk build
           bun run --cwd packages/replica build
@@ -110,6 +113,9 @@ jobs:
           EXPECTED_NODE_MAJOR: "20"
           NPM_CONFIG_OFFLINE: "true"
           NPM_CONFIG_REGISTRY: "http://127.0.0.1:9"
+          # test:public-api runs the web-sdk webpack build, which exceeds Node's
+          # default ~2 GB heap (TC-2952).
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/secrets.test.ts
           bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test packages/cli/src/commands/secrets-owner-retry.test.ts

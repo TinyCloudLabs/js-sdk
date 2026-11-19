@@ -5,9 +5,11 @@ import { setTimeout as wait } from "node:timers/promises";
 import { tryOpenBrowser } from "../lib/browser.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
-import { createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
+import { buildShareInvitationApprovalSpec, checkApprovalResultBinding, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type ApprovalRenewal, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
+import { RENEWAL_ADMISSION_LEAD_MS, verifyOwnerRenewalLease } from "@tinycloud/sdk-core/delegations/renewal-receipt";
 import { ProfileManager } from "../config/profiles.js";
 import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
@@ -21,6 +23,7 @@ import { carryRefusedDelegation, isPermanentRefusal, markMaybeGranted } from "./
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
 import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, firstCheckTimeoutMs, type ApprovalWait } from "./approval-wait.js";
+import { verifyInvitationGrant, type VerifiedInvitationGrant } from "./invitation-key-grant.js";
 
 interface PendingApproval {
   version: 1;
@@ -36,6 +39,8 @@ interface PendingApproval {
   signingKey?: Ed25519PrivateJwk;
   relayPrivateKey: string;
   expectedOwner?: string;
+  /** An invitation's file identity (sha256 of the shared bytes), kept so a rerun of the same file resumes it. */
+  invitationMeta?: { contentSha256: string; requestedDurationMs?: number };
   resultRef?: string;
   resultExpiresAt?: string;
   resultEnvelope?: unknown;
@@ -54,6 +59,13 @@ export function trackApprovalResult(source: object, verified: object): void {
 const acquisitions = new WeakMap<object, PendingApproval>();
 /** The `--timeout` a request was acquired under; its acknowledgement is bounded by the same limit. */
 const approvalWaits = new WeakMap<PendingApproval, ApprovalWait>();
+/** The owner renewal lease that came with an acquired delegation, verified and admitted, until the login saves it. */
+const renewals = new WeakMap<object, ApprovalRenewal>();
+
+/** The verified renewal lease an approval result carried for this delegation, if it carried one. */
+export function approvalRenewalOf(delegation: object): ApprovalRenewal | undefined {
+  return renewals.get(delegation);
+}
 
 /** Remote results require the durable login commit before their delivery can be acknowledged. */
 export function approvalResultNeedsAck(delegation: object): boolean {
@@ -323,6 +335,7 @@ async function throwRemoteError(profile: string, entry: PendingApproval, respons
 function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
   delegation: Record<string, unknown>;
   session: ReturnType<typeof verifyScopedLogin>["session"];
+  renewal?: ApprovalRenewal;
 } {
   if (!entry.resultRef || !entry.resultEnvelope) throw invalid("No encrypted approval result is available.");
   // The result the owner approved, once opened: a refusal carries it so the caller can name the refused delegation.
@@ -340,6 +353,18 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
       new Date(opened.delegationExpiresAt).toISOString() !== opened.delegationExpiresAt ||
       !opened.delegation || typeof opened.delegation !== "object") throw invalid("Encrypted result binding does not match this request.");
     const delegation = opened.delegation as Record<string, unknown>;
+    if (entry.request.context) {
+      // Everything about the key comes from the owner-signed grant for THIS request; the owner must be the profile's own account.
+      if (entry.expectedOwner === undefined) throw invalid("An invitation approval needs the profile's own account to check it against.");
+      const grant = verifyInvitationGrant(delegation, key, {
+        targetDid: entry.request.targetDid, ownerDid: entry.expectedOwner, request: { requestId: entry.requestId, bodyCid: entry.bodyCid },
+        acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt,
+      });
+      if (grant.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || grant.expiresAt !== opened.delegationExpiresAt) {
+        throw invalid("Result owner or expiry differs from its signed delegation.");
+      }
+      return { delegation, session: { ownerDid: grant.ownerDid, permissions: grant.permissions, expiresAt: grant.expiresAt } };
+    }
     const verified = verifyScopedLogin(delegation, key, entry.request.targetDid,
       entry.request.permissions as PermissionEntry[], {
         expectedOwner: entry.expectedOwner ?? opened.ownerDid,
@@ -348,11 +373,65 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
       });
     if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() ||
       verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid("Result owner or expiry differs from its signed delegation.");
-    return { delegation, session: verified.session };
+    // A renewal is accepted only when this request asked for one, and then only bound to it.
+    if (!entry.request.renewal) return { delegation, session: verified.session };
+    let renewal: ApprovalRenewal | undefined;
+    try {
+      renewal = checkApprovalResultBinding(opened, { requestId: entry.requestId, bodyCid: entry.bodyCid, request: entry.request }).renewal;
+    } catch {
+      // share-envelope's reasons are technical; the owner sees what to do next.
+      throw invalid("The approved renewal doesn't match this request. Sign in again for a new approval.");
+    }
+    return { delegation, session: verified.session, ...(renewal ? { renewal } : {}) };
   } catch (error) {
     // The binding checks raise APPROVAL_RESULT_INVALID, which is also raised before any result exists: only here is it a refusal of one.
     if (isPermanentRefusal(error) || (error instanceof CLIError && error.code === "APPROVAL_RESULT_INVALID")) carryRefusedDelegation(error, seen);
     throw error;
+  }
+}
+
+/**
+ * Check the owner's renewal lease against the grant it renews, then admit it at the node, before anything is saved.
+ * Admission replays the exact signed lease, so a rerun after a lost answer admits the same one. A lease that does not
+ * match its grant, or a grant too close to its end for the node to start renewing it, refuses the approval for good.
+ */
+async function admitApprovedRenewal(host: string, entry: PendingApproval, verified: ReturnType<typeof verifyPendingResult> & { renewal: ApprovalRenewal }): Promise<void> {
+  const { delegation, session, renewal } = verified;
+  const header = delegation.delegationHeader;
+  const original = {
+    delegationHeader: { Authorization: typeof header === "object" && header !== null && "Authorization" in header ? String(header.Authorization) : "" },
+    delegationCid: String(delegation.delegationCid),
+    verificationMethod: String(delegation.verificationMethod),
+  };
+  const refused = (message: string): CLIError => {
+    const error = invalid(message);
+    carryRefusedDelegation(error, delegation);
+    return error;
+  };
+  // The shared verifier's messages are technical; the owner sees what happened and what to do next.
+  let signed: { originalExpiresAt: string; leaseSignedExpiresAt: string };
+  try { signed = await verifyOwnerRenewalLease(original, session.ownerDid, renewal); }
+  catch { throw refused("This renewal doesn't match the permission you approved, so it wasn't turned on. Sign in again for a new approval."); }
+  if (Date.parse(signed.originalExpiresAt) - Date.now() < RENEWAL_ADMISSION_LEAD_MS) {
+    throw refused("The approved session ends too soon for its renewal to start. Sign in again for a new approval.");
+  }
+  try {
+    await admitOwnerRenewalLease({
+      host: new URL(host).origin, originalAuthorization: original.delegationHeader.Authorization, originalCid: original.delegationCid,
+      ownerDid: session.ownerDid, agentDid: entry.request.targetDid, spaceId: String(delegation.spaceId),
+      nodeIdentity: renewal.receipt.nodeIdentity, leaseAuthorization: renewal.receipt.leaseAuthorization,
+      leaseCid: renewal.receipt.leaseCid, leaseExpiresAt: signed.leaseSignedExpiresAt,
+    });
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === RENEWAL_LEASE_ORIGINAL_EXPIRED) {
+      throw new CLIError("AUTH_EXPIRED", "The approved session has expired. No session was saved.", ExitCode.AUTH_REQUIRED);
+    }
+    // admitOwnerRenewalLease raises this when the host no longer advertises the identity the lease was issued to.
+    if (error instanceof Error && error.message === "Renewal node identity changed") {
+      throw refused("This renewal names a different TinyCloud node than the one you signed in to, so it wasn't turned on. Sign in again for a new approval.");
+    }
+    throw Object.assign(new CLIError("NETWORK_ERROR", "The TinyCloud node didn't accept this session's renewal. Your approval is saved, so run the same command again.",
+      ExitCode.NETWORK_ERROR), { cause: error });
   }
 }
 
@@ -385,6 +464,15 @@ function lapsedPastRetention(entry: PendingApproval, now: number): boolean {
   return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
 }
 
+/** Tell the owner where to approve: the caller's own hook, or the link on stderr, and the browser unless a popup is off. */
+async function showApprovalLink(options: AuthFlowOptions, entry: PendingApproval): Promise<void> {
+  options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+  if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\nThe link is valid until ${entry.requestExpiresAt}.\n`);
+  if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+    await tryOpenBrowser(entry.approvalUrl);
+  }
+}
+
 /**
  * An approval request that expired before anyone approved it. Production OpenKey answers a discover after the
  * request's expiry with 400 invalid_request unless the request was approved, in which case it serves the result until
@@ -402,6 +490,20 @@ async function discoverRefusedAsExpired(entry: PendingApproval, response: Respon
   if (response.status !== 400 || entry.resultRef !== undefined || now < Date.parse(entry.requestExpiresAt)) return false;
   const body = await response.clone().json().catch(() => null) as { code?: unknown; error?: unknown } | null;
   return body?.code === "invalid_request" || (typeof body?.error === "string" && /expired/i.test(body.error));
+}
+
+/**
+ * One status check of a stored request that is long past its expiry: whether OpenKey confirms it expired unapproved
+ * (the 400 `invalid_request` of production, or its own `expired_request`). Not being able to ask, an approved or still-open
+ * answer and any other refusal are all "no", so the caller takes its normal path and nothing is dropped on a guess.
+ */
+async function openKeySaysExpired(entry: PendingApproval, signingKey: Ed25519PrivateJwk): Promise<boolean> {
+  let response: Response;
+  try { response = await post(entry, "discover", signingKey); } catch { return false; }
+  if (response.ok) return false;
+  if (await discoverRefusedAsExpired(entry, response, Date.now())) return true;
+  const body: unknown = await response.clone().json().catch(() => null);
+  return typeof body === "object" && body !== null && "code" in body && body.code === "expired_request";
 }
 
 /**
@@ -435,7 +537,8 @@ async function pauseBetweenAttempts(profile: string, entry: PendingApproval, app
 /** Retryable reads never acknowledge or consume. The private result key is synced before the URL is exposed. */
 export async function acquireApprovalRequest(_did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const profile = options.profileName;
-  if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
+  if (!profile || !options.jwk || !options.host || (!options.permissions?.length && !options.invitationContext) ||
+    (options.invitationContext && !options.expectedOwner)) {
     throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
   }
   const signingKey = options.jwk as Ed25519PrivateJwk;
@@ -445,20 +548,26 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   const apiOrigin = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ??
     (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
   const linkApiOrigin = configuredOrigin(process.env.TC_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API_ORIGIN, "Links API");
-  const lifetime = grantLifetimeSeconds(options.expiry);
+  const context = options.invitationContext;
   const targetPublicJwk: OpenKeyApprovalRequestV1["targetPublicJwk"] = {
     kty: signingKey.kty, crv: signingKey.crv, x: signingKey.x,
   };
-  const spec = { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
-    targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
-    ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: lifetime };
+  // An invitation request names no permissions and no key: the approver chooses the key and the result is checked against its own signature.
+  const spec = context
+    ? buildShareInvitationApprovalSpec({ targetDid: signer.did, targetPublicJwk, nodeOrigin: options.host, context, now: Date.now() })
+    : { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
+      targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
+      ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: grantLifetimeSeconds(options.expiry),
+      ...(options.renewalLeaseSeconds === undefined ? {} : { renewal: { version: 1 as const, leaseLifetimeSeconds: options.renewalLeaseSeconds } }) };
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }
   const matching = (await activePending(profile)).filter((item) => {
     if (item.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
-    const { permissions: nextPermissions, ...next } = spec;
+    const { permissions: nextPermissions, ...nextRaw } = spec;
+    // A resumed invitation keeps its first lifetime; the window is fixed by the context, not by when this run started.
+    const next = context ? { ...nextRaw, grantLifetimeSeconds: prior.grantLifetimeSeconds, suggestedLifetimeSeconds: prior.suggestedLifetimeSeconds } : nextRaw;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin ||
       item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin ||
       priorPermissions.length !== nextPermissions.length) return false;
@@ -479,33 +588,50 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     });
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
-  let entry = matching[0];
-  const isNewRequest = entry === undefined;
-  // Under --timeout a stored request that holds no result and expired so long ago that OpenKey cannot serve one any
-  // more is decided here, before OpenKey is asked and before its dead link is shown again. A younger expired request
-  // is left to OpenKey: it may be an approval given just before the expiry.
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
-    throw await expiredRequest(profile, entry, true);
+  let entry: PendingApproval | undefined = matching[0];
+  let isNewRequest = entry === undefined;
+  // The link of a stored request that holds no result and is past its own expiry cannot be approved any more, so it is
+  // never shown again: not inside the result retention (where the request may still be an approval given just before the
+  // expiry, which OpenKey's answer below decides) and not after it. The local clock decides only that the link is withheld;
+  // it is shown after all only if OpenKey reports the request still open (clock skew).
+  // A request past the retention is also decided here (#1016): under --timeout the command ends with exit 3 and the next
+  // run makes the new request (callers pace links by exit code). Without a deadline nobody is waiting on that exit code:
+  // OpenKey is asked once, and if it confirms the request expired unapproved the entry is dropped and a new request is made
+  // in this run. Any other answer (an approved result, still open, no answer) takes the normal path below.
+  const clock = approvalWait?.now ?? Date.now;
+  let linkWithheld = false;
+  if (entry && !entry.resultRef && !entry.resultEnvelope && clock() >= Date.parse(entry.requestExpiresAt)) {
+    linkWithheld = true;
+    if (lapsedPastRetention(entry, clock())) {
+      if (approvalWait) throw await expiredRequest(profile, entry, true);
+      if (await openKeySaysExpired(entry, signingKey)) {
+        const staleRequestId = entry.requestId;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== staleRequestId));
+        entry = undefined;
+        isNewRequest = true;
+        linkWithheld = false;
+      }
+    }
   }
   if (!entry) {
     const relay = createECDH("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
-    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin,
+      ...(context ? { expiresAt: new Date(context.acceptanceExpiresAt) } : {}) });
     const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
     entry = { version: 1, request, requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link,
       requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,
       ...(profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey }),
       relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, ackId: randomUUID(),
+      ...(options.invitationMeta === undefined ? {} : { invitationMeta: options.invitationMeta }),
       ...(options.commandIntent === undefined ? {} : { commandIntent: options.commandIntent }) };
     await updatePending(profile, (items) => [...items, entry!]);
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
-    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):\n${entry.approvalUrl}\n`);
-    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
-      await tryOpenBrowser(entry.approvalUrl);
-    }
+    if (!linkWithheld) await showApprovalLink(options, entry);
+    // No link: the saved one is past its expiry. Say what the wait is, without a link nobody can approve.
+    else if (!options.onApprovalRequest) console.error("Checking the saved request with OpenKey...");
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
@@ -529,6 +655,11 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       }
       answered = true;
       if (response.status === 202) {
+        // OpenKey still holds the request open although this clock says it expired (clock skew): its link is live after all.
+        if (linkWithheld) {
+          linkWithheld = false;
+          await showApprovalLink(options, entry);
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
@@ -572,12 +703,16 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     }
   }
   let verified: ReturnType<typeof verifyPendingResult>;
-  try { verified = verifyPendingResult(entry, signingKey); } catch (error) {
+  try {
+    verified = verifyPendingResult(entry, signingKey);
+    if (verified.renewal) await admitApprovedRenewal(options.host, entry, { ...verified, renewal: verified.renewal });
+  } catch (error) {
     // A refused result is never served from this entry again: its result key and reference are dropped now, as for an
     // expired or unknown result. AUTH_EXPIRED and every other error keep the entry so the same command can resume.
     if (isPermanentRefusal(error)) await forgetApproval(profile, entry);
     throw error;
   }
+  if (verified.renewal) renewals.set(verified.delegation, verified.renewal);
   await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
   acquisitions.set(verified.delegation, entry);
   if (approvalWait) approvalWaits.set(entry, approvalWait);
@@ -661,4 +796,54 @@ export async function completeApprovalResult(profile: string, delegation?: objec
       ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item)
       : items.filter((item) => item.requestId !== entry.requestId));
   }
+}
+
+/**
+ * The context of a still-open invitation approval for this recipient and file, so a rerun resumes it instead of asking again.
+ * Everything the owner was shown must match: recipient, subject kind and name, and the content's access expiry.
+ */
+export async function pendingInvitationContext(profile: string, match: {
+  recipientEmail: string; subjectKind: "file" | "session"; subjectName: string; accessExpiresAt: string; contentSha256?: string; requestedDurationMs?: number; now?: number;
+}): Promise<ShareInvitationApprovalContext | undefined> {
+  const now = match.now ?? Date.now();
+  return (await activePending(profile)).flatMap((entry) => entry.request.context ? [{ context: entry.request.context, entry }] : [])
+    .find(({ context, entry }) => context.recipientEmail === match.recipientEmail && context.subjectKind === match.subjectKind && context.subjectName === match.subjectName
+      && Date.parse(context.acceptanceExpiresAt) > now && entry.invitationMeta?.contentSha256 === match.contentSha256
+      // The same absolute date, or the SAME relative choice the user made then (the exact duration, never inferred from timing): such a rerun
+      // resumes the open request and its own absolute date. Any other duration, even by a second, is a new choice and a new request.
+      && (context.accessExpiresAt === match.accessExpiresAt
+        // A resumed date is only ever one earlier than the new request's and still usable (more than a minute left): both are decided here,
+        // before anything is installed or taken.
+        || (match.requestedDurationMs !== undefined && entry.invitationMeta?.requestedDurationMs === match.requestedDurationMs
+          && Date.parse(context.accessExpiresAt) < Date.parse(match.accessExpiresAt) && Date.parse(context.accessExpiresAt) > now + 60_000)))?.context;
+}
+
+/**
+ * Take an approved invitation grant exactly once: the pending record is removed first, so a rerun or a second process
+ * cannot use the same approval for a second send, and then OpenKey is told the result was received (best effort; its
+ * copy expires on its own). A send that fails after this needs a new approval.
+ */
+export async function takeInvitationApproval(profile: string, delegation: object): Promise<void> {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || !entry.resultRef) throw invalid("This is not an invitation approval that has a result.");
+  const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
+  const key = entry.signingKey ?? profileKey;
+  if (!key || signerFromJwk(key).did !== entry.request.targetDid) throw invalid("The approval was not requested by this profile's key.");
+  let present = false;
+  await updatePending(profile, (items) => {
+    present = items.some((item) => item.requestId === entry.requestId);
+    return items.filter((item) => item.requestId !== entry.requestId);
+  });
+  if (!present) throw invalid("This invitation approval was already used; request a new one.");
+  try { await post(entry, "ack", key); } catch { /* the result expires on its own */ }
+}
+
+/** The facts of an approved invitation grant, read again from its owner-signed bytes for THIS acquired request (never from the result's own fields). */
+export function invitationGrantOf(delegation: object, key: object): VerifiedInvitationGrant {
+  const entry = acquisitions.get(delegation);
+  if (!entry?.request.context || entry.expectedOwner === undefined) throw invalid("This is not an invitation approval for this profile.");
+  return verifyInvitationGrant(delegation as Record<string, unknown>, key, {
+    targetDid: entry.request.targetDid, ownerDid: entry.expectedOwner, request: { requestId: entry.requestId, bodyCid: entry.bodyCid },
+    acceptanceExpiresAt: entry.request.context.acceptanceExpiresAt,
+  });
 }

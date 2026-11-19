@@ -1,3 +1,4 @@
+import { issuedFixture } from './support/issued-fixture.mjs';
 // TC-2338: guards of `courier pair renew <peer> --renew-artifact` and of the receiver that installs the
 // resulting C artifact. Each assertion here fails when the guard it names is removed:
 //   - a renewal cannot outlive the exporter's own Courier grant, and an expired grant exports nothing;
@@ -34,21 +35,8 @@ const owners = {
 };
 
 const hits = { delegate: 0, invoke: 0 };
-const stub = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/delegate') {
-    hits.delegate += 1;
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ activated: ['agents'], skipped: [] }));
-    return;
-  }
-  if (req.method === 'POST' && req.url === '/invoke') {
-    hits.invoke += 1;
-    res.writeHead(200, { 'content-type': 'application/json', etag: '"stub-etag"' });
-    res.end('{}');
-    return;
-  }
-  res.writeHead(404).end('no such route');
-});
+const fixtureApi = issuedFixture(typeof hits === 'undefined' ? {} : hits);
+const stub = http.createServer((req, res) => { void fixtureApi.handle(req, res); });
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const HOST = `http://127.0.0.1:${stub.address().port}`;
 test.after(() => stub.close());
@@ -148,7 +136,15 @@ async function makeHome(name, handle, ownerPrivateKey, grantLifetimeMs = 30 * DA
   for (const [file, body] of [['profile.json', profile], ['key.json', key], ['grant.json', grant]]) {
     fs.writeFileSync(path.join(home, file), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
   }
-  return { home, profile, grant };
+  return { home, profile, grant, ownerPrivateKey };
+}
+
+async function approveLater(fixture, lifetime = 30 * DAY) {
+  const key = JSON.parse(fs.readFileSync(path.join(fixture.home, 'key.json'), 'utf8'));
+  const result = await makeGrant(fixture.ownerPrivateKey, key, lifetime);
+  fs.writeFileSync(path.join(fixture.home, 'grant.json'), JSON.stringify(result.grant), { mode: 0o600 });
+  const profile = profileAt(fixture.home); profile.grantExpiresAt = result.grant.expiresAt; writeProfile(fixture.home, profile);
+  fixture.grant = result.grant;
 }
 
 const profilePath = (home) => path.join(home, 'profile.json');
@@ -167,29 +163,39 @@ async function pairAll(a, aPeerHandle, b, callMe) {
 /** Make the last outbound issuance older than the 20 h throttle so the next export needs no --force. */
 function backdateOutbound(home, peerHandle) {
   const profile = profileAt(home);
-  profile.peers[peerHandle].outbound.at(-1).issuedAt = new Date(Date.now() - 21 * HOUR).toISOString();
+  profile.peers[peerHandle].outbound.at(-1).issuedAt = new Date(Date.now() - 25 * HOUR).toISOString();
   writeProfile(home, profile);
+  fixtureApi.age(profile.peers[peerHandle].outbound.at(-1).cid, 25 * HOUR);
 }
 
 const signedExpiry = (artifact) => new Date(JSON.parse(artifact.delegation).expiry).getTime();
 
-test('a renewal cannot outlive the exporter grant: a 2 h grant exports an artifact expiring within the grant, not in 7 days', async () => {
+test('a renewal cannot outlive the exporter grant: no equal-end issuance and a short prior extends only to the parent', async () => {
   const issuer = await makeHome('cap-issuer', 'cap-issuer', owners.sam, 2 * HOUR);
   const recipient = await makeHome('cap-recipient', 'cap-recipient', owners.mira);
   await pairAll(issuer, 'issuer-cap', recipient, 'recipient-cap');
   backdateOutbound(issuer.home, 'issuer-cap');
+  const bytes = profileBytes(issuer.home); const calls = { ...hits };
+  const noExtension = await runFail(issuer.home, ['pair', 'renew', 'issuer-cap', '--renew-artifact', '--force']);
+  assert.equal(noExtension.stdout, '');
+  assert.match(noExtension.stderr, /\[renew-throttled\]/);
+  assert.equal(profileBytes(issuer.home), bytes);
+  assert.deepEqual(hits, calls, 'already parent-capped access signs and publishes nothing');
 
-  const grantExpiry = Date.parse(issuer.grant.expiresAt);
-  const before = Date.now();
-  const art = await run(issuer.home, ['pair', 'renew', 'issuer-cap', '--renew-artifact']);
-
+  const short = await makeHome('short-cap-issuer', 'short-cap-issuer', owners.sam, HOUR);
+  await pairAll(short, 'short-cap', recipient, 'short-cap-recipient');
+  const priorEnd = Date.parse(profileAt(short.home).peers['short-cap'].outbound.at(-1).expiresAt);
+  await approveLater(short, 2 * HOUR);
+  const grantExpiry = Date.parse(short.grant.expiresAt); const before = Date.now();
+  const art = await run(short.home, ['pair', 'renew', 'short-cap', '--renew-artifact', '--force']);
   assert.equal(art.step, 'C');
   const advertised = Date.parse(art.delegationExpiresAt);
-  assert.ok(advertised <= grantExpiry, `renewal expires ${art.delegationExpiresAt}, after the grant ${issuer.grant.expiresAt}`);
-  assert.ok(advertised < before + 3 * HOUR, 'the 7 day lifetime must not be issued from a 2 h grant');
-  assert.ok(advertised > before + HOUR, 'a usable renewal, not an already-lapsed one');
-  assert.equal(signedExpiry(art), advertised, 'the signed delegation carries the same expiry as the artifact advertises');
-  assert.ok(signedExpiry(art) <= grantExpiry, 'the signed expiry is within the grant');
+  assert.ok(advertised > priorEnd, 'the prior short grant is strictly extended');
+  assert.ok(advertised <= grantExpiry, 'the signed child stays inside actual parent authority');
+  assert.ok(advertised < before + 3 * HOUR, 'Month is capped by the 2 h parent');
+  assert.ok(advertised > before + HOUR, 'the result is live');
+  assert.equal(signedExpiry(art), advertised);
+  assert.ok(signedExpiry(art) <= grantExpiry);
 });
 
 test('an exporter whose grant expired gets [grant-expired], exit 1, empty stdout, and nothing stamped', async () => {
@@ -212,7 +218,7 @@ test('an exporter whose grant expired gets [grant-expired], exit 1, empty stdout
   assert.deepEqual(hits, calls, 'nothing signed or published');
 });
 
-test('a second export inside 20 h is [renew-throttled] and stamps nothing; an aged stamp or --force exports and stamps', async () => {
+test('a second export inside 24 h is [renew-throttled] and stamps nothing; an aged stamp or --force exports and stamps', async () => {
   const issuer = await makeHome('throttle-issuer', 'throttle-issuer', owners.sam);
   const recipient = await makeHome('throttle-recipient', 'throttle-recipient', owners.mira);
   await pairAll(issuer, 'issuer-thr', recipient, 'recipient-thr');
@@ -230,6 +236,7 @@ test('a second export inside 20 h is [renew-throttled] and stamps nothing; an ag
   assert.deepEqual(hits, calls, 'a throttled export signs and publishes nothing');
 
   backdateOutbound(issuer.home, 'issuer-thr');
+  await approveLater(issuer);
   const aged = await run(issuer.home, ['pair', 'renew', 'issuer-thr', '--renew-artifact']);
   assert.equal(aged.step, 'C');
   assert.equal(stamped().length, 2, 'an export past the window stamps');
@@ -241,6 +248,7 @@ test('a second export inside 20 h is [renew-throttled] and stamps nothing; an ag
   assert.equal(stamped().length, 2);
 
   await new Promise((resolve) => setTimeout(resolve, 1100)); // a later signed expiry than the previous artifact
+  await approveLater(issuer);
   const forced = await run(issuer.home, ['pair', 'renew', 'issuer-thr', '--renew-artifact', '--force']);
   assert.equal(forced.step, 'C');
   assert.equal(stamped().length, 3, '--force exports inside the window and stamps');
@@ -303,7 +311,10 @@ function receiver() {
     backdateOutbound(issuer.home, 'issuer-recv');
     backdateOutbound(forger.home, 'issuer-recv');
     await new Promise((resolve) => setTimeout(resolve, 1100)); // renewals expire after the installed delegations
+    await approveLater(issuer);
+    await approveLater(forger);
     const renewal = await run(issuer.home, ['pair', 'renew', 'issuer-recv', '--renew-artifact']);
+    fixtureApi.seed(profileAt(forger.home).peers['issuer-recv'].outbound.at(-1).delegation);
     const forged = await run(forger.home, ['pair', 'renew', 'issuer-recv', '--renew-artifact']);
     assert.equal(renewal.callMe, 'recipient-recv');
     assert.equal(forged.callMe, 'recipient-forger');

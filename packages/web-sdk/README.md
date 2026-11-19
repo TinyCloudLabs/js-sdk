@@ -58,12 +58,20 @@ expiry. The permission check does not contact the node, so a session the node
 rejects (a 401 after a revocation or a reset, for example) is still restored.
 With OpenKey, `prepareSignIn()` makes the same check.
 
-Restoring a session makes one node read, capped at 5 seconds, to learn whether
-the session's primary space is hosted. It never prompts and never fails the
-restore. Read the answer from `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or
-`"unknown"`). At sign-in the answer comes from the node's activation of the new
-session. `signIn()` on a restored session whose space is `"not-hosted"` returns
-the restored session.
+`restoreSession()` resolves from stored state. It automatically starts a
+background hosting probe, capped at 5 seconds, and reactivates stored panel
+grants. Read `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or `"unknown"`) for
+the current display hint. A stored hint applies only to the same account,
+space and host. It can be one session stale until the probe corrects it at
+runtime, and updates in storage when the signed session is next persisted.
+Older records start at `"unknown"`. The hint never grants authority or skips
+permission checks. The probe never prompts or fails the restore.
+Panel permission requests wait up to 4 seconds for stored grants to reactivate
+before showing a permission prompt.
+`signIn()` waits for the probe when it restores a session. At fresh sign-in
+the hosting answer comes from the node's activation of the new session.
+`signIn()` on a restored session whose space is `"not-hosted"` returns the
+restored session.
 
 To force a fresh consent, sign out first. `signOut()` clears the stored session
 and blocks restoring until the next sign-in succeeds, so `signIn()` prompts:
@@ -77,6 +85,8 @@ There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
 
 Sign-out reports session-storage failures. Replica cleanup has its own recovery markers; sign-out completion alone does not certify local-copy erase. Custom/native session adapters keep their existing storage contract, including the provider's durability and boot-handling responsibilities.
+With an asynchronous custom runtime-grant store, sign-out waits for in-flight
+load/save calls to settle.
 
 ### Runtime permission grants with OpenKey
 
@@ -504,7 +514,7 @@ const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
 TinyCloud is built on these fundamental principles:
 
 - **Sovereignty** - Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned.
-- **Privacy** - Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party.
+- **Privacy** - Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored. See [Security and trust](https://docs.tinycloud.xyz/concepts/security-and-trust).
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
 
@@ -549,3 +559,13 @@ Join the TinyCloud community:
 
 - [Twitter](https://twitter.com/TinyCloudLabs)
 - [Telegram](https://t.me/+pplkv1XbbU01MDVh)
+
+### Account setup and sign-in options
+
+The web SDK includes implicit account bootstrap permissions only at the approved first-party page origins. Other origins, including generic localhost and server-rendered contexts, request the application's manifest rows without implicit account or capabilities-read rows. Explicit manifest permissions are preserved.
+
+`autoBootstrapAccount: false` disables account bootstrap and its implicit sign-in permissions, including in the node SDK. `includeAccountRegistryPermissions: false` omits the implicit account registry bundle. Setting either option to `true` does not enable first-party bootstrap at another origin. The policy uses the actual page origin, independently of a configured SIWE domain.
+
+A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://home.tinycloud.xyz/"` before signing. Complete setup there and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
+
+Details: TC-2931

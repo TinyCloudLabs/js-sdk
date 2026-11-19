@@ -14,7 +14,10 @@ export function spaceIdsEqual(left: string, right: string): boolean {
   return normalizeOwnerAddress(left) === normalizeOwnerAddress(right);
 }
 
-/** Read routing scope from a grant whose signature and exact CID both verify. */
+/**
+ * Read routing scope from bytes whose signature and exact CID verify.
+ * This does not validate proof-chain authorization or validity times and is not an authorization decision.
+ */
 export async function verifiedDelegationRouting(authorization: string, cid: string): Promise<{
   audienceDid: string;
   resources: readonly { resource: string; access: ResourceAccess }[];

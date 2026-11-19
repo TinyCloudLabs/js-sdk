@@ -1,5 +1,6 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { publicJwk } from "@tinycloud/sdk-core";
+import type { ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -33,6 +34,10 @@ export interface AuthFlowOptions {
   jwk?: object;
   host?: string;
   permissions?: PermissionEntry[];
+  /** A share-invitation approval: no permissions and no key id; the approver chooses the key. */
+  invitationContext?: ShareInvitationApprovalContext;
+  /** An invitation's file identity, stored with its pending request so a rerun of the same file resumes it. */
+  invitationMeta?: { contentSha256: string; requestedDurationMs?: number };
   /**
    * User-facing context shown on the OpenKey approval page. Optional at the
    * OpenKey protocol boundary, but TinyCloud CLI permission-grant call sites
@@ -59,6 +64,11 @@ export interface AuthFlowOptions {
    * it must verify the signed result with the matching `expiryChangeable` expectation.
    */
   expiryChangeable?: boolean;
+  /**
+   * Ask the owner for a renewal lease of at most this many seconds with the signed approval request. The result's
+   * lease is verified and admitted at the node before the login saves it. No command sets this yet.
+   */
+  renewalLeaseSeconds?: number;
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */

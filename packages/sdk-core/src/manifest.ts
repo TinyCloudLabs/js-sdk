@@ -224,6 +224,8 @@ export interface ManifestRegistryRecord {
 }
 
 export interface ComposeManifestOptions {
+  /** Include implicit space-level capabilities reads. Default true. Explicit entries are always preserved. */
+  includeImplicitCapabilitiesRead?: boolean;
   /** Include implicit account-space registry permissions. Default true. */
   includeAccountRegistryPermissions?: boolean;
 }
@@ -982,7 +984,7 @@ function defaultEntriesForTier(tier: ManifestDefaults): PermissionEntry[] {
  * - Per-entry expiry overrides per-delegation overrides manifest > `DEFAULT_EXPIRY`.
  * - Default entries use `skipPrefix: false` so they inherit the manifest prefix.
  */
-export function resolveManifest(input: Manifest): ResolvedCapabilities {
+export function resolveManifest(input: Manifest, options: Pick<ComposeManifestOptions, "includeImplicitCapabilitiesRead"> = {}): ResolvedCapabilities {
   const manifest = validateManifest(input);
 
   const prefix =
@@ -1004,9 +1006,9 @@ export function resolveManifest(input: Manifest): ResolvedCapabilities {
     ...secretEntries,
   ];
 
-  const resources: ResourceCapability[] = withCapabilitiesReadForSpaces(
-    allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space)),
-  );
+  const entries = allEntries.flatMap((entry) => resolveEntry(entry, prefix, expiryMs, space));
+  const resources: ResourceCapability[] = options.includeImplicitCapabilitiesRead === false
+    ? dedupeResources(entries) : withCapabilitiesReadForSpaces(entries);
 
   const additionalDelegates: ResolvedDelegate[] =
     manifest.did === undefined
@@ -1384,7 +1386,7 @@ export function composeManifestRequest(
   const includeAccountRegistryPermissions =
     options.includeAccountRegistryPermissions ?? true;
   const manifests = inputs.map(validateManifest);
-  const resolved = manifests.map(resolveManifest);
+  const resolved = manifests.map((manifest) => resolveManifest(manifest, options));
   const resources = resolved.flatMap((entry) => entry.resources);
   const delegationTargets = resolved.flatMap((entry) =>
     entry.additionalDelegates.map((delegate) => ({
@@ -1401,8 +1403,8 @@ export function composeManifestRequest(
       })),
     );
   }
-  const resourcesWithImplicitCapabilities =
-    withCapabilitiesReadForSpaces(resources);
+  const resourcesWithImplicitCapabilities = options.includeImplicitCapabilitiesRead === false
+    ? dedupeResources(resources) : withCapabilitiesReadForSpaces(resources);
 
   const manifestsByAppId = new Map<string, Manifest[]>();
   for (const manifest of manifests) {

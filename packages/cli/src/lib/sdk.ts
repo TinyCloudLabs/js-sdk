@@ -8,7 +8,7 @@ import { CLIError, wrapError } from "../output/errors.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
-import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
 import { recordWarnings, recordRegistryFallbackWarning } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
@@ -89,20 +89,22 @@ function signedLifetimePassed(delegation: PortableDelegation): boolean {
 /**
  * Restore the stored session. node-sdk refuses expired or otherwise unusable
  * persisted authority (`AUTH_EXPIRED`) while verifying it locally, before any
- * node request; only a new sign-in fixes that.
+ * node request; only a new sign-in fixes that. A session saved with an owner
+ * renewal lease is restored through the node once its original grant expires.
  */
 async function restoreProfileSession(
   node: TinyCloudNode,
   profileName: string,
   profile: ProfileConfig | null,
   sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+  stored: Record<string, unknown>,
 ): Promise<void> {
   const posture = profile === null ? undefined : resolveProfilePosture(profile);
   if (ownerSessionLacksProof(sessionData, profile)) {
     throw sessionExpiredError(profileName, posture);
   }
   try {
-    await node.restoreSession(sessionData);
+    await restoreStoredSession(node, sessionData, stored);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
       throw sessionExpiredError(profileName, posture);
@@ -143,6 +145,7 @@ export type ProfileSessionContext = Pick<CLIContext, "profile" | "host"> & Parti
  * Inspect a profile's persisted session without signing in, replaying a
  * stored grant, or querying registry/node endpoints. Non-replicating restore
  * verifies and hydrates authority locally; live operations resolve routing.
+ * Only a renewed session past its original grant asks the node for its lease.
  */
 export async function restoreProfileSessionNode(
   ctx: ProfileSessionContext,
@@ -157,7 +160,7 @@ export async function restoreProfileSessionNode(
     typeof session.delegationHeader.Authorization !== "string") {
     return { unavailable: "session_invalid" };
   }
-  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now()) {
+  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now() && liveStoredLease(session) === undefined) {
     return { unavailable: "session_expired" };
   }
   const key = await ProfileManager.getKey(ctx.profile);
@@ -171,7 +174,7 @@ export async function restoreProfileSessionNode(
       host: ctx.host,
       ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
     });
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
   } catch (error) {
     if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
@@ -185,7 +188,8 @@ export async function restoreProfileSessionNode(
  * Whether the profile's stored session passes verification in a throwaway,
  * non-replicating node without signing in, writing profile state, or querying
  * registry/node endpoints. Live operations still resolve fresh routing.
- * `true` when there is none to restore.
+ * `true` when there is none to restore. A renewed session past its original
+ * grant is the exception: only the node can confirm its lease.
  */
 export async function storedSessionVerifiesLocally(profileName: string): Promise<boolean> {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
@@ -209,7 +213,7 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       host: profile.host ?? DEFAULT_HOST,
       ...(local ? { privateKey: profile.privateKey } : {}),
     });
-    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
+    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
     return true;
   } catch {
     return false;
@@ -294,7 +298,7 @@ export async function createSDKInstance(
     }
     const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
     if (restoredOwnSession) {
-      await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key));
+      await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key), session!);
     } else {
       await node.signIn();
     }
@@ -343,7 +347,7 @@ export async function createSDKInstance(
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile!, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile!, session, key), session);
     recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
       host: ctx.host,
       ownerSpace: profile?.spaceId,

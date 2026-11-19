@@ -14,6 +14,7 @@ import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./outp
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
+import { approveEmailInviteKey } from "./share/invite-approval.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
 import { applyNoRetryFlag } from "./lib/retry-policy.js";
 import { CONFIG_DIR } from "./config/constants.js";
@@ -35,6 +36,7 @@ function fullCommandName(command: Command): string {
 const shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch,
+  approveEmailInviteKey,
 });
 
 function selectedShareProfile(): string | undefined {

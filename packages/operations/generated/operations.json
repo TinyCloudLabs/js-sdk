@@ -2590,7 +2590,7 @@
           },
           "app": {
             "type": "string",
-            "description": "Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."
+            "description": "Pass one existing personal app id or catalog slug (healthlog or recipes) to request its task access together."
           },
           "access": {
             "type": "string",
@@ -2632,6 +2632,13 @@
                 "app": {
                   "type": "string"
                 },
+                "layout": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "new"
+                  ]
+                },
                 "title": {
                   "type": "string"
                 },
@@ -2646,10 +2653,117 @@
               },
               "required": [
                 "app",
+                "layout",
                 "copy"
               ],
               "additionalProperties": false
             }
+          },
+          "legacy": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "not_approved"
+            ]
+          },
+          "discovery": {
+            "type": "string",
+            "enum": [
+              "listed",
+              "not_approved"
+            ]
+          },
+          "catalog": {
+            "type": "object",
+            "properties": {
+              "keys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "records": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/properties/catalog/properties/records/items/anyOf/0/properties/value/additionalProperties"
+                                }
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "$ref": "#/properties/catalog/properties/records/items/anyOf/0/properties/value/additionalProperties"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "etag": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "value",
+                        "etag"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "NOT_FOUND",
+                            "MALFORMED"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "outcome"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "keys",
+              "records"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -2657,7 +2771,10 @@
           "now",
           "utc",
           "timezone",
-          "apps"
+          "apps",
+          "legacy",
+          "discovery",
+          "catalog"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -3742,6 +3859,13 @@
                     "app": {
                       "type": "string"
                     },
+                    "layout": {
+                      "type": "string",
+                      "enum": [
+                        "legacy",
+                        "new"
+                      ]
+                    },
                     "title": {
                       "type": "string"
                     },
@@ -3756,10 +3880,117 @@
                   },
                   "required": [
                     "app",
+                    "layout",
                     "copy"
                   ],
                   "additionalProperties": false
                 }
+              },
+              "legacy": {
+                "type": "string",
+                "enum": [
+                  "listed",
+                  "not_approved"
+                ]
+              },
+              "discovery": {
+                "type": "string",
+                "enum": [
+                  "listed",
+                  "not_approved"
+                ]
+              },
+              "catalog": {
+                "type": "object",
+                "properties": {
+                  "keys": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "records": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "anyOf": [
+                                  {
+                                    "type": "null"
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/$defs/output/properties/catalog/properties/records/items/anyOf/0/properties/value/additionalProperties"
+                                    }
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "$ref": "#/$defs/output/properties/catalog/properties/records/items/anyOf/0/properties/value/additionalProperties"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "etag": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "value",
+                            "etag"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "outcome": {
+                              "type": "string",
+                              "enum": [
+                                "NOT_FOUND",
+                                "MALFORMED"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "outcome"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "keys",
+                  "records"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -3767,7 +3998,10 @@
               "now",
               "utc",
               "timezone",
-              "apps"
+              "apps",
+              "legacy",
+              "discovery",
+              "catalog"
             ],
             "additionalProperties": false,
             "$schema": "http://json-schema.org/draft-07/schema#"
@@ -3858,6 +4092,15 @@
       "input": {
         "type": "object",
         "properties": {
+          "layout": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "new"
+            ],
+            "default": "new",
+            "description": "Use the app's layout from context; omitted means new."
+          },
           "kinds": {
             "type": "array",
             "items": {
