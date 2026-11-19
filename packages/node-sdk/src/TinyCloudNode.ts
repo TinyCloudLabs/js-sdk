@@ -7467,9 +7467,14 @@ export class TinyCloudNode {
       resolved.vaultKey,
     );
 
+    // A file that fails to load is a failed read, so readSecret still never rejects after the read; the next call loads again.
+    const loaded = await this.loadSecretRead().catch(() => undefined);
+    return loaded ? loaded.secretReadResult(result, parsePermissionHint) : { status: "read_failed" };
+  }
+
+  private loadSecretRead() {
     // Not a static import on purpose: web-sdk's root size budget has no room for it, so bundlers ship it as its own file.
-    const { secretReadResult } = await import("./secret-read.js");
-    return secretReadResult(result, parsePermissionHint);
+    return import("./secret-read.js");
   }
 
   private getBaseSecrets(spaceId: string): ISecretsService {
