@@ -17,12 +17,20 @@ export interface HookWebhookScope {
 export interface HookWebhookRegistration extends HookWebhookScope {
   callbackUrl: string;
   secret: string;
+  /**
+   * Custom headers sent with every delivery, for example `{ Authorization: "Bearer <key>" }`.
+   * Write-only: stored encrypted by the node, listed by name only. Reserved headers
+   * (Host, Content-Length, Content-Type, Cookie, X-TinyCloud-*, hop-by-hop) are refused.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface HookWebhookRecord extends HookWebhookScope {
   id: string;
   subscriberDid?: string;
   callbackUrl: string;
+  /** Names of the custom delivery headers; their values are never returned. */
+  headerNames?: string[];
   active: boolean;
   createdAt: string;
 }
@@ -50,6 +58,14 @@ export interface HookEvent {
   epoch: string;
   eventIndex: number;
   timestamp: string;
+  /** SQL events: the table this write changed. */
+  tableName?: string;
+  /**
+   * SQL events: the node-derived SQLite rowid of the one row an INSERT added, for `feed_responses` its `sequence`.
+   * Omitted whenever the node cannot prove it (multi-row writes, updates, deletes, ignored inserts), and never
+   * present on DuckDB events. Read the row by this id when present; otherwise scan.
+   */
+  rowId?: number;
 }
 
 export interface HookStreamEvent {

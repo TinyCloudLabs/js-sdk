@@ -197,6 +197,69 @@ and only then removes the registry row, so a failed revoke can be retried. If th
 is removed and the result says `"revoked": false, "nodeHadNoGrant": true`. Any other 404 (a proxy, an older node)
 is a failure and leaves the row. The token stays reserved for the same agent DID.
 
+A short-lived agent cannot hold `feed watch` open. Add `--notify-url` and the node
+calls that https URL whenever the owner saves an answer or message, so the agent
+wakes at once. `--notify-header "Name: value"`, `--notify-header-env Name=ENV_VAR`,
+`--notify-header-file Name=path` (repeatable) and `--notify-header-stdin Name` (one
+header) add headers to each call, for receivers that need their own credential:
+
+```bash
+GROK_KEY="Bearer ..." tinycloud --profile owner feed connect --agent writer --to "$AGENT_DID" \
+  --label Writer --notify-url https://grok.example/routine/hook \
+  --notify-header-env Authorization=GROK_KEY > feed-grant.json
+```
+
+Header values are stored encrypted by the node, are never shown or listed again (only
+the names), and are never printed in errors, logs or saved profile files. Prefer
+`--notify-header-env`, `--notify-header-file` or `--notify-header-stdin`: command
+lines are visible to other local users. Host, Content-Length, Content-Type, Cookie,
+`X-TinyCloud-*` and other transport headers, and any value with a line break, are
+refused before anything is sent. The output's `notify` object carries the webhook id,
+header names and a one-time HMAC secret for `X-TinyCloud-Signature`; the node does not
+return it. Running `connect` again with the same flags registers a new webhook first and
+then removes the earlier ones for that URL, so no write is missed; for a moment both
+deliver, so the receiver must ignore a repeated `X-TinyCloud-Event-Id` (it is the same
+for every subscription to one write; the delivery id is not). The node allows a few
+webhooks per space; at its limit `connect` has to remove the old one first, and its
+`notify` object then carries `missedWhileReplacing` and `next`: run
+`tinycloud feed watch --drain` once to pick up anything written in between.
+
+The call's body is the write event (ids only, no row content). For a write to the
+response database it names the table (`tableName`) and, when the node can prove it,
+`rowId`: the inserted row's `sequence`. A response with a private payload also writes
+the payload table, whose event carries that table's own rowid, not a `sequence`: act
+only on the event whose `tableName` is `feed_responses`. The card id is not in the
+body; it is one indexed read away (rowId → `feed_responses`). The woken agent runs
+
+```bash
+tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runtime --drain
+```
+
+which hands off every response it has not yet had, once, and exits: one JSON line per
+answer or owner message with its `cardId`, `responseId` and `kind`. A repeat wake
+delivers nothing twice, and a wake the node coalesced or dropped is covered by the next
+drain. With a `rowId`, `feed responses --after <rowId - 1> --limit 1` reads just that row.
+
+`rowId` is **absent** (not null, not zero) whenever the node cannot prove one row was
+inserted, so never require it; fall back to `--drain` (or a `feed responses` scan) when
+it is missing. It is absent for: a multi-row INSERT; an UPDATE or DELETE; an upsert that
+updated an existing row; an INSERT that was ignored; a WITHOUT ROWID table; a statement
+that touches more than one table; a write that came through the query path rather than
+a single-statement execute; any statement after which the last-inserted rowid did not
+move; DuckDB databases; and KV writes (which carry `path`, not a table).
+
+The general command is `tinycloud hooks`, for any service and prefix:
+
+```bash
+tinycloud hooks register --service sql --path-prefix <database> --url https://example.com/wake \
+  --header-env Authorization=WAKE_AUTH --space applications
+tinycloud hooks list --space applications     # header names only
+tinycloud hooks remove <id> --space applications
+```
+
+`register` prints a generated signing secret once; pass `--secret-env NAME` to use your
+own (never echoed). To change a webhook's headers, remove it and register again.
+
 Publish `card.json` from the agent profile:
 
 ```json

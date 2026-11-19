@@ -12,6 +12,7 @@ import type {
 import { ErrorCodes, err, ok, serviceError } from "../types";
 import { authRequiredError, wrapError } from "../errors";
 import type { IHooksService } from "./IHooksService";
+import { webhookHeadersProblem } from "./webhookHeaders";
 import type {
   HookEvent,
   HookStreamEvent,
@@ -231,6 +232,12 @@ export class HooksService extends BaseService implements IHooksService {
       );
     }
 
+    const headersProblem = webhookHeadersProblem(webhook.headers);
+    if (headersProblem !== undefined) {
+      return err(
+        serviceError(ErrorCodes.INVALID_INPUT, headersProblem, "hooks", { meta: { field: "headers" } }),
+      );
+    }
     try {
       const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks`,
@@ -248,6 +255,9 @@ export class HooksService extends BaseService implements IHooksService {
             abilities: webhook.abilities ?? [],
             callbackUrl: webhook.callbackUrl,
             secret: webhook.secret,
+            ...(webhook.headers === undefined || Object.keys(webhook.headers).length === 0
+              ? {}
+              : { headers: webhook.headers }),
           }),
         },
       );
@@ -1193,6 +1203,8 @@ function parseHookEvent(message: HookStreamEvent): HookEvent {
     epoch: parsed.epoch ?? "",
     eventIndex: parsed.eventIndex ?? 0,
     timestamp: parsed.timestamp ?? "",
+    ...(typeof parsed.tableName === "string" ? { tableName: parsed.tableName } : {}),
+    ...(typeof parsed.rowId === "number" && Number.isSafeInteger(parsed.rowId) && parsed.rowId >= 0 ? { rowId: parsed.rowId } : {}),
   };
 }
 
@@ -1260,6 +1272,11 @@ function pickWebhookRecord(
     return null;
   }
 
+  const headerNames =
+    stringArrayField(value, "headerNames") ??
+    stringArrayField(value, "header_names") ??
+    parsedStringArrayField(value, "headerNamesJson") ??
+    parsedStringArrayField(value, "header_names_json");
   return {
     id,
     space,
@@ -1280,6 +1297,7 @@ function pickWebhookRecord(
     subscriberDid:
       optionalStringField(value, "subscriberDid") ??
       optionalStringField(value, "subscriber_did"),
+    ...(headerNames === undefined ? {} : { headerNames }),
   };
 }
 

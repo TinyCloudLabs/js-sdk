@@ -365,7 +365,7 @@ export type {
 } from "./duckdb";
 
 // Hooks service
-export { HooksService } from "./hooks";
+export { HooksService, WEBHOOK_HEADER_LIMITS, isReservedWebhookHeader, webhookHeadersProblem } from "./hooks";
 export type {
   IHooksService,
   HookServiceName,

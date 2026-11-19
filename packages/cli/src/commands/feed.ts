@@ -5,7 +5,7 @@ import { parseSpaceUri } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage, appendFeedResponse, feedCardSchema, feedHandlingSchema, feedResourceNames, feedResponsePayloadSchema,
   getFeedCardState, initializeFeedDatabases, listFeedCards, listFeedResponses,
-  listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedCardMd, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
+  drainFeedResponses, listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedCardMd, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
 } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
 import type { FeedResponse, FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
@@ -23,6 +23,7 @@ import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
+import { registerFeedNotify, resolveFeedNotify } from "../feed/notify.js";
 import { CARD_MD_RESOURCE, DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, markDefault, rememberCardMdVersion } from "../feed/card-md.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
@@ -50,6 +51,10 @@ async function context(command: Command) {
 function agentOptions(command: Command): Command {
   return command.requiredOption("--agent <token>", "Stable owner-scoped agent token")
     .option("--space <name|uri>", "Owner space containing the feed resources", "applications");
+}
+
+function collectOption(next: string, previous: string[]): string[] {
+  return [...previous, next];
 }
 
 async function readPrivatePayload(file: string | undefined): Promise<FeedResponsePayload | undefined> {
@@ -142,8 +147,15 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .requiredOption("--to <did>", "Authenticated agent DID receiving the grant")
     .requiredOption("--label <label>", "Owner registry display label")
     .option("--expiry <duration>", "Delegation expiry duration", "24h")
+    .option("--notify-url <url>", "https URL to call when the owner saves an answer or message, so a short-lived agent wakes at once")
+    .option("--notify-header <name:value>", "Header to send with each notification, repeatable (e.g. 'Authorization: Bearer KEY'). Stored encrypted, never shown again; prefer --notify-header-env, --notify-header-file or --notify-header-stdin, since command lines are visible", collectOption, [])
+    .option("--notify-header-env <name=ENV_VAR>", "Header whose value is read from an environment variable, repeatable", collectOption, [])
+    .option("--notify-header-file <name=path>", "Header whose value is read from a file, repeatable; the value is never shown", collectOption, [])
+    .option("--notify-header-stdin <name>", "Header whose value is read from stdin (one header only)", collectOption, [])
     .action(async (options, command) => {
       try {
+        // Validate before anything is provisioned; header values never appear in an error.
+        const notify = await resolveFeedNotify(options);
         const { node, space, sql, resources, output, responses } = await context(command);
         const did = options.to.split("#")[0];
         const source: FeedSource = {
@@ -159,7 +171,15 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           const { delegation } = await node.delegateTo(did, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
           return delegation;
         });
-        outputJson({ source, delegation });
+        if (notify === undefined) return outputJson({ source, delegation });
+        let receipt;
+        try {
+          receipt = await registerFeedNotify(node.hooks, space, resources.responseResource, notify);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "unknown error";
+          throw new Error(`The feed is connected, but the notify webhook was not registered: ${reason}. Run the same command again to retry.`);
+        }
+        outputJson({ source, delegation, notify: receipt });
       } catch (error) { return handleError(error); }
     });
 
@@ -297,8 +317,10 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
     .requiredOption("--recipient <id>", "Stable runtime recipient identity used by the handoff ledger")
     .option("--runner <json>", "JSON argv array run once per response, e.g. '[\"node\",\"agent-handler.js\"]' (default: print JSON lines)")
     .option("--once", "Exit after the first batch of new responses is handed off")
+    .option("--drain", "Hand off every pending response (answers and owner messages, each with its card and response ID) once and exit, without waiting for new ones; for a process a webhook wakes. Repeat wakes never deliver a response twice")
     .option("--handoff <path>", "Durable local SQLite handoff path (default: profile feed ledger)")
     .action(async (options, command) => {
+      if (options.drain === true && options.once === true) return handleError(new Error("--drain and --once cannot be combined: --drain never waits"));
       let local: LocalFeedHandoff | undefined;
       const abort = new AbortController();
       const stop = () => abort.abort();
@@ -315,6 +337,12 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
         process.on("SIGTERM", stop);
         const deliver = runner === undefined ? printFeedResponse
           : (response: FeedResponse) => runFeedRunner(runner, response, abort.signal);
+        if (options.drain === true) {
+          await drainFeedResponses({
+            responses, handoff: local.handle, recipient: options.recipient, signal: abort.signal, deliver,
+          });
+          return;
+        }
         await listenFeedResponses({
           responses, handoff: local.handle, recipient: options.recipient, hooks: node.hooks, once: options.once === true,
           subscription: { space, service: "sql", pathPrefix: resources.responseResource },
