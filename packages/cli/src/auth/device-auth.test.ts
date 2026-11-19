@@ -60,7 +60,7 @@ async function encryptRelay(relayPublicJwk: object, transactionId: string, value
 }
 
 /** What OpenKey's /delegate/complete returns for an owner-signed SIWE over `signed`; `caveat` is signed onto every action. */
-async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000, caveat?: Record<string, unknown>) {
+async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000, caveat?: Record<string, unknown>, sessionSpaceId = spaceId) {
   const abilities: Record<string, Record<string, string[]>> = {};
   // A network URN path is a top-level raw ReCap resource, as OpenKey signs it.
   const rawAbilities: Record<string, string[]> = {};
@@ -74,14 +74,14 @@ async function signedDelegation(signed: PermissionEntry[], publicJwk: object, cl
   }
   const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + lifetimeMs).toISOString();
   const prepared = wasm.prepareSession({
-    abilities, ...(Object.keys(rawAbilities).length === 0 ? {} : { rawAbilities }), address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
+    abilities, ...(Object.keys(rawAbilities).length === 0 ? {} : { rawAbilities }), address, chainId: 1, domain: "openkey.so", spaceId: sessionSpaceId, jwk: key,
     issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
   });
   if (caveat) prepared.siwe = withRecapCaveat(prepared.siwe, caveat);
   const signature = await signer.signMessage(prepared.siwe);
   return {
     ...wasm.completeSessionSetup({ ...prepared, signature }),
-    jwk: publicJwk, verificationMethod: sessionDid, address, chainId: 1, spaceId, ownerDid,
+    jwk: publicJwk, verificationMethod: sessionDid, address, chainId: 1, spaceId: sessionSpaceId, ownerDid,
     siwe: prepared.siwe, signature, expiresAt, permissions: claimed, hostActivated: true,
   };
 }
@@ -124,8 +124,8 @@ function openKeyRelayStub(approve: (start: Record<string, unknown>, transactionI
 
 const fakeOpenKey = openKeyRelayStub;
 
-async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown>; primary?: boolean; space?: Record<string, unknown> }) {
-  const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat);
+async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown>; primary?: boolean; space?: Record<string, unknown>; sessionSpaceId?: string }) {
+  const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat, input.sessionSpaceId);
   // OpenKey's unsigned report that the approving key is the account's primary key, and how far it got hosting the space.
   const relayed = { ...delegation, ...(input.primary === undefined ? {} : { primary: input.primary }), ...input.space };
   return response({
@@ -252,8 +252,13 @@ describe("OpenKey device authorization", () => {
       [{ ...defaultDecrypt, actions: ["tinycloud.encryption/encrypt"] }],
       [{ ...defaultDecrypt, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/encrypt"] }],
       [{ ...defaultDecrypt, space: "secrets" }],
-      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
-      [{ service: "tinycloud.kv", space: `tinycloud:pkh:eip155:1:${address}:secrets`, path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: `tinycloud:pkh:eip155:1:${address}:secrets`, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/delete"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/scoped/team/KEY", actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/key", actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: `vault/secrets/K${"A".repeat(64)}`, actions: ["tinycloud.kv/get"] }],
+      [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/list", "tinycloud.kv/get"] }],
     ];
     for (const permissions of forbidden) {
       const openkey = openKeyRelayStub(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
@@ -284,6 +289,38 @@ describe("OpenKey device authorization", () => {
     const result = await acquire(openkey, { permissions });
     expect(openkey.startBodies[0]?.permissions).toEqual(permissions);
     expect(result.approved).toContainEqual({ ...permissions[1], space: spaceId.toLowerCase() });
+  });
+
+  test("starts device authorization for one named secret in the secrets space, with the default decrypt entry", async () => {
+    const secretsSpace = wasm.makeSpaceId(address, 1, "secrets");
+    const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+    const named: PermissionEntry[] = [
+      { service: "tinycloud.capabilities", space: "secrets", path: "", actions: ["tinycloud.capabilities/read"] },
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"] },
+      defaultDecrypt,
+    ];
+    const signedDecrypt: PermissionEntry = { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] };
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...named.slice(0, 2), signedDecrypt], binding: named, sessionSpaceId: secretsSpace }));
+    const result = await acquire(openkey, { permissions: named });
+    expect(openkey.startBodies[0]?.permissions).toEqual(named);
+    expect(result.declined).toEqual([]);
+    expect(result.spaceId).toBe(secretsSpace);
+  });
+
+  test("starts device authorization for a named secret with the list-only grant on the secrets prefix", async () => {
+    const secretsSpace = wasm.makeSpaceId(address, 1, "secrets");
+    const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+    const signedEntries: PermissionEntry[] = [
+      { service: "tinycloud.capabilities", space: "secrets", path: "", actions: ["tinycloud.capabilities/read"] },
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["tinycloud.kv/get"] },
+      { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/list"] },
+    ];
+    const named: PermissionEntry[] = [...signedEntries, defaultDecrypt];
+    const signedDecrypt: PermissionEntry = { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] };
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, { signed: [...signedEntries, signedDecrypt], binding: named, sessionSpaceId: secretsSpace }));
+    const result = await acquire(openkey, { permissions: named });
+    expect(openkey.startBodies[0]?.permissions).toEqual(named);
+    expect(result.declined).toEqual([]);
   });
 
   test("reports capabilities the owner unchecked and keeps only the signed subset, including the required capability read", async () => {
@@ -532,6 +569,23 @@ describe("device login persistence", () => {
       .toEqual([expect.objectContaining({ actions: ["tinycloud.encryption/decrypt"] })]);
   });
 
+  test("sends one default-network decrypt when a hand-written manifest repeats it", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
+    const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+    const defaultDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
+    const once = [...requested, defaultDecrypt];
+    const openkey = openKeyRelayStub((start, id) => approved(start, id, {
+      signed: [...requested, { service: "encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] }],
+      binding: once,
+    }));
+
+    await loginWithDeviceAuthorization({ profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: [...once, { ...defaultDecrypt }], fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined });
+
+    const sent = openkey.startBodies[0]?.permissions as PermissionEntry[];
+    expect(sent.filter((entry) => entry.service === "tinycloud.encryption")).toHaveLength(1);
+  });
+
   test("records whether the approving key is the account's primary key and warns on stderr when it is not (TC-705)", async () => {
     const stderr: string[] = [];
     const write = process.stderr.write.bind(process.stderr);
@@ -625,7 +679,7 @@ describe("device login persistence", () => {
     const openkey = openKeyRelayStub(() => response({}), { start: response({ error: "invalid_scope" }, 400) });
     await expect(loginWithDeviceAuthorization({
       profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE,
-      permissions: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }],
+      permissions: [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/", actions: ["tinycloud.kv/get"] }],
       fetchFn: openkey.fetchFn,
     })).rejects.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
     expect(openkey.urls).toEqual([]);
