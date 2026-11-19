@@ -58,7 +58,7 @@ function listedDelegation(d: AccountDelegationRecord) {
 const ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
 
 /** Maps the SDK's issued-delegation errors to CLI errors; everything else takes the common mapping. */
-function issuedFailure(
+export function issuedFailure(
   error: { code: string; message: string; meta?: Record<string, unknown> },
   host: string,
 ): CLIError {
