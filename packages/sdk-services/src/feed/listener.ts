@@ -29,6 +29,7 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
     : options.deliver;
 
   const drain = async (): Promise<void> => {
+    try { await options.onWake?.(); } catch { /* advisory only */ }
     do {
       dirty = false;
       let afterSequence = 0;
