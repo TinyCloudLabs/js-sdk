@@ -433,8 +433,13 @@ export async function bootstrapDelegatedSession(
     // session every command refuses: report the delegation, write nothing.
     if (signedLifetimePassed(delegation)) throw delegationExpiredError();
 
-    // Logout keeps the key, so a signed-out profile signs in again with it.
-    const jwk = signerJwkForProfile(ctx.profile, undefined, await ProfileManager.getStoredKey(ctx.profile));
+    // The key the profile signs with: a live session's private JWK, else key.json (logout keeps it for a signed-out
+    // profile to sign in again; a session-only profile has none).
+    const jwk = signerJwkForProfile(
+      ctx.profile,
+      previousSession && "jwk" in previousSession ? previousSession.jwk : undefined,
+      await ProfileManager.getStoredKey(ctx.profile),
+    );
     const session = {
       delegationHeader: delegation.delegationHeader,
       delegationCid: delegation.cid,
