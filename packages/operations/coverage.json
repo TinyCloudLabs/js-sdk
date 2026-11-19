@@ -140,6 +140,7 @@
     { "command": "feed import", "status": "legacy" },
     { "command": "feed connect", "status": "legacy" },
     { "command": "feed disconnect", "status": "legacy" },
+    { "command": "feed card-md", "status": "legacy" },
     { "command": "feed publish", "status": "legacy" },
     { "command": "feed respond", "status": "legacy" },
     { "command": "feed message", "status": "legacy" },

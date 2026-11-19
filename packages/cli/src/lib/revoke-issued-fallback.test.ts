@@ -45,7 +45,7 @@ describe("owner revoke falls back to what this key issued", () => {
     const { node, calls } = ownerNode({ issued: listing(OTHER_CID.replace("someoneelse", "another")) });
     const failure = await revoke(node).then(() => undefined, (error: unknown) => error);
     expect(failure).toMatchObject({ code: "TARGET_NOT_FOUND" });
-    expect((failure as Error).message).toContain("does not list it among the delegations this profile's own key issued");
+    expect((failure as Error).message).toContain("doesn't list it among the delegations this profile's key issued");
     expect(calls).toMatchObject({ revokeIssued: [], ownerRevoke: 0 });
   });
 

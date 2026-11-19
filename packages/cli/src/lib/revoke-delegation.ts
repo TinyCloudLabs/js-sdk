@@ -152,14 +152,14 @@ export async function revokeDelegationOnNode(params: {
             await revokeIssuedDelegation(node, ctx, cid);
             return {
               cid, revoked: true, targetSpaceSource: "node-issued-list", authorityScopeSource: "own-session-key",
-              authorityScopeReason: "The node lists this delegation as issued by this profile's own key, which revoked it with no proof and no owner approval.",
+              authorityScopeReason: "The node lists this delegation as issued by this profile's own key, so that key revoked it.",
             };
           }
           // An old node cannot list issued delegations: the CID stays unknown. Any other failure is reported, never read as "not issued by you".
           if (!issued.ok && issued.error.code !== "UNSUPPORTED_OPERATION") throw issuedFailure(issued.error, ctx.host);
           throw new CLIError(
             "TARGET_NOT_FOUND",
-            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}". It has no local record of that grant, and the node does not list it among the delegations this profile's own key issued. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            `This profile can't look up "${cid}": it has no local record of that grant, and the node doesn't list it among the delegations this profile's key issued.`,
             ExitCode.NOT_FOUND,
           );
         }
