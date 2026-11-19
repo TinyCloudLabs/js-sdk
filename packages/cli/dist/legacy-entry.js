@@ -41327,8 +41327,8 @@ function printResult(result) {
 // src/commands/feed.ts
 init_profiles();
 init_sdk();
-import { readFile as readFile13 } from "fs/promises";
-import { join as join19 } from "path";
+import { readFile as readFile14 } from "fs/promises";
+import { join as join20 } from "path";
 import { parseSpaceUri as parseSpaceUri3 } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage,
@@ -41345,6 +41345,7 @@ import {
   newFeedMessageSchema as newFeedMessageSchema2,
   newFeedResponseSchema as newFeedResponseSchema2,
   publishFeedCard,
+  readFeedCardMd as readFeedCardMd2,
   readFeedResponsePayload,
   recordFeedHandling,
   resolveFeedCard
@@ -41534,6 +41535,13 @@ async function connectFeedAgent(registry, source, activate) {
     throw new Error("The owner feed registry did not confirm the activated grant provenance");
   }
   return grant;
+}
+function feedAgentPermissions(space, resources) {
+  return [
+    { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+    { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
+    { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] }
+  ];
 }
 
 // src/feed/disconnect.ts
@@ -42130,6 +42138,281 @@ async function importFeedPreparedBundle(options) {
   }
 }
 
+// src/feed/card-md.ts
+import { chmod as chmod6, readFile as readFile13, rename as rename3, writeFile as writeFile5 } from "fs/promises";
+import { join as join19 } from "path";
+import { readFeedCardMd } from "@tinycloud/sdk-services/feed";
+
+// src/feed/card-md-default.ts
+var CARD_MD_DEFAULT_VERSION = "ce089aab8391";
+var CARD_MD_DEFAULT = `# card.md
+
+How cards are made for this Feed. Every agent that posts here reads this before its first card. The owner can change it at any time; when it changes, follow the new version.
+
+## Writing a card
+
+1. Plain words first. Write for the owner, not for another agent: no code names, file paths or ids in the text.
+2. Start with a short post: what happened, in one or two sentences. Put it in \`payload.summary\`, and don't repeat the title.
+3. When the owner has to do something, give numbered steps, one action per step.
+4. When you ask for access, name the exact thing and the limit: which data or app, what you will do with it (read, or read and change), and for how long. Never ask for more than the task needs.
+5. One card per thing. Don't edit a card to show progress: post a new update.
+6. On every card, set \`payload.priority\` (0 is the most urgent, 5 is routine news) and \`payload.agent\`. When anything has a date, set \`payload.deadline\` and \`payload.expiresAt\`.
+
+## Card kinds
+
+- **Decision**: the owner picks one of two to four. The options go in \`choices\`, as \`{"id", "label"}\` (not \`options\`). Add \`payload.brief\` with the sections Background, Why now, If you don't answer, The options and Recommendation.
+- **Update**: news that needs no answer. \`needsResponse\` is \`false\` and there are no \`choices\`. To point at a web page, set \`payload.render\` to \`link\` and add \`payload.url\`.
+- **Page**: several questions at once, with something to look at. It needs both \`payload.page.image\` (a public \`https://\` image) and \`payload.page.questions\`. Without both, the Feed shows a plain card and none of your questions.
+
+## What publishing checks
+
+\`feed publish\` checks only the outer card. It never checks \`payload\`, and it drops any other top-level field without saying so: \`priority\` belongs in \`payload.priority\`. Copy the shapes below.
+
+## Known-good cards
+
+### Decision
+
+\`\`\`json
+{
+  "cardId": "weight-goal-2026-11",
+  "revision": 1,
+  "issuanceId": "weight-goal-2026-11-r1",
+  "kind": "decision",
+  "needsResponse": true,
+  "title": "New weekly goal?",
+  "body": "You were under 82 kg all week. I suggest 81.5 kg for next week.",
+  "choices": [
+    {
+      "id": "lower",
+      "label": "81.5 kg"
+    },
+    {
+      "id": "keep",
+      "label": "Keep 82 kg"
+    }
+  ],
+  "urgency": 2,
+  "createdAt": "2026-11-03T09:00:00Z",
+  "payload": {
+    "render": "post",
+    "priority": 3,
+    "deadline": "2026-11-08T18:00:00Z",
+    "expiresAt": "2026-11-09T00:00:00Z",
+    "summary": "Lower next week's goal to 81.5 kg, or keep 82 kg?",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Weight tracker"
+    },
+    "brief": {
+      "title": "Next week's weight goal",
+      "markdown": "## Background\\nYour weekly goal this month is 82 kg. This week's weigh-ins: 81.9, 81.7, 81.6 and 81.4 kg.\\n\\n## Why now\\nI set next week's goal on Sunday evening.\\n\\n## If you don't answer\\nThe goal stays at 82 kg.\\n\\n## The options\\n| | 81.5 kg | Keep 82 kg |\\n|---|---|---|\\n| Change | 0.5 kg lower | None |\\n| Risk | A miss if the week goes badly | You stop making progress |\\n\\n## Recommendation\\n81.5 kg: you were under it on three of four days."
+    }
+  }
+}
+\`\`\`
+
+### Update
+
+\`\`\`json
+{
+  "cardId": "weight-2026-11-03",
+  "revision": 1,
+  "issuanceId": "weight-2026-11-03-r1",
+  "kind": "update",
+  "needsResponse": false,
+  "title": "New low",
+  "body": "81.4 kg this morning, 0.6 kg under your previous best.",
+  "urgency": 0,
+  "createdAt": "2026-11-03T07:42:10Z",
+  "payload": {
+    "render": "post",
+    "priority": 5,
+    "summary": "81.4 kg, a new low.",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Weight tracker"
+    },
+    "source": {
+      "label": "Weigh-ins"
+    }
+  }
+}
+\`\`\`
+
+### Update with a link
+
+\`\`\`json
+{
+  "cardId": "weight-report-2026-11",
+  "revision": 1,
+  "issuanceId": "weight-report-2026-11-r1",
+  "kind": "update",
+  "needsResponse": false,
+  "title": "October report",
+  "body": "Your October weigh-ins in one chart: down 1.8 kg over the month.",
+  "urgency": 1,
+  "createdAt": "2026-11-01T08:00:00Z",
+  "payload": {
+    "render": "link",
+    "url": "https://example.org/weight/october",
+    "priority": 4,
+    "summary": "October: down 1.8 kg. The chart is one tap away.",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Weight tracker"
+    }
+  }
+}
+\`\`\`
+
+### Page
+
+\`\`\`json
+{
+  "cardId": "party-plan-2026-11",
+  "revision": 1,
+  "issuanceId": "party-plan-2026-11-r1",
+  "kind": "page",
+  "needsResponse": true,
+  "title": "Plan for Mia's party",
+  "body": "I found the hall and two cakes. Three things to settle before I book.",
+  "urgency": 3,
+  "createdAt": "2026-11-03T10:00:00Z",
+  "payload": {
+    "render": "post",
+    "priority": 2,
+    "deadline": "2026-11-05T12:00:00Z",
+    "summary": "Pick a date, cakes and anything else before I book the hall.",
+    "agent": {
+      "kind": "claude",
+      "model": "Claude Sonnet 5.5",
+      "runsOn": "Home laptop",
+      "job": "Party planner"
+    },
+    "page": {
+      "image": "https://example.org/hall.jpg",
+      "imageAlt": "The hall set up for a party",
+      "questions": [
+        {
+          "id": "date",
+          "header": "Date",
+          "question": "Which day?",
+          "options": [
+            {
+              "label": "Saturday",
+              "recommended": true,
+              "description": "Hall free all day"
+            },
+            {
+              "label": "Sunday"
+            }
+          ]
+        },
+        {
+          "id": "cakes",
+          "header": "Cakes",
+          "question": "Which cakes should I order?",
+          "multi": true,
+          "options": [
+            {
+              "label": "Chocolate",
+              "image": "https://example.org/choc.jpg"
+            },
+            {
+              "label": "Lemon"
+            }
+          ],
+          "notePrompt": "Any allergies?"
+        },
+        {
+          "id": "else",
+          "header": "Anything else",
+          "question": "Anything else I should arrange?"
+        }
+      ]
+    }
+  }
+}
+\`\`\`
+
+## The owner's preferences
+
+None. The owner can add their own rules here.
+`;
+
+// src/feed/card-md.ts
+init_safe_text();
+var CARD_MD_RESOURCE = "xyz.tinycloud.tinychat/feed/card_md";
+var DEFAULT_CARD_MD = { text: CARD_MD_DEFAULT, version: CARD_MD_DEFAULT_VERSION, default: true };
+var seenPath = (directory, agent) => join19(directory, `feed-card-md-${encodeURIComponent(agent)}.json`);
+async function seenCardMdVersion(directory, agent) {
+  try {
+    const parsed = JSON.parse(await readFile13(seenPath(directory, agent), "utf8"));
+    return typeof parsed.version === "string" ? parsed.version : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function rememberCardMdVersion(directory, agent, version) {
+  const target = seenPath(directory, agent);
+  const temporary = `${target}.${process.pid}.tmp`;
+  await writeFile5(temporary, `${JSON.stringify({ version })}
+`, { mode: 384 });
+  await chmod6(temporary, 384);
+  await rename3(temporary, target);
+}
+function markDefault(card) {
+  return card.version === CARD_MD_DEFAULT_VERSION ? { text: card.text, version: card.version, default: true } : card;
+}
+async function showOnce(card, directory, agent) {
+  const cardMd = card.default === true ? { version: card.version, default: true } : { version: card.version };
+  if (await seenCardMdVersion(directory, agent) === card.version) return { cardMd };
+  await rememberCardMdVersion(directory, agent, card.version).catch(() => void 0);
+  return { cardMd, changed: card };
+}
+async function cardMdOrDefaultForPublish(db, directory, agent) {
+  let card;
+  try {
+    const read6 = await readFeedCardMd(db);
+    if (!read6.ok) return {};
+    card = read6.data === null ? DEFAULT_CARD_MD : markDefault(read6.data);
+  } catch {
+    return {};
+  }
+  return showOnce(card, directory, agent);
+}
+function cardMdChangedText(card) {
+  const version = safeInline(card.version);
+  if (card.default === true) return `The owner hasn't set a card.md, so this is the default (${version}):
+${safeBlock(card.text)}`;
+  return card.text === "" ? `The owner's card.md changed (${version}): it's now empty.` : `The owner's card.md changed (${version}):
+${safeBlock(card.text)}`;
+}
+var CARD_MD_SCHEMA = `CREATE TABLE IF NOT EXISTS card_md (
+  id INTEGER PRIMARY KEY, text TEXT NOT NULL, version TEXT NOT NULL, updated_at TEXT NOT NULL
+)`;
+var CARD_MD_UPSERT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET text = excluded.text, version = excluded.version, updated_at = excluded.updated_at
+  WHERE card_md.version <> excluded.version`;
+var CARD_MD_INSERT_DEFAULT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO NOTHING`;
+async function copyCardMdToAgent(master, agentResponses) {
+  try {
+    const read6 = await readFeedCardMd(master);
+    if (!read6.ok) return false;
+    const statement = read6.data === null ? { sql: CARD_MD_INSERT_DEFAULT, params: [DEFAULT_CARD_MD.text, DEFAULT_CARD_MD.version, (/* @__PURE__ */ new Date()).toISOString()] } : { sql: CARD_MD_UPSERT, params: [read6.data.text, read6.data.version, read6.data.updatedAt] };
+    const written = await agentResponses.batch([{ sql: CARD_MD_SCHEMA }, statement]);
+    return written.ok;
+  } catch {
+    return false;
+  }
+}
+
 // src/commands/feed.ts
 var FEED_PREFIX2 = "xyz.tinycloud.tinychat/feed";
 var REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -42161,7 +42444,7 @@ function agentOptions(command) {
 async function readPrivatePayload(file) {
   if (file === void 0) return void 0;
   try {
-    const parsed = feedResponsePayloadSchema2.safeParse(JSON.parse(await readFile13(file, "utf8")));
+    const parsed = feedResponsePayloadSchema2.safeParse(JSON.parse(await readFile14(file, "utf8")));
     if (!parsed.success) throw new Error("Invalid payload envelope");
     return parsed.data;
   } catch {
@@ -42193,6 +42476,13 @@ into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
+card-md prints the owner's card.md: {text, version, updatedAt}. When the owner hasn't set one it
+prints the default instead, as {text, version, default: true}.
+publish and watch print the text once on stderr when its version differs from the last
+one this profile saw for the agent. publish also adds cardMd {version} to its JSON each time,
+with default: true while it is the default.
+An agent connected before card.md existed reads it with the same grant.
+
 export captures an owner-only raw KV snapshot to an unused private file. Source space,
 slash prefix and output are explicit; source get/sync grants are separate from feed SQL.
 `);
@@ -42219,7 +42509,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       }
       let bundle;
       try {
-        bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile13(options.file)));
+        bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile14(options.file)));
       } catch {
         throw cliErrorFromService({ code: "INVALID_INPUT", message: "Could not read a valid prepared feed bundle file" });
       }
@@ -42243,12 +42533,9 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       };
       const delegation = await connectFeedAgent(sql2.db(REGISTRY), source, async () => {
         value3(await initializeFeedDatabases2({ output: output2, responses }));
+        await copyCardMdToAgent(sql2.db(CARD_MD_RESOURCE), responses);
         const expiry = parseExpiry3(options.expiry).getTime() - Date.now();
-        const { delegation: delegation2 } = await node.delegateTo(did2, [
-          { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
-          { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
-          { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] }
-        ], { expiry, requireActivation: true });
+        const { delegation: delegation2 } = await node.delegateTo(did2, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
         return delegation2;
       });
       outputJson({ source, delegation });
@@ -42272,9 +42559,25 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
   });
   agentOptions(feed.command("publish").description("Agent: publish an immutable card issuance")).requiredOption("--file <path>", "Card JSON file").action(async (options, command) => {
     try {
-      const { output: output2 } = await context(command);
-      const card = feedCardSchema2.parse(JSON.parse(await readFile13(options.file, "utf8")));
-      outputJson(value3(await publishFeedCard(output2, card)));
+      const { output: output2, responses, profile } = await context(command);
+      const card = feedCardSchema2.parse(JSON.parse(await readFile14(options.file, "utf8")));
+      const published = value3(await publishFeedCard(output2, card));
+      const directory = await ProfileManager.ensureProfileDir(profile.profile).catch(() => void 0);
+      const { cardMd, changed } = directory === void 0 ? {} : await cardMdOrDefaultForPublish(responses, directory, options.agent);
+      if (changed) process.stderr.write(`${cardMdChangedText(changed)}
+`);
+      outputJson(cardMd === void 0 ? published : { ...published, cardMd });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("card-md").description("Agent: read the owner's card.md, the owner's instructions for the cards you post")).action(async (options, command) => {
+    try {
+      const { responses, profile } = await context(command);
+      const stored = value3(await readFeedCardMd2(responses));
+      const cardMd = stored === null ? DEFAULT_CARD_MD : markDefault(stored);
+      await rememberCardMdVersion(await ProfileManager.ensureProfileDir(profile.profile), options.agent, cardMd.version);
+      outputJson(cardMd);
     } catch (error) {
       return handleError(error);
     }
@@ -42284,7 +42587,7 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
       const { output: output2, responses } = await context(command);
       let response;
       try {
-        const parsed = newFeedResponseSchema2.safeParse(JSON.parse(await readFile13(options.file, "utf8")));
+        const parsed = newFeedResponseSchema2.safeParse(JSON.parse(await readFile14(options.file, "utf8")));
         if (!parsed.success) throw new Error("Invalid response header");
         response = parsed.data;
       } catch {
@@ -42301,7 +42604,7 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
       const { output: output2, responses } = await context(command);
       let message;
       try {
-        const parsed = newFeedMessageSchema2.safeParse(JSON.parse(await readFile13(options.file, "utf8")));
+        const parsed = newFeedMessageSchema2.safeParse(JSON.parse(await readFile14(options.file, "utf8")));
         if (!parsed.success) throw new Error("Invalid message header");
         message = parsed.data;
       } catch {
@@ -42316,7 +42619,7 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
   agentOptions(feed.command("handling").description("Agent: append response acknowledgement or outcome without changing owner responses")).requiredOption("--file <path>", "Handling JSON including full response and card identities").action(async (options, command) => {
     try {
       const { output: output2 } = await context(command);
-      const handling = feedHandlingSchema.parse(JSON.parse(await readFile13(options.file, "utf8")));
+      const handling = feedHandlingSchema.parse(JSON.parse(await readFile14(options.file, "utf8")));
       outputJson(value3(await recordFeedHandling(output2, handling)));
     } catch (error) {
       return handleError(error);
@@ -42370,7 +42673,7 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
       const runner = options.runner === void 0 ? void 0 : parseFeedRunner(options.runner);
       const { profile, node, space, responses, resources } = await context(command);
       const directory = await ProfileManager.ensureProfileDir(profile.profile);
-      local = await openFeedHandoff(options.handoff ?? join19(directory, `feed-${options.agent}.sqlite`));
+      local = await openFeedHandoff(options.handoff ?? join20(directory, `feed-${options.agent}.sqlite`));
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
       const deliver = runner === void 0 ? printFeedResponse : (response) => runFeedRunner(runner, response, abort.signal);
@@ -42382,7 +42685,13 @@ row is removed only after the revoke succeeds; the token stays reserved for the 
         once: options.once === true,
         subscription: { space, service: "sql", pathPrefix: resources.responseResource },
         signal: abort.signal,
-        deliver
+        deliver,
+        // The owner's card.md write wakes the watch with no response; show it once per version, on stderr.
+        onWake: async () => {
+          const { changed } = await cardMdOrDefaultForPublish(responses, directory, options.agent);
+          if (changed) process.stderr.write(`${cardMdChangedText(changed)}
+`);
+        }
       });
     } catch (error) {
       return handleError(error);
@@ -42552,15 +42861,15 @@ function missingGrantHint(profile, appId) {
 }
 
 // src/commands/kv.ts
-import { readFile as readFile14 } from "fs/promises";
+import { readFile as readFile15 } from "fs/promises";
 
 // src/lib/private-output.ts
 init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID4 } from "crypto";
-import { lstat as lstat10, open as open17, rename as rename3, rm as rm9 } from "fs/promises";
-import { basename as basename3, dirname as dirname9, join as join20 } from "path";
+import { lstat as lstat10, open as open17, rename as rename4, rm as rm9 } from "fs/promises";
+import { basename as basename3, dirname as dirname9, join as join21 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
     const destination = await lstat10(path);
@@ -42583,7 +42892,7 @@ async function validatePrivateOutput(path, label = "output") {
 async function writePrivateOutput(path, value4, label = "output") {
   await validatePrivateOutput(path, label);
   const parentPath = dirname9(path);
-  const temp = join20(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
+  const temp = join21(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
   let created = false;
   try {
     const handle = await open17(temp, "wx", PRIVATE_FILE_MODE);
@@ -42594,7 +42903,7 @@ async function writePrivateOutput(path, value4, label = "output") {
     } finally {
       await handle.close();
     }
-    await rename3(temp, path);
+    await rename4(temp, path);
   } catch (error) {
     if (created) await rm9(temp, { force: true }).catch(() => void 0);
     const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
@@ -42714,7 +43023,7 @@ function registerKvCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = await readFile14(options.file);
+        putValue = await readFile15(options.file);
       } else if (options.stdin) {
         putValue = await readStdin2();
       } else {
@@ -42863,7 +43172,7 @@ init_formatter();
 init_errors();
 init_sdk();
 init_named_keys();
-import { readFile as readFile15 } from "fs/promises";
+import { readFile as readFile16 } from "fs/promises";
 import { NamedKeyError, createNamedKeyClient } from "@tinycloud/node-sdk/encryption-keys";
 import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
 async function readStdin3() {
@@ -42874,7 +43183,7 @@ async function readStdin3() {
   return Buffer.concat(chunks);
 }
 async function readInput(file) {
-  return file === void 0 ? readStdin3() : readFile15(file);
+  return file === void 0 ? readStdin3() : readFile16(file);
 }
 function cliErrorFromNamedKey(error, command, path) {
   if (!(error instanceof NamedKeyError)) return error;
@@ -43036,7 +43345,7 @@ init_constants();
 init_theme();
 import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME29 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile16 } from "fs/promises";
+import { readFile as readFile17 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
   const manifest = program.command("manifest").description("Inspect TinyCloud app manifests");
@@ -43150,7 +43459,7 @@ async function loadManifestSource2(source) {
     }
     return response.text();
   }
-  return readFile16(source, "utf8");
+  return readFile17(source, "utf8");
 }
 function prefixWithAppId(path, appId) {
   const slash = path.indexOf("/");
@@ -43635,8 +43944,8 @@ init_profile_replicas();
 import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants7 } from "fs";
-import { mkdir as mkdir7, open as open18, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat11 } from "fs/promises";
-import { basename as basename4, dirname as dirname10, join as join21, resolve as resolve6 } from "path";
+import { mkdir as mkdir7, open as open18, readdir as readdir6, rename as rename5, unlink as unlink6, lstat as lstat11 } from "fs/promises";
+import { basename as basename4, dirname as dirname10, join as join23, resolve as resolve6 } from "path";
 
 // src/lib/replication-report.ts
 function percentile(values, fraction) {
@@ -43811,7 +44120,7 @@ async function replicaNames(profile) {
       if (entry.isSymbolicLink()) throw localPathChanged(profile);
       if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
       const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
-        const database = await lstat11(join21(directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat11(join23(directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -43835,7 +44144,7 @@ async function withReplicaRoot(profile, action, create5 = false) {
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
-      await mkdir7(join21(directory, "replicas"), { mode: 448 }).catch((error) => {
+      await mkdir7(join23(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -43861,7 +44170,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create5) {
       await recheckRoot();
-      await mkdir7(join21(root, name), { mode: 448 }).catch((error) => {
+      await mkdir7(join23(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -43872,7 +44181,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
       async (_directory, path, expectedDirectory, recheckChild) => {
         await recheckRoot();
         await recheckChild();
-        const database = await lstat11(join21(_directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat11(join23(_directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -44102,7 +44411,7 @@ function describeStatus(status) {
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve6(path);
-  const temp = join21(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
+  const temp = join23(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
   const handle = await open18(temp, fsConstants7.O_CREAT | fsConstants7.O_EXCL | fsConstants7.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
@@ -44111,7 +44420,7 @@ async function writeFileAtomic(path, bytes) {
     await handle.close();
   }
   try {
-    await rename4(temp, target);
+    await rename5(temp, target);
   } catch (error) {
     await unlink6(temp).catch(() => void 0);
     throw error;
@@ -44145,7 +44454,7 @@ async function assertNamedLocalEntry(profile, path, expected, kind) {
   if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
-  const path = join21(parent, name);
+  const path = join23(parent, name);
   const before = await lstat11(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -44174,7 +44483,7 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   }
 }
 async function readReportFile(profile, parent, name) {
-  const path = join21(parent, name);
+  const path = join23(parent, name);
   const before = await lstat11(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -44719,8 +45028,8 @@ init_errors();
 init_warnings();
 init_constants();
 import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile17 } from "fs/promises";
-import { join as join23 } from "path";
+import { readFile as readFile18 } from "fs/promises";
+import { join as join24 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope, SECRET_TYPES as SECRET_TYPES2 } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation4 } from "@tinycloud/operations";
@@ -45323,7 +45632,7 @@ function resolveSecretListPrefix(options = {}) {
 }
 function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join23(home, ".tinycloud", "profiles");
+  return join24(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
@@ -45681,7 +45990,7 @@ function permissionsFromDelegation2(delegation) {
 }
 async function loadDelegationCandidates(source) {
   try {
-    const raw = JSON.parse(await readFile17(source, "utf8"));
+    const raw = JSON.parse(await readFile18(source, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code !== "ENOENT") {
@@ -45700,8 +46009,8 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join23(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile17(importedPath, "utf8"));
+    const importedPath = join24(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile18(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -46351,7 +46660,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        secretValue = await readFile17(options.file, "utf-8");
+        secretValue = await readFile18(options.file, "utf-8");
       } else if (options.stdin) {
         secretValue = (await readStdin4()).toString("utf-8");
       } else {
@@ -46663,9 +46972,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants as constants2 } from "fs";
-import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open19, readFile as readFile18, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm10, unlink as unlink7 } from "fs/promises";
+import { lstat as lstat12, mkdir as mkdir8, mkdtemp, open as open19, readFile as readFile19, realpath as realpath3, stat as stat6, link as link4, rename as rename6, rm as rm10, unlink as unlink7 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
-import { basename as basename5, join as join24, resolve as resolve7, sep as sep3 } from "path";
+import { basename as basename5, join as join25, resolve as resolve7, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -46710,7 +47019,7 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const path = resolve7(input);
   const info = await stat6(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile18(path));
+  const bytes = new Uint8Array(await readFile19(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
@@ -46719,7 +47028,7 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join24(current, segment) : join24(current, segment);
+    current = current === sep3 ? join25(current, segment) : join25(current, segment);
     try {
       const info = await lstat12(current);
       if (info.isSymbolicLink()) {
@@ -46741,17 +47050,17 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const safeName = safeFilename(filename);
   const directoryHandle = await open19(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath3(outputDirectory);
-  const outputPath = join24(stableDirectory, safeName);
+  const outputPath = join25(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat6(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join24(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join25(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat12(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join24(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
+  const stagingPath = join25(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -46769,7 +47078,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
     handle = void 0;
     await assertStableDirectory();
     if (force) {
-      await rename5(temporaryPath, outputPath);
+      await rename6(temporaryPath, outputPath);
     } else {
       await link4(temporaryPath, outputPath);
       await unlink7(temporaryPath);
@@ -46788,7 +47097,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
     await rm10(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join24(outputDirectory, safeName);
+  return join25(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -46797,7 +47106,7 @@ init_profiles();
 // src/share/html-folder.ts
 import { constants as constants3, existsSync as existsSync2 } from "fs";
 import { lstat as lstat13, open as open20, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
-import { basename as basename6, dirname as dirname11, isAbsolute, join as join25, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
+import { basename as basename6, dirname as dirname11, isAbsolute, join as join26, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -47870,7 +48179,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join25(absolute, entry.name);
+      const child = join26(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -48571,7 +48880,7 @@ init_theme();
 import { CLI_NAME as CLI_NAME36 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
-import { mkdir as mkdir9, writeFile as writeFile5 } from "fs/promises";
+import { mkdir as mkdir9, writeFile as writeFile6 } from "fs/promises";
 import { dirname as dirname12 } from "path";
 function didWithoutFragment2(did2) {
   const fragment = did2.indexOf("#");
@@ -48729,7 +49038,7 @@ it directly with \`${CLI_NAME36} space host <name>\` (no request needed).
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
     await mkdir9(dirname12(emitOption), { recursive: true });
-    await writeFile5(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+    await writeFile6(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
       path: emitOption,
@@ -48753,7 +49062,7 @@ init_space();
 init_host();
 init_theme();
 import { CLI_NAME as CLI_NAME37 } from "@tinycloud/operations/cli-name";
-import { writeFile as writeFile6 } from "fs/promises";
+import { writeFile as writeFile7 } from "fs/promises";
 import { resolve as resolve9 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
@@ -48897,7 +49206,7 @@ Output:
       const blob = result.data;
       const buffer = Buffer.from(await blob.arrayBuffer());
       const outputPath = resolve9(options.output);
-      await writeFile6(outputPath, buffer);
+      await writeFile7(outputPath, buffer);
       outputJson({
         file: outputPath,
         size: blob.size,
@@ -49454,7 +49763,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile19 } from "fs/promises";
+import { readFile as readFile20 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -49516,7 +49825,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile19(options.file));
+        putValue = new Uint8Array(await readFile20(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
@@ -49631,7 +49940,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile20 } from "fs/promises";
+import { readFile as readFile21 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -49736,7 +50045,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile20(options.file, "utf-8");
+        varValue = await readFile21(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {
