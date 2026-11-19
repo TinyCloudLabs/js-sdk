@@ -106,7 +106,7 @@ const acquisitionFlow = async (did: string, options: Record<string, unknown>) =>
   return delegation;
 };
 mock.module("../auth/browser-auth.js", () => ({ ...realBrowserAuth, startAuthFlow: acquisitionFlow }));
-mock.module("../auth/space-setup.js", () => ({ ensureSpaceSetup: async () => undefined }));
+mock.module("../auth/space-setup.js", () => ({ ensureSpaceSetup: async () => undefined, createSpaceRecheck: () => ({ settle: () => undefined, check: async () => undefined }) }));
 mock.module("../output/errors.js", () => ({
   CLIError: class CLIError extends Error {
     constructor(public code: string, message: string, public exitCode: number, public metadata?: Record<string, unknown>) {

@@ -315,6 +315,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return promise;
 }
 
+/** JSON as the node stores it and `getJson` parses it back, so a sent body and a read-back body compare equal. */
+function storedJson(value: unknown): string {
+  return JSON.stringify(JSON.parse(JSON.stringify(value)));
+}
+
+const STATE_CHANGED = 'watch.json was changed by another process: a second `watch` is running for this Courier agent.';
+
 export class Watcher {
   private state: WatchState = emptyWatchState();
   private readonly retryAt = new Map<string, number>();
@@ -338,6 +345,8 @@ export class Watcher {
   private onFatal: (() => void) | undefined;
   /** Etag of this agent's watch.json as this watcher last saw it: null = absent, undefined = unknown (fetch before writing). */
   private stateEtag: string | null | undefined;
+  /** The state (as stored JSON) of a write whose request failed without a 412: it may have been applied. */
+  private unconfirmedState: string | undefined;
   /** Per `<peer handle>\n<peer task key>`: two peers may use the same name for us, so a key alone is ambiguous. */
   private readonly taskCache = new Map<string, { etag: string | null; terminal: boolean }>();
   /** Peer keys whose value is over the batch cap: reported once and not read again by this process. */
@@ -529,22 +538,38 @@ export class Watcher {
     const run = this.stateQueue.then(async () => {
       const result = fn();
       const { selfKv } = this.deps;
-      if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, this.keys.watch))?.etag ?? null;
+      if (this.unconfirmedState !== undefined) await this.confirmState();
+      else if (this.stateEtag === undefined) this.stateEtag = (await getJson<WatchState>(selfKv, this.keys.watch))?.etag ?? null;
+      // A copy, so the body sent is exactly the one remembered if the outcome is unknown.
+      const sent = structuredClone(this.state);
       try {
         const written = this.stateEtag
-          ? await putMatch(selfKv, this.keys.watch, this.state, this.stateEtag)
-          : await putCreate(selfKv, this.keys.watch, this.state);
+          ? await putMatch(selfKv, this.keys.watch, sent, this.stateEtag)
+          : await putCreate(selfKv, this.keys.watch, sent);
         this.stateEtag = written ?? undefined;
       } catch (error) {
-        if (error instanceof CourierError && error.code === 'conflict') {
-          throw this.stateConflict('watch.json was changed by another process: a second `watch` is running for this Courier agent.');
-        }
+        if (error instanceof CourierError && error.code === 'conflict') throw this.stateConflict(STATE_CHANGED);
+        // Not refused: the node may have applied it and only the reply was lost (a timeout, a dropped connection,
+        // `outcome_unknown`). The next write reads the state back first.
+        this.unconfirmedState = storedJson(sent);
         throw error;
       }
       return result;
     });
     this.stateQueue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * After a write with an unknown outcome: the stored state is either unchanged (not applied) or exactly the body
+   * this watcher sent (applied). Both are this watcher's own; anything else was written by another process.
+   */
+  private async confirmState(): Promise<void> {
+    const got = await getJson<WatchState>(this.deps.selfKv, this.keys.watch);
+    const etag = got?.etag ?? null;
+    if (etag !== this.stateEtag && (!got || storedJson(got.value) !== this.unconfirmedState)) throw this.stateConflict(STATE_CHANGED);
+    this.stateEtag = etag;
+    this.unconfirmedState = undefined;
   }
 
   /** Another watcher owns this profile's state. Carrying on would double-wake and overwrite its pending wakes: stop. */

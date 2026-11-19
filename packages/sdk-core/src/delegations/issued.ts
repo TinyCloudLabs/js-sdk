@@ -47,6 +47,9 @@ async function refusalText(response: FetchResponse): Promise<string> {
   return text.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
 }
 
+/** The body of the node's 404 for a revocation (or other write) whose space it has no row for. */
+const NODE_SPACE_NOT_FOUND = "space not found";
+
 /**
  * Maps a non-2xx answer to an issued-delegation query or proofless revocation.
  * The node refuses with a plain-text 401 or 403, answers 400 for a cursor it will not
@@ -58,8 +61,9 @@ async function issuedHttpError(
   response: FetchResponse,
   what: string,
   meta: Record<string, unknown>,
+  readText?: string,
 ): Promise<DelegationError> {
-  const text = await refusalText(response);
+  const text = readText ?? await refusalText(response);
   const details = { ...meta, status: response.status };
   if (response.status === 401 || response.status === 403) {
     return createError(
@@ -311,9 +315,14 @@ export async function revokeIssued(
       : await send(ctx.fetchFn, ctx.host);
     if (!response.ok) {
       if (response.status === 404) {
+        // Only the node's own answer for a revocation it cannot place, `404 Space not found` (TxError::SpaceNotFound), means the
+        // delegation is gone. Any other 404 (a proxy, an older node's route) is a failure the caller must not read as "gone".
+        const text = await refusalText(response);
         return {
           ok: false,
-          error: createError(DelegationErrorCodes.NOT_FOUND, `Delegation not found: ${cid}`),
+          error: text.toLowerCase() === NODE_SPACE_NOT_FOUND
+            ? createError(DelegationErrorCodes.NOT_FOUND, `Delegation not found: ${cid}`, undefined, { cid, status: 404 })
+            : await issuedHttpError(response, "Failed to revoke delegation", { cid }, text),
         };
       }
       return {

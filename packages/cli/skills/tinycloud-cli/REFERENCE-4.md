@@ -4,7 +4,7 @@ Part 4 of the CLI command reference. The entry point is [REFERENCE.md](REFERENCE
 
 ### Artifacts
 
-An artifact is a file an agent publishes for a person to open in the Share viewer. Publish it as a bearer link, the default: HTML renders for link recipients only and an addressed (`--to email:` / `did:` / `domain:`) HTML file is offered as a download; JSX follows the same rule once the JSX renderer ships, and until then it is shown as source text with a Download action. One file per artifact; folders and multi-file bundles are not supported.
+An artifact is a file an agent publishes for a person to open in the Share viewer. Publish it as a bearer link, the default: HTML renders for link recipients only and an addressed (`--to did:` / `domain:`) HTML file is offered as a download; JSX follows the same rule once the JSX renderer ships, and until then it is shown as source text with a Download action. One file per artifact; folders and multi-file bundles are not supported.
 
 | Kind | File | What the viewer does |
 |------|------|----------------------|
@@ -32,7 +32,7 @@ tinycloud --profile publisher share publish ./report-v2.md --to anyone --artifac
 tinycloud --profile publisher share revoke <shareId>
 ```
 
-- Default to `--to anyone` for artifacts unless the person you are working for named a narrower audience. Choose `--expires` deliberately (the default is `7d`). Anyone holding the complete URL can open it until it expires or is revoked, and revoking does not recall copies already received. For content that only named people may read, use `--to email:` and tell the recipient it will download rather than render.
+- Default to `--to anyone` for artifacts unless the person you are working for named a narrower audience. Choose `--expires` deliberately (the default is `7d`). Anyone holding the complete URL can open it until it expires or is revoked, and revoking does not recall copies already received. For content that only one person may read, use `--to did:`; `--to domain:` reaches everyone with a verified address at that domain. Tell the recipient an addressed file downloads rather than renders.
 - `--artifact new` pins: the link reads the one version published, and the CLI never overwrites a version (the next publish writes the next one). Use it whenever the artifact may be revised; `share versions <artifact-id>` lists the versions and the shares pinned to each. A pinned share is read-only, so `--action edit` is refused with it, and `--to anyone --action edit` is refused for every share.
 - Give the person the link from `share show <shareId> --reveal-link` once; do not write it to logs, issue comments or shared files. `share publish --json` never has the link, and `share show --reveal-link` refuses `--json`, so a log of JSON output never holds it.
 - Never put secrets, tokens or private keys in an artifact. The source is stored in the owner's space and its bytes are readable by every link holder.
