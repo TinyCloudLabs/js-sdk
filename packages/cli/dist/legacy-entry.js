@@ -21819,13 +21819,13 @@ function registerBugReportCommand(program, dependencies = {}) {
 init_profile_gate();
 init_dist();
 init_profiles();
-import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
 import { spawn } from "child_process";
 import { lstat as lstat8, mkdir as mkdir5, readFile as readFile10, writeFile as writeFile3 } from "fs/promises";
 import { dirname as dirname6, join as join17 } from "path";
-import { createInterface as createInterface4 } from "readline";
+import { createInterface as createInterface5 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
@@ -37096,7 +37096,7 @@ init_types();
 init_constants();
 init_permissions();
 init_sdk();
-import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
 import { TinyCloudNode as TinyCloudNode2 } from "@tinycloud/node-sdk";
 import { DelegationRequestBindingSchema, PermissionEntrySchema as PermissionEntrySchema2 } from "@tinycloud/operations/artifacts";
 import {
@@ -37111,7 +37111,7 @@ import {
 // src/lib/revoke-delegation.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME18 } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation4 } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer as withoutBearer3 } from "@tinycloud/operations/delegation-binding";
 init_permissions();
@@ -37180,6 +37180,254 @@ async function lookupOwnerSpaceOnNode(node, cid, ownerDid) {
     if (cursor === void 0) return ownerSpaceFromNodeRecords(records, cid, ownerDid, node.sessionDid);
   }
   return void 0;
+}
+
+// src/commands/delegation.ts
+import { createInterface as createInterface4 } from "readline";
+init_profiles();
+init_formatter();
+init_errors();
+init_constants();
+init_sdk();
+init_duration();
+import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
+import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
+async function queryDelegations(node, options, until) {
+  const found = [];
+  let cursor;
+  do {
+    const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
+    if (!page.ok) {
+      if (page.error.code === "PERMISSION_DENIED") {
+        throw new CLIError(
+          "PERMISSION_DENIED",
+          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME17} auth login\` again to grant it.`,
+          ExitCode.PERMISSION_DENIED
+        );
+      }
+      throw cliErrorFromService(page.error);
+    }
+    found.push(...page.data.items);
+    cursor = page.data.nextCursor;
+  } while (cursor && !(until && found.some((d) => d.cid === until)));
+  return found;
+}
+function listedDelegation(d) {
+  const resources = d.resources.map((r) => {
+    const [space, service, ...path] = r.resource.split("/");
+    return { space, service, path: path.join("/"), actions: r.actions };
+  });
+  return {
+    cid: d.cid,
+    delegatee: d.delegateDid,
+    delegator: d.delegatorDid,
+    direction: d.direction,
+    status: d.status,
+    expiry: d.expiresAt?.toISOString() ?? null,
+    resources
+  };
+}
+var ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
+function issuedFailure(error, host) {
+  if (error.code === "UNSUPPORTED_OPERATION") {
+    return new CLIError(
+      "ISSUED_DELEGATIONS_UNAVAILABLE",
+      `${host} can't list the delegations you issued yet.`,
+      ExitCode.NODE_ERROR
+    );
+  }
+  if (error.code === "CHAIN_TOO_DEEP") {
+    return new CLIError(
+      "CHAIN_TOO_DEEP",
+      "The node can't check this delegation chain right now because it's too long. Try again later.",
+      ExitCode.NODE_ERROR,
+      { status: 503 }
+    );
+  }
+  if (error.code === "INVALID_CURSOR") {
+    return new CLIError(
+      "INVALID_CURSOR",
+      "The node couldn't continue the list. Run the command again.",
+      ExitCode.NODE_ERROR,
+      { status: 400 }
+    );
+  }
+  return cliErrorFromService(error);
+}
+async function revokeIssuedDelegation(node, ctx, cid) {
+  const result = await node.delegationManager.revokeIssued(cid);
+  if (result.ok) return { cid: result.data.cid, revoked: true };
+  if (result.error.code === "PERMISSION_DENIED") {
+    throw new CLIError(
+      "REVOKE_UNAUTHORIZED",
+      `The node refused this revocation: ${result.error.message}.`,
+      ExitCode.PERMISSION_DENIED,
+      {
+        status: result.error.meta?.status,
+        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME17} --profile ${ctx.profile} delegation list --granted\`.`
+      }
+    );
+  }
+  if (result.error.code === "NOT_FOUND") {
+    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
+  }
+  throw issuedFailure(result.error, ctx.host);
+}
+async function confirmCurrentSessionRevoke(yes) {
+  if (yes) return;
+  const warning = "This is your current sign-in session; revoking it signs you out";
+  if (!isInteractive() || !process.stdin.isTTY) {
+    throw new CLIError("CONFIRMATION_REQUIRED", `${warning}. Re-run with --yes to confirm.`, ExitCode.USAGE_ERROR);
+  }
+  process.stderr.write(`${warning}.
+`);
+  const prompt = createInterface4({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await new Promise((resolve10) => prompt.question("Revoke this session? [y/N] ", resolve10));
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      throw new CLIError("REQUEST_CANCELLED", "Current session revocation cancelled.", ExitCode.ERROR);
+    }
+  } finally {
+    prompt.close();
+  }
+}
+function registerDelegationCommand(program, configuration = {}) {
+  const delegation = program.command("delegation").description("Manage delegations");
+  delegation.command("create").description("Create a delegation").requiredOption("--to <did>", "Recipient DID").requiredOption("--path <path>", "KV path scope").requiredOption("--actions <actions>", "Comma-separated actions (e.g., kv/get,kv/list)").option("--expiry <duration>", "Expiry duration (e.g., 1h, 7d, ISO date)", "1h").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const actions = options.actions.split(",").map((a) => {
+        const trimmed = a.trim();
+        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
+      });
+      const byService = {};
+      for (const action of actions) {
+        const slash = action.indexOf("/");
+        if (slash <= "tinycloud.".length || slash === action.length - 1) {
+          throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+        }
+        (byService[action.slice(0, slash)] ??= []).push(action);
+      }
+      const expiry = parseExpiry3(options.expiry);
+      const recipient = options.to.split("#")[0];
+      const { delegation: created } = await node.delegateTo(
+        recipient,
+        Object.entries(byService).map(([service, serviceActions]) => ({
+          service,
+          space: "default",
+          path: options.path,
+          actions: serviceActions
+        })),
+        { expiry: expiry.getTime() - Date.now(), requireActivation: true }
+      ).catch((error) => {
+        if (error instanceof PermissionNotInManifestError) {
+          const needed = error.missing.map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`).join("; ");
+          throw new CLIError(
+            "PERMISSION_DENIED",
+            `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
+            ExitCode.PERMISSION_DENIED
+          );
+        }
+        throw error;
+      });
+      const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
+      if (confirmed?.status !== "active") {
+        throw new CLIError(
+          "DELEGATION_NOT_CONFIRMED",
+          confirmed ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.` : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
+          ExitCode.ERROR
+        );
+      }
+      outputJson({
+        cid: created.cid,
+        delegateDid: recipient,
+        delegatorDid: confirmed.delegatorDid,
+        path: options.path,
+        actions,
+        expiry: created.expiry.toISOString(),
+        status: confirmed.status
+      });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  delegation.command("list").description("List delegations").option("--granted", "Show only delegations I've granted").option("--received", "Show only delegations I've received").option("--space <space>", "Filter by space name or ID").action(async (options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      if (options.granted && options.received) {
+        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
+      }
+      if (options.granted && ctx.posture === "delegate-session" && node.address === void 0) {
+        const issued = await node.delegationManager.queryAllIssued({ space: options.space });
+        if (!issued.ok) throw issuedFailure(issued.error, ctx.host);
+        outputJson({
+          delegations: issued.data.map(listedDelegation),
+          count: issued.data.length,
+          note: ISSUED_ORDER_NOTE
+        });
+        return;
+      }
+      const delegations = await queryDelegations(node, {
+        direction: options.granted ? "granted" : options.received ? "received" : "all",
+        space: options.space
+      });
+      outputJson({
+        delegations: delegations.map(listedDelegation),
+        count: delegations.length
+      });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  delegation.command("info <cid>").description("Get delegation details").option("--space <space>", "Filter by space name or ID").action(async (cid, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const node = await ensureAuthenticated(ctx);
+      const found = (await queryDelegations(node, { direction: "all", space: options.space })).find((d) => d.cid === cid);
+      if (!found) {
+        throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
+      }
+      outputJson(listedDelegation(found));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Confirm revoking the current sign-in session", false).action(async (cid, options, cmd) => {
+    try {
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : void 0;
+      if (delegateCandidate !== void 0 && delegateCandidate.address === void 0) {
+        outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
+        return;
+      }
+      const session = await ProfileManager.getSession(ctx.profile);
+      const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
+      if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
+      const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : void 0;
+      const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
+      const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
+      const revoked = await revokeDelegationOnNode({
+        ctx,
+        node,
+        profile,
+        cid,
+        openKeyAcquisition: configuration.openKeyAcquisition
+      });
+      const replicasRemoved = prepared ? await finishProfileLogout(ctx, { online: prepared, expectedSessionCid: cid }) : void 0;
+      outputJson({
+        ...revoked,
+        ...replicasRemoved === void 0 ? {} : { signedOut: true, replicasRemoved }
+      });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
 }
 
 // src/lib/revoke-delegation.ts
@@ -37284,9 +37532,21 @@ async function revokeDelegationOnNode(params) {
           host: ctx.host
         });
         if (!boundSpace) {
+          const issued = await node.delegationManager.queryAllIssued({ untilCid: cid });
+          if (issued.ok && issued.data.some((delegation) => delegation.cid === cid)) {
+            await revokeIssuedDelegation(node, ctx, cid);
+            return {
+              cid,
+              revoked: true,
+              targetSpaceSource: "node-issued-list",
+              authorityScopeSource: "own-session-key",
+              authorityScopeReason: "The node lists this delegation as issued by this profile's own key, so that key revoked it."
+            };
+          }
+          if (!issued.ok && issued.error.code !== "UNSUPPORTED_OPERATION") throw issuedFailure(issued.error, ctx.host);
           throw new CLIError(
             "TARGET_NOT_FOUND",
-            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            `This profile can't look up "${cid}": it has no local record of that grant, and the node doesn't list it among the delegations this profile's key issued.`,
             ExitCode.NOT_FOUND
           );
         }
@@ -37369,7 +37629,7 @@ async function revokeDelegationOnNode(params) {
         "REVOKE_UNAUTHORIZED",
         "The node rejected this revocation: Unauthorized Revoker.",
         ExitCode.PERMISSION_DENIED,
-        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME17} --profile <profile-name> delegation revoke ${cid}\`.` }
+        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME18} --profile <profile-name> delegation revoke ${cid}\`.` }
       );
     }
     throw cliErrorFromService(result.error);
@@ -37459,7 +37719,7 @@ function renderList(result) {
   }
   process.stdout.write(`Profile: ${result.profile}
 `);
-  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME18} delegation revoke ${result.session.cid})
+  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME19} delegation revoke ${result.session.cid})
 ` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.
 `);
@@ -37557,7 +37817,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
               ExitCode.ERROR,
               {
                 causeCode: cause.code,
-                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME18} --profile ${ctx.profile} auth grants remove ${cid}`
+                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME19} --profile ${ctx.profile} auth grants remove ${cid}`
               }
             );
           }
@@ -37604,7 +37864,7 @@ init_formatter();
 init_errors();
 init_constants();
 init_local_key();
-import { CLI_NAME as CLI_NAME19 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME20 } from "@tinycloud/operations/cli-name";
 async function createKeyOnlyProfile(profileName2, host, defaultSpace) {
   await ProfileManager.ensureConfigDir();
   const { jwk, did: did2 } = await generateKey2();
@@ -37641,7 +37901,7 @@ function registerInitCommand(program) {
       if (await ProfileManager.profileExists(profileName2)) {
         throw new CLIError(
           "PROFILE_EXISTS",
-          `Profile "${profileName2}" already exists. Use \`${CLI_NAME19} profile delete ${profileName2}\` first or choose a different name.`,
+          `Profile "${profileName2}" already exists. Use \`${CLI_NAME20} profile delete ${profileName2}\` first or choose a different name.`,
           ExitCode.ERROR
         );
       }
@@ -37792,7 +38052,7 @@ async function promptAuthMethod() {
   if (!isInteractive()) {
     return "openkey";
   }
-  const rl = createInterface4({
+  const rl = createInterface5({
     input: process.stdin,
     output: process.stderr
   });
@@ -37950,7 +38210,7 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
       "REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED,
-      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME20} auth logout\`.` }
+      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME21} auth logout\`.` }
     );
   }
   const signerDid = addressToDID(
@@ -37994,7 +38254,7 @@ async function revokeForLogout(ctx, discardLocalChanges) {
           "REVOCATION_FAILED",
           `Revocation failed for ${cid}: ${result.error.message}. Session, key, and replica files are retained for retry; local reads stay denied.`,
           ExitCode.ERROR,
-          { cid, hint: `Retry \`${CLI_NAME20} auth logout --revoke\` when the node is available.` }
+          { cid, hint: `Retry \`${CLI_NAME21} auth logout --revoke\` when the node is available.` }
         );
       }
       if (result.data.cid !== cid || result.data.revoked !== true) {
@@ -38013,7 +38273,7 @@ async function revokeForLogout(ctx, discardLocalChanges) {
       "REVOCATION_FAILED",
       `Revocation failed before local logout: ${error instanceof Error ? error.message : String(error)}. Session, key, and replica files are retained for retry; local reads stay denied.`,
       ExitCode.ERROR,
-      { hint: `Retry \`${CLI_NAME20} auth logout --revoke\` when online authority is available.` }
+      { hint: `Retry \`${CLI_NAME21} auth logout --revoke\` when online authority is available.` }
     );
   }
 }
@@ -38212,7 +38472,7 @@ async function finishProfileLogout(ctx, options = {}) {
 function registerAuthCommand(program, options) {
   const auth = program.command("auth").description("Authentication management");
   registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
-  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME20} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
+  auth.command("login").description("Authenticate with TinyCloud").option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)").option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes").option("--no-popup", "Print the OpenKey URL without opening a browser").option("--method <method>", "Authentication method: local or openkey").option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME21} share publish\``).option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`).option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner").option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key").option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.").option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix, values = []) => [...values, prefix]).option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)").action(async (options2, cmd) => {
     try {
       if (options2.device && options2.paste) {
         throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
@@ -38376,7 +38636,7 @@ function registerAuthCommand(program, options) {
         authenticated: false,
         replicasRemoved,
         replicasKept: options2.keepReplicas === true,
-        warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME20} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME20} delegation revoke <cid>\` to end access now.`,
+        warning: online ? `The node confirmed revocation of the listed CIDs before local logout. Files you already shared stay available until each share expires or you revoke it (\`${CLI_NAME21} share revoke <id>\`).` : options2.keepReplicas ? "Legacy replica files remain on disk; this local logout clears the session but does not revoke node grants. Purge the files before a future sign-in if they must not be reused." : `Logout is local; delegations and grants on the node stay valid until they expire. Use \`${CLI_NAME21} delegation revoke <cid>\` to end access now.`,
         ...online === void 0 ? {} : {
           revokedCids: online.plan.cids,
           revocationExcluded: online.plan.excluded
@@ -38536,7 +38796,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       }
       if (profile.authMethod === "openkey" || options2.device || keyOnlyOpenKey) {
         if (!key) {
-          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME20} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
+          throw new CLIError("NO_KEY", `No key found for profile "${ctx.profile}". Run \`${CLI_NAME21} --profile ${ctx.profile} auth rotate\` to create a new key and sign in.`, ExitCode.AUTH_REQUIRED);
         }
         const openkeyHost = resolveOpenKeyHost(profile);
         const grants = [];
@@ -38685,7 +38945,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
           kind: parsed.kind,
           requestId: parsed.requestId,
           requested: parsed.requested,
-          next: `${CLI_NAME20} auth retry ${parsed.requestId}`
+          next: `${CLI_NAME21} auth retry ${parsed.requestId}`
         });
         return;
       }
@@ -39296,7 +39556,7 @@ async function acquireOpenKeyApproval(params) {
   if (!key) {
     throw new CLIError(
       "NO_KEY",
-      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME20} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME21} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
       ExitCode.AUTH_REQUIRED
     );
   }
@@ -39380,7 +39640,7 @@ async function ensureDelegationAuthority(params) {
     if (!key) {
       throw new CLIError(
         "NO_KEY",
-        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME20} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+        `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME21} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -39598,7 +39858,7 @@ async function rotateAuthKey(profileName2, host, options = {}) {
     if (!profile.privateKey) {
       throw new CLIError(
         "LOCAL_OWNER_KEY_REQUIRED",
-        `Profile "${profileName2}" does not have a local owner private key. Run \`${CLI_NAME20} auth login --method local\` first.`,
+        `Profile "${profileName2}" does not have a local owner private key. Run \`${CLI_NAME21} auth login --method local\` first.`,
         ExitCode.AUTH_REQUIRED
       );
     }
@@ -39958,9 +40218,9 @@ function preparedSignInOptions(expiry) {
 }
 var KEYS_APPROVAL_NOTE = (folder) => `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.
 `;
-var keysNotGrantedAfterLogin = (profileName2) => `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME20} --profile ${profileName2} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.
+var keysNotGrantedAfterLogin = (profileName2) => `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME21} --profile ${profileName2} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.
 `;
-var KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME20} keys ensure <folder>/<name>\` again in a minute.
+var KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME21} keys ensure <folder>/<name>\` again in a minute.
 `;
 async function readyNamedKeysNetwork(node) {
   try {
@@ -40205,7 +40465,7 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
 }
 
 // src/commands/completion.ts
-import { CLI_NAME as CLI_NAME21 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
 function registerCompletionCommand(program) {
   const completion = program.command("completion").description("Generate shell completions");
   completion.command("bash").description("Output bash completions").action(() => {
@@ -40222,7 +40482,7 @@ function registerCompletionCommand(program) {
   });
 }
 function generateBashCompletion() {
-  return `# ${CLI_NAME21} bash completion
+  return `# ${CLI_NAME22} bash completion
 _tc_completions() {
   local cur prev commands subcommands
   COMPREPLY=()
@@ -40247,11 +40507,11 @@ _tc_completions() {
     COMPREPLY=( $(compgen -W "\${subcommands}" -- "\${cur}") )
   fi
 }
-complete -F _tc_completions ${CLI_NAME21}
+complete -F _tc_completions ${CLI_NAME22}
 `;
 }
 function generateZshCompletion() {
-  return `#compdef ${CLI_NAME21}
+  return `#compdef ${CLI_NAME22}
 
 _tc() {
   local -a commands
@@ -40303,51 +40563,51 @@ _tc
 `;
 }
 function generateFishCompletion() {
-  return `# ${CLI_NAME21} fish completion
+  return `# ${CLI_NAME22} fish completion
 set -l commands init auth kv space delegation share node profile completion
 
 # Disable file completion by default
-complete -c ${CLI_NAME21} -f
+complete -c ${CLI_NAME22} -f
 
 # Top-level commands
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
-complete -c ${CLI_NAME21} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a init -d "Initialize a new TinyCloud profile"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a auth -d "Authentication management"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a kv -d "Key-value store operations"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a space -d "Space management"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a delegation -d "Manage delegations"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a share -d "Share data with others"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a node -d "Node health and info"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a profile -d "Profile management"
+complete -c ${CLI_NAME22} -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell completions"
 
 # Subcommands
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from space" -a "list create info switch"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from node" -a "health version status"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
-complete -c ${CLI_NAME21} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from auth" -a "login logout rotate status whoami"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from kv" -a "get put delete list head"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from space" -a "list create info switch"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from delegation" -a "create list info revoke"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from share" -a "create receive list revoke"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from node" -a "health version status"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from profile" -a "list create show switch delete"
+complete -c ${CLI_NAME22} -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
 
 # Global options
-complete -c ${CLI_NAME21} -l profile -s p -d "Profile to use"
-complete -c ${CLI_NAME21} -l host -s H -d "TinyCloud node URL"
-complete -c ${CLI_NAME21} -l verbose -s v -d "Enable verbose output"
-complete -c ${CLI_NAME21} -l no-cache -d "Disable caching"
-complete -c ${CLI_NAME21} -l quiet -s q -d "Suppress non-essential output"
-complete -c ${CLI_NAME21} -l replication -d "Enable read-through replication"
-complete -c ${CLI_NAME21} -l no-replication -d "Disable replication"
-complete -c ${CLI_NAME21} -l replication-debug -d "Write replication diagnostics to stderr"
-complete -c ${CLI_NAME21} -l no-diagnostic-logs -d "Don't record a CLI log for this command"
+complete -c ${CLI_NAME22} -l profile -s p -d "Profile to use"
+complete -c ${CLI_NAME22} -l host -s H -d "TinyCloud node URL"
+complete -c ${CLI_NAME22} -l verbose -s v -d "Enable verbose output"
+complete -c ${CLI_NAME22} -l no-cache -d "Disable caching"
+complete -c ${CLI_NAME22} -l quiet -s q -d "Suppress non-essential output"
+complete -c ${CLI_NAME22} -l replication -d "Enable read-through replication"
+complete -c ${CLI_NAME22} -l no-replication -d "Disable replication"
+complete -c ${CLI_NAME22} -l replication-debug -d "Write replication diagnostics to stderr"
+complete -c ${CLI_NAME22} -l no-diagnostic-logs -d "Don't record a CLI log for this command"
 `;
 }
 
 // src/commands/courier.ts
-import { CLI_NAME as CLI_NAME22 } from "@tinycloud/operations/cli-name";
-var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME22} courier takes no ${CLI_NAME22} options and does not use ${CLI_NAME22} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME22} courier init --host <url>.`;
+import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
+var TC_OPTIONS_BEFORE_COURIER = `${CLI_NAME23} courier takes no ${CLI_NAME23} options and does not use ${CLI_NAME23} profiles; Courier keeps its own profile in $COURIER_HOME (default ~/.courier). Put flags after "courier", e.g. ${CLI_NAME23} courier init --host <url>.`;
 function registerCourierCommand(program) {
-  const courier = program.command("courier").description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME22} courier --help\` (beta)`).argument("[args...]").allowUnknownOption().helpOption(false);
+  const courier = program.command("courier").description(`Agent-to-agent threads over TinyCloud; run \`${CLI_NAME23} courier --help\` (beta)`).argument("[args...]").allowUnknownOption().helpOption(false);
   courier.action(() => courier.error(TC_OPTIONS_BEFORE_COURIER, { exitCode: 2, code: "tc.courier.options" }));
 }
 
@@ -40379,254 +40639,6 @@ function registerContextCommand(program) {
           evidence: "local-metadata"
         },
         access: "not-tested"
-      });
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-}
-
-// src/commands/delegation.ts
-import { createInterface as createInterface5 } from "readline";
-init_profiles();
-init_formatter();
-init_errors();
-init_constants();
-init_sdk();
-init_duration();
-import { CLI_NAME as CLI_NAME23 } from "@tinycloud/operations/cli-name";
-import { PermissionNotInManifestError } from "@tinycloud/node-sdk";
-async function queryDelegations(node, options, until) {
-  const found = [];
-  let cursor;
-  do {
-    const page = await node.account.delegations.query({ ...options, limit: 100, cursor });
-    if (!page.ok) {
-      if (page.error.code === "PERMISSION_DENIED") {
-        throw new CLIError(
-          "PERMISSION_DENIED",
-          `This session cannot read delegations: it lacks tinycloud.delegation/list. Run \`${CLI_NAME23} auth login\` again to grant it.`,
-          ExitCode.PERMISSION_DENIED
-        );
-      }
-      throw cliErrorFromService(page.error);
-    }
-    found.push(...page.data.items);
-    cursor = page.data.nextCursor;
-  } while (cursor && !(until && found.some((d) => d.cid === until)));
-  return found;
-}
-function listedDelegation(d) {
-  const resources = d.resources.map((r) => {
-    const [space, service, ...path] = r.resource.split("/");
-    return { space, service, path: path.join("/"), actions: r.actions };
-  });
-  return {
-    cid: d.cid,
-    delegatee: d.delegateDid,
-    delegator: d.delegatorDid,
-    direction: d.direction,
-    status: d.status,
-    expiry: d.expiresAt?.toISOString() ?? null,
-    resources
-  };
-}
-var ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
-function issuedFailure(error, host) {
-  if (error.code === "UNSUPPORTED_OPERATION") {
-    return new CLIError(
-      "ISSUED_DELEGATIONS_UNAVAILABLE",
-      `${host} can't list the delegations you issued yet.`,
-      ExitCode.NODE_ERROR
-    );
-  }
-  if (error.code === "CHAIN_TOO_DEEP") {
-    return new CLIError(
-      "CHAIN_TOO_DEEP",
-      "The node can't check this delegation chain right now because it's too long. Try again later.",
-      ExitCode.NODE_ERROR,
-      { status: 503 }
-    );
-  }
-  if (error.code === "INVALID_CURSOR") {
-    return new CLIError(
-      "INVALID_CURSOR",
-      "The node couldn't continue the list. Run the command again.",
-      ExitCode.NODE_ERROR,
-      { status: 400 }
-    );
-  }
-  return cliErrorFromService(error);
-}
-async function revokeIssuedDelegation(node, ctx, cid) {
-  const result = await node.delegationManager.revokeIssued(cid);
-  if (result.ok) return { cid: result.data.cid, revoked: true };
-  if (result.error.code === "PERMISSION_DENIED") {
-    throw new CLIError(
-      "REVOKE_UNAUTHORIZED",
-      `The node refused this revocation: ${result.error.message}.`,
-      ExitCode.PERMISSION_DENIED,
-      {
-        status: result.error.meta?.status,
-        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME23} --profile ${ctx.profile} delegation list --granted\`.`
-      }
-    );
-  }
-  if (result.error.code === "NOT_FOUND") {
-    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
-  }
-  throw issuedFailure(result.error, ctx.host);
-}
-async function confirmCurrentSessionRevoke(yes) {
-  if (yes) return;
-  const warning = "This is your current sign-in session; revoking it signs you out";
-  if (!isInteractive() || !process.stdin.isTTY) {
-    throw new CLIError("CONFIRMATION_REQUIRED", `${warning}. Re-run with --yes to confirm.`, ExitCode.USAGE_ERROR);
-  }
-  process.stderr.write(`${warning}.
-`);
-  const prompt = createInterface5({ input: process.stdin, output: process.stderr });
-  try {
-    const answer = await new Promise((resolve10) => prompt.question("Revoke this session? [y/N] ", resolve10));
-    if (!/^y(es)?$/i.test(answer.trim())) {
-      throw new CLIError("REQUEST_CANCELLED", "Current session revocation cancelled.", ExitCode.ERROR);
-    }
-  } finally {
-    prompt.close();
-  }
-}
-function registerDelegationCommand(program, configuration = {}) {
-  const delegation = program.command("delegation").description("Manage delegations");
-  delegation.command("create").description("Create a delegation").requiredOption("--to <did>", "Recipient DID").requiredOption("--path <path>", "KV path scope").requiredOption("--actions <actions>", "Comma-separated actions (e.g., kv/get,kv/list)").option("--expiry <duration>", "Expiry duration (e.g., 1h, 7d, ISO date)", "1h").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const actions = options.actions.split(",").map((a) => {
-        const trimmed = a.trim();
-        return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
-      });
-      const byService = {};
-      for (const action of actions) {
-        const slash = action.indexOf("/");
-        if (slash <= "tinycloud.".length || slash === action.length - 1) {
-          throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
-        }
-        (byService[action.slice(0, slash)] ??= []).push(action);
-      }
-      const expiry = parseExpiry3(options.expiry);
-      const recipient = options.to.split("#")[0];
-      const { delegation: created } = await node.delegateTo(
-        recipient,
-        Object.entries(byService).map(([service, serviceActions]) => ({
-          service,
-          space: "default",
-          path: options.path,
-          actions: serviceActions
-        })),
-        { expiry: expiry.getTime() - Date.now(), requireActivation: true }
-      ).catch((error) => {
-        if (error instanceof PermissionNotInManifestError) {
-          const needed = error.missing.map((m) => `${m.actions.join(", ")} on space "${m.space ?? "default"}" path "${m.path}"`).join("; ");
-          throw new CLIError(
-            "PERMISSION_DENIED",
-            `This session cannot delegate what was requested. Missing: ${needed}. Sign in again with these permissions.`,
-            ExitCode.PERMISSION_DENIED
-          );
-        }
-        throw error;
-      });
-      const confirmed = (await queryDelegations(node, { direction: "granted" }, created.cid)).find((d) => d.cid === created.cid);
-      if (confirmed?.status !== "active") {
-        throw new CLIError(
-          "DELEGATION_NOT_CONFIRMED",
-          confirmed ? `The node lists delegation ${created.cid} as ${confirmed.status}, not active; treat it as not created.` : `The node accepted delegation ${created.cid} but does not list it; treat it as not created.`,
-          ExitCode.ERROR
-        );
-      }
-      outputJson({
-        cid: created.cid,
-        delegateDid: recipient,
-        delegatorDid: confirmed.delegatorDid,
-        path: options.path,
-        actions,
-        expiry: created.expiry.toISOString(),
-        status: confirmed.status
-      });
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-  delegation.command("list").description("List delegations").option("--granted", "Show only delegations I've granted").option("--received", "Show only delegations I've received").option("--space <space>", "Filter by space name or ID").action(async (options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      if (options.granted && options.received) {
-        throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
-      }
-      if (options.granted && ctx.posture === "delegate-session" && node.address === void 0) {
-        const issued = await node.delegationManager.queryAllIssued({ space: options.space });
-        if (!issued.ok) throw issuedFailure(issued.error, ctx.host);
-        outputJson({
-          delegations: issued.data.map(listedDelegation),
-          count: issued.data.length,
-          note: ISSUED_ORDER_NOTE
-        });
-        return;
-      }
-      const delegations = await queryDelegations(node, {
-        direction: options.granted ? "granted" : options.received ? "received" : "all",
-        space: options.space
-      });
-      outputJson({
-        delegations: delegations.map(listedDelegation),
-        count: delegations.length
-      });
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-  delegation.command("info <cid>").description("Get delegation details").option("--space <space>", "Filter by space name or ID").action(async (cid, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const node = await ensureAuthenticated(ctx);
-      const found = (await queryDelegations(node, { direction: "all", space: options.space })).find((d) => d.cid === cid);
-      if (!found) {
-        throw new CLIError("NOT_FOUND", `Delegation "${cid}" not found in this account's delegations`, ExitCode.NOT_FOUND);
-      }
-      outputJson(listedDelegation(found));
-    } catch (error) {
-      return handleError(error);
-    }
-  });
-  delegation.command("revoke <cid>").description("Revoke a delegation").option("--yes", "Confirm revoking the current sign-in session", false).action(async (cid, options, cmd) => {
-    try {
-      const globalOpts = cmd.optsWithGlobals();
-      const ctx = await ProfileManager.resolveContext(globalOpts);
-      const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : void 0;
-      if (delegateCandidate !== void 0 && delegateCandidate.address === void 0) {
-        outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
-        return;
-      }
-      const session = await ProfileManager.getSession(ctx.profile);
-      const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
-      if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
-      const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : void 0;
-      const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
-      const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
-      const revoked = await revokeDelegationOnNode({
-        ctx,
-        node,
-        profile,
-        cid,
-        openKeyAcquisition: configuration.openKeyAcquisition
-      });
-      const replicasRemoved = prepared ? await finishProfileLogout(ctx, { online: prepared, expectedSessionCid: cid }) : void 0;
-      outputJson({
-        ...revoked,
-        ...replicasRemoved === void 0 ? {} : { signedOut: true, replicasRemoved }
       });
     } catch (error) {
       return handleError(error);
