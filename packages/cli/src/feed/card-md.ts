@@ -1,7 +1,17 @@
 import { chmod, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readFeedCardMd } from "@tinycloud/sdk-services/feed";
-import type { FeedCardMd, FeedReadDatabase } from "@tinycloud/sdk-services/feed";
+import type { FeedCardMd, FeedDatabase, FeedReadDatabase } from "@tinycloud/sdk-services/feed";
+import { CARD_MD_DEFAULT, CARD_MD_DEFAULT_VERSION } from "./card-md-default.js";
+
+/** The owner's own copy, one row, in the Feed's namespace. Agents get a copy of the row in their response database. */
+export const CARD_MD_RESOURCE = "xyz.tinycloud.tinychat/feed/card_md";
+
+/** What an agent reads when the owner has not set a card.md: the Feed's default, marked as such. */
+export const DEFAULT_CARD_MD = { text: CARD_MD_DEFAULT, version: CARD_MD_DEFAULT_VERSION, default: true as const };
+
+/** A card.md as shown to an agent; `default` is set only on the bundled default. */
+export type ShownCardMd = Pick<FeedCardMd, "text" | "version"> & { default?: true };
 
 const seenPath = (directory: string, agent: string) => join(directory, `feed-card-md-${agent}.json`);
 
@@ -24,10 +34,17 @@ export async function rememberCardMdVersion(directory: string, agent: string, ve
 }
 
 export interface PublishCardMd {
-  /** Goes into the publish result; absent when card.md is unset, unreadable, or its read failed. */
-  cardMd?: { version: string };
+  /** Goes into the publish result; absent when card.md or its default cannot be read. `default` marks the bundled default. */
+  cardMd?: { version: string; default?: true };
   /** The full text to show once, present only when the version differs from the last one shown. */
-  changed?: FeedCardMd;
+  changed?: ShownCardMd;
+}
+
+async function showOnce(card: ShownCardMd, directory: string, agent: string): Promise<PublishCardMd> {
+  const cardMd = card.default === true ? { version: card.version, default: true as const } : { version: card.version };
+  if (await seenCardMdVersion(directory, agent) === card.version) return { cardMd };
+  await rememberCardMdVersion(directory, agent, card.version).catch(() => undefined);
+  return { cardMd, changed: card };
 }
 
 /**
@@ -44,12 +61,54 @@ export async function cardMdForPublish(db: FeedReadDatabase, directory: string, 
   } catch {
     return {};
   }
-  if (await seenCardMdVersion(directory, agent) === card.version) return { cardMd: { version: card.version } };
-  await rememberCardMdVersion(directory, agent, card.version).catch(() => undefined);
-  return { cardMd: { version: card.version }, changed: card };
+  return showOnce(card, directory, agent);
+}
+
+/**
+ * As cardMdForPublish, but an agent whose owner has not set a card.md (no table or no row) gets the bundled
+ * default, marked `default`, once. When the owner's copy arrives its version differs and it shows as a change.
+ * A read that fails is still left alone: the default would claim the owner has nothing set.
+ */
+export async function cardMdOrDefaultForPublish(db: FeedReadDatabase, directory: string, agent: string): Promise<PublishCardMd> {
+  let card: ShownCardMd;
+  try {
+    const read = await readFeedCardMd(db);
+    if (!read.ok) return {};
+    card = read.data ?? DEFAULT_CARD_MD;
+  } catch {
+    return {};
+  }
+  return showOnce(card, directory, agent);
 }
 
 /** What stderr shows once per changed version. An owner who cleared card.md is a change too. */
-export function cardMdChangedText(card: FeedCardMd): string {
+export function cardMdChangedText(card: ShownCardMd): string {
+  if (card.default === true) return `The owner hasn't set a card.md, so this is the default (${card.version}):\n${card.text}`;
   return card.text === "" ? `The owner's card.md changed (${card.version}): it's now empty.` : `The owner's card.md changed (${card.version}):\n${card.text}`;
+}
+
+// The same table and upsert the Feed uses for every copy, so the Feed's later copy of the same version changes nothing.
+// No CHECK: the node's SQL authorizer refuses a CHECK that reads a column.
+const CARD_MD_SCHEMA = `CREATE TABLE IF NOT EXISTS card_md (
+  id INTEGER PRIMARY KEY, text TEXT NOT NULL, version TEXT NOT NULL, updated_at TEXT NOT NULL
+)`;
+const CARD_MD_UPSERT = `INSERT INTO card_md (id, text, version, updated_at) VALUES (1, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET text = excluded.text, version = excluded.version, updated_at = excluded.updated_at
+  WHERE card_md.version <> excluded.version`;
+
+/**
+ * Copies the owner's card.md into a newly connected agent's response database, so the agent has it before the Feed
+ * next opens. Returns whether it copied. An owner with no card.md copies nothing (the agent reads the default),
+ * and a failure never stops the connection: the Feed's next copy covers it.
+ */
+export async function copyCardMdToAgent(master: FeedReadDatabase, agentResponses: FeedDatabase): Promise<boolean> {
+  try {
+    const read = await readFeedCardMd(master);
+    if (!read.ok || read.data === null) return false;
+    const { text, version, updatedAt } = read.data;
+    const written = await agentResponses.batch([{ sql: CARD_MD_SCHEMA }, { sql: CARD_MD_UPSERT, params: [text, version, updatedAt] }]);
+    return written.ok;
+  } catch {
+    return false;
+  }
 }

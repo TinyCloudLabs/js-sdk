@@ -21,7 +21,7 @@ import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runne
 import { connectFeedAgent, feedAgentPermissions } from "../feed/connection.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
-import { cardMdChangedText, cardMdForPublish, rememberCardMdVersion } from "../feed/card-md.js";
+import { CARD_MD_RESOURCE, DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, rememberCardMdVersion } from "../feed/card-md.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -88,9 +88,11 @@ into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
-card-md prints the owner's card.md: {text, version, updatedAt}, or null when the owner hasn't set one.
+card-md prints the owner's card.md: {text, version, updatedAt}. When the owner hasn't set one it
+prints the default instead, as {text, version, default: true}.
 publish and watch print the text once on stderr when its version differs from the last
-one this profile saw for the agent. publish also adds cardMd {version} to its JSON each time.
+one this profile saw for the agent. publish also adds cardMd {version} to its JSON each time,
+with default: true while it is the default.
 An agent connected before card.md existed reads it with the same grant.
 
 export captures an owner-only raw KV snapshot to an unused private file. Source space,
@@ -149,6 +151,8 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         };
         const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
+          // The agent has the owner's card.md from its first read, not from the Feed's next open.
+          await copyCardMdToAgent(sql.db(CARD_MD_RESOURCE), responses);
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
           const { delegation } = await node.delegateTo(did, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
           return delegation;
@@ -166,7 +170,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         const published = value(await publishFeedCard(output, card));
         // card.md is advice about the next card: it never changes whether this one was published.
         const directory = await ProfileManager.ensureProfileDir(profile.profile).catch(() => undefined);
-        const { cardMd, changed } = directory === undefined ? {} : await cardMdForPublish(responses, directory, options.agent);
+        const { cardMd, changed } = directory === undefined ? {} : await cardMdOrDefaultForPublish(responses, directory, options.agent);
         if (changed) process.stderr.write(`${cardMdChangedText(changed)}\n`);
         outputJson(cardMd === undefined ? published : { ...published, cardMd });
       } catch (error) { return handleError(error); }
@@ -176,8 +180,8 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .action(async (options, command) => {
       try {
         const { responses, profile } = await context(command);
-        const cardMd = value(await readFeedCardMd(responses));
-        if (cardMd !== null) await rememberCardMdVersion(await ProfileManager.ensureProfileDir(profile.profile), options.agent, cardMd.version);
+        const cardMd = value(await readFeedCardMd(responses)) ?? DEFAULT_CARD_MD;
+        await rememberCardMdVersion(await ProfileManager.ensureProfileDir(profile.profile), options.agent, cardMd.version);
         outputJson(cardMd);
       } catch (error) { return handleError(error); }
     });
@@ -299,7 +303,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           signal: abort.signal, deliver,
           // The owner's card.md write wakes the watch with no response; show it once per version, on stderr.
           onWake: async () => {
-            const { changed } = await cardMdForPublish(responses, directory, options.agent);
+            const { changed } = await cardMdOrDefaultForPublish(responses, directory, options.agent);
             if (changed) process.stderr.write(`${cardMdChangedText(changed)}\n`);
           },
         });
