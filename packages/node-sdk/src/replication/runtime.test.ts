@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ServiceContext, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type ReplicationScheduler } from "@tinycloud/sdk-services";
+import { ServiceContext, ok, type KVReadThrough, type KVReplicaHandle, type KVReplicaStorage, type PendingWriteStore, type ReplicationScheduler } from "@tinycloud/sdk-services";
 import { createMemoryPendingStore } from "@tinycloud/sdk-services/kv/replication";
 import type { ServiceSession } from "@tinycloud/sdk-core";
 import { ReplicationRuntime } from "./runtime";
@@ -32,6 +32,134 @@ function context(host: string): ServiceContext {
 }
 
 describe("node ReplicationRuntime binding", () => {
+  test("a refused restore binds network-only reads with one gated event and no replica access", async () => {
+    let opens = 0;
+    let pending = 0;
+    const events: Array<{ type: string; op?: string; reason?: string; outcome?: string; code?: string }> = [];
+    const storage = {
+      kind: "indexeddb" as const,
+      async open() { opens++; throw new Error("Gated restore must not open a replica"); },
+      pendingWrites() { pending++; throw new Error("Gated restore must not access pending writes"); },
+      async purge() {},
+    } as KVReplicaStorage;
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage, onEvent: (event) => events.push(event) }, clock);
+    let primary: KVReadThrough | null = null;
+    let secondary: KVReadThrough | null = null;
+    const scope = { context: context("https://node.example"), session, gate: "stamp_stale" as const,
+      primaryKV: [
+        { space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) { primary = value; } } },
+        { space: "tinycloud:pkh:eip155:1:0xabc:other", kv: { setReadThrough(value: KVReadThrough | null) { secondary = value; } } },
+      ],
+    };
+    await runtime.bindGatedNetworkOnly(scope, () => import("./gated-network"));
+    expect(primary).not.toBeNull();
+    expect(secondary).toBeNull();
+    expect(await runtime.control.status()).toMatchObject([{ prefix: "notes/", state: "gated", gate: "stamp_stale" }]);
+    await expect(runtime.control.sync()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    const offline = Object.assign(new Error("network offline"), { code: "NETWORK_ERROR" });
+    let networkCalls = 0;
+    const network = async (): Promise<never> => { networkCalls++; throw offline; };
+    const signal = new AbortController().signal;
+    const read = primary!;
+    await expect(read.get({ space: primarySpace, key: "notes/a", path: "notes/a", options: undefined, signal, network })).rejects.toBe(offline);
+    await expect(read.list({ space: primarySpace, listPath: "notes/", options: undefined, signal, network })).rejects.toBe(offline);
+    expect(networkCalls).toBe(2);
+    expect(events.filter((event) => event.type === "replication.read")).toMatchObject([
+      { op: "get", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
+      { op: "list", reason: "replica_gated", outcome: "error", code: "REPLICA_GATED" },
+    ]);
+    const networkValue = ok({ data: "network", headers: {} });
+    const requested = await read.get({ space: primarySpace, key: "different key", path: "notes/a",
+      options: { source: "network" }, signal, network: async () => { networkCalls++; return networkValue; } });
+    expect(requested).toBe(networkValue);
+    expect(events.at(-1)).toMatchObject({ reason: "NETWORK_REQUESTED", outcome: "found" });
+    const notCovered = await read.get({ space: primarySpace, key: "notes/a", path: "notesX",
+      options: undefined, signal, network: async () => { networkCalls++; return networkValue; } });
+    expect(notCovered).toBe(networkValue);
+    expect(events.at(-1)).toMatchObject({ reason: "not_covered", key: "notesX" });
+    const observedBeforeSecondary = events.length;
+    const secondaryValue = await read.get({ space: "tinycloud:pkh:eip155:1:0xabc:other", key: "notes/a", path: "notes/a",
+      options: undefined, signal, network: async () => { networkCalls++; return networkValue; } });
+    expect(secondaryValue).toBe(networkValue);
+    expect(events).toHaveLength(observedBeforeSecondary);
+    const cursor = await read.list({ space: primarySpace, listPath: "notes/", options: { cursor: "tcr1.not-a-cursor" },
+      signal, network });
+    expect(cursor).toMatchObject({ ok: false, error: { code: "INVALID_INPUT", meta: { replication: "cursor_restart" } } });
+    expect(networkCalls).toBe(5);
+    expect(events.at(-1)).toMatchObject({ reason: "cursor_restart", outcome: "error" });
+    await expect(read.list({ space: primarySpace, listPath: "notes/", options: { cursor: "foreign.cursor" },
+      signal, network })).rejects.toBe(offline);
+    expect(events.at(-1)).toMatchObject({ reason: "network_cursor", outcome: "error" });
+    await expect(read.list({ space: primarySpace, listPath: "notes/", options: { raw: true },
+      signal, network })).rejects.toBe(offline);
+    expect(events.at(-1)).toMatchObject({ reason: "unsupported_option", outcome: "error" });
+    const write = await read.write({ op: "put", space: primarySpace, entries: [{ path: "notes/a", body: "alpha" }], signal, network: async () => {
+      networkCalls++;
+      return ok("network");
+    } });
+    expect(write).toEqual(ok("network"));
+    expect(networkCalls).toBe(8);
+    expect(opens).toBe(0);
+    expect(pending).toBe(0);
+    expect(events.filter((event) => event.type === "replication.write")).toHaveLength(0);
+    const readCount = events.filter((event) => event.type === "replication.read").length;
+    const delayedNetwork = Promise.withResolvers<never>();
+    const delayed = read.get({ space: primarySpace, key: "notes/a", path: "notes/a", options: undefined, signal,
+      network: () => delayedNetwork.promise });
+    await runtime.unbind();
+    expect(primary).toBeNull();
+    delayedNetwork.reject(offline);
+    await expect(delayed).rejects.toBe(offline);
+    expect(events.filter((event) => event.type === "replication.read")).toHaveLength(readCount);
+  });
+
+  test("a failed gated-only loader leaves a refused restore on the original network KV path", async () => {
+    let reads: KVReadThrough | null = null;
+    let opens = 0;
+    const storage = {
+      kind: "indexeddb" as const,
+      async open() { opens++; throw new Error("must not open local replica"); },
+      pendingWrites() { throw new Error("must not touch pending writes"); },
+    } as KVReplicaStorage;
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"], storage }, clock);
+    const scoped = { space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) { reads = value; } } };
+    await runtime.bindGatedNetworkOnly({
+      context: context("https://node.example"), session, gate: "stamp_stale", primaryKV: [scoped],
+    }, async () => { throw new Error("gated-only chunk offline"); });
+    expect(reads).toBeNull();
+    expect(await runtime.control.status()).toMatchObject([{ state: "gated", gate: "stamp_stale" }]);
+    await expect(runtime.control.sync()).rejects.toMatchObject({ code: "REPLICA_GATED" });
+    const networkResult = ok({ data: "alpha", headers: {} });
+    let requests = 0;
+    const network = async () => { requests++; return networkResult; };
+    const readResult = reads
+      ? await reads.get({ space: primarySpace, key: "notes/a", path: "notes/a",
+        options: undefined, signal: new AbortController().signal, network })
+      : await network();
+    expect(readResult).toBe(networkResult);
+    expect(requests).toBe(1);
+    expect(opens).toBe(0);
+    await runtime.control.close();
+  });
+
+  test("a gated-only module resolving after sign-out cannot attach or emit into the retired session", async () => {
+    const runtime = new ReplicationRuntime({ enabled: true, prefixes: ["notes/"],
+      storage: { kind: "indexeddb", async open() { throw new Error("local open"); } } as KVReplicaStorage }, clock);
+    const loading = Promise.withResolvers<typeof import("./gated-network")>();
+    let attached = 0;
+    const bind = runtime.bindGatedNetworkOnly({
+      context: context("https://node.example"), session, gate: "stamp_stale",
+      primaryKV: [{ space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) {
+        if (value) attached++;
+      } } }],
+    }, () => loading.promise);
+    const unbind = runtime.unbind();
+    loading.resolve(await import("./gated-network"));
+    await Promise.all([bind, unbind]);
+    expect(attached).toBe(0);
+    expect(await runtime.control.status()).toEqual([]);
+  });
+
   test("binds by canonical host/session identity and shares pending state on session replacement", async () => {
     let pendingStores = 0;
     const storage = {
@@ -71,6 +199,96 @@ describe("node ReplicationRuntime binding", () => {
     expect(attached).toBeNull();
     expect(await runtime.control.status()).toEqual([]);
     await runtime.control.sync();
+  });
+
+  test("gate-issued stamps bind pending writes and quota-limited opens across session replacement", async () => {
+    const first = { incarnation: "gate", lifecycleEpoch: 1 };
+    const second = { incarnation: "gate", lifecycleEpoch: 2 };
+    let active = first;
+    let pendingStores = 0;
+    let syncs = 0;
+    let firstPending: PendingWriteStore | undefined;
+    const refusal = (gate: string) => Object.assign(new Error(`Replica gate refused: ${gate}`), { code: "REPLICA_GATED", gate });
+    const check = (stamp: typeof first | undefined) => {
+      if (!stamp) throw refusal("not_established");
+      if (stamp.incarnation !== active.incarnation || stamp.lifecycleEpoch !== active.lifecycleEpoch) throw refusal("stamp_stale");
+    };
+    const grant = {
+      cid: "installed", parentCid: null, expiresAt: clock.now() + 120_000,
+      installedAt: clock.now(), effectiveExpiresAt: clock.now() + 120_000,
+      consentDeadline: clock.now() + 604_800_000, state: "active" as const, unconstrained: true,
+    };
+    const storage: KVReplicaStorage = {
+      kind: "indexeddb",
+      lifecycle: {
+        kind: "indexeddb",
+        checkDelivery(stamp) {
+          return !stamp ? { status: "gated", gate: "not_established" }
+            : stamp.incarnation === active.incarnation && stamp.lifecycleEpoch === active.lifecycleEpoch
+              ? { status: "allow" } : { status: "gated", gate: "stamp_stale" };
+        },
+        consentDeadline: () => clock.now() + 604_800_000,
+      } as NonNullable<KVReplicaStorage["lifecycle"]>,
+      pendingWrites(identity, options) {
+        check(options?.stamp);
+        pendingStores++;
+        const bound = options!.stamp!;
+        const store = createMemoryPendingStore(identity);
+        const gated = {
+          ...store,
+          read: async () => { check(bound); return store.read(); },
+          update: async (mutate: Parameters<PendingWriteStore["update"]>[0]) => { check(bound); return store.update(mutate); },
+        };
+        if (bound.lifecycleEpoch === first.lifecycleEpoch) firstPending = gated;
+        return gated;
+      },
+      async open(spec) {
+        check(spec.stamp);
+        if (spec.grantPolicy?.grantTtlMs !== 120_000 ||
+            spec.quota?.maxBytes !== 4_096 || spec.quota.minFreeBytes !== 512) {
+          throw Object.assign(new Error("Configured grant and quota policy required"), { code: "REPLICA_INVALID_ARGUMENT" });
+        }
+        return {
+          spec, deviceDid: "did:key:replica",
+          async grant() { return grant; },
+          async installGrant() { throw new Error("Installed grant must be reused"); },
+          async sync({ syncStartEpoch }) {
+            check(spec.stamp);
+            syncs++;
+            return { status: "synced", pages: 0, changes: 0, deleted: 0, fetched: 0, contentMissing: 0, coverage: "complete", syncedThroughEpoch: syncStartEpoch };
+          },
+          async close() {},
+        } as KVReplicaHandle;
+      },
+      async purge() {},
+    };
+    const runtime = new ReplicationRuntime({
+      enabled: true, prefixes: ["notes/"], storage, grantTtlMs: 120_000, maxBytes: 4_096, minFreeBytes: 512,
+    }, clock);
+    const sessionAuthority = {
+      sessionOnly: true,
+      sessionGrant: () => ({ ucan: "current-session", device: { did: "did:key:replica", jwk: {} } }),
+      plan: () => { throw new Error("Session-only authority must not plan"); },
+      mint: async () => { throw new Error("Session-only authority must not mint"); },
+    };
+    const bind = (stamp: typeof first) => runtime.bind({
+      context: context("https://gate.example"), session, address, chainId: 1, stamp,
+      authority: sessionAuthority, primaryKV: [],
+    });
+
+    await bind(first);
+    await runtime.control.sync();
+    active = second;
+    await expect(firstPending!.read()).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "stamp_stale" });
+    await bind(second);
+    await runtime.control.sync();
+    expect(pendingStores).toBe(2);
+    expect(syncs).toBe(2);
+    await expect(runtime.bind({
+      context: context("https://gate.example"), session, address, chainId: 1,
+      authority: sessionAuthority, primaryKV: [],
+    })).rejects.toMatchObject({ code: "REPLICA_GATED", gate: "not_established" });
+    await runtime.control.close();
   });
 
   test("isolates pending stores when the bind host changes", async () => {
@@ -213,6 +431,94 @@ describe("node ReplicationRuntime binding", () => {
     await Promise.all([binding, purging]);
     expect(timers).toBe(0);
     expect(purges).toBe(1);
+    await runtime.control.close();
+  });
+  test("a committed browser expiry reaches only the bound opened controller", async () => {
+    const stamp = { incarnation: "current", lifecycleEpoch: 2 };
+    const events: Array<{ type: string; action?: string; replicaId?: string }> = [];
+    const subscribers = new Set<(stamp: typeof stamp) => void>();
+    let stale = false;
+    let redundantDenials = 0;
+    let localReads = 0;
+    let attached: KVReadThrough | null = null;
+    const storage: KVReplicaStorage = {
+      kind: "indexeddb",
+      lifecycle: {
+        kind: "indexeddb",
+        consentDeadline: () => clock.now() + 60_000,
+        checkDelivery: () => stale ? { status: "gated", gate: "stamp_stale" } : { status: "allow" },
+        subscribeConsentExpired(listener: (stamp: typeof stamp) => void) {
+          subscribers.add(listener);
+          return () => { subscribers.delete(listener); };
+        },
+        async deny() { redundantDenials++; return { status: "denied", lifecycleEpoch: 3, intents: 1 }; },
+      } as unknown as NonNullable<KVReplicaStorage["lifecycle"]>,
+      async open(spec) {
+        return {
+          spec,
+          deviceDid: "did:key:replica",
+          replicaId: "opaque-run",
+          async get(key) {
+            localReads++;
+            return {
+              status: "present", key, value: new TextEncoder().encode('"local"'),
+              etag: '"local"', metadata: { "content-type": "application/json" },
+              meta: { asOf: new Date(clock.now()).toISOString(), coverage: "complete", authority: "valid", syncedThroughEpoch: 0 },
+            };
+          },
+          async grant() {
+            return { cid: "installed", parentCid: null, expiresAt: clock.now() + 60_000, state: "active", unconstrained: true,
+              installedAt: clock.now(), effectiveExpiresAt: clock.now() + 60_000, consentDeadline: clock.now() + 60_000 };
+          },
+          async installGrant() { return this.grant(); },
+          async status() {
+            return { coverage: "complete", lastSyncAt: new Date(clock.now()).toISOString(), syncedThroughEpoch: 0,
+              authority: { state: "valid", expiresAt: clock.now() + 60_000 }, grant: await this.grant(),
+              counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null };
+          },
+          async close() {},
+        } as KVReplicaHandle;
+      },
+      async purge() {},
+      pendingWrites(identity) { return Object.assign(createMemoryPendingStore(identity), { durable: true }); },
+    };
+    const runtime = new ReplicationRuntime({
+      enabled: true, prefixes: ["notes/"], storage, mode: "foreground",
+      onEvent(event) { events.push(event); },
+    }, clock);
+    const binding = {
+      context: context("https://expiry.example"), session, address, chainId: 1, stamp,
+      authority: {
+        ...authority,
+        consentAnchor: () => ({ source: "siwe" as const, at: clock.now() }),
+        sessionGrant: () => ({ ucan: "token", device: { did: "did:key:replica", jwk: {} } }),
+      },
+      primaryKV: [{ space: primarySpace, kv: { setReadThrough(value: KVReadThrough | null) { attached = value; } } }],
+    };
+    const network = async () => ok({ data: "network", headers: { get: () => null } });
+    const read = () => attached!.get({ space: primarySpace, key: "notes/a", path: "notes/a",
+      options: undefined, signal: new AbortController().signal, network });
+
+    await runtime.bind(binding);
+    expect(subscribers.size).toBe(1);
+    const beforeExpiry = await read();
+    expect(beforeExpiry.ok && beforeExpiry.data.data).toBe("local");
+    expect(localReads).toBe(1);
+    stale = true;
+    for (const notify of subscribers) notify(stamp);
+    const afterExpiry = await read();
+    expect(afterExpiry.ok && afterExpiry.data.data).toBe("network");
+    expect(localReads).toBe(1);
+    expect(events.filter((event) => event.type === "replication.grant" && event.action === "consent_deadline_reached"))
+      .toEqual([expect.objectContaining({ replicaId: "opaque-run" })]);
+    expect(events.filter((event) => event.type === "replication.lifecycle" && event.action === "denied"))
+      .toHaveLength(1);
+    expect(redundantDenials).toBe(0);
+
+    await runtime.bind(binding);
+    expect(subscribers.size).toBe(1);
+    await runtime.unbind();
+    expect(subscribers.size).toBe(0);
     await runtime.control.close();
   });
 });

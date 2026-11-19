@@ -1,7 +1,7 @@
 import type { Result } from "../types";
 
 /** Where the owner frees up space or upgrades their plan. */
-export const STORAGE_MANAGE_URL = "https://account.tinycloud.xyz/billing";
+export const STORAGE_MANAGE_URL = "https://account.tinycloud.xyz/storage";
 
 /** Storage counts as nearly full from this share of the limit. */
 export const STORAGE_NEARLY_FULL_RATIO = 0.9;

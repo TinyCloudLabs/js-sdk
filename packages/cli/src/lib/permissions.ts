@@ -11,12 +11,14 @@ import { resolveSecretsOwner } from "@tinycloud/operations/secret-request";
 import {
   additionalDelegationsPath as sharedAdditionalDelegationsPath,
   authRequestsPath as sharedAuthRequestsPath,
+  profilePath,
   profileStoreMetadataPath,
   readAdditionalDelegations,
   readAuthRequests,
   refuseWriteToDeletedProfile,
   updateProfileStore,
   withProfileLock,
+  withPinnedProfileDirectory,
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 import {
@@ -33,14 +35,14 @@ import {
   type RuntimeDelegationActivator,
   type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import { PROFILES_DIR } from "../config/constants.js";
 import { fileExists, PRIVATE_FILE_MODE } from "../config/storage.js";
 import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { isRawEncryptionPermission } from "./raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
+import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
@@ -108,10 +110,10 @@ export function permissionRequestsPath(profile: string): string {
 }
 
 export function grantHistoryPath(profile: string): string {
-  return join(PROFILES_DIR, profile, "auth-grants.jsonl");
+  return join(profilePath(profile), "auth-grants.jsonl");
 }
 export function localGrantArtifactsPath(profile: string): string {
-  return join(PROFILES_DIR, profile, "auth-grant-artifacts.json");
+  return join(profilePath(profile), "auth-grant-artifacts.json");
 }
 
 export function createPermissionRequestArtifact(params: {
@@ -152,30 +154,38 @@ export async function loadAdditionalDelegations(
 }
 
 export async function loadLocalGrantArtifacts(profile: string): Promise<LocalGrantArtifact[]> {
-  const path = localGrantArtifactsPath(profile);
-  if (!(await fileExists(path))) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((value): value is LocalGrantArtifact =>
-    value !== null && typeof value === "object" &&
-    typeof (value as any).delegationCid === "string" &&
-    (value as any).delegation !== null && typeof (value as any).delegation === "object" &&
-    (value as any).delegation.cid === (value as any).delegationCid &&
-    typeof (value as any).delegation.delegationHeader?.Authorization === "string"
-  );
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return [];
+    const path = localGrantArtifactsPath(profile);
+    if (!(await fileExists(path))) return [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(parsed)) return [];
+    const records: unknown[] = parsed;
+    return records.filter((value): value is LocalGrantArtifact => {
+      if (value === null || typeof value !== "object" ||
+        !("delegationCid" in value) || typeof value.delegationCid !== "string" ||
+        !("delegation" in value) || value.delegation === null || typeof value.delegation !== "object") return false;
+      const delegation = value.delegation;
+      if (!("cid" in delegation) || delegation.cid !== value.delegationCid ||
+        !("delegationHeader" in delegation) || delegation.delegationHeader === null ||
+        typeof delegation.delegationHeader !== "object") return false;
+      const header = delegation.delegationHeader;
+      return "Authorization" in header && typeof header.Authorization === "string";
+    });
+  });
 }
 
 export async function appendLocalGrantArtifact(
   profile: string,
   delegation: PortableDelegation,
 ): Promise<void> {
-  await ProfileManager.ensureProfileDir(profile);
   await withProfileLock(profile, async () => {
+    await ProfileManager.ensureProfileDir(profile);
     await refuseWriteToDeletedProfile(profile);
     const records = await loadLocalGrantArtifacts(profile);
     if (records.some((record) => record.delegationCid === delegation.cid)) return;
@@ -378,34 +388,41 @@ export async function appendGrantHistory(
   profile: string,
   entry: Omit<GrantHistoryEntry, "ts" | "profile">,
 ): Promise<void> {
-  await ProfileManager.ensureProfileDir(profile);
-  const line = JSON.stringify({
-    ts: new Date().toISOString(),
-    profile,
-    ...entry,
-  }) + "\n";
-  const path = grantHistoryPath(profile);
-  await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
-  // `mode` only applies on creation; tighten history written by older releases.
-  await chmod(path, PRIVATE_FILE_MODE);
+  await withProfileLock(profile, async () => {
+    await ProfileManager.ensureProfileDir(profile);
+    await refuseWriteToDeletedProfile(profile);
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      profile,
+      ...entry,
+    }) + "\n";
+    const path = grantHistoryPath(profile);
+    await appendFile(path, line, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
+    // `mode` only applies on creation; tighten history written by older releases.
+    await chmod(path, PRIVATE_FILE_MODE);
+  });
 }
 
 export async function readGrantHistory(
   profile: string,
 ): Promise<GrantHistoryEntry[]> {
-  const path = grantHistoryPath(profile);
-  if (!(await fileExists(path))) return [];
-  const raw = await readFile(path, "utf8");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as GrantHistoryEntry);
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return [];
+    const path = grantHistoryPath(profile);
+    if (!(await fileExists(path))) return [];
+    const raw = await readFile(path, "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as GrantHistoryEntry);
+  });
 }
 
 export async function parseCapSpec(
   spec: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry> {
   const firstColon = spec.indexOf(":");
   const lastColon = spec.lastIndexOf(":");
@@ -432,12 +449,13 @@ export async function parseCapSpec(
 
   return (await resolvePermissionSpaces([
     { service, space, path, actions },
-  ], profile))[0]!;
+  ], profile, options))[0]!;
 }
 
 export async function loadPermissionRequest(
   source: string,
   profile: string,
+  options: { allowLogicalSpaces?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const raw = JSON.parse(await readFile(source, "utf8")) as { permissions?: PermissionEntry[] };
   if (!Array.isArray(raw.permissions)) {
@@ -447,7 +465,7 @@ export async function loadPermissionRequest(
       ExitCode.USAGE_ERROR,
     );
   }
-  return resolvePermissionSpaces(raw.permissions, profile);
+  return resolvePermissionSpaces(raw.permissions, profile, options);
 }
 
 export async function loadManifestPermissions(
@@ -463,55 +481,36 @@ export async function loadManifestPermissions(
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
-  if (options.device && typeof manifest.app_id === "string" &&
-    (manifest.secrets !== undefined ||
-      manifest.space === "secrets" ||
-      (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")) ||
-      (Array.isArray(manifest.permissions) && manifest.permissions.some((entry: unknown) =>
-        entry !== null && typeof entry === "object" &&
-        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption")))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+  // OpenKey's device sign-in refuses encryption grants, so the built-in Share publishing manifest goes through it
+  // without its default-key decrypt entry. A paste sign-in keeps the entry.
+  if (options.device && source === SHARE_PUBLISHING_MANIFEST_REF && Array.isArray(manifest.permissions)) {
+    manifest.permissions = manifest.permissions.filter((entry: unknown) =>
+      !(entry !== null && typeof entry === "object" &&
+        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption"));
+  }
+  // Checked on the manifest as written, before resolution rewrites its entries.
+  if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
+  if (options.device && typeof manifest.app_id === "string") {
+    const refused = manifest.secrets !== undefined || manifest.space === "secrets" ||
+        (typeof manifest.space === "string" && manifest.space.endsWith(":secrets"))
+      ? "secrets"
+      : deviceRefusal(appManifestEntries(manifest));
+    if (refused !== undefined) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+    }
   }
 
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
-    if (options.device && resolved.resources.some((entry) =>
-      entry.service === "tinycloud.encryption" ||
-      entry.space === "secrets" ||
-      entry.space?.endsWith(":secrets"))) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    const refused = options.device ? deviceRefusal(resolved.resources) : undefined;
+    if (refused !== undefined) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
 
   if (typeof manifest.app_id === "string") {
-    const permissions = ((manifest.permissions as unknown[]) ?? [])
-      .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object")
-      .map((entry) => {
-        const service = normalizeService(String(entry.service ?? ""));
-        const path = String(entry.path ?? "");
-        const actions = expandActionShortNames(
-          service,
-          Array.isArray(entry.actions)
-            ? entry.actions.map(String)
-            : [],
-        );
-        // A raw encryption network URN is owner-scoped, not a path in the
-        // manifest's space (sdk-core resolveManifest keeps it the same way).
-        if (isRawEncryptionPermission({ service, path })) {
-          return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
-        }
-        const resolvedPath = entry.skipPrefix === true
-          ? path
-          : prefixAppManifestPath(path, manifest.app_id as string);
-        return {
-          service,
-          space: String(manifest.space ?? "applications"),
-          path: resolvedPath,
-          actions,
-          ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
-        };
-      });
+    const permissions = appManifestEntries(manifest);
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
     return resolvePermissionSpaces(permissions, profile, options);
   }
@@ -521,6 +520,40 @@ export async function loadManifestPermissions(
     "Manifest must contain either SDK field \"id\" or app manifest field \"app_id\".",
     ExitCode.USAGE_ERROR,
   );
+}
+
+const DEVICE_MANIFEST_NEXT = "Use browser or --paste login for this manifest.";
+
+/** An app manifest's permissions, each as it will be requested (see `appManifestEntry`). */
+function appManifestEntries(manifest: Record<string, unknown>): PermissionEntry[] {
+  return ((manifest.permissions as unknown[]) ?? [])
+    .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object")
+    .map((entry) => appManifestEntry(entry, manifest));
+}
+
+/**
+ * One app-manifest permission as it will be requested. Paths get the app prefix unless `skipPrefix`. An encryption
+ * entry names a network, not a path in a space, so the prefix never applies (as in sdk-core resolveManifest), and its
+ * network is its own `space`, else the manifest's. The device check and the login resolve the same entry.
+ */
+function appManifestEntry(entry: Record<string, unknown>, manifest: Record<string, unknown>): PermissionEntry {
+  const service = normalizeService(String(entry.service ?? ""));
+  const path = String(entry.path ?? "");
+  const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
+  // A raw encryption network URN is owner-scoped, not a path in the
+  // manifest's space (sdk-core resolveManifest keeps it the same way).
+  if (isRawEncryptionPermission({ service, path })) {
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+  }
+  const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
+  const ownSpace = encryption && typeof entry.space === "string" ? entry.space : undefined;
+  return {
+    service,
+    space: ownSpace ?? String(manifest.space ?? "applications"),
+    path: encryption || entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id as string),
+    actions,
+    ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
+  };
 }
 
 async function secretPermissionsFromAppManifest(
@@ -637,7 +670,7 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
-  options: { allowLogicalSpaces?: boolean } = {},
+  options: { allowLogicalSpaces?: boolean; ownerDid?: string; device?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
   // First login (and delegates) may not know the owner's address yet. Keep
@@ -654,6 +687,22 @@ export async function resolvePermissionSpaces(
       // A network URN is never prefixed; send OpenKey the contract shape.
       const { skipPrefix: _skipPrefix, ...raw } = entry;
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      continue;
+    }
+    // The built-in Share manifest's default/share/ decrypt is a raw encryption prefix,
+    // the shape every raw encryption entry has. Without a known owner the login is refused: a profile without
+    // this entry cannot publish email shares.
+    if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: `${await defaultSecretsNetworkId(profile, options.ownerDid)}/share/`, actions });
+      continue;
+    }
+    if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
+      // OpenKey's device flow takes this entry as written and signs the approving owner's own network.
+      if (options.device) {
+        resolved.push({ service, space: "default", path: "", actions });
+        continue;
+      }
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }
     let space: string;

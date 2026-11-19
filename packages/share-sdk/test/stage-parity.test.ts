@@ -9,6 +9,7 @@ import {
   ShareNotifyError,
   recipientMatchesShareRecord,
   revokeShare,
+  ShareRevocationIncompleteError,
   normalizeShareTarget,
   publishPolicyShare,
   type SenderShareRecord,
@@ -114,6 +115,51 @@ describe("Share lifecycle and authorization parity", () => {
     expect(calls).toBe(3);
   });
 
+  it("treats a refused delivery authorization as final, the same for HTTP 400 and HTTP 422", async () => {
+    const results = [];
+    for (const status of [400, 422] as const) {
+      let calls = 0;
+      results.push(await notifyShare({
+        shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+        adapter: { async deliver() {
+          calls += 1;
+          throw Object.assign(new Error("share delivery authorization refused"), { code: "delivery-authorization-invalid", status });
+        } },
+      }));
+      expect(calls).toBe(1);
+    }
+    expect(results[0]).toMatchObject({ state: "partial-failure", attempts: 1, retryable: false });
+    expect(results[1]).toEqual(results[0]);
+  });
+
+  it("keeps retrying a server failure and a 400 that is not the authorization refusal", async () => {
+    for (const status of [500, 400] as const) {
+      let calls = 0;
+      const result = await notifyShare({
+        shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+        adapter: { async deliver() {
+          calls += 1;
+          throw Object.assign(new Error("failed"), { status });
+        } },
+      });
+      expect(result).toMatchObject({ state: "partial-failure", attempts: 3, retryable: true });
+      expect(calls).toBe(3);
+    }
+  });
+
+  it("retries a rate-limited delivery authorization within the budget and ends retryable, not final", async () => {
+    let calls = 0;
+    const result = await notifyShare({
+      shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+      adapter: { async deliver() {
+        calls += 1;
+        throw Object.assign(new Error("V3 share delivery authorization failed: HTTP 429"), { status: 429, code: "delivery-rate-limited" });
+      } },
+    });
+    expect(calls).toBe(3);
+    expect(result).toMatchObject({ state: "partial-failure", attempts: 3, retryable: true });
+  });
+
   it("reports a confirmed prior delivery only after a successful repeat", async () => {
     const email = { ...record, recipientMatcher: { kind: "exactEmail" as const, value: "foo@x.com" }, deliveredRecipients: ["foo@x.com"] };
     let attempts = 0;
@@ -194,44 +240,86 @@ describe("Share lifecycle and authorization parity", () => {
     });
   });
 
-  it("revokes the selected signed Policy/v3 root for active sessions, admission, and delivery", async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    const addressed = {
-      ...record,
-      targetKind: "recipientDid" as const,
-      recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" },
-      deliveryMaterial: {
-        shareCid: "bafy-share",
-        envelope: { attestedEnforcerBinding: { nodeAudience: "did:key:z6MkPhysicalNode" } },
-        sealedEnvelope: "AQ",
-        envelopeKey: "A".repeat(43),
-      },
-    };
-    await expect(revokeShare({
-      record: addressed,
-      adapter: { async revokePolicyRoot(input) { calls.push(input); } },
-    })).resolves.toMatchObject({ state: "revoked", delegationCid: "bafy-enforcement" });
-    expect(calls).toEqual([{
-      rootCid: "bafy-enforcement",
-      targetRole: "policy-enforcement",
-      ownerDid: "did:key:z6Mkowner",
-      nodeOrigin: "https://node.example",
-      nodeAudience: "did:key:z6MkPhysicalNode",
-    }]);
+  const addressedRecord = {
+    ...record,
+    targetKind: "recipientDid" as const,
+    recipientMatcher: { kind: "recipientDid" as const, value: "did:key:z6Mkrecipient" },
+    deliveryMaterial: {
+      shareCid: "bafy-share",
+      envelope: { attestedEnforcerBinding: { nodeAudience: "did:key:z6MkPhysicalNode" } },
+      sealedEnvelope: "AQ",
+      envelopeKey: "A".repeat(43),
+    },
+  };
+  const rootRequest = (rootCid: string, targetRole: string) => ({
+    rootCid, targetRole, ownerDid: "did:key:z6Mkowner", nodeOrigin: "https://node.example", nodeAudience: "did:key:z6MkPhysicalNode",
+  });
 
-    calls.length = 0;
+  it.each([undefined, "direct", "ancestor"] as const)("revokes every Policy/v3 root of an addressed share, enforcement first (scope %s)", async (scope) => {
+    const calls: Array<Record<string, unknown>> = [];
     await expect(revokeShare({
-      record: addressed,
-      scope: "ancestor",
+      record: addressedRecord,
+      ...(scope === undefined ? {} : { scope }),
       adapter: { async revokePolicyRoot(input) { calls.push(input); } },
-    })).resolves.toMatchObject({ state: "revoked", delegationCid: "bafy-owner" });
-    expect(calls).toEqual([{
-      rootCid: "bafy-owner",
-      targetRole: "policy-authority",
-      ownerDid: "did:key:z6Mkowner",
-      nodeOrigin: "https://node.example",
-      nodeAudience: "did:key:z6MkPhysicalNode",
-    }]);
+    })).resolves.toMatchObject({
+      state: "revoked",
+      delegationCid: "bafy-enforcement",
+      roots: [
+        { rootCid: "bafy-enforcement", targetRole: "policy-enforcement", state: "revoked" },
+        { rootCid: "bafy-owner", targetRole: "policy-authority", state: "revoked" },
+      ],
+    });
+    expect(calls).toEqual([rootRequest("bafy-enforcement", "policy-enforcement"), rootRequest("bafy-owner", "policy-authority")]);
+  });
+
+  it("tries every root, reports the one left, and leaves the record unrevoked for a retry", async () => {
+    const records = new MemorySenderShareRecordStorage();
+    await records.put(addressedRecord);
+    const refusal = new Error("HTTP 503");
+    const calls: string[] = [];
+    const failing = revokeShare({
+      record: addressedRecord,
+      records,
+      adapter: { async revokePolicyRoot(input) { calls.push(input.rootCid); if (input.targetRole === "policy-enforcement") throw refusal; } },
+    });
+    await expect(failing).rejects.toBeInstanceOf(ShareRevocationIncompleteError);
+    const error = await failing.catch((caught: unknown) => caught as ShareRevocationIncompleteError);
+    expect(calls).toEqual(["bafy-enforcement", "bafy-owner"]);
+    expect(error.revoked).toEqual(["bafy-owner"]);
+    expect(error.failed).toEqual([{ rootCid: "bafy-enforcement", targetRole: "policy-enforcement", error: refusal }]);
+    expect((await records.get(addressedRecord.shareId))?.revokedAt).toBeUndefined();
+
+    await expect(revokeShare({ record: addressedRecord, records, adapter: { async revokePolicyRoot() {} } }))
+      .resolves.toMatchObject({ state: "revoked", roots: [{ state: "revoked" }, { state: "revoked" }] });
+    expect((await records.get(addressedRecord.shareId))?.revokedAt).toBeDefined();
+  });
+
+  it("reports a policy root the adapter leaves live as live, with its expiry, and still ends the share", async () => {
+    await expect(revokeShare({
+      record: addressedRecord,
+      adapter: { async revokePolicyRoot(input) { return input.targetRole === "policy-authority" ? "left-live" : undefined; } },
+    })).resolves.toMatchObject({
+      state: "revoked",
+      roots: [
+        { rootCid: "bafy-enforcement", targetRole: "policy-enforcement", state: "revoked" },
+        { rootCid: "bafy-owner", targetRole: "policy-authority", state: "left-live", expiresAt: addressedRecord.expiresAt },
+      ],
+    });
+  });
+
+  it.each([
+    // The policy root is revoked, so only the role check refuses this one.
+    ["the enforcement root is left live", addressedRecord, async (input: { targetRole: string }) => input.targetRole === "policy-enforcement" ? "left-live" as const : undefined, ["bafy-enforcement"]],
+    ["an untyped adapter returns an unknown outcome for the enforcement root", addressedRecord, async (input: { targetRole: string }) => (input.targetRole === "policy-enforcement" ? false : undefined) as unknown as undefined, ["bafy-enforcement"]],
+    ["only the policy root is offered and left live", { ...addressedRecord, enforcementDelegationCid: undefined }, async () => "left-live" as const, ["bafy-owner"]],
+  ])("refuses to call a share revoked when %s", async (_label, record, revokePolicyRoot, failedCids) => {
+    const records = new MemorySenderShareRecordStorage();
+    await records.put(record);
+    const outcome = revokeShare({ record, records, adapter: { revokePolicyRoot } });
+    await expect(outcome).rejects.toBeInstanceOf(ShareRevocationIncompleteError);
+    const error = await outcome.catch((caught: unknown) => caught as ShareRevocationIncompleteError);
+    expect(error.failed.map((failure) => failure.rootCid)).toEqual(failedCids);
+    expect((await records.get(record.shareId))?.revokedAt).toBeUndefined();
   });
 
   it("persists the revocation receipt state after a successful revoke", async () => {

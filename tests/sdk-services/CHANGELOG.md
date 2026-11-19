@@ -1,5 +1,122 @@
 # @tinycloudlabs/sdk-services-test
 
+## 21.0.5
+
+## 21.0.4
+
+### Patch Changes
+
+- @tinycloud/sdk-services@3.8.3
+
+## 21.0.3
+
+### Patch Changes
+
+- @tinycloud/sdk-services@3.8.2
+
+## 21.0.2
+
+### Patch Changes
+
+- @tinycloud/sdk-services@3.8.1
+
+## 21.0.1
+
+### Patch Changes
+
+- @tinycloud/sdk-services@3.6.1
+
+## 21.0.0
+
+### Patch Changes
+
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0
+
+## 20.0.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [82cbd43]
+  - @tinycloud/sdk-services@3.6.0-beta.3
+
+## 20.0.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0-beta.2
+
+## 20.0.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0
+
+## 20.0.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+
+## 19.0.0
+
+### Patch Changes
+
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [9891ed9]
+- Updated dependencies [87a137e]
+- Updated dependencies [370a8e4]
+- Updated dependencies [ef49c14]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0
+
+## 19.0.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [ef49c14]
+  - @tinycloud/sdk-services@3.3.0-beta.39
+
+## 19.0.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [87a137e]
+  - @tinycloud/sdk-services@3.3.0-beta.25
+
+## 19.0.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0-beta.11
+
+## 19.0.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/sdk-services@3.3.0-beta.7
+
+## 18.0.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [9891ed9]
+  - @tinycloud/sdk-services@3.2.6-beta.4
+
 ## 18.0.2-beta.0
 
 ### Patch Changes

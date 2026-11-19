@@ -300,6 +300,21 @@ const deniedDelegation = await nodeB.delegateTo(initA.courierDid, [{
   actions: ['tinycloud.kv/put'],
 }], { expiry: '1h' }).then(() => false).catch((e) => /PermissionNotInManifestError|permission/i.test(String(e)));
 ok('agent cannot delegate approvals write', deniedDelegation);
+
+// Single use survives the courier key itself (spec §7): create the marker, then try to un-consume it.
+const { approvalIsUsed, consumeApproval } = await import('../dist/approval.js');
+const consumedId = 'e2econsumed';
+ok('approval starts unused (clean key-level 404)', (await approvalIsUsed(nodeB.kv, consumedId)) === false);
+await consumeApproval(nodeB.kv, consumedId);
+ok('approval is used after consume', (await approvalIsUsed(nodeB.kv, consumedId)) === true);
+ok('second consume is refused', await consumeApproval(nodeB.kv, consumedId).then(() => false).catch((e) => e.code === 'approval-used'));
+const deniedDel = await nodeB.kv.delete(k.approvalUsed(consumedId), { prefix: '' })
+  .then((r) => ({ ok: r.ok === true, status: r.error?.status ?? r.error?.meta?.status ?? r.error?.code, msg: r.error?.message }))
+  .catch((e) => ({ ok: false, status: e.status ?? e.code, msg: String(e.message).slice(0, 120) }));
+ok('Courier cannot delete a used-marker', deniedDel.ok === false && /401|403/.test(String(deniedDel.status ?? deniedDel.msg)), JSON.stringify(deniedDel));
+await nodeB.kv.put(k.approvalUsed(consumedId), 'overwritten', { prefix: '' }).catch(() => undefined);
+ok('overwriting the marker does not un-consume it', (await approvalIsUsed(nodeB.kv, consumedId)) === true);
+ok('replay after the delete attempt is still refused', await consumeApproval(nodeB.kv, consumedId).then(() => false).catch((e) => e.code === 'approval-used'));
 const ownerRequest = await nodeB.kv.get(k.request(req.requestId), { prefix: '' });
 ok('owner request record retains action detail', JSON.stringify(ownerRequest).includes('Deploy the thing'));
 

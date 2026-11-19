@@ -111,6 +111,35 @@ describe("ShareEnvelopeV3 Policy/v2", () => {
     if (roundTripped.policy.schema !== "xyz.tinycloud.policy/policy/v2") throw new Error("expected Policy/v2");
     expect(roundTripped.policy.credentialRequirement).toEqual(vector.policyProjection);
     expect(verifyEnvelopeV3SignatureOnly(roundTripped)).toBe(true);
+    const namedContentSource = {
+      ...contentSource,
+      encryptionKeyPath: `share/${contentSource.shareId}`,
+    };
+    const namedPolicy = {
+      ...policy,
+      contentSource: namedContentSource,
+      capabilityCeiling: capabilityCeiling.map((capability) => capability.kind === "encryption"
+        ? { ...capability, resource: `${contentSource.encryptionNetwork}/${namedContentSource.encryptionKeyPath}` }
+        : capability),
+    };
+    expect(shareEnvelopeV3Schema.safeParse({
+      ...roundTripped,
+      contentSource: namedContentSource,
+      policy: namedPolicy,
+    }).success).toBe(true);
+    expect(shareEnvelopeV3Schema.safeParse({
+      ...roundTripped,
+      contentSource: namedContentSource,
+      policy: {
+        ...namedPolicy,
+        capabilityCeiling,
+      },
+    }).success).toBe(false);
+    expect(shareEnvelopeV3Schema.safeParse({
+      ...roundTripped,
+      contentSource: { ...namedContentSource, encryptionKeyPath: "share/another" },
+      policy: namedPolicy,
+    }).success).toBe(false);
 
     const { credentialRequirement: _requirement, ...v1Fields } = unsignedPolicy;
     const v1 = { ...v1Fields, schema: "xyz.tinycloud.policy/policy/v1", policyId: policy.policyId, signature: policy.signature };

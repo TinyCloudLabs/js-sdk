@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { SPACE, device, deviceGrant, keyPair, owner, signUcan } from "../test/fixtures.js";
 import { ReplicaError, ReplicaErrorCode } from "./errors.js";
-import { assertGrantInstallable, grantCovers, parseUcanGrant, syncGrantSpaces, ucanCid } from "./grant.js";
+import { assertGrantInstallable, grantCovers, grantUnconstrained, parseUcanGrant, syncGrantSpaces, ucanCid } from "./grant.js";
 import { assertFolderPrefix, kvPrefixCovers, requiresSecretsOptIn } from "./scope.js";
 
 function codeOf(run: () => unknown): string | undefined {
@@ -116,5 +116,39 @@ describe("assertGrantInstallable", () => {
     const now = Math.floor(Date.now() / 1000);
     expect(codeOf(() => assertGrantInstallable(deviceGrant({ exp: now - 1 }), install))).toBe(ReplicaErrorCode.GRANT_EXPIRED);
     expect(codeOf(() => assertGrantInstallable(deviceGrant({ nbf: now + 600 }), install))).toBe(ReplicaErrorCode.GRANT_NOT_YET_VALID);
+  });
+});
+
+describe("unconstrained grants", () => {
+  const grantWith = (att: Record<string, Record<string, unknown>>) =>
+    parseUcanGrant(signUcan(owner, { aud: device.did, exp: Math.floor(Date.now() / 1000) + 3600, att, prf: ["bafyparent"] }));
+  const notes = `${SPACE}/kv/notes/`;
+
+  test("get and sync with no caveats, or one empty branch, are unconstrained", () => {
+    expect(grantUnconstrained(deviceGrant(), SPACE, "notes/")).toBe(true);
+    expect(grantUnconstrained(grantWith({ [notes]: { "tinycloud.kv/get": {}, "tinycloud.kv/sync": [] } }), SPACE, "notes/")).toBe(true);
+    expect(grantUnconstrained(grantWith({ [`${SPACE}/kv`]: { "tinycloud.kv/*": [{}], "tinycloud.kv/sync": [{}] } }), SPACE, "notes/")).toBe(true);
+  });
+
+  test("a caveat on get or on sync makes the grant constrained", () => {
+    const caveat = [{ maxBytes: 10 }];
+    expect(grantUnconstrained(grantWith({ [notes]: { "tinycloud.kv/get": caveat, "tinycloud.kv/sync": [{}] } }), SPACE, "notes/")).toBe(false);
+    expect(grantUnconstrained(grantWith({ [notes]: { "tinycloud.kv/get": [{}], "tinycloud.kv/sync": caveat } }), SPACE, "notes/")).toBe(false);
+    expect(grantUnconstrained(grantWith({ [notes]: { "tinycloud.kv/get": [{}, { a: 1 }], "tinycloud.kv/sync": [{}] } }), SPACE, "notes/")).toBe(false);
+    expect(grantUnconstrained(grantWith({ [notes]: { "tinycloud.kv/get": "weird", "tinycloud.kv/sync": [{}] } }), SPACE, "notes/")).toBe(false);
+  });
+
+  test("an unconstrained branch elsewhere still covers a caveated one", () => {
+    expect(
+      grantUnconstrained(
+        grantWith({ [notes]: { "tinycloud.kv/get": [{ a: 1 }], "tinycloud.kv/sync": [{}] }, [`${SPACE}/kv`]: { "tinycloud.kv/get": [{}] } }),
+        SPACE,
+        "notes/",
+      ),
+    ).toBe(true);
+  });
+
+  test("missing sync is not unconstrained coverage", () => {
+    expect(grantUnconstrained(grantWith({ [notes]: { "tinycloud.kv/*": [{}] } }), SPACE, "notes/")).toBe(false);
   });
 });

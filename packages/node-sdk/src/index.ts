@@ -40,6 +40,7 @@ import "./replication/node-loader";
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
+export { NodeNotRespondingError, NodeIdentityMismatchError, PartialNodeWriteError } from "@tinycloud/sdk-services";
 
 // Re-export core types
 export type {
@@ -97,6 +98,8 @@ export type {
   ReplicaAuthorityState,
   ReplicaCoverage,
   ReplicaDevice,
+  ReplicaGatedHandle,
+  ReplicaInspectedStatus,
   ReplicaGrantInfo,
   ReplicaState,
   ReplicaStatusEntry,
@@ -106,6 +109,11 @@ export type {
   ReplicationIdentity,
   ReplicationOptions,
   ReplicationPurgeReport,
+  ReplicaLocalEraseOutcome,
+  ReplicaPurgeError,
+  ReplicaPurgeFailedEvent,
+  ReplicaPurgeLocalCopyResult,
+  ReplicaPurgeTrigger,
   ReplicationReason,
   ReplicationScheduler,
   ResolvedReplicationOptions,
@@ -130,6 +138,7 @@ export {
   pkhDid,
   principalDid,
   principalDidEquals,
+  publicJwk,
   parseCanonicalNetworkId,
   TinyCloudDebugLogger,
   tinyCloudDebugLogger,
@@ -156,7 +165,12 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
+  type OpenKeyAuthorizeInput,
+  type OpenKeyAuthorizationResultV1,
+  type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
 } from "./authorization/NodeUserAuthorization";
+export { isAppKeyHostBound } from "./authorization/appKeyHostBinding";
 
 // OpenKey integration adapter — Sol continuation contract requires a
 // production entry point that wires OpenKey's authorizeTinyCloud into
@@ -197,6 +211,7 @@ export {
   TinyCloudNode,
   UnsupportedSessionRestoreError,
   InvalidRestoredSessionError,
+  RenewalLeaseOriginalExpiredError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
@@ -278,7 +293,7 @@ export { NodeWasmBindings } from "./NodeWasmBindings";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";
-export type { RestorableSession } from "./DelegatedAccess";
+export type { DelegatedSecretReadInput, RestorableSession } from "./DelegatedAccess";
 export {
   serializeDelegation,
   deserializeDelegation,
@@ -289,6 +304,7 @@ export {
   signedCompactUcanExpiry,
   RUNTIME_DELEGATION_REJECTIONS,
   RuntimeDelegationRejectedError,
+  MissingSpacesError,
 } from "./delegation";
 export type {
   PortableDelegation,
@@ -401,7 +417,9 @@ export type {
   VaultError,
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ResolvedSecretPath,
   ParsedSecretCatalogKey,
@@ -514,6 +532,7 @@ export {
   DelegationManager,
   SharingService,
   createSharingService,
+  inspectShareToken,
   DelegationErrorCodes,
 } from "@tinycloud/sdk-core";
 
@@ -625,4 +644,13 @@ export {
 // Read-through replication storage (TC-858 §11.1): Node entry ONLY —
 // loading the adapter is lazy (replica/sqlite/wasm import at first use),
 // but the export itself must never reach `@tinycloud/node-sdk/core`.
-export { sqliteReplicaStorage } from "./replication/sqlite";
+export {
+  sqliteReplicaStorage,
+  createProfileReplicaPurge,
+  REPLICA_LOGOUT_PENDING_FILE,
+  assertProfileLogoutClear,
+  logoutPrincipalDigest,
+  RESTORED_GATE_MESSAGE,
+  type ProfileReplicaPurge,
+  type ProfileReplicaDeferredToken,
+} from "./replication/sqlite";

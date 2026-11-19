@@ -8,7 +8,7 @@ import {
 import type { ReceiverCredentialCustody } from "../credentials";
 import type { ReceiverSessionStorage } from "./receiver-session";
 
-const STORE_KEY = "tinycloud.share.receiver-credentials.v1";
+export const SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY = "tinycloud.share.receiver-credentials.v1";
 const MAX_CREDENTIALS = 8;
 
 interface ReceiverCredentialEntry {
@@ -19,7 +19,7 @@ interface ReceiverCredentialEntry {
 }
 
 function entries(storage: ReceiverSessionStorage, now: Date): ReceiverCredentialEntry[] {
-  const raw = storage.getItem(STORE_KEY);
+  const raw = storage.getItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY);
   if (raw === null) return [];
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
@@ -31,13 +31,13 @@ function entries(storage: ReceiverSessionStorage, now: Date): ReceiverCredential
       return Object.keys(item).sort().join(",") === "expiresAt,holderDid,record,requirementDigest" && typeof item.holderDid === "string" && typeof item.requirementDigest === "string" && typeof item.expiresAt === "string" && Date.parse(item.expiresAt) > now.getTime() && record?.type === "TinyCloudStoredCredential" && record.version === 1 && record.holderDid === item.holderDid && record.requirementDigest === item.requirementDigest && record.expiresAt === item.expiresAt;
     }).slice(0, MAX_CREDENTIALS);
   } catch {
-    storage.removeItem(STORE_KEY);
+    storage.removeItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY);
     return [];
   }
 }
 
 function save(storage: ReceiverSessionStorage, value: readonly ReceiverCredentialEntry[]): void {
-  storage.setItem(STORE_KEY, JSON.stringify({ type: "TinyCloudShareReceiverCredentials", version: 1, entries: value.slice(0, MAX_CREDENTIALS) }));
+  storage.setItem(SHARE_RECEIVER_CREDENTIALS_STORAGE_KEY, JSON.stringify({ type: "TinyCloudShareReceiverCredentials", version: 1, entries: value.slice(0, MAX_CREDENTIALS) }));
 }
 
 export class SessionReceiverCredentialCustody implements ReceiverCredentialCustody {

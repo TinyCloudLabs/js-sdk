@@ -126,6 +126,37 @@ test("delegation rejection details keep only a known activation reason", () => {
   expect(rejection("node said: reason-canary").details).toBeUndefined();
   expect(JSON.stringify([rejection("activation_unauthenticated"), rejection("reason-canary")])).not.toContain("canary");
 });
+test("authentication details admit only a known revocation reason and canonical delegation CIDs", () => {
+  const revokedCid = `bafkr4i${"a".repeat(52)}`;
+  const ancestorCid = `bafkr4i${"b".repeat(52)}`;
+  const authError = (details: Record<string, unknown>) => redactOperationError(
+    { sensitivity },
+    { code: "AUTH_REQUIRED", message: "Authentication is required.", retryable: false, details },
+  );
+
+  expect(authError({
+    reason: "delegation_revoked",
+    revokedCid,
+    ancestorCid,
+    nodeText: "private-node-canary",
+    token: "private-token-canary",
+  }).details).toEqual({ reason: "delegation_revoked", revokedCid });
+  expect(authError({ reason: "delegation_ancestor_revoked", revokedCid, ancestorCid }).details)
+    .toEqual({ reason: "delegation_ancestor_revoked", revokedCid, ancestorCid });
+  for (const details of [
+    { reason: "delegation_revoked", revokedCid: "not-a-cid" },
+    { reason: "delegation_revoked", revokedCid: `${revokedCid}\n` },
+    { reason: "delegation_ancestor_revoked", revokedCid },
+    { reason: "delegation_ancestor_revoked", revokedCid, ancestorCid: "private-node-canary" },
+    { reason: "delegation_ancestor_revoked", revokedCid, ancestorCid: `${ancestorCid}\n` },
+    { reason: "private-node-canary", revokedCid },
+  ]) {
+    expect(authError(details).details).toBeUndefined();
+  }
+  expect(JSON.stringify(authError({ reason: "delegation_revoked", revokedCid, nodeText: "private-node-canary" })))
+    .not.toContain("canary");
+});
+
 
 test("error details reject attacker values in safe mismatch fields", () => {
   const canaries = [

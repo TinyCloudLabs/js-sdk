@@ -1,9 +1,13 @@
+import "../test-bootstrap.mjs";
 // Takes the profile lock of the built @tinycloud/operations (as the CLI runs
 // it, under Node) `iterations` times, recording overlapping holders. Run with
 // no-hard-links.cjs preloaded. Exit 3: timed out without holding the lock.
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProfileLockTimeoutError, withProfileLock } from "@tinycloud/operations/state";
+import { exitWithParent } from "../../src/test-support/parent-watch.mjs";
+
+exitWithParent();
 
 const [profile, holdersDir, iterations, staleAfterMs, timeoutMs] = process.argv.slice(2);
 if (!profile || !holdersDir || !iterations || !staleAfterMs || !timeoutMs) {

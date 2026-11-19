@@ -22,12 +22,14 @@ import {
   parseAuthError,
   storageRejectionError,
   parseStorageRejection,
+  nodeRetryError,
 } from "../errors";
 import {
   formatServiceResponseError,
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
+import { requestTooLargeError } from "../statementSize";
 import type { ISQLService } from "./ISQLService";
 import type { IDatabaseHandle } from "./ISQLService";
 import { DatabaseHandle } from "./DatabaseHandle";
@@ -177,13 +179,14 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query", dbName, [action]);
+          const failure = await this.handleErrorResponse(response, "query", dbName, [action]);
+          return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
         const data = (await response.json()) as QueryResponse<T>;
         return ok(data);
       } catch (error) {
-        return err(wrapError("sql", error));
+        return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
         request.dispose();
       }
@@ -227,13 +230,14 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          const failure = await this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
         const data = (await response.json()) as ExecuteResponse;
         return ok(data);
       } catch (error) {
-        return err(wrapError("sql", error));
+        return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
         request.dispose();
       }
@@ -261,13 +265,14 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          const failure = await this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
         const data = (await response.json()) as BatchResponse;
         return ok(data);
       } catch (error) {
-        return err(wrapError("sql", error));
+        return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
         request.dispose();
       }
@@ -493,22 +498,22 @@ export class SQLService extends BaseService implements ISQLService {
     body: Record<string, unknown>,
     signal: AbortSignal
   ): Promise<FetchResponse> {
-    const session = this.context.session!;
     const actionList = Array.isArray(actions) ? actions : [actions];
-    const headers =
-      actionList.length === 1
-        ? this.context.invoke(session, "sql", dbName, actionList[0]!)
-        : this.invokeSQLAny(session, dbName, actionList);
 
-    return this.context.fetch(`${this.host}/invoke`, {
-      method: "POST",
-      headers: {
-        ...(headers as Record<string, string>),
-        "Content-Type": "application/json",
+    return this.invokeWithRetry(
+      `${this.host}/invoke`,
+      () => {
+        const session = this.context.session!;
+        return actionList.length === 1
+          ? this.context.invoke(session, "sql", dbName, actionList[0]!)
+          : this.invokeSQLAny(session, dbName, actionList);
       },
-      body: JSON.stringify(body) as any,
-      signal,
-    });
+      {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+      }
+    );
   }
 
   private actionForSql(sql: string, fallback: string): string {
@@ -550,6 +555,17 @@ export class SQLService extends BaseService implements ISQLService {
     );
   }
 
+  private redactFailure<T>(result: Result<T>, redactErrors?: boolean, status?: number): Result<T> {
+    if (!redactErrors || result.ok) return result;
+    const candidate = result.error.code;
+    const code = typeof candidate === "string" && Object.prototype.hasOwnProperty.call(ErrorCodes, candidate)
+      ? candidate : ErrorCodes.SQL_ERROR;
+    const safeStatus = typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599
+      ? status : undefined;
+    return err(serviceError(code, "SQL operation failed", "sql",
+      safeStatus === undefined ? undefined : { meta: { status: safeStatus } }));
+  }
+
   private async handleErrorResponse(
     response: FetchResponse,
     operation: string,
@@ -568,10 +584,13 @@ export class SQLService extends BaseService implements ISQLService {
     if (response.status === 413 && parseStorageRejection(errorText)) {
       return err(storageRejectionError("sql", 413, meta, errorText));
     }
+    const retryError = nodeRetryError("sql", `SQL ${operation} failed: ${response.status} - ${errorText}`, response, errorText);
+    if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const errorCode = this.mapHttpStatusToErrorCode(
+    const sizeCode = requestTooLargeError("sql", operation, response.status, errorText);
+    const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );

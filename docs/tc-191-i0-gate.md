@@ -3,9 +3,9 @@
 Result: `unpublishable-defer`
 
 The exact MCP v2 candidate verified by `tests/mcp-sdk-contract` is
-`@modelcontextprotocol/server@2.0.0-beta.4` with the matching
-`@modelcontextprotocol/client@2.0.0-beta.4`. Both packed manifests require
-Node `>=20`. The contract passes the Zod 3 -> `zod-to-json-schema@3.25.1`
+`@modelcontextprotocol/server@2.0.0-beta.5` with the matching
+`@modelcontextprotocol/client@2.0.0-beta.5`. Both packed manifests require
+Node `>=20`. The contract passes the Zod 3 -> `zod-to-json-schema@3.25.2`
 (`jsonSchema7`, `$refStrategy: "none"`) -> `fromJsonSchema` path, official
 stdio client, structured output, protocol-only stdout, and packed-engine
 checks. The MCP stdio child reports its own runtime major and the contract

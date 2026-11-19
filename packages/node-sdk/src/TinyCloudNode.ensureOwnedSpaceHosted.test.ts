@@ -1,10 +1,13 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { expect, mock, test } from "bun:test";
 
 import type { ISessionManager, IWasmBindings } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+const HOST = "https://tinycloud.test";
 const SECRETS = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
 
 function makeSessionManager(): ISessionManager {
@@ -36,7 +39,8 @@ function makeNode(): TinyCloudNode {
     signMessage: mock(async () => "0xsig"),
   };
   const node = new TinyCloudNode({
-    host: "https://tinycloud.test",
+    host: HOST,
+    tinycloudRegistryUrl: HOST,
     signer: signer as any,
     wasmBindings: makeWasmBindings(),
   });
@@ -50,6 +54,7 @@ function makeNode(): TinyCloudNode {
       delegationHeader: { Authorization: "base-token" },
       spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
     },
+    resolveResourceDestinations: async () => [{ url: HOST }],
     hostOwnedSpaceResult: mock(async () => ({ success: true, status: 200 })),
   };
   return node;
@@ -92,7 +97,14 @@ function withFetch<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const original = globalThis.fetch;
-  globalThis.fetch = mock(impl) as unknown as typeof fetch;
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin === HOST && (init?.method ?? "GET") === "GET" && /^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) {
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+    }
+    return impl(input);
+  }, { preconnect: original.preconnect });
   return fn().finally(() => {
     globalThis.fetch = original;
   });

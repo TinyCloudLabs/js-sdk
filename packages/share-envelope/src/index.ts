@@ -25,6 +25,7 @@ export {
 export { canonicalize } from "./jcs.js";
 export { canonicalEmailDomain, canonicalMailbox, isCanonicalEmailDomain, mailboxBelongsToDomain } from "./email.js";
 export {
+  POLICY_ROOT_MAX_LIFETIME_SECONDS,
   signCompactUcanAuthorization,
   verifyCompactUcanAuthorization,
   type CompactUcanAuthorization,
@@ -48,6 +49,7 @@ export {
   sessionJwkSchema,
   shareActionSchema,
   shareEnvelopeV2Schema,
+  artifactPinSchema,
   shareEnvelopeV3Schema,
   shareEnvelopeSchema,
   policyCredentialRequirementV1Schema,
@@ -85,6 +87,7 @@ export {
   type UnifiedPolicyV2,
   type UnifiedPolicyCapability,
   type UnifiedRoot,
+  type ArtifactPin,
   type ShareEnvelopeV3,
   type UnsignedShareEnvelopeV3,
 } from "./schema.js";
@@ -106,12 +109,8 @@ export {
 } from "./sign.js";
 export {
   encodeShareUrl,
-  encodeSealedInlineShareUrl,
-  parseSealedInlineShareUrl,
   parseShareUrl,
-  type SealedInlineShareUrlParts,
   type ParseShareUrlOptions,
-  type ParsedSealedInlineShareUrl,
   type ShareUrlParts,
 } from "./link.js";
 export { getBearerSessionJwk } from "./bearer.js";

@@ -9,7 +9,9 @@
 
 import type { Json } from "./canonical";
 import type { PermissionHint } from "../types";
+import type { RoutingFailure } from "../resourceRouting";
 
+import type { KeyWrapContext } from "./keyWrap";
 /** Default ciphersuite identifier for v1 envelopes. */
 export const DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1" as const;
 
@@ -47,10 +49,11 @@ export const DECRYPT_ACTION = "tinycloud.encryption/decrypt" as const;
  *   them.
  */
 export interface InlineEncryptedEnvelope {
-  /** Schema version. */
   v: typeof ENVELOPE_VERSION;
   /** Network id URN. */
   networkId: string;
+  /** Exact named-key path; absent on network-root v1 envelopes. */
+  keyPath?: string;
   /** Ciphersuite identifier. */
   alg: string;
   /** Network key version that was used to wrap the symmetric key. */
@@ -63,10 +66,9 @@ export interface InlineEncryptedEnvelope {
   ciphertext: string;
   /** Base64-encoded associated data, if any. */
   aad?: string;
-  /** Caller-supplied metadata. Not authenticated against the node. */
+  /** Caller metadata; v2 wraps bind it to the node-authenticated header. */
   metadata?: Record<string, string>;
 }
-
 /**
  * Node-published network descriptor. The node DB is authoritative; a
  * cached copy may also live under
@@ -97,6 +99,8 @@ export interface DecryptRequestBody {
   type: typeof DECRYPT_FACT_TYPE;
   targetNode: string;
   networkId: string;
+  /** Exact named-key path for path-scoped decrypt, absent for root keys. */
+  keyPath?: string;
   alg: string;
   keyVersion: number;
   /** Base64-encoded wrapped symmetric key from the envelope. */
@@ -140,6 +144,8 @@ export interface DecryptInvocationFact {
   type: typeof DECRYPT_FACT_TYPE;
   targetNode: string;
   networkId: string;
+  /** Exact named-key path for path-scoped decrypt, absent for root keys. */
+  keyPath?: string;
   bodyHash: string;
   encryptedSymmetricKeyHash: string;
   receiverPublicKeyHash: string;
@@ -191,6 +197,7 @@ export interface EncryptionCrypto {
   sealToNetworkKey(
     networkPublicKey: Uint8Array,
     symmetricKey: Uint8Array,
+    options?: { keyWrapV2: boolean; context: KeyWrapContext },
   ): Uint8Array;
   /**
    * Open a wrapped symmetric key that was re-encrypted to the
@@ -200,6 +207,7 @@ export interface EncryptionCrypto {
   openWithReceiverKey(
     receiverPrivateKey: Uint8Array,
     wrappedKey: Uint8Array,
+    expected?: KeyWrapContext,
   ): Uint8Array;
   /**
    * Verify an ed25519 signature over `message` produced by the node
@@ -274,6 +282,7 @@ export interface DecryptInvocationSigner {
  * Errors thrown / returned from the encryption module.
  */
 export type EncryptionErrorInput =
+  | RoutingFailure
   | { code: "NETWORK_NOT_FOUND"; networkId?: string; name?: string; message?: string }
   | { code: "NETWORK_NOT_ACTIVE"; state: string; message?: string }
   | { code: "INVALID_NETWORK_ID"; message: string }
@@ -318,6 +327,8 @@ function defaultEncryptionMessage(input: EncryptionErrorInput): string {
       return input.message ?? input.cause.message;
     case "INVALID_INPUT":
       return input.message;
+    default:
+      return input.message ?? input.code;
   }
 }
 

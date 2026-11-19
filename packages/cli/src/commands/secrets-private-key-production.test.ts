@@ -394,7 +394,6 @@ test("published secrets helper fails closed on unproven, broad, and wrong-owner 
       if (mode === "false") return false;
       if (mode === "has-throw") throw new Error("attacker authority detail");
       if (mode === "broad" || mode === "ownerless" || mode === "caveated-flat" || mode === "unrecognized" || mode === "missing-proof") return true;
-      if (mode === "broad") return true;
       const granted = grants.get(this) ?? [];
       return requested.every((permission) => granted.some((candidate) =>
         JSON.stringify(candidate) === JSON.stringify(permission)

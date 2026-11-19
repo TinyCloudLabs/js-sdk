@@ -11,12 +11,16 @@ import {
   InvokeFunction,
   InvokeAnyFunction,
   FetchFunction,
+  FetchRequestInit,
+  FetchResponse,
   defaultRetryPolicy,
   EventHandler,
   TelemetryEventHandler,
   TelemetryConfig,
 } from "./types";
 import { tinyCloudDebugLogger } from "./debug";
+import { nodeRetryError } from "./errors";
+import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
 
 /**
@@ -407,6 +411,52 @@ export class ServiceContext implements IServiceContext {
     };
   }
 
+  /** Retry `NODE_BUSY` / `REQUEST_TIMEOUT`; `build` must re-sign per attempt (the node 409s a repeated invocation). */
+  async invokeWithRetry(
+    url: string,
+    build: () => FetchRequestInit | Promise<FetchRequestInit>,
+  ): Promise<FetchResponse> {
+    this.assertActive();
+    const policy = this._retryPolicy;
+    const startedAt = Date.now();
+    let backoffMs = 0;
+    let signal: AbortSignal | undefined;
+    for (let attempt = 1; ; attempt++) {
+      const init = await build();
+      signal ??= this.combineSignals(init.signal);
+      const response = await this._fetch(url, init);
+      const done = (): FetchResponse => {
+        try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
+        return response;
+      };
+      if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return done();
+      const text = await response.clone().text().catch(() => "");
+      const error = nodeRetryError("", "", response, text);
+      if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
+        return done();
+      }
+      const remaining = (policy.maxTotalMs ?? Infinity) - (Date.now() - startedAt);
+      if (remaining <= 0) return done();
+      const retryAfterMs = error.meta.retryAfterMs;
+      const step = Math.min(
+        policy.maxDelayMs,
+        policy.backoff === "exponential"
+          ? policy.baseDelayMs * 2 ** (attempt - 1)
+          : policy.backoff === "linear"
+            ? policy.baseDelayMs * attempt
+            : 0,
+      );
+      const delay = Math.min(
+        typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
+        remaining,
+      );
+      (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.()?.catch?.(() => {});
+      await abortableSleep(delay, signal);
+      if (signal.aborted) throw signal.reason;
+      backoffMs += delay;
+    }
+  }
+
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
@@ -418,29 +468,20 @@ export class ServiceContext implements IServiceContext {
         return fetchFn(url, request);
       }
 
-      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", {
-        url,
-        method: request.method ?? "GET",
-        init: request,
-      });
+      const meta = { url, method: request.method ?? "GET" };
+      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
 
       try {
         const response = await fetchFn(url, request);
         timer.stop({
+          ...meta,
           ok: response.ok,
-          url,
-          method: request.method ?? "GET",
           status: response.status,
           statusText: response.statusText,
         });
         return response;
       } catch (error) {
-        timer.stop({
-          ok: false,
-          url,
-          method: request.method ?? "GET",
-          error,
-        });
+        timer.stop({ ...meta, ok: false, error });
         throw error;
       }
     };
@@ -448,6 +489,12 @@ export class ServiceContext implements IServiceContext {
 
   private combineSignals(signal?: AbortSignal): AbortSignal {
     if (!signal) return this._abortController.signal;
+    // `AbortSignal.any` links the two signals for as long as the composite lives, with no listener on the long-lived
+    // signal (TC-2418), so aborting the context (sign-out) still cancels a response body being read. Trade-off: on
+    // Node its composites stay reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B
+    // on Node 22; a listener that is never removed retains about 1 KB). Where it is missing (older browsers) the
+    // listeners below are unchanged.
+    if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, this._abortController.signal]);
     const combined = new AbortController();
     const abort = (source: AbortSignal) => combined.abort(source.reason);
     if (signal.aborted) {
@@ -465,3 +512,4 @@ export class ServiceContext implements IServiceContext {
     return combined.signal;
   }
 }
+

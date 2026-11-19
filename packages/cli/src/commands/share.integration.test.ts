@@ -10,6 +10,7 @@ import { runShareCaptured } from "./share.integration-harness.js";
 import { MemorySenderShareRecordStorage, type PublishedShare } from "@tinycloud/share-sdk";
 
 describe("tc share command integration", () => {
+
   test("publishes, receives, and records one native TinyCloud bearer link", async () => {
     const viewerOrigin = "https://share-dev.tinycloud.link";
     const root = await mkdtemp(join(tmpdir(), "tc-share-command-"));
@@ -39,6 +40,23 @@ describe("tc share command integration", () => {
     const receivedPath = (await runShareCaptured(["share", "receive", link, "--output", output, "--viewer-origin", viewerOrigin])).stdout.trim();
     expect(await readFile(receivedPath, "utf8")).toBe("# command round trip\n");
     expect((await records.list()).length).toBe(1);
+  });
+
+  test("refuses a native link from another origin with ORIGIN_MISMATCH before reading it, in receive and inspect", async () => {
+    let reads = 0;
+    configureShareCommandServices({ nativeReader: async () => { reads += 1; return { bytes: new Uint8Array([1]), filename: "x.md" }; } });
+    const link = "https://evil.example/viewer#tc1=opaque-native-delegation";
+    for (const command of ["receive", "inspect"]) {
+      // handleError ends the process; record its exit code and let the action return instead.
+      const originalExit = process.exit;
+      let exitCode: number | undefined;
+      process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+      let stderr: string;
+      try { ({ stderr } = await runShareCaptured(["share", command, link, "--json"])); }
+      finally { process.exit = originalExit; }
+      expect({ command, exitCode, origin: stderr.includes("ORIGIN_MISMATCH") }).toEqual({ command, exitCode: 5, origin: true });
+    }
+    expect(reads).toBe(0);
   });
 
   test("redacts token-bearing publish and receive authorization results in JSON", async () => {
@@ -82,7 +100,7 @@ describe("tc share command integration", () => {
     };
     for (const name of ["a\u0001.md", "a\u200B.md", "a\u202E.md", "a\u2028.md"]) {
       const result = await refusal(["share", "publish", input, "--name", name, "--json"]);
-      expect(result.exitCode).toBe(8);
+      expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("UNSAFE_FILENAME");
     }
     const stdin = process.stdin as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<Buffer> };
@@ -91,7 +109,7 @@ describe("tc share command integration", () => {
     stdin[Symbol.asyncIterator] = () => { stdinRead = true; throw new Error("stdin must not be read"); };
     try {
       const result = await refusal(["share", "publish", "-", "--name", "a\u200B.md", "--json"]);
-      expect(result.exitCode).toBe(8);
+      expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("UNSAFE_FILENAME");
     } finally {
       stdin[Symbol.asyncIterator] = originalIterator;

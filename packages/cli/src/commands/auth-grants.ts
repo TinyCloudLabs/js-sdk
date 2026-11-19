@@ -18,6 +18,7 @@ import { ExitCode } from "../config/constants.js";
 import { loadAdditionalDelegations, removeStoredDelegations, type StoredAdditionalDelegation } from "../lib/permissions.js";
 import { ensureAuthenticated, restoreProfileSessionNode } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
+import { noteUnneededYes, UNNEEDED_YES_DESCRIPTION } from "../lib/yes-flag.js";
 import { discardWarnings } from "../output/warnings.js";
 import { CLIError, handleError, wrapError } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson } from "../output/formatter.js";
@@ -119,7 +120,7 @@ function localSessionCid(session: Record<string, unknown>, host: string): string
 
 function renderList(result: {
   profile: string;
-  session: { cid: string | null; expiresAt: string | null } | null;
+  session: { cid: string | null; expiresAt: string | null; label: "current session" | null } | null;
   localVerification: "available" | "session_missing" | "session_expired" | "session_invalid";
   grants: ListedGrant[];
 }): void {
@@ -129,7 +130,7 @@ function renderList(result: {
   }
   process.stdout.write(`Profile: ${result.profile}\n`);
   process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` +
-    (result.session?.cid ? ` (revoke with ${CLI_NAME} delegation revoke ${result.session.cid})\n` : "\n"));
+    (result.session?.cid ? ` (current session; revoke with ${CLI_NAME} delegation revoke ${result.session.cid})\n` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.\n`);
   process.stdout.write(formatTable(
     ["CID", "LOCAL", "EXPIRES", "SOURCE", "BOUND", "SCOPE"],
@@ -166,28 +167,31 @@ export function registerAuthGrantsCommand(
           host: ctx.host,
           ...(node ? { resolveSpace: operationSpaceResolver(node, profile.spaceId) } : {}),
         })));
+        const sessionCid = session === undefined ? null : localSessionCid(session, ctx.host);
         renderList({
           profile: ctx.profile,
           session: session === undefined ? null : {
-            cid: localSessionCid(session, ctx.host),
+            cid: sessionCid,
+            label: sessionCid === null ? null : "current session",
             expiresAt: isoDate(session.expiresAt ?? session.expiry),
           },
           localVerification: "node" in restored ? "available" : restored.unavailable,
           grants,
         });
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 
   grants.command("remove <cid>")
     .description("Remove locally stored grants for exactly this CID; optionally revoke as the owner")
     .option("--revoke", "Revoke on the node before removing local grants")
-    .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--yes", UNNEEDED_YES_DESCRIPTION, false)
     .action(async (cid: string, flags: { revoke?: boolean; yes?: boolean }, cmd: Command) => {
       try {
+        noteUnneededYes(flags.yes);
         const { ctx, profile } = await localContext(cmd.optsWithGlobals());
-        // This gate precedes even a local lookup, consent, session restore and node requests.
+        // This gate precedes even a local lookup, session restore and node requests.
         if (flags.revoke && resolveProfilePosture(profile) === "delegate-session") {
           throw new CLIError(
             "REVOKE_UNAUTHORIZED",
@@ -219,7 +223,7 @@ export function registerAuthGrantsCommand(
             }
           }
           const revoked = await revokeDelegationOnNode({
-            ctx: revokeCtx, profile, node, cid, yes: flags.yes ?? false, localTarget,
+            ctx: revokeCtx, profile, node, cid, localTarget,
             openKeyAcquisition: options.openKeyAcquisition,
           });
           let removed: number;
@@ -258,7 +262,7 @@ export function registerAuthGrantsCommand(
           else process.stdout.write(`Removed ${removed} local grant${removed === 1 ? "" : "s"} for ${cid}. The node delegation was not revoked.\n`);
         }
       } catch (error) {
-        handleError(error);
+        return handleError(error);
       }
     });
 }

@@ -11,7 +11,7 @@ import { inputJsonSchema, outputJsonSchema } from "./schema.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, "server.mjs");
-const MCP_VERSION = "2.0.0-beta.4";
+const MCP_VERSION = "2.0.0-beta.5";
 const NODE_MAJOR = 20;
 const NODE = process.env.NODE_BINARY ?? "node";
 

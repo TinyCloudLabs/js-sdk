@@ -1,4 +1,6 @@
+import { createProfileRegistryCacheStore, createProfileRegistrySequenceStore } from "@tinycloud/operations/state";
 import { TinyCloudNode, signedCompactUcanExpiry, type PortableDelegation } from "@tinycloud/node-sdk";
+import type { ProfileReplicaLogoutPending } from "@tinycloud/sdk-services/kv/replication";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
@@ -6,13 +8,27 @@ import { CLIError, wrapError } from "../output/errors.js";
 import { DEFAULT_HOST, ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { replayAdditionalDelegations } from "./permissions.js";
 import { sessionExpiredError } from "../auth/session-expired.js";
-import { ownerSessionLacksProof } from "@tinycloud/operations/profile";
-import { recordWarnings } from "../output/warnings.js";
+import { liveStoredLease, ownerSessionLacksProof, restoreStoredSession } from "@tinycloud/operations/profile";
+import { recordWarnings, recordRegistryFallbackWarning } from "../output/warnings.js";
 import { delegationExpiredError } from "../auth/delegation-expiry.js";
 
+import { cliRetryPolicy } from "./retry-policy.js";
 import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
+import { assertPendingRemoteLogoutSession, recoverPendingLogout } from "./logout-pending.js";
 export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
+
+function configuredRegistryUrl(
+  contextUrl: string | undefined,
+  profile: ProfileConfig | null | undefined,
+): string | undefined {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : undefined;
+}
+
 /**
  * Returns true when a JWK carries the private-key parameter required by the
  * WASM signer. The CLI is OKP/EC-only (Ed25519, secp256k1) where `d` is the
@@ -73,20 +89,22 @@ function signedLifetimePassed(delegation: PortableDelegation): boolean {
 /**
  * Restore the stored session. node-sdk refuses expired or otherwise unusable
  * persisted authority (`AUTH_EXPIRED`) while verifying it locally, before any
- * node request; only a new sign-in fixes that.
+ * node request; only a new sign-in fixes that. A session saved with an owner
+ * renewal lease is restored through the node once its original grant expires.
  */
 async function restoreProfileSession(
   node: TinyCloudNode,
   profileName: string,
   profile: ProfileConfig | null,
   sessionData: Parameters<TinyCloudNode["restoreSession"]>[0],
+  stored: Record<string, unknown>,
 ): Promise<void> {
   const posture = profile === null ? undefined : resolveProfilePosture(profile);
   if (ownerSessionLacksProof(sessionData, profile)) {
     throw sessionExpiredError(profileName, posture);
   }
   try {
-    await node.restoreSession(sessionData);
+    await restoreStoredSession(node, sessionData, stored);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "AUTH_EXPIRED") {
       throw sessionExpiredError(profileName, posture);
@@ -111,16 +129,28 @@ function persistedSessionData(
     chainId: session.chainId as number | undefined,
     siwe: session.siwe as string | undefined,
     signature: session.signature as string | undefined,
+    replicaStamp: session.replicaStamp as Parameters<TinyCloudNode["restoreSession"]>[0]["replicaStamp"],
   };
 }
 
+/** A profile's persisted session restored into a node, or why it could not be. */
+export type ProfileSessionRestore =
+  | { node: TinyCloudNode }
+  | { unavailable: "session_missing" | "session_expired" | "session_invalid" };
+
+/** The part of a CLI context that restoring a stored session reads; a full {@link CLIContext} also fits. */
+export type ProfileSessionContext = Pick<CLIContext, "profile" | "host"> & Partial<CLIContext>;
+
 /**
- * Inspect a profile's own persisted session without signing in, replaying a
- * stored grant or contacting the node. Used for local grant inspection only.
+ * Inspect a profile's persisted session without signing in, replaying a
+ * stored grant, or querying registry/node endpoints. Non-replicating restore
+ * verifies and hydrates authority locally; live operations resolve routing.
+ * Only a renewed session past its original grant asks the node for its lease.
  */
 export async function restoreProfileSessionNode(
-  ctx: CLIContext,
-): Promise<{ node: TinyCloudNode } | { unavailable: "session_missing" | "session_expired" | "session_invalid" }> {
+  ctx: ProfileSessionContext,
+): Promise<ProfileSessionRestore> {
+  await recoverPendingLogout(ctx.profile);
   const profile = await ProfileManager.getProfile(ctx.profile);
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
   if (!session) return { unavailable: "session_missing" };
@@ -130,16 +160,21 @@ export async function restoreProfileSessionNode(
     typeof session.delegationHeader.Authorization !== "string") {
     return { unavailable: "session_invalid" };
   }
-  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now()) {
+  if (typeof session.expiresAt === "string" && Date.parse(session.expiresAt) <= Date.now() && liveStoredLease(session) === undefined) {
     return { unavailable: "session_expired" };
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
     });
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session, key), session);
     return { node };
   } catch (error) {
     if (error instanceof CLIError && error.metadata?.reason === "session_expired") {
@@ -150,14 +185,17 @@ export async function restoreProfileSessionNode(
 }
 
 /**
- * Whether the profile's stored session, when `createSDKInstance` would restore
- * it, passes the same local verification, run here in a throwaway node: no
- * request is sent and nothing is written. `true` when there is none to restore.
+ * Whether the profile's stored session passes verification in a throwaway,
+ * non-replicating node without signing in, writing profile state, or querying
+ * registry/node endpoints. Live operations still resolve fresh routing.
+ * `true` when there is none to restore. A renewed session past its original
+ * grant is the exception: only the node can confirm its lease.
  */
 export async function storedSessionVerifiesLocally(profileName: string): Promise<boolean> {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
   if (profile === null) return true;
   const local = profile.authMethod === "local" && typeof profile.privateKey === "string";
+  await recoverPendingLogout(profileName);
   try {
     const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
     if (!session || typeof session.delegationCid !== "string" || typeof session.spaceId !== "string" ||
@@ -165,11 +203,17 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       !("Authorization" in session.delegationHeader) ||
       typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
+    const tinycloudRegistryUrl = configuredRegistryUrl(undefined, profile);
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(profileName),
+      registrySequenceStore: createProfileRegistrySequenceStore(profileName),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...cliRetryPolicy(),
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: profile.host ?? DEFAULT_HOST,
       ...(local ? { privateKey: profile.privateKey } : {}),
     });
-    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key));
+    await restoreProfileSession(node, profileName, profile, persistedSessionData(profileName, profile, session, key), session);
     return true;
   } catch {
     return false;
@@ -186,13 +230,29 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
  */
 export async function createSDKInstance(
   ctx: CLIContext,
-  options?: { privateKey?: string }
+  options?: {
+    privateKey?: string;
+    pendingRemoteLogout?: { marker: ProfileReplicaLogoutPending; ownerDid: string; sessionCid: string };
+  },
 ): Promise<TinyCloudNode> {
+  if (options?.pendingRemoteLogout) {
+    await assertPendingRemoteLogoutSession(ctx.profile, options.pendingRemoteLogout);
+  } else {
+    await recoverPendingLogout(ctx.profile);
+  }
   // A headless delegate may pass a private key with no persisted profile at all.
   // Only require a profile when we have no explicit key to fall back on.
-  const profile = options?.privateKey
+  const storedProfile = options?.privateKey
     ? await ProfileManager.getProfile(ctx.profile).catch(() => null)
     : await ProfileManager.getProfile(ctx.profile);
+  if (storedProfile?.authSignedOut === true && !options?.privateKey) {
+    throw new CLIError("AUTH_REQUIRED",
+      `Profile "${ctx.profile}" was explicitly signed out. Run \`${CLI_NAME} --profile ${ctx.profile} auth login\` to establish a new session.`,
+      ExitCode.AUTH_REQUIRED);
+  }
+  // A headless --private-key identity is not the logged-out profile's key or replica.
+  const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
   const key = await ProfileManager.getKey(ctx.profile);
 
@@ -220,15 +280,25 @@ export async function createSDKInstance(
       process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
     }
     const node = new TinyCloudNode({
+      registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+      registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+      onRegistryFallback: recordRegistryFallbackWarning,
+      ...cliRetryPolicy(),
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...(replication ? { replication } : {}),
     });
     if (node.replication) registerReplication(ctx.profile, node.replication);
 
+    if (options?.pendingRemoteLogout &&
+        (!session || session.delegationCid !== options.pendingRemoteLogout.sessionCid)) {
+      throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+        "The retained revocation session disappeared before SDK restore.", ExitCode.ERROR);
+    }
     const restoredOwnSession = Boolean(session && session.delegationHeader && session.delegationCid && session.spaceId);
     if (restoredOwnSession) {
-      await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key));
+      await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile, session!, key), session!);
     } else {
       await node.signIn();
     }
@@ -238,8 +308,11 @@ export async function createSDKInstance(
       recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
         host: ctx.host,
         ownerSpace: profile.spaceId,
-        migrate: options?.privateKey === undefined,
+        migrate: options?.privateKey === undefined && options?.pendingRemoteLogout === undefined,
       }));
+    }
+    if (options?.pendingRemoteLogout) {
+      await assertPendingRemoteLogoutSession(ctx.profile, options.pendingRemoteLogout);
     }
     return node;
   }
@@ -255,21 +328,34 @@ export async function createSDKInstance(
     process.stderr.write("[replication] Enabled, but this profile has no configured prefixes; reads use the network.\n");
   }
   const node = new TinyCloudNode({
+    registryCacheStore: createProfileRegistryCacheStore(ctx.profile),
+    registrySequenceStore: createProfileRegistrySequenceStore(ctx.profile),
+    onRegistryFallback: recordRegistryFallbackWarning,
+    ...cliRetryPolicy(),
+    ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
     host: ctx.host,
     privateKey: options?.privateKey,
     ...(replication ? { replication } : {}),
   });
   if (node.replication) registerReplication(ctx.profile, node.replication);
+  if (options?.pendingRemoteLogout &&
+      (!session || session.delegationCid !== options.pendingRemoteLogout.sessionCid)) {
+    throw new CLIError("PROFILE_CHANGED_DURING_REVOKE",
+      "The retained revocation session disappeared before SDK restore.", ExitCode.ERROR);
+  }
 
   if (options?.privateKey) {
     await node.signIn();
   } else if (session && session.delegationHeader && session.delegationCid && session.spaceId) {
-    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile!, session, key));
+    await restoreProfileSession(node, ctx.profile, profile, persistedSessionData(ctx.profile, profile!, session, key), session);
     recordWarnings(await replayAdditionalDelegations(node, ctx.profile, {
       host: ctx.host,
       ownerSpace: profile?.spaceId,
-      migrate: true,
+      migrate: options?.pendingRemoteLogout === undefined,
     }));
+  }
+  if (options?.pendingRemoteLogout) {
+    await assertPendingRemoteLogoutSession(ctx.profile, options.pendingRemoteLogout);
   }
   return node;
 }
@@ -350,7 +436,9 @@ export async function bootstrapDelegatedSession(
       jwk,
       verificationMethod: sessionDid,
     };
-    const profile = { ...previousProfile, sessionDid, spaceId: delegation.spaceId };
+    // A delegated session never carries named-key authority.
+    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
       await ProfileManager.setProfile(ctx.profile, profile);
@@ -447,7 +535,10 @@ function annotate(error: unknown, note: string | undefined): unknown {
  */
 export async function ensureAuthenticated(
   ctx: CLIContext,
-  options?: { privateKey?: string }
+  options?: {
+    privateKey?: string;
+    pendingRemoteLogout?: { marker: ProfileReplicaLogoutPending; ownerDid: string; sessionCid: string };
+  },
 ): Promise<TinyCloudNode> {
   // An explicitly-provided private key (--private-key / TC_PRIVATE_KEY) is a
   // first-class headless identity: accept it before any profile/session gate so
@@ -457,12 +548,17 @@ export async function ensureAuthenticated(
   }
 
   const profile = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+  if (profile?.authSignedOut === true) {
+    throw new CLIError("AUTH_REQUIRED",
+      `Profile "${ctx.profile}" was explicitly signed out. Run \`${CLI_NAME} --profile ${ctx.profile} auth login\` to establish a new session.`,
+      ExitCode.AUTH_REQUIRED);
+  }
 
   // For local auth, we can sign in directly without a stored session. The
   // profile's own key is not an override: createSDKInstance reads it from the
   // profile, so the profile's binding migration may run.
   if (profile?.authMethod === "local" && profile.privateKey) {
-    return createSDKInstance(ctx);
+    return createSDKInstance(ctx, options);
   }
 
   const session = await ProfileManager.getSession(ctx.profile);

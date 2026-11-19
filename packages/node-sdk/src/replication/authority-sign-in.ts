@@ -25,7 +25,7 @@ export function hasUnrestrictedGetCoverage(
 export function augmentSignInEntriesWithReplication(input: {
   entries: readonly PermissionEntry[];
   primarySpaceId: string;
-  replication?: Pick<ReplicationOptions, "prefixes" | "allowSecrets">;
+  replication?: Pick<ReplicationOptions, "prefixes" | "allowSecrets" | "syncScope">;
 }): PermissionEntry[] {
   const out: PermissionEntry[] = [];
   const replication = input.replication;
@@ -46,6 +46,7 @@ export function augmentSignInEntriesWithReplication(input: {
     eligiblePaths.push(path);
   }
   if (
+    replication.syncScope !== "prefixes" &&
     eligiblePaths.length === replication.prefixes.length &&
     eligiblePaths.length > 0 &&
     hasUnrestrictedGetCoverage(input.entries, input.primarySpaceId, "")

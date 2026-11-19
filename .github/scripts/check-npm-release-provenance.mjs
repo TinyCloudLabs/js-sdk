@@ -44,21 +44,219 @@
 //                       if no single release commit explains them.
 //   pre-publish         Every version npm already has must pass the rule above.
 //                       Versions npm lacks are about to be published from HEAD.
-//   post-publish        Every version must now be on npm and pass the rule.
-//                       Retries while the registry catches up.
+//   post-publish [<publish-log>]
+//                       Every version must now be on npm and pass the rule.
+//                       Retries while the registry catches up. A version that
+//                       the changesets publish output in <publish-log> says npm
+//                       accepted, but that npm still does not show after the
+//                       whole budget, is pending, not a failure (TC-1457),
+//                       unless a current version requires it (see below).
+//   record-accepted <publish-log>
+//                       Print one `tinycloud-npm-accepted: name@version` line
+//                       per version npm accepted in the changesets publish
+//                       output. Those lines in the run's log are the only
+//                       record of acceptance; no other state is kept.
+//
+// npm can accept a publish and show it only 17 minutes to 2.5 hours later
+// (@tinycloud/web-sdk, TC-1457). The next run's pre-publish would see "not on
+// npm" and publish the same number from newer code. So pre-publish also looks,
+// read-only through `gh`, at the Release runs since the version's commit: a
+// version npm lacks that one of them accepted is a hard stop, never published
+// again. A version no run accepted is published from HEAD as before.
 //
 // pre-publish and post-publish also require every exact internal dependency of
 // every current version (as published on npm, or as about to be published) to
 // be on npm, or in pre-publish, about to be published by this run.
+//
+// In post-publish a pending version is not enough for a package that requires
+// it. `npm publish` moves each package's dist-tag as soon as npm accepts it, so
+// on 2026-10-20 `@tinycloud/web-sdk@beta` pointed at 3.3.0-beta.31 while npm
+// did not show the @tinycloud/web-sdk-wasm@1.7.7-beta.0 it requires, and
+// `npm install @tinycloud/web-sdk@beta` failed with ETARGET. The dependent fails
+// red, with the commands that move its tag back and later forward. Nothing here
+// runs them: CI never moves dist-tags. When RELEASE_DIST_TAGS_FILE is set,
+// pre-publish records every package's dist-tags there before anything is
+// published, and post-publish reads the record to name the version to move back to.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 const RELEASE_COMMIT = /^chore: (beta version packages|release stable packages)\b/;
 const STABLE_RELEASE_COMMIT = /^chore: release stable packages\b/;
+const BETA_RELEASE_COMMIT = /^chore: beta version packages\b/;
 const MODES = ["unpublished-stable", "unfinished-stable", "pre-publish", "post-publish"];
+const ACCEPTED_MARKER = "tinycloud-npm-accepted:";
+const ACCEPTED_LINE = new RegExp(`(?:^|\\s)${ACCEPTED_MARKER} (@?[^\\s@]+)@(\\S+)\\s*$`, "gm");
+const RELEASE_WORKFLOW = "changesets.yml";
+const RUN_LIST_LIMIT = 100;
+
+// Versions the changesets publish output says npm accepted: the list under
+// "packages published successfully:" and the "New tag:" lines.
+export function acceptedFromPublishLog(log) {
+  const accepted = new Set();
+  let listing = false;
+  for (const raw of log.split("\n")) {
+    const line = raw.replace(/\x1b\[[0-9;]*m/g, "").replace(/^\S+Z\s+/, "").replace(/^\u{1F98B}\s+/u, "").trim();
+    const entry = /^(?:New tag:\s+)?(@?[^\s@]+@\d\S*)$/.exec(line)?.[1];
+    if (/packages published successfully/i.test(line)) listing = true;
+    else if (entry && (listing || line.startsWith("New tag:"))) accepted.add(entry);
+    else if (!entry) listing = false;
+  }
+  return accepted;
+}
+
+// Versions a run's log records as accepted (see `record-accepted`).
+export function acceptedFromRunLog(log) {
+  return new Set([...log.matchAll(ACCEPTED_LINE)].map(([, name, version]) => `${name}@${version}`));
+}
+
+function gh(args) {
+  const result = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 });
+  if (result.status !== 0) throw new Error(`gh ${args.join(" ")} failed: ${result.stderr.trim()}`);
+  return result.stdout;
+}
+
+// The one attempt shape that proves a Release attempt never pushed or published. Steps are found
+// by name because their numbers move with every workflow edit; a workflow edit that renames or
+// adds a step makes this shape unrecognised, which fails closed until the list is updated.
+//
+// "Beta Release" lists every step of the job (GitHub's own setup, post and complete steps
+// included). The steps in BETA_NEVER_RAN must not have started: pushing, publishing, and the
+// two steps that only run after a publish. Every other step is one that cannot push or publish
+// and may have any outcome. "Stable Release" and "Beta GitHub Releases" (which only runs when
+// the beta job published) must not have started at all.
+const BETA_JOB = "Beta Release";
+const NEVER_STARTED_JOBS = ["Stable Release", "Beta GitHub Releases"];
+const BETA_NEVER_RAN = new Set([
+  "Push beta version bumps",
+  "Publish beta to npm",
+  "Keep the publish log for beta-github-releases",
+  "Confirm npm has every current version",
+]);
+const BETA_STEPS = new Set([
+  ...BETA_NEVER_RAN,
+  "Set up job",
+  "Run actions/checkout@v4",
+  "Run oven-sh/setup-bun@v1",
+  "Run dtolnay/rust-toolchain@stable",
+  "Install wasm-pack",
+  "Run bun install --frozen-lockfile",
+  "Check for pending changesets",
+  "Install release deploy key",
+  "Require sign-off for major bumps",
+  "List pending changesets",
+  "Refuse to run while a stable release is unfinished",
+  "Version and build",
+  "Verify node release pin",
+  "Check internal dependency pins",
+  "Commit beta version bumps",
+  "Setup Node for npm publish",
+  "Check npm before publishing",
+  "Record whether this run published versions",
+  "Remove release deploy key",
+  "Post Setup Node for npm publish",
+  "Post Run oven-sh/setup-bun@v1",
+  "Post Run actions/checkout@v4",
+  "Complete job",
+]);
+
+// Did a Release attempt provably never push or publish? Decided from the jobs-for-attempt
+// data ({ total_count, jobs: [{ name, status, conclusion, steps }] }), for an attempt whose log
+// cannot be read (a cancelled attempt has none). The data must be exactly the recognised shape
+// above, with nothing unknown, missing, duplicated or contradictory; anything else is not proof:
+// { ok: false, reason }.
+export function attemptNeverPublished(data) {
+  const no = (reason) => ({ ok: false, reason });
+  const jobs = data?.jobs;
+  const expected = [BETA_JOB, ...NEVER_STARTED_JOBS];
+  if (!Array.isArray(jobs) || data.total_count !== jobs.length) return no("the attempt's job list is missing or incomplete");
+  const names = jobs.map((job) => job?.name);
+  if (names.length !== expected.length || !expected.every((name) => names.filter((n) => n === name).length === 1)) {
+    return no(`the attempt's jobs are ${JSON.stringify(names)}, not exactly ${JSON.stringify(expected)}`);
+  }
+  // A job that never started has no steps. A started job always lists at least its setup step.
+  const neverStarted = (job) => job.status === "completed" && (job.conclusion === "skipped" || job.conclusion === "cancelled") && Array.isArray(job.steps) && job.steps.length === 0;
+  for (const job of jobs) {
+    if (job.name !== BETA_JOB) {
+      if (!neverStarted(job)) return no(`"${job.name}" is ${job.status}/${job.conclusion ?? "no conclusion"} with ${Array.isArray(job.steps) ? job.steps.length : "unknown"} steps; it must not have started`);
+      continue;
+    }
+    if (neverStarted(job)) continue;
+    if (job.status !== "completed" || !Array.isArray(job.steps)) return no(`"${job.name}" is not a completed job with a step list`);
+    const stepNames = job.steps.map((step) => step?.name);
+    if (stepNames.length !== BETA_STEPS.size || !stepNames.every((name) => BETA_STEPS.has(name)) || new Set(stepNames).size !== BETA_STEPS.size) {
+      return no(`"${job.name}" steps are not exactly the known ones (unknown, missing or duplicate step names)`);
+    }
+    for (const step of job.steps) {
+      const skipped = step.status === "completed" && step.conclusion === "skipped";
+      const notStarted = (step.status === "pending" || step.status === "queued") && step.conclusion == null && step.started_at == null;
+      const finished = step.status === "completed" && ["success", "failure", "cancelled"].includes(step.conclusion);
+      if (BETA_NEVER_RAN.has(step.name) ? !(skipped || notStarted) : !(skipped || finished)) {
+        return no(`"${job.name}" step "${step.name}" is ${step.status}/${step.conclusion ?? "no conclusion"}${step.started_at ? " (started)" : ""}`);
+      }
+    }
+  }
+  return { ok: true };
+}
+
+// Did an earlier Release run get npm to accept this version? Looks at completed
+// runs created since the commit before the version commit (the run that made
+// the version commit started from there), other than this one, and reads their
+// logs through `gh` (needs `actions: read`). A cancelled attempt has no log
+// (TC-1457); it is passed over only when the attempt's job and step data show
+// that its push and publish steps never ran. Fails closed: if the answer cannot
+// be found, pre-publish must not guess "never accepted".
+export function acceptedByEarlierRun({
+  pkg,
+  repo,
+  head,
+  listRuns = () =>
+    JSON.parse(
+      gh(["run", "list", "--workflow", RELEASE_WORKFLOW, "--limit", String(RUN_LIST_LIMIT), "--json", "databaseId,createdAt,status,url,attempt"]),
+    ),
+  runLog = (id, attempt) => gh(["run", "view", String(id), "--attempt", String(attempt), "--log"]),
+  attemptJobs = (id, attempt) => JSON.parse(gh(["api", `repos/{owner}/{repo}/actions/runs/${id}/attempts/${attempt}/jobs?per_page=100`])),
+  currentRunId = process.env.GITHUB_RUN_ID,
+  currentAttempt = Number(process.env.GITHUB_RUN_ATTEMPT || 1),
+}) {
+  const version = versionCommit(repo, head, pkg);
+  const base = version && repo.parent(version);
+  if (!base) return undefined;
+  const since = Date.parse(repo.date(base));
+  const runs = listRuns();
+  if (runs.length >= RUN_LIST_LIMIT && Date.parse(runs[runs.length - 1].createdAt) >= since) {
+    throw new Error(`the last ${RUN_LIST_LIMIT} Release runs are all newer than ${base}; cannot tell whether ${pkg.name}@${pkg.version} was accepted by an earlier run`);
+  }
+  const id = `${pkg.name}@${pkg.version}`;
+  // A re-run replaces a run's log, so every attempt is read; for this run, only its earlier attempts.
+  for (const run of runs) {
+    if (Date.parse(run.createdAt) < since) continue;
+    const current = String(run.databaseId) === String(currentRunId);
+    if (!current && run.status !== "completed") continue;
+    const attempts = current ? currentAttempt - 1 : run.attempt ?? 1;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      let log;
+      try {
+        log = runLog(run.databaseId, attempt);
+      } catch (error) {
+        let verdict;
+        try {
+          verdict = attemptNeverPublished(attemptJobs(run.databaseId, attempt));
+        } catch (jobsError) {
+          verdict = { ok: false, reason: `its job and step data could not be read (${jobsError.message})` };
+        }
+        if (!verdict.ok) {
+          throw new Error(`${error.message}; cannot tell that Release run ${run.databaseId} (attempt ${attempt}) did not publish: ${verdict.reason}`);
+        }
+        continue;
+      }
+      if (acceptedFromRunLog(log).has(id)) return { id: run.databaseId, attempt, url: run.url };
+    }
+  }
+  return undefined;
+}
 
 function parseJson(source) {
   if (source === undefined) return undefined;
@@ -88,6 +286,7 @@ export function gitRepo(cwd = process.cwd()) {
       return result.status === 0 ? result.stdout.trim() : undefined;
     },
     subject: (rev) => ok(["log", "-1", "--format=%s", rev]),
+    date: (rev) => ok(["log", "-1", "--format=%cI", rev]),
     show(rev, path) {
       const result = run(["show", `${rev}:${path}`]);
       return result.status === 0 ? result.stdout : undefined;
@@ -124,6 +323,15 @@ export function npmView(name, version) {
   }
   if (output?.error?.code === "E404") return { published: false };
   throw new Error(`npm view ${name}@${version} failed: ${result.stderr.trim() || result.stdout.trim()}`);
+}
+
+// npm view name dist-tags -> { tag: version } ({} if npm has never had the package).
+export function npmDistTags(name) {
+  const result = spawnSync("npm", ["view", name, "dist-tags", "--json"], { encoding: "utf8" });
+  const output = parseJson(result.stdout.trim() || "null");
+  if (result.status === 0) return output && typeof output === "object" ? output : {};
+  if (output?.error?.code === "E404") return {};
+  throw new Error(`npm view ${name} dist-tags failed: ${result.stderr.trim() || result.stdout.trim()}`);
 }
 
 // npm view name -> has npm ever had this package?
@@ -237,12 +445,41 @@ export function unfinishedStableRelease({ repo, view = npmView, packageExists = 
   return { missing, problems, releaseCommit: problems.length ? undefined : commit };
 }
 
+// The beta version commit to finish publishing from, if any (the `resume: beta` Release run). A beta run versions and pushes
+// before it publishes, so a publish that stopped partway (npm slow to show a version, a failed layer) leaves a pushed
+// version commit whose versions npm lacks, and no pending changesets for a plain re-run to publish. Resume only from the
+// NEWEST release commit on HEAD's first-parent history, and only when it is a beta one: a later stable release has
+// superseded the betas. `missing` is every public package whose version at that commit npm does not show; publishing is
+// idempotent (`changeset publish` skips versions npm has, and the pre-publish check stops on accepted-but-not-visible ones).
+export function unfinishedBetaRelease({ repo, view = npmView }) {
+  const head = repo.revParse("HEAD");
+  const releaseCommit = repo.history(head, ".changeset/pre.json").find((commit) => RELEASE_COMMIT.test(repo.subject(commit)));
+  if (!releaseCommit) {
+    return { missing: [], problems: ["no beta version commit on HEAD's first-parent history"] };
+  }
+  const problems = [];
+  if (!BETA_RELEASE_COMMIT.test(repo.subject(releaseCommit))) {
+    problems.push(`the newest release commit ${releaseCommit} is not a beta version commit; a later stable release superseded the betas`);
+  }
+  const missing = publicPackages(repo, releaseCommit)
+    .filter((pkg) => !view(pkg.name, pkg.version).published)
+    .map((pkg) => ({ name: pkg.name, version: pkg.version, dir: pkg.dir }));
+  return { missing, problems, releaseCommit: problems.length ? undefined : releaseCommit };
+}
+
 export async function check({
   mode,
   repo,
   view = npmView,
   packageExists = npmPackageExists,
   sleep = (ms) => delay(ms),
+  // Versions npm accepted in this run (post-publish) and how to find ones an earlier run accepted (pre-publish).
+  accepted = new Set(),
+  acceptedEarlier = (pkg) => acceptedByEarlierRun({ pkg, repo, head: repo.revParse("HEAD") }),
+  onPending = () => {},
+  // post-publish: dist-tags recorded before publishing ({ name: { tag: version } }) and npm's current ones.
+  previousTags = {},
+  tagsOf = npmDistTags,
   // npm's index can lag a successful publish by many minutes (web-sdk 3.2.5 showed up after ~17 min, TC-1155).
   // Poll with backoff (10 s doubling, capped at 2 min) within one 30-minute budget shared by every package.
   waitMs = 30 * 60_000,
@@ -269,6 +506,7 @@ export async function check({
     return registry.get(id);
   };
 
+  const pending = new Set();
   let waited = 0;
   for (const pkg of packages) {
     const id = `${pkg.name}@${pkg.version}`;
@@ -282,8 +520,19 @@ export async function check({
       registry.set(id, npm);
     }
     if (!npm.published) {
-      if (mode === "pre-publish") log(`${id}: not on npm; will publish from HEAD.`);
-      else fail(pkg, { reason: "not on npm after publish" });
+      if (mode === "pre-publish") {
+        const earlier = await acceptedEarlier(pkg);
+        if (earlier) {
+          fail(pkg, {
+            kind: "accepted-not-visible",
+            reason: `accepted by Release run ${earlier.id}${earlier.attempt > 1 ? ` (attempt ${earlier.attempt})` : ""}${earlier.url ? ` (${earlier.url})` : ""} but not yet visible on npm`,
+          });
+        } else log(`${id}: not on npm; will publish from HEAD.`);
+      } else if (accepted.has(id)) {
+        pending.add(id);
+        log(`${id} was accepted by npm in this run but is not visible after ${waitMs / 1000}s; pending, not a failure.`);
+        onPending({ name: pkg.name, version: pkg.version });
+      } else fail(pkg, { reason: "not on npm after publish" });
       continue;
     }
 
@@ -300,14 +549,59 @@ export async function check({
     for (const [name, range] of npm.published ? npm.requires ?? [] : pkg.requires) {
       const dependency = workspace.get(name);
       const version = dependency && pinnedVersion(range, dependency.version);
-      if (!version || lookup(name, version).published) continue;
+      if (!version) continue;
+      const id = `${name}@${version}`;
+      if (pending.has(id)) {
+        fail(pkg, {
+          kind: "dependency-not-visible",
+          reason: `requires ${id}, which npm accepted in this run but does not show yet, so installing ${pkg.name}@${pkg.version} fails until it does`,
+          commands: tagCommands({ pkg, dependency: id, previousTags, tagsOf }),
+        });
+        continue;
+      }
+      if (lookup(name, version).published) continue;
       const publishing = mode === "pre-publish" && !dependency.private && dependency.version === version;
       if (publishing) continue;
-      const where = mode === "pre-publish" ? "not on npm and not published by this run" : "not on npm";
-      fail(pkg, { reason: `requires ${name}@${version}, which is ${where}` });
+      if (mode === "pre-publish") {
+        fail(pkg, { reason: `requires ${id}, which is not on npm and not published by this run` });
+      } else {
+        fail(pkg, {
+          kind: "dependency-not-visible",
+          reason: `requires ${id}, which is not on npm`,
+          commands: tagCommands({ pkg, dependency: id, previousTags, tagsOf }),
+        });
+      }
     }
   }
   return failures;
+}
+
+// The commands a maintainer runs for a published package whose dependency npm
+// does not show: move each dist-tag that now points at it back to the version
+// recorded before publishing, and forward again once the dependency shows.
+function tagCommands({ pkg, dependency, previousTags, tagsOf }) {
+  const id = `${pkg.name}@${pkg.version}`;
+  let current;
+  try {
+    current = tagsOf(pkg.name);
+  } catch (error) {
+    return [`could not read npm's dist-tags for ${pkg.name} (${error.message}); check \`npm view ${pkg.name} dist-tags\``];
+  }
+  const recorded = previousTags[pkg.name] ?? {};
+  const moved = Object.keys(current).filter((tag) => current[tag] === pkg.version).sort();
+  if (moved.length === 0) {
+    const before = Object.entries(recorded).map(([tag, version]) => `${tag}=${version}`).join(", ") || "none recorded";
+    return [`no dist-tag points at ${id} yet (before publishing: ${before}); check \`npm view ${pkg.name} dist-tags\``];
+  }
+  return moved.flatMap((tag) => {
+    const previous = recorded[tag];
+    return [
+      previous && previous !== pkg.version
+        ? `tag back:     npm dist-tag add ${pkg.name}@${previous} ${tag}`
+        : `tag back:     no earlier \`${tag}\` was recorded for ${pkg.name}; pick one from \`npm view ${pkg.name} time\``,
+      `roll forward: npm dist-tag add ${id} ${tag}   (once \`npm view ${dependency} version\` answers)`,
+    ];
+  });
 }
 
 const ADVICE = {
@@ -328,6 +622,19 @@ const ADVICE = {
     "Check the publish log and `npm view <name>@<version> gitHead`.",
 };
 
+const DEPENDENCY_ADVICE =
+  "These versions are published and their dist-tags already point at them, but they require an internal version npm\n" +
+  "does not show, so installing them by tag fails (ETARGET). CI does not move dist-tags. Do not re-run. A maintainer\n" +
+  "with npm publish rights either waits until `npm view <dependency> version` answers (npm has shown accepted versions\n" +
+  "17 minutes to 2.5 hours late, TC-1457), or runs each \"tag back\" command now and its \"roll forward\" command once the\n" +
+  "dependency shows. Hold merges to master until then.";
+
+const ACCEPTED_ADVICE =
+  "npm accepted these versions in an earlier Release run but does not show them yet. Publishing them again from this\n" +
+  "commit would give the same version number different code, so nothing was published. In a beta run\n" +
+  "nothing was pushed either: master and the pending changesets are untouched. Wait until `npm view <name>@<version> gitHead` answers,\n" +
+  "then push to master again (the run versions the changesets then); or bump the package with a changeset.";
+
 export function failureMessage(failures, mode, problems = []) {
   const missingOnly = mode === "unpublished-stable" || mode === "unfinished-stable";
   const lines = failures.map((failure) =>
@@ -336,24 +643,51 @@ export function failureMessage(failures, mode, problems = []) {
       ...(missingOnly ? [] : [`    npm gitHead:    ${failure.gitHead ?? "(none)"}`]),
       `    version commit: ${failure.versionCommit ?? "(unknown)"}`,
       `    HEAD:           ${failure.head}`,
+      ...(failure.commands ?? []).map((command) => `    ${command}`),
     ].join("\n"),
   );
   const why = problems.length ? `\nWhy: ${problems.join("; ")}.\n` : "";
-  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n${why}\n${ADVICE[mode]}`;
+  const kinds = new Set(failures.map((failure) => failure.kind));
+  const advice = [
+    ...(kinds.has("accepted-not-visible") ? [ACCEPTED_ADVICE] : []),
+    ...(kinds.has("dependency-not-visible") ? [DEPENDENCY_ADVICE] : []),
+    ...(failures.some((failure) => !["accepted-not-visible", "dependency-not-visible"].includes(failure.kind)) ? [ADVICE[mode]] : []),
+  ].join("\n\n");
+  return `Release provenance check failed (${mode}):\n\n${lines.join("\n")}\n${why}\n${advice}`;
 }
 
 function report(failures, mode, problems) {
   if (failures.length === 0) return;
   if (process.env.GITHUB_ACTIONS === "true") {
     for (const failure of failures) {
+      const commands = failure.commands?.length ? ` ${failure.commands.map((command) => command.replace(/\s+/g, " ")).join("; ")}` : "";
       console.log(
         `::error title=${mode}: ${failure.name}@${failure.version}::${failure.reason} ` +
-          `(npm gitHead ${failure.gitHead ?? "none"}, HEAD ${failure.head})`,
+          `(npm gitHead ${failure.gitHead ?? "none"}, HEAD ${failure.head})${commands}`,
       );
     }
   }
   console.error(failureMessage(failures, mode, problems));
   process.exitCode = 1;
+}
+
+const readLog = (path) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+
+// Record every public package's dist-tags before publishing, for post-publish's
+// "tag back" commands. Best effort: without the record those commands say so.
+function recordDistTags(repo, path) {
+  try {
+    const tags = Object.fromEntries(publicPackages(repo, repo.revParse("HEAD")).map((pkg) => [pkg.name, npmDistTags(pkg.name)]));
+    writeFileSync(path, `${JSON.stringify(tags, null, 2)}\n`);
+    console.log(`Recorded the dist-tags of ${Object.keys(tags).length} packages in ${path}.`);
+  } catch (error) {
+    console.log(`Could not record dist-tags before publishing (${error.message}); a post-publish failure will not name the version to move back to.`);
+  }
+}
+
+function readDistTags(path) {
+  if (!path || !existsSync(path)) return {};
+  return parseJson(readFileSync(path, "utf8")) ?? {};
 }
 
 async function main([mode, output, ...rest]) {
@@ -370,8 +704,53 @@ async function main([mode, output, ...rest]) {
     if (output) appendFileSync(output, `sha=${releaseCommit}\n`);
     return;
   }
+  if (mode === "unfinished-beta" && rest.length === 0) {
+    const { missing, problems, releaseCommit } = unfinishedBetaRelease({ repo });
+    if (missing.length === 0 && problems.length === 0) return console.log("No beta version is missing from npm; nothing to resume.");
+    if (!releaseCommit) {
+      if (missing.length === 0) return console.log(`Nothing to resume: ${problems.join("; ")}.`);
+      console.error(`Cannot resume the beta release: ${problems.join("; ")}.`);
+      process.exitCode = 1;
+      return;
+    }
+    for (const pkg of missing) console.log(`${pkg.name}@${pkg.version} is missing from npm; set by ${releaseCommit}.`);
+    console.log(`Resuming the beta release ${releaseCommit}; nothing new is versioned in this run.`);
+    if (output) appendFileSync(output, `sha=${releaseCommit}\n`);
+    return;
+  }
+  if (mode === "record-accepted" && output && rest.length === 0) {
+    for (const id of [...acceptedFromPublishLog(readLog(output))].sort()) console.log(`${ACCEPTED_MARKER} ${id}`);
+    return;
+  }
+  if (mode === "post-publish" && rest.length === 0) {
+    const onPending = ({ name, version }) => {
+      const message = `${name}@${version}: npm accepted this version but does not show it yet. Wait; do not re-run. The next run stops rather than publish it again.`;
+      if (process.env.GITHUB_ACTIONS === "true") console.log(`::warning title=post-publish: ${name}@${version} pending::${message}`);
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `- ${message}\n`);
+    };
+    const accepted = output ? acceptedFromPublishLog(readLog(output)) : new Set();
+    const previousTags = readDistTags(process.env.RELEASE_DIST_TAGS_FILE);
+    return report(await check({ mode, repo, accepted, onPending, previousTags }), mode);
+  }
+  if (mode === "pre-publish" && output === undefined) {
+    if (process.env.RELEASE_DIST_TAGS_FILE) recordDistTags(repo, process.env.RELEASE_DIST_TAGS_FILE);
+    let failures;
+    try {
+      failures = await check({ mode, repo });
+    } catch (error) {
+      // Fail closed, with a readable reason instead of a stack trace.
+      const message = `Could not tell whether an earlier Release run already got npm to accept a version that npm does not show: ${error.message}`;
+      if (process.env.GITHUB_ACTIONS === "true") console.log(`::error title=pre-publish: cannot check earlier Release runs::${message.replace(/\n/g, " ")}`);
+      console.error(`${message}\n\nNothing was published (in a beta run, nothing was pushed either). This needs the job's \`actions: read\` permission and GH_TOKEN, and \`gh\` able to reach GitHub. Re-run once that is fixed; do not publish by hand.`);
+      process.exitCode = 1;
+      return;
+    }
+    return report(failures, mode);
+  }
   if (MODES.includes(mode) && output === undefined) return report(await check({ mode, repo }), mode);
-  console.error(`usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>)`);
+  console.error(
+    `usage: check-npm-release-provenance.mjs ${MODES.join("|")} (unfinished-stable takes an optional <output-file>, post-publish an optional <publish-log>) | record-accepted <publish-log> | unfinished-beta [<output-file>]`,
+  );
   process.exitCode = 2;
 }
 

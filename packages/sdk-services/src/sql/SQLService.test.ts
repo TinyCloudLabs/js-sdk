@@ -818,3 +818,175 @@ describe("SQLService permissions", () => {
     }
   });
 });
+
+describe("SQLService 413 request vs response classification", () => {
+  function serviceAnswering(body: string): SQLService {
+    const service = new SQLService();
+    service.initialize(
+      createContext(
+        async () => response(false, 413, body, "Payload Too Large"),
+        [],
+      ),
+    );
+    return service;
+  }
+
+  test("coded request 413 maps to SQL_REQUEST_TOO_LARGE and keeps the node body in the message", async () => {
+    const service = serviceAnswering(
+      "sql_request_too_large: JSON body exceeds complete envelope limit (limit 1024 bytes)",
+    );
+
+    const result = await service.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+      expect(result.error.message).toContain(
+        "sql_request_too_large: JSON body exceeds complete envelope limit (limit 1024 bytes)",
+      );
+    }
+  });
+
+  test("coded response 413 stays SQL_RESPONSE_TOO_LARGE even for a write statement", async () => {
+    const service = serviceAnswering(
+      "sql_response_too_large: Response too large: 2048 bytes (limit 1024 bytes)",
+    );
+
+    const result = await service.execute("INSERT INTO notes (body) VALUES ('a')");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("uncoded 413 on a write statement maps to SQL_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("uncoded 413 on executeStatement maps to SQL_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.executeStatementOnDb("default", "insert_note", ["a"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("uncoded 413 on a query maps to SQL_RESPONSE_TOO_LARGE", async () => {
+    const service = serviceAnswering("Response too large: 2048 bytes");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("coded request 413 on a read query maps to SQL_REQUEST_TOO_LARGE, the prefix beats the action", async () => {
+    const service = serviceAnswering("sql_request_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("bare request code 413 with no colon maps to SQL_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("sql_request_too_large");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("generic request_too_large code is ignored, so a read query stays SQL_RESPONSE_TOO_LARGE", async () => {
+    const service = serviceAnswering("request_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("coded request prefix beats response text on WITH and EXPLAIN executes", async () => {
+    const service = serviceAnswering("sql_request_too_large: Response too large: 2048 bytes");
+
+    const withResult = await service.execute("WITH src AS (SELECT 1 AS id) SELECT id FROM src");
+    const explainResult = await service.execute("EXPLAIN SELECT 1");
+
+    expect(withResult.ok).toBe(false);
+    if (!withResult.ok) {
+      expect(withResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+    expect(explainResult.ok).toBe(false);
+    if (!explainResult.ok) {
+      expect(explainResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("a coded 413 from the other engine is not matched and falls to the operation rule", async () => {
+    const duckdbRequestBatch = serviceAnswering("duckdb_request_too_large: JSON body exceeds complete envelope limit");
+    const duckdbRequestQuery = serviceAnswering("duckdb_request_too_large: JSON body exceeds complete envelope limit");
+    const duckdbResponseBatch = serviceAnswering("duckdb_response_too_large: Response too large: 2048 bytes");
+
+    const batchResult = await duckdbRequestBatch.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+    const queryResult = await duckdbRequestQuery.query("SELECT * FROM big");
+    const responseBatchResult = await duckdbResponseBatch.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(batchResult.ok).toBe(false);
+    if (!batchResult.ok) {
+      expect(batchResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+    expect(queryResult.ok).toBe(false);
+    if (!queryResult.ok) {
+      expect(queryResult.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+    expect(responseBatchResult.ok).toBe(false);
+    if (!responseBatchResult.ok) {
+      expect(responseBatchResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("coded response prefix beats request-side text on a WITH execute", async () => {
+    const service = serviceAnswering("sql_response_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.execute(
+      "WITH src AS (SELECT 1 AS id) INSERT INTO notes (id) SELECT id FROM src",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("coded row-limit 413 maps to SQL_RESPONSE_TOO_LARGE and names no node byte limit", async () => {
+    const service = serviceAnswering("sql_response_too_large: Response too large: row limit exceeded (limit 500 rows)");
+
+    const result = await service.execute("SELECT id FROM notes");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+      expect(result.error.message).not.toMatch(/node's limit/);
+    }
+  });
+});

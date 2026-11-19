@@ -1,17 +1,8 @@
 {
   "webSdkTestBaseline": {
     "ref": "cbfe21eeda9d3994b450aa6378cb94381e4cd368",
-    "unhandledErrors": 3,
-    "failingNames": [
-      "packages/web-sdk/tests/coordinationos-vendor.test.ts::the generated manifest and ESM namespace expose exactly the contract",
-      "packages/web-sdk/tests/siwe-signature-init.test.js::should apply extension capabilities during message generation",
-      "packages/web-sdk/tests/siwe-signature-init.test.js::should handle extensions without namespace",
-      "packages/web-sdk/tests/siwe-signature-init.test.js::should apply multiple extensions in order"
-    ],
-    "unhandledSignatures": [
-      "Cannot find package 'eth-testing'",
-      "paired OpenCredentials worktree not found",
-      "ReferenceError: HTMLElement is not defined"
-    ]
+    "unhandledErrors": 0,
+    "failingNames": [],
+    "unhandledSignatures": []
   }
 }

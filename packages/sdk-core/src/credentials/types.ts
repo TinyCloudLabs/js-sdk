@@ -1,5 +1,7 @@
 export const CREDENTIAL_ACQUISITION_PROTOCOL = "tinycloud.credentials/acquisition/v1" as const;
 export const HOLDER_BINDING_DOMAIN = "tinycloud.credentials/holder-binding/v1" as const;
+/** Signing domain of the held (account, EIP-191) binding. Equal to `ACCOUNT_BINDING_DOMAIN` of held-credentials. */
+export const ACCOUNT_HOLDER_BINDING_DOMAIN = "tinycloud.credentials/account-binding/v1" as const;
 export const CREDENTIAL_CONTRACT_VERSION = 1 as const;
 export const CREDENTIAL_STEP_REGISTRY_VERSION = 1 as const;
 export const CREDENTIAL_FORMAT = "vc+sd-jwt" as const;
@@ -46,10 +48,13 @@ export interface CredentialFlowDescriptor {
   readonly interaction: { readonly origin: "https://credentials.org"; readonly pathTemplate: "/credentials/acquire/{requestId}" };
   readonly format: { readonly id: typeof CREDENTIAL_FORMAT; readonly vct: string };
   readonly claims: readonly CredentialClaimDescriptor[];
-  readonly subjectRelationship: "holder_is_subject";
+  readonly subjectRelationship: "holder_is_subject" | "account_is_subject";
   readonly inputs: readonly CredentialInputDescriptor[];
   readonly steps: readonly CredentialStepDescriptor[];
-  readonly holderBinding: { readonly required: true; readonly alg: "EdDSA"; readonly domain: typeof HOLDER_BINDING_DOMAIN; readonly version: 1 };
+  /** Ticket: `{EdDSA, holder-binding/v1}` with `holder_is_subject`. Held: `{EIP191, account-binding/v1}` with `account_is_subject`. */
+  readonly holderBinding:
+    | { readonly required: true; readonly alg: "EdDSA"; readonly domain: typeof HOLDER_BINDING_DOMAIN; readonly version: 1 }
+    | { readonly required: true; readonly alg: "EIP191"; readonly domain: typeof ACCOUNT_HOLDER_BINDING_DOMAIN; readonly version: 1 };
   readonly endpoints: Readonly<Record<"request" | "state" | "challenge" | "proof" | "holderBinding" | "holderSignature" | "issue" | "result", CredentialEndpointId>>;
   readonly lifecycle: { readonly requestTtlSeconds: number; readonly challengeTtlSeconds: number; readonly maxProofAttempts: number; readonly challengeConsumption: "atomic_once"; readonly retry: "bounded" };
   readonly status: { readonly type: "none"; readonly freshnessSeconds: number };
@@ -66,7 +71,8 @@ export interface CredentialRequirement {
   readonly maxAgeSeconds?: number;
 }
 
-export interface CredentialHolderBinding {
+/** The ticket (did:key, EdDSA) holder binding: 19 fields. */
+export interface TicketHolderBinding {
   readonly type: typeof HOLDER_BINDING_DOMAIN;
   readonly protocol: typeof CREDENTIAL_ACQUISITION_PROTOCOL;
   readonly requestId: string;
@@ -87,6 +93,15 @@ export interface CredentialHolderBinding {
   readonly issuedAt: string;
   readonly expiresAt: string;
 }
+
+/** The held (account, EIP-191) holder binding: the ticket fields plus `credentialLifetimeSeconds`, a `urn:uuid` v4 `jti`, the account `type`. 20 fields. */
+export interface AccountHolderBinding extends Omit<TicketHolderBinding, "type"> {
+  readonly type: typeof ACCOUNT_HOLDER_BINDING_DOMAIN;
+  readonly credentialLifetimeSeconds: 31_536_000;
+}
+
+/** A holder binding is exactly one of the two shapes, keyed on `type`. */
+export type CredentialHolderBinding = TicketHolderBinding | AccountHolderBinding;
 
 export interface IssuerVerificationKey {
   readonly kid: string;

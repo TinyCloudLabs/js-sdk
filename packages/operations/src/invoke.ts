@@ -19,6 +19,7 @@ import {
   type OperationDefinition,
   type OperationRef,
   type OperationResult,
+  type RetryDescriptor,
   type OperationRuntimeRequirement,
   type RuntimeOperationContext,
 } from "./contract.js";
@@ -34,6 +35,7 @@ import {
   isExactCapabilityMemberSubset,
   validateExactCapabilities,
 } from "./authority.js";
+import { invalidInputMessage } from "./invalid-input.js";
 import {
   createOrReusePermissionRequest,
   buildPermissionRequestArtifact,
@@ -300,7 +302,7 @@ async function retryWithLocalAuthority(
   }
 }
 
-/** Diagnostics from building the runtime belong to the invocation's result. */
+/** Runtime diagnostics, including route selection during execution, belong to the result. */
 function withRuntimeWarnings(
   result: OperationResult<unknown>,
   prepared: Exclude<PreparedInvocation, { status: "error" }>,
@@ -379,7 +381,7 @@ async function prepareInvocation(
       unresolvedContextSummary(target),
       operationError(
         definition.invalidInputErrorCode ?? "INPUT_INVALID",
-        "The operation input is invalid.",
+        invalidInputMessage(definition.input, parsedInput.error),
         {
           details: zodIssueDetails(parsedInput.error),
         },
@@ -434,11 +436,15 @@ async function prepareInvocation(
       : await resolveRuntime(target, definition.runtime);
   if (!runtimeResolution.ok) {
     // Runtime-preparation errors share the execution errors' detail allowlist.
-    return { status: "error", result: errorResult(
+    const result = errorResult(
       operation,
       runtimeResolution.context,
       redactOperationError(definition, runtimeResolution.error),
-    ) };
+    );
+    return { status: "error", result: {
+      ...result,
+      ...(runtimeResolution.warnings === undefined ? {} : { warnings: runtimeResolution.warnings }),
+    } };
   }
   if (requiresRuntime(definition.runtime)) {
     const actualPosture = runtimeResolution.context.summary.posture;
@@ -682,7 +688,7 @@ async function executePreparedInvocation(
           operation,
           context: runtimeResolution.context.summary,
           setup: outcome.setup,
-          retry: retryDescriptor(
+          retry: operationRetryDescriptor(
             operation,
             parsedInput.data,
             outcome.requiresCallerInput ?? false,
@@ -787,16 +793,12 @@ function errorResult(
   return { status: "error", operation, context, error };
 }
 
-function retryDescriptor(
+/** Build the same canonical retry identity used by operation authority results. */
+export function operationRetryDescriptor(
   operation: OperationRef,
   input: unknown,
-  requiresCallerInput: boolean,
-): Readonly<{
-  operationId: string;
-  operationVersion: number;
-  inputDigest: string;
-  requiresCallerInput: boolean;
-}> {
+  requiresCallerInput = false,
+): RetryDescriptor {
   return {
     operationId: operation.operationId,
     operationVersion: operation.operationVersion,
@@ -899,7 +901,7 @@ function authorityRequiredResult(
     missing,
     request,
     approval: approvalAction(request, node),
-    retry: retryDescriptor(operation, input, requiresCallerInput),
+    retry: operationRetryDescriptor(operation, input, requiresCallerInput),
   };
 }
 

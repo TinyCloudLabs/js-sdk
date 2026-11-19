@@ -1,23 +1,43 @@
 import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomBytes } from "node:crypto";
+import { publicJwk } from "@tinycloud/sdk-core";
+import type { ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { acquireApprovalRequest } from "./approval-request.js";
+import type { ApprovalWait } from "./approval-wait.js";
+import { ProfileManager } from "../config/profiles.js";
+import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
-interface DelegationData {
+export interface DelegationData {
   delegationHeader: { Authorization: string };
   delegationCid: string;
   spaceId: string;
   [key: string]: unknown;
 }
 
-interface AuthFlowOptions {
+export interface AuthFlowOptions {
   paste?: boolean;
+  /** Profile-owned, durable request/result recovery state. */
+  profileName?: string;
+  expectedOwner?: string;
+  /** Local command identity only; never sent in the signed request or delegation. */
+  commandIntent?: string;
+  onApprovalRequest?: (request: { approvalUrl: string; requestId: string; expiresAt: string }) => void;
+  /**
+   * Bound the wait for the owner's approval (`--timeout`). A new request then ends the call at once with
+   * APPROVAL_PENDING (exit 8), a resumed one waits until the deadline; an approval that has arrived is always collected.
+   */
+  approvalWait?: ApprovalWait;
   noPopup?: boolean;
   jwk?: object;
   host?: string;
   permissions?: PermissionEntry[];
+  /** A share-invitation approval: no permissions and no key id; the approver chooses the key. */
+  invitationContext?: ShareInvitationApprovalContext;
+  /** An invitation's file identity, stored with its pending request so a rerun of the same file resumes it. */
+  invitationMeta?: { contentSha256: string; requestedDurationMs?: number };
   /**
    * User-facing context shown on the OpenKey approval page. Optional at the
    * OpenKey protocol boundary, but TinyCloud CLI permission-grant call sites
@@ -33,68 +53,39 @@ interface AuthFlowOptions {
   /** API origin for short-code lookup when OpenKey uses a separate API host. */
   openkeyApiHost?: string;
   /**
-   * Lifetime hint for the resulting delegation. Encoded into the
-   * `/delegate?expiry=<value>` URL parameter so OpenKey can sign for the
-   * requested window instead of its hardcoded default. Forwarded as-is —
-   * OpenKey does the parsing and clamping server-side.
+   * Requested grant lifetime. Remote approval carries it in the immutable
+   * request; the explicit paste flow retains the existing expiry URL parameter.
+   * Undefined preserves the caller's existing default.
    */
   expiry?: string | number;
+  /**
+   * Opt in to a user-chosen lifetime on a PLAIN link (the explicit paste flow). Only `buildAuthUrl` reads it, so the
+   * signed approval request, which carries its lifetime in an immutable signed body, never sends it. Callers that set
+   * it must verify the signed result with the matching `expiryChangeable` expectation.
+   */
+  expiryChangeable?: boolean;
+  /**
+   * Ask the owner for a renewal lease of at most this many seconds with the signed approval request. The result's
+   * lease is verified and admitted at the node before the login saves it. No command sets this yet.
+   */
+  renewalLeaseSeconds?: number;
 }
 
-const PRIVATE_JWK_FIELDS = new Set([
-  "d",
-  "p",
-  "q",
-  "dp",
-  "dq",
-  "qi",
-  "oth",
-  "k",
-]);
-
-/** Real delegation callbacks are a few KB; anything far larger is refused unread. */
-const MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
-
-export function publicJwkForDelegation(jwk: object): object {
-  const publicJwk: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
-    }
-  }
-
-  return publicJwk;
-}
-
-/**
- * Start the browser auth flow.
- * Mode 1 (default): local HTTP callback server
- * Mode 2 (--paste): manual code paste
- */
+/** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */
 export async function startAuthFlow(
   did: string,
   options: AuthFlowOptions = {}
 ): Promise<DelegationData> {
+  assertNoCaveatLimits(options.permissions);
   if (options.paste) {
     return pasteFlow(did, options);
   }
 
-  try {
-    return await callbackFlow(did, options);
-  } catch (error) {
-    // Ctrl-C cancels the login; it isn't a reason to fall back to paste.
-    if (error instanceof CLIError && error.code === "CANCELLED") throw error;
-    // Fallback to paste if browser can't open
-    if (process.stdin.isTTY) {
-      console.error("Could not open browser. Falling back to manual paste mode.");
-      return pasteFlow(did, options);
-    }
-    throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
-  }
+  return acquireApprovalRequest(did, options);
 }
 
 export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: string } = {}): string {
+  assertNoCaveatLimits(options.permissions);
   const params = new URLSearchParams();
   params.set("did", did);
   if (options.callback) {
@@ -103,7 +94,7 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   if (options.jwk) {
     // base64url-encode the JWK
     const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk)),
+      JSON.stringify(publicJwk(options.jwk)),
     ).toString("base64url");
     params.set("jwk", jwkB64);
   }
@@ -125,6 +116,12 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   }
   if (options.expiry !== undefined) {
     params.set("expiry", String(options.expiry));
+  }
+  // OpenKey reads exactly the string "true". Without it the plain link is shorter-only: the user can pick no longer
+  // than the `expiry` above (or the 7-day default when there is none). With it the picker is uncapped, and the CLI
+  // holds the signed result to its own bound (see `expiryChangeable` in SignedSessionExpectations).
+  if (options.expiryChangeable === true) {
+    params.set("expiryChangeable", "true");
   }
   // Announce the negotiated authorization protocol so OpenKey can pick the
   // right widget copy. Older OpenKey builds ignore unknown params.
@@ -189,11 +186,40 @@ export function validateDelegationCallbackPayload(value: unknown): string | null
   return null;
 }
 
-async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
+/** The redeemed delegation must be for this CLI key and carry no private key material. */
+function assertBoundToKey(parsed: unknown, did: string, localJwk: Record<string, unknown>): void {
+  const delegation = parsed as Record<string, unknown> | null;
+  const jwk = delegation?.jwk as Record<string, unknown> | undefined;
+  if (
+    typeof delegation?.verificationMethod !== "string" ||
+    delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
+    !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
+    jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
+    typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
+    "d" in jwk
+  ) {
+    throw new Error("Delegation is bound to a different CLI key.");
+  }
+}
+
+/** A pasted OpenKey result: a short code (looked up and bound to this key) or the full delegation code. */
+export async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const trimmed = input.trim();
   let parsed: unknown;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const localJwk = publicJwk(options.jwk);
+    // OpenKey consumes the code on redeem: a code an interrupted run already redeemed is finished from its local copy.
+    const saved = options.profileName === undefined ? undefined : await pendingDelegationFor(options.profileName, trimmed);
+    if (saved !== undefined) {
+      try {
+        assertBoundToKey(saved, did, localJwk);
+      } catch (error) {
+        await dropPendingDelegationFor(options.profileName!, trimmed);
+        throw error;
+      }
+      return saved;
+    }
     const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ??
       (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST
         ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
@@ -202,23 +228,19 @@ async function delegationFromInput(input: string, did: string, options: AuthFlow
     });
     if (!response.ok) {
       throw Object.assign(new Error(response.status === 404
-        ? "Delegation code not found or expired. Use the full code shown in OpenKey instead."
+        ? "Delegation code not found or expired. A short code works only once and OpenKey no longer has this one (it was already used, it expired, or the CLI refused it). Approve again in OpenKey to get a new code."
         : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json() as { delegation?: unknown };
     parsed = result.delegation;
-    const delegation = parsed as Record<string, unknown> | null;
-    const jwk = delegation?.jwk as Record<string, unknown> | undefined;
-    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
-    if (
-      typeof delegation?.verificationMethod !== "string" ||
-      delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
-      !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
-      jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
-      typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
-      [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
-    ) {
-      throw new Error("Delegation is bound to a different CLI key.");
+    assertBoundToKey(parsed, did, localJwk);
+    // Before the caller verifies or activates anything, so a kill from here on cannot lose the owner's approval.
+    if (options.profileName !== undefined && validateDelegationCallbackPayload(parsed) === null) {
+      // A first sign-in holds its new key only in memory until the login commits; a copy bound to a key that is
+      // never saved could not be finished after a kill, so say what to do instead of keeping it.
+      const stored = await ProfileManager.getKey(options.profileName) as Record<string, unknown> | null;
+      if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed as DelegationData);
+      else console.error("Note: this sign-in's key is not saved until the login commits, so an interrupted sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
     }
   } else {
     try {
@@ -242,156 +264,6 @@ function shouldOpenBrowser(options: AuthFlowOptions): boolean {
   return env !== "1" && env !== "true";
 }
 
-async function callbackFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
-  return new Promise((resolve, reject) => {
-    let timeout: ReturnType<typeof setTimeout>;
-    let settled = false;
-    let rl: ReturnType<typeof createInterface> | undefined;
-
-    function settle(result: { data?: DelegationData; error?: Error }) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      server.close();
-      // A held-open socket must not keep the CLI alive after the login settles.
-      server.closeAllConnections();
-      if (rl) {
-        rl.close();
-      }
-      if (result.data) {
-        resolve(result.data);
-      } else {
-        reject(result.error);
-      }
-    }
-
-    // Only OpenKey's page, which received this unguessable path in the
-    // approval URL, can deliver the delegation (TC-1058). Browsers always send
-    // Origin on this cross-origin POST, so a request without OpenKey's origin
-    // is refused. Structurally invalid requests are answered and ignored, so a
-    // stray one can't end the login. This is not sender authentication: a local
-    // process that learns the path (it is in the printed URL and the browser's
-    // argv) can forge the header and post a well-formed payload, which ends the
-    // login with a proof error at worst; the per-login OpenKey nonce closes that.
-    const callbackPath = `/callback/${randomBytes(16).toString("base64url")}`;
-    const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
-    const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
-
-    // Check for stalled requests every second, so the timeouts below apply promptly.
-    const server = createServer({ connectionsCheckingInterval: 1_000 }, (req: IncomingMessage, res: ServerResponse) => {
-      if (req.headers.origin !== openKeyOrigin) {
-        res.writeHead(403);
-        res.end();
-        return;
-      }
-      if (req.method === "POST" && req.url === callbackPath) {
-        const chunks: Buffer[] = [];
-        let size = 0;
-        req.on("data", (chunk: Buffer) => {
-          size += chunk.length;
-          if (size > MAX_CALLBACK_BODY_BYTES) {
-            res.writeHead(413, cors);
-            res.end();
-            req.destroy();
-            return;
-          }
-          chunks.push(chunk);
-        });
-        req.on("end", () => {
-          let data: DelegationData;
-          try {
-            data = JSON.parse(Buffer.concat(chunks).toString("utf8")) as DelegationData;
-          } catch {
-            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Invalid JSON" }));
-            return;
-          }
-          const invalid = validateDelegationCallbackPayload(data);
-          if (invalid) {
-            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: invalid }));
-            return;
-          }
-          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
-          res.end(JSON.stringify({ success: true }));
-          settle({ data });
-        });
-      } else if (req.method === "OPTIONS" && req.url === callbackPath) {
-        // CORS preflight
-        res.writeHead(204, {
-          ...cors,
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
-        });
-        res.end();
-      } else {
-        res.writeHead(404);
-        res.end();
-      }
-    });
-    // Slow or stalled requests are dropped instead of lingering for the whole login.
-    server.headersTimeout = 10_000;
-    server.requestTimeout = 10_000;
-
-    server.listen(0, "127.0.0.1", async () => {
-      const addr = server.address();
-      if (!addr || typeof addr === "string") {
-        settle({ error: new Error("Failed to start callback server") });
-        return;
-      }
-      const port = addr.port;
-      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
-      const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
-      const openBrowser = shouldOpenBrowser(options);
-      const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
-
-      if (openBrowser && hasTerminal) {
-        console.error(`Opening browser for authentication...`);
-        console.error(`If the browser doesn't open, visit: ${authUrl}`);
-      } else if (!openBrowser || hasTerminal) {
-        console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
-      }
-
-      if (openBrowser) {
-        try {
-          const open = (await import("open")).default;
-          await open(authUrl);
-        } catch {
-          settle({ error: new Error("Failed to open browser") });
-          return;
-        }
-      }
-
-      // In interactive mode, also accept paste input while waiting for callback
-      if (process.stdin.isTTY) {
-        console.error(`\nIf the browser can't connect back, enter the short code or paste the full delegation code here:`);
-        rl = createInterface({
-          input: process.stdin,
-          output: process.stderr,
-        });
-        let resolving = false;
-        rl.on("line", async (input) => {
-          if (settled || resolving) return;
-          resolving = true;
-          try {
-            settle({ data: await delegationFromInput(input, did, options) });
-          } catch (error) {
-            console.error(error instanceof Error ? error.message : "Invalid delegation code. Try again:");
-          } finally {
-            resolving = false;
-          }
-        });
-        // On a TTY, readline takes Ctrl-C itself and would only pause (TC-1062).
-        rl.on("SIGINT", () => settle({ error: loginCancelled() }));
-      }
-    });
-
-    // Timeout after 5 minutes
-    timeout = setTimeout(() => {
-      settle({ error: new Error("Authentication timed out after 5 minutes") });
-    }, 5 * 60 * 1000);
-  });
-}
 
 async function pasteFlow(did: string, options: AuthFlowOptions = {}): Promise<DelegationData> {
   const authUrl = buildAuthUrl(did, options);

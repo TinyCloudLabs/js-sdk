@@ -45,6 +45,7 @@ export type {
   IService,
   ServiceSession,
   RetryPolicy,
+  RetryStats,
   InvokeFunction,
   InvokeAnyFunction,
   InvokeAnyEntry,
@@ -139,6 +140,24 @@ export type {
 // Context
 export { ServiceContext } from "./context";
 export type { ServiceContextConfig } from "./context";
+export {
+  createResourceRoutingFetch,
+  createResourceTransportInvocationFetch,
+  routeResourceRequest,
+  routingResourceOf,
+  isVaultResourceUri,
+  namesVaultResourceUri,
+  verifyResourceDestination,
+  NodeNotRespondingError,
+  NodeIdentityMismatchError,
+  ResourceNotRoutedError,
+  PartialNodeWriteError,
+  routingFailure,
+} from "./resourceRouting";
+export type { ResourceAccess, ResourceDestination, ResourceNodeInfo, ResourceRoutingConfig, ResourceTransport, ResourceTransportTarget, ResourceTransportOptions } from "./resourceRouting";
+
+// Developer request log
+export type { RequestEvent, RequestLog, RequestLogReader, RequestSink, RequestService } from "./telemetry/requestLog";
 
 // Errors
 export {
@@ -154,6 +173,7 @@ export {
   storageQuotaExceededError,
   storageLimitReachedError,
   storageRejectionError,
+  nodeRetryError,
   parseStorageQuotaBytes,
   parseStorageRejection,
   type StorageAccountUsage,
@@ -233,7 +253,10 @@ export type {
   ReplicaAuthorityState,
   ReplicaCoverage,
   ReplicaDevice,
+  ReplicaGatedHandle,
+  ReplicaInspectedStatus,
   ReplicaGrantInfo,
+  ReplicaPeerCommit,
   ReplicaState,
   ReplicaStatusEntry,
   ReplicationAuthority,
@@ -245,6 +268,53 @@ export type {
   ReplicationReason,
   ReplicationScheduler,
   ResolvedReplicationOptions,
+} from "./kv/replication";
+export type {
+  ConsentDeadlineMs,
+  ClampConsentAnchor,
+  EffectiveGrantExpiry,
+  EffectiveGrantExpiryInput,
+  MintRemainingMs,
+  NeedsSilentRenewal,
+  ReplicaAccountGate,
+  ReplicaBrowserGateAccess,
+  ReplicaBrowserGateSnapshot,
+  ReplicaBrowserGateTx,
+  ReplicaClock,
+  ReplicaAdmitHook,
+  ReplicaBrowserPageAdmission,
+  ReplicaConsentAnchor,
+  ReplicaConsentSource,
+  ReplicaDenyInput,
+  ReplicaDenyOutcome,
+  ReplicaDeliveryDecision,
+  ReplicaEraseReport,
+  ReplicaGateAccess,
+  ReplicaGatedError,
+  ReplicaGateReason,
+  ReplicaGateScope,
+  ReplicaGateSnapshot,
+  ReplicaGatedSpec,
+  ReplicaGatedStorage,
+  ReplicaGateTx,
+  ReplicaGuardedStore,
+  ReplicaGrantPolicy,
+  ReplicaLifecycleGate,
+  ReplicaLocalEraseOutcome,
+  ReplicaPurgeError,
+  ReplicaPurgeFailedEvent,
+  ReplicaPurgeLocalCopyResult,
+  ReplicaPurgeTrigger,
+  ReplicaPageAdmission,
+  ReplicaPartitionEraser,
+  ReplicaPartitionIndexEntry,
+  ReplicaPrivateGateHash,
+  ReplicaPurgeIntent,
+  ReplicaQuotaLedger,
+  ReplicaQuotaSpec,
+  ReplicaSessionStamp,
+  ReplicaStampedReply,
+  SaltedHash,
 } from "./kv/replication";
 export {
   CLEAR_PENDING_WARNING,
@@ -360,6 +430,10 @@ export type {
 
 export {
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -373,7 +447,9 @@ export {
 export type {
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ParsedSecretCatalogKey,
   ResolvedSecretPath,
@@ -386,6 +462,7 @@ export {
   EncryptionService,
   DecryptTransportResponseError,
   parseNetworkId,
+  parseEncryptionResource,
   buildNetworkId,
   isNetworkId,
   networkDiscoveryKey,
@@ -432,6 +509,7 @@ export type {
   EncryptToNetworkOptions,
   DecryptEnvelopeOptions,
   ParsedNetworkId,
+  ParsedEncryptionResource,
   BuildDecryptInvocationInput,
   BuiltDecryptInvocation,
   CanonicalJson,

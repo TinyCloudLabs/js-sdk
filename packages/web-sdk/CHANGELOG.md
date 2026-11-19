@@ -1,5 +1,2503 @@
 # @tinycloudlabs/web-sdk
 
+## 3.13.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+
+## 3.13.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+  - @tinycloud/replica@0.4.6-beta.2
+
+## 3.13.0-beta.7
+
+### Minor Changes
+
+- 9f3ca26: `DelegatedAccess` (from `useDelegation`) can read Secrets-app secrets through the delegation: `access.encryption` and `access.readSecret({ name, scope? })`, which returns the same `SecretReadResult` as `TinyCloudNode.readSecret`. A read needs `tinycloud.kv/get` on the secret's record and `tinycloud.encryption/decrypt` in the delegation. The decrypt permission isn't limited to that secret: it covers the owner's default network.
+
+  The new `@tinycloud/node-sdk/runtime-grants` and `@tinycloud/node-sdk/secret-read` entry points are internal: don't import them directly, as they can change in any release.
+
+  Details: TC-3338
+
+- 9f3ca26: `grantRuntimePermissions` (and `TinyCloudWeb.requestPermissions`) asks for one approval for a request across several spaces and returns one `PortableDelegation` per space. A requested space that isn't set up is never created: the call throws `MissingSpacesError` (`code: "SPACE_NOT_FOUND"`, `missingSpaceIds`, and `delegations` for the spaces that were granted). A space this account doesn't own throws before any approval (`code: "SPACE_NOT_OWNED"`). `MissingSpacesError` is exported from `@tinycloud/node-sdk`, `@tinycloud/node-sdk/core` and `@tinycloud/web-sdk`.
+
+  Details: TC-3338
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+
+## 3.13.0-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.13.0-beta.6
+- @tinycloud/replica@0.4.6-beta.1
+- @tinycloud/sdk-core@3.13.0-beta.6
+
+## 3.13.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+
+## 3.13.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+  - @tinycloud/node-sdk@3.13.0-beta.4
+
+## 3.13.0-beta.3
+
+### Minor Changes
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+  - @tinycloud/replica@0.4.6-beta.0
+
+## 3.13.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [b758e71]
+  - @tinycloud/node-sdk@3.13.0-beta.2
+
+## 3.13.0-beta.1
+
+### Minor Changes
+
+- 2395340: Share one item made of several resources with a single link, and open it in an app.
+  - `sharing.generate({ resources: [{ path, actions? }, …] })` grants up to 16 distinct paths in one share, with one owner approval when a new root is needed. `path`/`actions` keep working for a single resource. `onRootDelegationNeeded` now also receives `resources`, and a root it returns must be the owner's signature over every resource.
+  - `sharing.delegateReceivedShare` signs one child over every shared resource (or narrows to one with `path`), and reports a node refusal for a revoked chain as `REVOKED` and an expired one as `AUTH_EXPIRED`.
+  - `inspectShareToken(token)` checks a share token offline against the owner's wallet signature and returns the owner, the exact resources, when access ends and the root delegation's CID. Use it for anything shown before a share is claimed.
+  - `useDelegation` on a delegation of several resources gives a `kv` that takes full keys; `DelegatedAccess.resources` and `ShareAccess.resources` list every resource.
+  - `@tinycloud/share-sdk/native-link` adds `publishNativeShareLink` and `openNativeShareLink`: a short link to a sealed record carrying the share and up to 8 KiB of app display data, opened without reading the owner's node. The display data is not signed by the owner.
+
+  Details: TC-3194
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+  - @tinycloud/share-sdk@1.6.0-beta.0
+
+## 3.13.0-beta.0
+
+### Minor Changes
+
+- 634753d: `TinyCloudNode.delegateTo` accepts `notBefore?: Date`, signed into the delegation's UCAN as `nbf` (whole seconds, floored like the expiry) on both the session-key and the runtime-grant paths, so a delegation can be backdated to cover an issuer clock that runs ahead of the node's. Without it nothing changes and no `nbf` is signed. It is refused when it is in the future (the node checks a delegation against its own clock with no leeway, so a future `nbf` fails activation), when it is not before the expiry that will actually be signed (including the session and runtime-grant caps), when it is not a valid `Date`, or when combined with `forceWalletSign`, whose SIWE path cannot carry it. `@tinycloud/web-sdk` re-exports the extended `DelegateToOptions`.
+
+  Details: TC-3172
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+
+## 3.12.0
+
+### Minor Changes
+
+- 649bb18: Share publishing no longer creates the share key. `encryptAddressedShareContent` encrypts to the public key of the share's deterministic `share/<shareId>` key (read without authentication) and returns the stored bytes; the node records the key when the share policy is registered. Publishing an addressed share therefore requires a node that records the share key at policy registration. Each published share adds one key record, which counts toward the network's key limit.
+
+  Breaking changes:
+  - `@tinycloud/share-sdk`: `pathBoundSessionPermissions` now returns `decrypt` on `<network>/share/` only (no `key.create`); removed `PathBoundSharePlan.requiredPermissions` and `PathBoundSharePlan.sessionPermissions` (use `registrationPermissions`, decrypt on `<network>/share/`), the `key-not-authorized` and `key-receipt-mismatch` error codes, and `createKey` from `AddressedShareKeyClient` (it now needs only `encrypt`).
+  - `@tinycloud/sdk-core`: removed `expandRuntimePermissionEntries`; the `<network>/share/` manifest prefix accepts `decrypt` only, so `key.create` there is an invalid manifest entry.
+  - `@tinycloud/node-sdk`: sign-in accepts only `decrypt` on the `<network>/share/` prefix; runtime permission grants no longer accept `key.create` on an exact `share/<id>` key; removed `RuntimePermissionGrantOptions.expectedSessionKey`.
+  - `@tinycloud/web-sdk`: `requestPermissions` no longer accepts `key.create` on an exact `share/<id>` key.
+
+  `key.create` for `apps/<appId>/` keys (`manifest.keys`) and `NamedKeyClient.createKey` / `ensureKey` are unchanged.
+
+  Details: TC-2525
+
+- 55d52f7: `TinyCloudWeb.restoreSession()` now makes one bounded node read before it reports `"restored"`: it asks the node whether the restored session's primary space is hosted, waiting at most 5 seconds. It never prompts and never fails or delays the restore past that cap; an answer it cannot get is `"unknown"`. Read the result from the new `TinyCloudWeb.spaceHosting` getter (`"hosted"`, `"not-hosted"` or `"unknown"`). `signIn()` on a restored session whose space is not hosted returns the restored session, as before. Exports the `SpaceHosting` type.
+
+  Details: TC-2380
+
+- adfe9b5: `requestPermissions` on an OpenKey session now names the key it asks OpenKey to sign with. Every OpenKey sign request for a runtime grant carries the `keyId` of the connected account, and a client that is not connected is connected first (`connect()`, in the configured `mode`), so a restored session no longer opens a sign dialog that has no key. The signed message and the requested permissions are unchanged. This replaces the earlier refusal for a never-connected client: it now connects instead of falling back to the node's wallet signer.
+
+  In popup mode (the default) a browser blocks a second popup opened after the user spent time in the connect popup, so the first Allow only connects: `requestPermissions` rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, nothing is signed, and the second click signs with the connected key in one popup. Show your Allow button again on that code. `iframe` and `redirect` mode connect and sign in one click.
+
+  New exported `OpenKeySigningKeyError` (with `OpenKeySigningKeyErrorCode`), thrown before any sign request: `OPENKEY_KEY_MISSING` (the client is not connected and cannot connect, or `connect()` returned no `keyId`), `OPENKEY_KEY_AMBIGUOUS` (the connected key is not the signed-in account's, or reports no address) and `OPENKEY_CONNECTED_RETRY`. The SDK never calls the client's `signMessage` without a `keyId`. If the session ends or changes while a connect or sign dialog is open, the grant is cancelled and the signature is not used. A signer set with `setRuntimePermissionSigner` still takes precedence.
+
+  Details: TC-2281
+
+- b32f52e: Routing now reads a verified, owner-signed copy of each owner's registry record and refreshes it before each decision. A device with no saved settings no longer falls back to a default host when the registry is unreachable; it refuses with `RegistryUnavailableError`.
+
+  Details of the change:
+
+  Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. A cold device (no saved settings for the owner) no longer falls back to a configured or default host on HTTP 5xx, a transport error or a timeout: live routing is refused with `RegistryUnavailableError` (see the cold-device refusal entry). Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; registered resources without destinations do not fall back. An owner with only an older (v1) registry record keeps working when that record names only the default node, `https://node.tinycloud.xyz`: requests go there, as before. Any other v1-only record is refused until the owner saves a signed v2 record with `tinycloud registry publish`. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481, TC-3168
+
+- 593f051: Add opt-in TCW2 key wraps (HKDF-SHA256, with authenticated key context and metadata). Readers accept both wrap versions whatever the writer is set to; new writes stay v1 unless `keyWrapV2` is enabled. Network descriptors and payload schemas are unchanged.
+
+  Add the `requireKeyWrapV2` reader policy (off by default) across Node, Web, services and named-key clients. Writer defaults and signed receiver-response compatibility are unchanged.
+
+  Column decryption now requires an explicit expected format. V1 wrapped keys require encrypted framing; callers that select legacy plaintext get the bytes unchanged unless `strictEncryption` is enabled. Both flags default to false.
+
+  Details: TC-2518, TC-2517
+
+- 728b25c: Use OpenKey's advertised continuation API from the public signIn click to reserve one window before asynchronous preparation. Prepare, verify and complete the session with the request-pinned identity, preserving the configured manifest and validating the signed result before activation. Older clients and servers retain the existing authorization path.
+
+  Reject noncanonical SIWE and ReCap encodings during OpenKey verification. Custom WASM bindings must provide the strict parseVerifiedRecapFromSiwe verifier for ReCap sign-in.
+
+  Details: TC-2913
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+- 9ff4cf2: Expose `ensureSpaceHosted()` and allow restored sessions to host a missing primary space from a user gesture. Signing out during approval dismisses the prompt and rejects with an explicit cancellation error.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- f859fb3: Restore persisted sessions from local state and initialize replication on demand. Explicit network KV reads bypass replica setup. Refresh browser hosting and panel grants after restore.
+
+  Serialize panel-grant storage updates and sign-out cleanup so a delayed reactivation cannot overwrite a newly granted permission.
+
+  Details: TC-2773
+
+- 2139b24: Send only the public session key to OpenKey during sign-in.
+
+  `sdk-core` adds `publicJwk(jwk)`, re-exported by `node-sdk`: it returns only the standard public members of a JWK (`{kty, crv, x}` for Ed25519, `{kty, crv, x, y}` for EC, `{kty, n, e}` for RSA) plus `kid` when present, and throws for a key type without a public form. The OpenKey sign-in request from `prepareOpenKeySignIn()` and `signInWithOpenKey()`, `wireOpenKeyAuthorize`, the CLI's OpenKey links and handoff, the MCP approval link and Courier's approval link and `request` output now use it. Other members such as `alg` or `use` are no longer sent.
+
+  Details: TC-2582
+
+- b669909: When the panel's lazy chunk fails to load, log the failure and offer a full-page reload instead of retrying the same chunk URL.
+
+  Details: TC-2949
+
+- 2a8edc2: `restoreSession()` and `restoreSessionWithRenewal()` check the session's expiry again just before installing it. A session that expired while the restore was waiting, for example on a pending account-registry sync, is now refused with `InvalidRestoredSessionError` instead of being installed and then failing every call against the node.
+
+  In the web SDK, a restore whose session another instance on the same storage signed out while the node was restoring it now ends that node session and returns `"missing"` instead of `"restored"`.
+
+  Details: TC-2936
+
+- 5817c2b: `TinyCloudWeb.signOut()` clears local state first. The node's sign-out starts at once, but `signOut()` waits for it for at most 3 seconds after the persisted session is cleared, so a node call that never answers (for example after a revoked grant) no longer leaves the tab signed in. When the 3 seconds pass, `signOut()` resolves while the node's own cleanup may still be running; the local session is already gone, but callers should not assume the node-side cleanup has finished. Errors the node's sign-out raises within that time still reject `signOut()`, as before. A session whose stored record could not be removed is now fenced in `BrowserSessionStorage` (`markSignedOut` / `isSignedOut`), so a reload cannot restore it; a successful `clear` or a different saved session lifts the fence. Other `ISessionStorage` implementations keep only the in-memory block, and a sign-out with no live session (a restore still pending) fences nothing: only the in-memory block applies there.
+
+  `signOut()` in both SDKs clears the stored session only when it is still the session being signed out (same signature): a sign-out that finishes after a newer sign-in for the same address no longer erases the newer saved copy.
+
+  `FileSessionStorage.save` writes a temp file (mode 0600, so the saved file is owner-only) and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
+
+  Details: TC-2379
+
+- e50dd6c: Signing out now starts clearing the saved session before it waits for background cleanup, in the Node and browser SDKs. Storage-adapter interfaces are unchanged.
+
+  Details: TC-2379
+
+- c070c4b: Use resource routing and destination identity checks for policy, delegation, sharing and identity operations on Node/Web-owned SDK objects. Preserve per-space write outcomes and bind newly issued proofs to the selected destination.
+
+  Standalone Core objects and low-level policy functions still trust a host explicitly supplied by the caller; they do not consult the registry without a resource transport callback. Received-share and restored-data destinations require that callback. Node-local resource names without a routing owner are refused by the Node/Web transport rather than mapped to the current account.
+
+  Keep new-user onboarding tied to constructor-supplied hosts or an explicit code-supplied sign-in override, independently of restored session hints; registered routes still take precedence. Bind hosting, policy delivery, publication and grant activation to the initiating service graph across asynchronous preparation, response validation and signing. Web wrapper calls refuse account/session replacement before dispatch, and static share receiving uses the verified parent and registry-routed share actor rather than the link's recorded host.
+
+  Refuse redirects for credential- or body-bearing Core and Node requests, including encryption-network creation. Preserve typed routing failures and partial-write receipts, metadata and causes through delegation and sharing Result adapters rather than reporting a partial side effect as a generic network failure.
+
+  The unauthenticated, bodyless replication-restoration `/info` hint preflight remains an explicit exception so local replica hydration does not wait for a registry lookup.
+
+  Details: TC-2594
+
+- 5f271e5: Optional sign-in setup follows the account's published storage settings.
+
+  Details: TC-2687
+
+- 693676e: Space-hosting delegations carry an explicit expiration one UTC calendar year after creation, with February 29 clamped to February 28. A caller's `siweConfig.expirationTime` may shorten that lifetime; later values are clamped to the hosting tier. Node and browser SDKs apply the expiration before signing.
+
+  Keep host message construction deferred without loading the shared policy module in the hosting chunk.
+
+  Details: TC-2691
+
+- 766d27a: Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
+
+  Details: TC-2872
+
+- d4366f9: Expose verified SIWE ReCap proof CIDs and admit an already-signed owner renewal lease for an exact agent delegation through the lazy renewal subpath, without an agent private key. Ambiguous or malformed ReCap proof data is now refused.
+
+  Return distinct renewal expiry/inactive error codes so clients can distinguish refusal from unavailable status.
+
+  Keep renewal signature recovery inside its existing lazy web bundle so downstream bundlers do not scan declaration files as runtime modules.
+
+  Details: TC-2904
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+- f4220cf: Scope implicit sign-in bootstrap permissions to approved first-party page origins. Explicit bootstrap opt-out omits implicit account and capabilities-read rows; explicitly requested permissions remain intact. Third-party accounts with no registered route receive a setup-required error with the Home setup URL before signing.
+
+  Details: TC-2931
+
+- ce16ef6: Bind saved browser sign-ins to the requested account before restoration. DID and CAIP account requests also retain their chain selection.
+
+  Details: TC-2934
+
+- b00ad0b: Reuse confirmed absence for browser registry data reads for up to 60 seconds. Registered routes, writes, revocations, share delivery, node identity, sign-in and any other lookup not marked as a data read refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
+
+  Details: TC-2987
+
+- 163f986: Remove one non-public origin from `FIRST_PARTY_ORIGINS`. Pages served from that origin no longer receive implicit first-party bootstrap permissions at sign-in. All other first-party origins and Pages projects are unchanged.
+
+  Details: TC-3030
+
+- c2fde3d: Treat `https://tinycloud.one` and two native webview origins, `https://app.tinycloud.one` and `tinycloudone://app.tinycloud.one`, as first-party origins. Pages served from those exact origins receive the implicit first-party bootstrap permissions at sign-in, like the other first-party app origins. Subdomains, other ports, `http://`, other schemes and other casings are still treated as third-party.
+
+  Details: TC-3030
+
+- 711903b: A session or delegation made under a parent that expires on a fractional second now ends at the parent's whole second. `useDelegation` activates its session, `createSubDelegation` defaults and caps its delegation, and `grantRuntimePermissions` ends its grants at the session, each rounded down to the whole second, so a node that reads the parent's expiry in whole seconds accepts them (it refused them as outliving the parent). A delegation with less than a second left is refused with a clear message.
+
+  Details: TC-3076
+
+- 2c9c7cc: In a browser without `crypto.getRandomValues`, the web SDK now throws when it needs random bytes (for keys and nonces) instead of falling back to a non-cryptographic source. Browsers and webviews that have WebCrypto are unaffected.
+
+  Details: TC-3007
+
+- Updated dependencies [85095e8]
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [ccf3347]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [e409bef]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [f3df7de]
+- Updated dependencies [d4366f9]
+- Updated dependencies [e3cd63b]
+- Updated dependencies [728b25c]
+- Updated dependencies [56df81d]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+- Updated dependencies [711903b]
+- Updated dependencies [5fe6cff]
+- Updated dependencies [88a5f28]
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+- Updated dependencies [7266493]
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/sdk-core@3.12.0
+  - @tinycloud/node-sdk@3.12.0
+  - @tinycloud/share-sdk@1.5.0
+  - @tinycloud/replica@0.4.5
+  - @tinycloud/web-sdk-wasm@1.7.8
+  - @tinycloud/share-envelope@1.6.0
+
+## 3.12.0-beta.38
+
+### Patch Changes
+
+- 711903b: A session or delegation made under a parent that expires on a fractional second now ends at the parent's whole second. `useDelegation` activates its session, `createSubDelegation` defaults and caps its delegation, and `grantRuntimePermissions` ends its grants at the session, each rounded down to the whole second, so a node that reads the parent's expiry in whole seconds accepts them (it refused them as outliving the parent). A delegation with less than a second left is refused with a clear message.
+
+  Details: TC-3076
+
+- Updated dependencies [711903b]
+  - @tinycloud/node-sdk@3.12.0-beta.38
+
+## 3.12.0-beta.37
+
+### Patch Changes
+
+- c2fde3d: Treat `https://tinycloud.one` and two native webview origins, `https://app.tinycloud.one` and `tinycloudone://app.tinycloud.one`, as first-party origins. Pages served from those exact origins receive the implicit first-party bootstrap permissions at sign-in, like the other first-party app origins. Subdomains, other ports, `http://`, other schemes and other casings are still treated as third-party.
+
+  Details: TC-3030
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+  - @tinycloud/replica@0.4.5-beta.11
+
+## 3.12.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+
+## 3.12.0-beta.35
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+  - @tinycloud/share-sdk@1.5.0-beta.5
+
+## 3.12.0-beta.34
+
+### Patch Changes
+
+- 163f986: Remove one non-public origin from `FIRST_PARTY_ORIGINS`. Pages served from that origin no longer receive implicit first-party bootstrap permissions at sign-in. All other first-party origins and Pages projects are unchanged.
+
+  Details: TC-3030
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+  - @tinycloud/replica@0.4.5-beta.10
+
+## 3.12.0-beta.33
+
+### Patch Changes
+
+- b00ad0b: Reuse confirmed absence for browser registry data reads for up to 60 seconds. Registered routes, writes, revocations, share delivery, node identity, sign-in and any other lookup not marked as a data read refresh registry routing before each operation. Continue uncached when the optional cache cannot load.
+
+  Details: TC-2987
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+  - @tinycloud/replica@0.4.5-beta.9
+
+## 3.12.0-beta.32
+
+### Patch Changes
+
+- 2c9c7cc: In a browser without `crypto.getRandomValues`, the web SDK now throws when it needs random bytes (for keys and nonces) instead of falling back to a non-cryptographic source. Browsers and webviews that have WebCrypto are unaffected.
+
+  Details: TC-3007
+
+## 3.12.0-beta.31
+
+### Minor Changes
+
+- 728b25c: Use OpenKey's advertised continuation API from the public signIn click to reserve one window before asynchronous preparation. Prepare, verify and complete the session with the request-pinned identity, preserving the configured manifest and validating the signed result before activation. Older clients and servers retain the existing authorization path.
+
+  Reject noncanonical SIWE and ReCap encodings during OpenKey verification. Custom WASM bindings must provide the strict parseVerifiedRecapFromSiwe verifier for ReCap sign-in.
+
+  Details: TC-2913
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+
+## 3.12.0-beta.30
+
+### Patch Changes
+
+- Updated dependencies [85095e8]
+  - @tinycloud/sdk-core@3.12.0-beta.30
+  - @tinycloud/node-sdk@3.12.0-beta.30
+
+## 3.12.0-beta.29
+
+### Patch Changes
+
+- b669909: When the panel's lazy chunk fails to load, log the failure and offer a full-page reload instead of retrying the same chunk URL.
+
+  Details: TC-2949
+
+## 3.12.0-beta.28
+
+### Patch Changes
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+- Updated dependencies [0080686]
+  - @tinycloud/sdk-core@3.12.0-beta.28
+  - @tinycloud/node-sdk@3.12.0-beta.28
+  - @tinycloud/share-sdk@1.5.0-beta.4
+  - @tinycloud/replica@0.4.5-beta.8
+
+## 3.12.0-beta.27
+
+### Patch Changes
+
+- f4220cf: Scope implicit sign-in bootstrap permissions to approved first-party page origins. Explicit bootstrap opt-out omits implicit account and capabilities-read rows; explicitly requested permissions remain intact. Third-party accounts with no registered route receive a setup-required error with the Home setup URL before signing.
+
+  Details: TC-2931
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/sdk-core@3.12.0-beta.27
+  - @tinycloud/node-sdk@3.12.0-beta.27
+  - @tinycloud/replica@0.4.5-beta.7
+
+## 3.12.0-beta.26
+
+### Patch Changes
+
+- 2a8edc2: `restoreSession()` and `restoreSessionWithRenewal()` check the session's expiry again just before installing it. A session that expired while the restore was waiting, for example on a pending account-registry sync, is now refused with `InvalidRestoredSessionError` instead of being installed and then failing every call against the node.
+
+  In the web SDK, a restore whose session another instance on the same storage signed out while the node was restoring it now ends that node session and returns `"missing"` instead of `"restored"`.
+
+  Details: TC-2936
+
+- Updated dependencies [2a8edc2]
+  - @tinycloud/node-sdk@3.12.0-beta.26
+
+## 3.12.0-beta.25
+
+### Patch Changes
+
+- ce16ef6: Bind saved browser sign-ins to the requested account before restoration. DID and CAIP account requests also retain their chain selection.
+
+  Details: TC-2934
+
+## 3.12.0-beta.24
+
+### Patch Changes
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+
+## 3.12.0-beta.23
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.23
+  - @tinycloud/sdk-core@3.12.0-beta.23
+  - @tinycloud/share-sdk@1.5.0-beta.3
+
+## 3.12.0-beta.22
+
+### Patch Changes
+
+- d4366f9: Expose verified SIWE ReCap proof CIDs and admit an already-signed owner renewal lease for an exact agent delegation through the lazy renewal subpath, without an agent private key. Ambiguous or malformed ReCap proof data is now refused.
+
+  Return distinct renewal expiry/inactive error codes so clients can distinguish refusal from unavailable status.
+
+  Keep renewal signature recovery inside its existing lazy web bundle so downstream bundlers do not scan declaration files as runtime modules.
+
+  Details: TC-2904
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/sdk-core@3.12.0-beta.22
+  - @tinycloud/node-sdk@3.12.0-beta.22
+
+## 3.12.0-beta.21
+
+### Patch Changes
+
+- 766d27a: Renewal restores verify the full bounded stamp history and can find an expired saved session on provider-free reload.
+
+  Details: TC-2872
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk@3.12.0-beta.21
+  - @tinycloud/web-sdk-wasm@1.7.8-beta.0
+
+## 3.12.0-beta.20
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.20
+- @tinycloud/replica@0.4.5-beta.6
+- @tinycloud/sdk-core@3.12.0-beta.20
+
+## 3.12.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+  - @tinycloud/node-sdk@3.12.0-beta.19
+
+## 3.12.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [7266493]
+  - @tinycloud/share-sdk@1.5.0-beta.2
+  - @tinycloud/node-sdk@3.12.0-beta.18
+  - @tinycloud/sdk-core@3.12.0-beta.18
+
+## 3.12.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+  - @tinycloud/sdk-core@3.12.0-beta.17
+  - @tinycloud/share-sdk@1.5.0-beta.1
+  - @tinycloud/node-sdk@3.12.0-beta.17
+
+## 3.12.0-beta.16
+
+### Patch Changes
+
+- f859fb3: Restore persisted sessions from local state and initialize replication on demand. Explicit network KV reads bypass replica setup. Refresh browser hosting and panel grants after restore.
+
+  Serialize panel-grant storage updates and sign-out cleanup so a delayed reactivation cannot overwrite a newly granted permission.
+
+  Details: TC-2773
+
+- Updated dependencies [f859fb3]
+  - @tinycloud/node-sdk@3.12.0-beta.16
+  - @tinycloud/sdk-core@3.12.0-beta.16
+  - @tinycloud/replica@0.4.5-beta.5
+
+## 3.12.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [88a5f28]
+  - @tinycloud/node-sdk@3.12.0-beta.15
+
+## 3.12.0-beta.14
+
+### Patch Changes
+
+- e50dd6c: Signing out now starts clearing the saved session before it waits for background cleanup, in the Node and browser SDKs. Storage-adapter interfaces are unchanged.
+
+  Details: TC-2379
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/sdk-core@3.12.0-beta.14
+  - @tinycloud/node-sdk@3.12.0-beta.14
+
+## 3.12.0-beta.13
+
+### Minor Changes
+
+- 649bb18: Share publishing no longer creates the share key. `encryptAddressedShareContent` encrypts to the public key of the share's deterministic `share/<shareId>` key (read without authentication) and returns the stored bytes; the node records the key when the share policy is registered. Publishing an addressed share therefore requires a node that records the share key at policy registration. Each published share adds one key record, which counts toward the network's key limit.
+
+  Breaking changes:
+  - `@tinycloud/share-sdk`: `pathBoundSessionPermissions` now returns `decrypt` on `<network>/share/` only (no `key.create`); removed `PathBoundSharePlan.requiredPermissions` and `PathBoundSharePlan.sessionPermissions` (use `registrationPermissions`, decrypt on `<network>/share/`), the `key-not-authorized` and `key-receipt-mismatch` error codes, and `createKey` from `AddressedShareKeyClient` (it now needs only `encrypt`).
+  - `@tinycloud/sdk-core`: removed `expandRuntimePermissionEntries`; the `<network>/share/` manifest prefix accepts `decrypt` only, so `key.create` there is an invalid manifest entry.
+  - `@tinycloud/node-sdk`: sign-in accepts only `decrypt` on the `<network>/share/` prefix; runtime permission grants no longer accept `key.create` on an exact `share/<id>` key; removed `RuntimePermissionGrantOptions.expectedSessionKey`.
+  - `@tinycloud/web-sdk`: `requestPermissions` no longer accepts `key.create` on an exact `share/<id>` key.
+
+  `key.create` for `apps/<appId>/` keys (`manifest.keys`) and `NamedKeyClient.createKey` / `ensureKey` are unchanged.
+
+  Details: TC-2525
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/share-sdk@1.5.0-beta.0
+  - @tinycloud/sdk-core@3.12.0-beta.13
+  - @tinycloud/node-sdk@3.12.0-beta.13
+
+## 3.12.0-beta.12
+
+### Patch Changes
+
+- 693676e: Space-hosting delegations carry an explicit expiration one UTC calendar year after creation, with February 29 clamped to February 28. A caller's `siweConfig.expirationTime` may shorten that lifetime; later values are clamped to the hosting tier. Node and browser SDKs apply the expiration before signing.
+
+  Keep host message construction deferred without loading the shared policy module in the hosting chunk.
+
+  Details: TC-2691
+
+- Updated dependencies [693676e]
+  - @tinycloud/sdk-core@3.12.0-beta.12
+  - @tinycloud/node-sdk@3.12.0-beta.12
+
+## 3.12.0-beta.11
+
+### Patch Changes
+
+- 5f271e5: Optional sign-in setup follows the account's published storage settings.
+
+  Details: TC-2687
+
+- Updated dependencies [5f271e5]
+  - @tinycloud/node-sdk@3.12.0-beta.11
+
+## 3.12.0-beta.10
+
+### Minor Changes
+
+- 593f051: Add opt-in TCW2 key wraps with HKDF-SHA256, authenticated key context and metadata, and support for reading both wrap versions independently of the configured writer. New writes remain v1 unless `keyWrapV2` is enabled. Network descriptors and payload schemas are unchanged.
+
+  Add the default-off `requireKeyWrapV2` reader policy across Node, Web, services, and named-key clients without changing writer defaults or signed receiver-response compatibility. Reject lone UTF-16 surrogates in authenticated context strings and reroll reserved-prefix v1 ephemeral keys without changing the v1 format.
+
+  Column decryption now requires an explicit expected format. V1 wrapped keys require encrypted framing; callers selecting legacy plaintext preserve all bytes unless `strictEncryption` is enabled. Both flags default to false.
+
+  Details: TC-2518, TC-2517
+
+### Patch Changes
+
+- Updated dependencies [593f051]
+  - @tinycloud/node-sdk@3.12.0-beta.10
+  - @tinycloud/replica@0.4.5-beta.4
+  - @tinycloud/sdk-core@3.12.0-beta.10
+
+## 3.12.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [e409bef]
+  - @tinycloud/sdk-core@3.12.0-beta.9
+  - @tinycloud/node-sdk@3.12.0-beta.9
+
+## 3.12.0-beta.8
+
+### Patch Changes
+
+- c070c4b: Policy, delegation, sharing and identity calls from Node and Web SDK objects now use the same storage-server routing as data calls. When only some writes in a multi-space operation succeed, the result now reports each one instead of a generic network error. Core objects you create directly keep using the host you pass in.
+
+  Details: TC-2594
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+  - @tinycloud/replica@0.4.5-beta.3
+
+## 3.12.0-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/replica@0.4.5-beta.2
+- @tinycloud/sdk-core@3.12.0-beta.7
+
+## 3.12.0-beta.6
+
+### Minor Changes
+
+- adfe9b5: `requestPermissions` on an OpenKey session now names the key it asks OpenKey to sign with. Every OpenKey sign request for a runtime grant carries the `keyId` of the connected account, and a client that is not connected is connected first (`connect()`, in the configured `mode`), so a restored session no longer opens a sign dialog that has no key. The signed message and the requested permissions are unchanged. This replaces the earlier refusal for a never-connected client: it now connects instead of falling back to the node's wallet signer.
+
+  In popup mode (the default) a browser blocks a second popup opened after the user spent time in the connect popup, so the first Allow only connects: `requestPermissions` rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, nothing is signed, and the second click signs with the connected key in one popup. Show your Allow button again on that code. `iframe` and `redirect` mode connect and sign in one click.
+
+  New exported `OpenKeySigningKeyError` (with `OpenKeySigningKeyErrorCode`), thrown before any sign request: `OPENKEY_KEY_MISSING` (the client is not connected and cannot connect, or `connect()` returned no `keyId`), `OPENKEY_KEY_AMBIGUOUS` (the connected key is not the signed-in account's, or reports no address) and `OPENKEY_CONNECTED_RETRY`. The SDK never calls the client's `signMessage` without a `keyId`. If the session ends or changes while a connect or sign dialog is open, the grant is cancelled and the signature is not used. A signer set with `setRuntimePermissionSigner` still takes precedence.
+
+  Details: TC-2281
+
+## 3.12.0-beta.5
+
+### Patch Changes
+
+- 2139b24: Sign-in requests to OpenKey now include only the standard public members of the session key.
+
+  Details: TC-2582
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+
+## 3.12.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+  - @tinycloud/replica@0.4.5-beta.1
+
+## 3.12.0-beta.3
+
+### Minor Changes
+
+- b32f52e: Persist exact owner-signed v2 registry responses with separate fetch metadata, verify every cached read, and replace signed bytes only with strictly higher sequences. Every owner routing decision awaits a bounded refresh; overlapping requests coalesce, while subsequent decisions refresh again. Successful equal-sequence checks may renew fetch time without replacing signed bytes. Node and browser SDKs accept matching cache adapters; browser updates and deletion serialize across tabs.
+
+  The CLI and canonical Operations runtime share an owner-only, readable profile cache and atomic profile-store updates. Add read-only `tc registry show [did]` for owner, sequence, fetch age, full space placement, modes, hostnames and encryption destination, without sign-in, grant activation or network access.
+
+  Verified restored entries establish independent sequence history before direct refresh. Each caller enforces its own captured and current sequence history when joining an in-flight refresh, including registered results shared through a cache with independent sequence adapters. Profile registry transactions serialize within an already-held profile lock, and browser sequence maxima merge under one storage-key Web Lock across owners and tabs. Persistent browser sequence writes require Web Locks; callers without it must supply a transactional sequence adapter. Ordinary accepted-sequence writes retain best-effort semantics. Non-replicating session hydration performs local canonical verification without routing I/O; later live operations still refresh routing. Verified wallet-owner background prefetch starts at the live routing boundary independently of the requested resource owner, while real held-grant activation derives additional owners from verified signed permissions. Explicitly enabled replication retains preflight.
+
+  Changed behavior: warm fallback requires a canonically verified cached entry strictly younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500 and every other status refuse warm fallback. Authoritative HTTP4xx and fresh signed results without the required route invalidate cached settings while preserving known-owner evidence. Custom adapters now require `getRevision`, `update` callbacks receiving the locked revision, and atomic `delete(ownerKey, expectedRevision?, maximumSequence?)` guard semantics; wrappers must forward these arguments. Cold unknown-owner HTTP5xx, transport errors and timeouts retain configured/default-host compatibility. Actual route selection invokes `onRegistryFallback(reason, code?)` with `using_default_node` or `using_cached_settings`, or logs the corresponding value-free SDK warning; background lookups alone do not warn. Node-side registry admission is unchanged.
+
+  Single-host worker contexts no longer import unused resource-routing construction or transport-error constructors. Structured routing errors retain their stable codes, dependency messages, causes and partial-write/host metadata, including existing HTTP status and reason fields so authoritative refusals never become network fallbacks.
+
+  Equal-sequence refreshes renew fetch time only when the verified canonical signed payload is unchanged. Conflicting equal-sequence payloads refuse and invalidate cached routing while retaining known-owner sequence history; unchanged payloads preserve exact cached response bytes even when response formatting differs.
+
+  Durable per-owner invalidation revisions fence older in-flight results across adapter instances and reloads. Deletion atomically stores a metadata-only tombstone in the same cache value/file, advances even when empty, and never changes signed sequence history. Positive revisions retain known-owner evidence without a sequence adapter. Revision or signed-sequence guard mismatches refuse without deleting newer state; updates cannot reset the counter. Existing live entries without revision remain valid revision zero.
+
+  Metadata-only tombstones require a positive invalidation revision; revision-zero tombstones refuse as corrupt state. Legacy live entries without revision remain valid revision zero.
+
+  Current-runtime invalidation attempts retain their local fence across overlapping lookups independently of persisted revision writes. Only a successful online lookup started after the latest attempt may recover that local state.
+
+  Preserve covered offline replica reads when the data node is unreachable, while registry and identity refusals remain fail-closed.
+
+  Registry v2 and v1 lookups bypass the browser HTTP cache so browser-cached HTTP 200 responses cannot count as new online freshness checks. The separate signed-response cache retains its existing outage age limit.
+
+  Non-replicating restore installs host hints with the replacement session graph for subsequent public delegation preparation. Request-bound imports capture signed transport once, inspect it locally, stage additional-grant rows, and check signed expiry after the store write before live activation. Completion rechecks the stored request, session, host, requested scope and signed expiry. Unsuccessful completion restores prior additional-grant rows or reports the local persistence error; network activation remains a separate operation.
+
+  Changed behavior: request-bound imports hold the profile lock through staging and live activation, so cooperating profile writers wait within the existing profile-lock wait/timeout bounds instead of running alongside activation.
+
+  Independent profile lock acquisitions use their own directory pin when inheriting a completed acquisition's pin; borrowed live lexical scopes retain their original binding.
+
+  Details: TC-2481
+
+- 66a03e0: Route full-space reads and writes using verified owner-signed registry v2 memberships, with independent encryption-node transport and invocation audiences. Verify advertised node identities, preserve typed unreachable-node failures through secret operations and the CLI, and report incomplete multi-node writes explicitly. Read-only members may register their listed replicas without receiving ordinary writes.
+
+  Breaking: registry routing is now always v2-first and fail-closed. Explicit or saved hosts and local discovery are used only for genuine no-entry onboarding; v1-only registrations and registered resources without destinations do not fall back. The obsolete legacy-fallback policy is removed. Existing no-entry onboarding remains supported.
+
+  Register original mixed grants on the union of their listed data and encryption destinations. Stored-grant replay preserves node availability, identity and registry failures instead of converting them into missing authority or new approval requests; operations expose distinct routing error codes and retain partial registration outcomes.
+
+  Request-bound imports may follow a verified full-resource registry destination when the issuer's transport host differs from the saved request/profile hint. Request/profile/audience/signed-scope checks remain binding; genuine absence retains strict host matching, and registered encryption or inventory entries never imply data membership.
+
+  Accept supported capabilities/read in compact signed grants using the same closed service allowlist. Request-bound raw encryption permissions compare their exact network URN without mistaking the legacy encryption service marker for an owned data-space; explicit full-space and foreign-network bindings remain strict.
+
+  Network-only vault/secret reads now reject typed routing failures from KV or decrypt rather than misreporting ciphertext failure. Canonical secret operations preserve sanitized identity, registry and availability codes. Data-write partial outcomes stay distinct from retryable grant-registration availability.
+
+  Distinguish unavailable decryption transport from unavailable data storage with `DECRYPTION_DEPENDENCY_UNAVAILABLE`, retaining CLI network exit6 and naming the decryption service. A reachable decrypt endpoint returning503 keeps `SECRET_DECRYPT_FAILED` and exit1, without automatic retry or partial output.
+
+  Use clear owner-facing data-storage and decryption-service outage messages while preserving network exit6 and #865's omission of automatic technical permission-request reasons.
+
+  Details: TC-2481
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/replica@0.4.5-beta.0
+
+## 3.12.0-beta.2
+
+### Minor Changes
+
+- 9ff4cf2: Expose `ensureSpaceHosted()` and allow restored sessions to host a missing primary space from a user gesture. Signing out during approval dismisses the prompt and rejects with an explicit cancellation error.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+
+## 3.12.0-beta.1
+
+### Minor Changes
+
+- 55d52f7: `TinyCloudWeb.restoreSession()` now makes one bounded node read before it reports `"restored"`: it asks the node whether the restored session's primary space is hosted, waiting at most 5 seconds. It never prompts and never fails or delays the restore past that cap; an answer it cannot get is `"unknown"`. Read the result from the new `TinyCloudWeb.spaceHosting` getter (`"hosted"`, `"not-hosted"` or `"unknown"`). `signIn()` on a restored session whose space is not hosted returns the restored session, as before. Exports the `SpaceHosting` type.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
+## 3.11.1-beta.0
+
+### Patch Changes
+
+- 5817c2b: `TinyCloudWeb.signOut()` clears local state first. The node's sign-out starts at once, but `signOut()` waits for it for at most 3 seconds after the persisted session is cleared, so a node call that never answers (for example after a revoked grant) no longer leaves the tab signed in. When the 3 seconds pass, `signOut()` resolves while the node's own cleanup may still be running; the local session is already gone, but callers should not assume the node-side cleanup has finished. Errors the node's sign-out raises within that time still reject `signOut()`, as before. A session whose stored record could not be removed is now fenced in `BrowserSessionStorage` (`markSignedOut` / `isSignedOut`), so a reload cannot restore it; a successful `clear` or a different saved session lifts the fence. Other `ISessionStorage` implementations keep only the in-memory block, and a sign-out with no live session (a restore still pending) fences nothing: only the in-memory block applies there.
+
+  `signOut()` in both SDKs clears the stored session only when it is still the session being signed out (same signature): a sign-out that finishes after a newer sign-in for the same address no longer erases the newer saved copy.
+
+  `FileSessionStorage.save` writes a temp file (mode 0600, so the saved file is owner-only) and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
+
+  Details: TC-2379
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+
+## 3.11.1
+
+### Patch Changes
+
+- Sign-in requests to OpenKey now include only the standard public members of the session key.
+
+  Details: TC-2582
+
+- Updated dependencies
+  - @tinycloud/sdk-core@3.11.1
+  - @tinycloud/node-sdk@3.11.1
+
+## 3.11.0
+
+### Minor Changes
+
+- 75c0432: `openkey.expiryChangeable` is a new TinyCloudWeb option. When true, the OpenKey request tells OpenKey the user may change the session expiry, and the session is built with the expiry the user signed. It is a pass-through: `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards it and the option is inert on 0.12.x, so nothing changes until the app also updates `@openkey/sdk`.
+
+  `openkey.maxExpiresAt` (epoch milliseconds, a `Date`, or a function read when the approval comes back) sets the latest expiry the app accepts; a later signed expiry is refused before the session is built or stored, and the value is never sent to OpenKey.
+
+  Details: TC-2276
+
+### Patch Changes
+
+- cb0c6ce: When an app opts in with `openkey.expiryChangeable`, TinyCloudWeb now accepts a changed session expiry of any length up to 9999-12-31, including 11 or 100 years. It no longer refuses an expiry more than 10 years away. An expiry later than 9999-12-31, or one that is not a date, is refused with a message that names the date.
+
+  Details: TC-2272
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+  - @tinycloud/replica@0.4.4
+
+## 3.11.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/replica@0.4.4-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
+## 3.11.0-beta.1
+
+### Patch Changes
+
+- cb0c6ce: When an app opts in with `openkey.expiryChangeable`, TinyCloudWeb now accepts a changed session expiry of any length up to 9999-12-31, including 11 or 100 years. It no longer refuses an expiry more than 10 years away. An expiry later than 9999-12-31, or one that is not a date, is refused with a message that names the date.
+
+  Details: TC-2272
+
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0-beta.1
+  - @tinycloud/sdk-core@3.11.0-beta.1
+
+## 3.11.0-beta.0
+
+### Minor Changes
+
+- 75c0432: `openkey.expiryChangeable` is a new TinyCloudWeb option. When true, the OpenKey request tells OpenKey the user may change the session expiry, and the session is built with the expiry the user signed. It is a pass-through: `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards it and the option is inert on 0.12.x, so nothing changes until the app also updates `@openkey/sdk`.
+
+  `openkey.maxExpiresAt` (epoch milliseconds, a `Date`, or a function read when the approval comes back) sets the latest expiry the app accepts; a later signed expiry is refused before the session is built or stored, and the value is never sent to OpenKey.
+
+  Details: TC-2276
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+
+## 3.10.0
+
+### Minor Changes
+
+- d02c63e: `@tinycloud/web-sdk/credentials` exports two more held-credential functions. `probeHeldStoreAccess({ kv, ownerDid })` makes one `kv.list` of the account's `v1/held/` prefix and nothing else (no cursor, no read, no write): it resolves when the list is ok, throws `PERMISSION_DENIED` (the same text as the read functions) for a typed kv 401 or 403, and `OFFLINE` for any other failure; it checks list access only, so a session with list but not get passes it and fails later on get. `deleteHeldCredential({ kv, ownerDid, recordId })` (already built and tested in the held store, now public) deletes one record and returns `true`, `false` for a failed delete that is not a permission failure, or throws `PERMISSION_DENIED` for a delete the session may not make; it needs `kv del` on `v1/held/`. Both refuse a non-mainnet owner (`ACTIVE_SESSION_REQUIRED`) before any kv call. `pruneHeldCredentials` is not exported. `CREDENTIALS.md` documents both.
+
+  Details: TC-1454
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [81fe64e]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/replica@0.4.3
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+
+## 3.10.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [81fe64e]
+  - @tinycloud/replica@0.4.3-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.3
+
+## 3.10.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+
+## 3.10.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.1
+  - @tinycloud/share-sdk@1.4.4-beta.0
+
+## 3.10.0-beta.0
+
+### Minor Changes
+
+- d02c63e: `@tinycloud/web-sdk/credentials` exports two more held-credential functions. `probeHeldStoreAccess({ kv, ownerDid })` makes one `kv.list` of the account's `v1/held/` prefix and nothing else (no cursor, no read, no write): it resolves when the list is ok, throws `PERMISSION_DENIED` (the same text as the read functions) for a typed kv 401 or 403, and `OFFLINE` for any other failure; it checks list access only, so a session with list but not get passes it and fails later on get. `deleteHeldCredential({ kv, ownerDid, recordId })` (already built and tested in the held store, now public) deletes one record and returns `true`, `false` for a failed delete that is not a permission failure, or throws `PERMISSION_DENIED` for a delete the session may not make; it needs `kv del` on `v1/held/`. Both refuse a non-mainnet owner (`ACTIVE_SESSION_REQUIRED`) before any kv call. `pruneHeldCredentials` is not exported. `CREDENTIALS.md` documents both.
+
+  Details: TC-1454
+
+## 3.9.1
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [29fd1f9]
+- Updated dependencies [8d278fb]
+- Updated dependencies [e8d42b5]
+  - @tinycloud/node-sdk@3.9.1
+  - @tinycloud/replica@0.4.2
+  - @tinycloud/sdk-core@3.9.1
+  - @tinycloud/share-sdk@1.4.3
+
+## 3.9.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [29fd1f9]
+  - @tinycloud/replica@0.4.2-beta.0
+  - @tinycloud/node-sdk@3.9.1-beta.1
+
+## 3.9.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+- Updated dependencies [e8d42b5]
+  - @tinycloud/node-sdk@3.9.1-beta.0
+  - @tinycloud/sdk-core@3.9.1-beta.0
+  - @tinycloud/share-sdk@1.4.3-beta.0
+
+## 3.9.0
+
+### Minor Changes
+
+- a9bc978: The SDK can acquire a `tinycloud.email-held/v1` credential from the witness, for a caller that opts in per call. Nothing is enabled by default: the held profile stays disabled, and a call without `allowHeldProfile: true` is refused `PROFILE_UNAVAILABLE` before any request. `@tinycloud/node-sdk`: `acquireEmailProof`, `requestEmailProofCode` and `completeEmailProof` take `allowHeldProfile: true`; the holder is a canonical `did:pkh:eip155:1` (EIP-55) account with `EIP191`; the address is trimmed, refused if non-ASCII, lowercased and checked against the witness's rules (`ADDRESS_INVALID` before any request); the account binding the witness serves is checked against the SDK's own values before the wallet is asked to sign; the result is verified with the held verifier against the pinned issuer and cross-checked against the request. New public error code `CLIENT_CLOCK_SKEW` (not recoverable; default message "Your device clock is more than 5 minutes behind. Correct it and try again."): a device clock more than 5 minutes behind the witness is refused after the create call and before the code is mailed. `DESCRIPTOR_MISMATCH` and `UNSUPPORTED_VERSION` from the witness map to `PROFILE_UNAVAILABLE`. `EmailProofResult.verified` is now the ticket or the held verifier's result (`isTicketEmailProofResult` narrows it), and `EMAIL_PROOF_PINS` is exported from `@tinycloud/node-sdk/credentials`. `@tinycloud/sdk-core`: the credential descriptor and holder binding accept the held account shape next to the ticket shape (`AccountHolderBinding`, `TicketHolderBinding`, `ACCOUNT_HOLDER_BINDING_DOMAIN`). `@tinycloud/web-sdk`: `createAccountHolderSigner` signs only an exact held account binding for its own account and refuses any other bytes with `HOLDER_INVALID` before the wallet is called; `acquireHeldCredential` takes `allowHeldProfile`, checks that the issuer policy accepts the pinned issuer and reads the member's storage strictly before any request (a failed read is `OFFLINE`), and stores at `max(client time, credential iat)`. `@tinycloud/courier` stores ticket credentials only (a held result is refused there).
+
+  Only the email-proof functions (and the held source that forwards their `allowHeldProfile: true`) reach the held profile. `OpenCredentialsHttpTransport` (constructor option) and `interpretCredentialFlow` (input) refuse an account-bound descriptor with `UNSUPPORTED_PROFILE`, before any request, unless called with `allowAccountSubject: true`. That is a public option of both; the SDK's own callers pass it only for the held profile, after the per-call opt-in was accepted. The `CredentialsService` operations (`acquire`, `ensure`, `verify`) refuse a held requirement or descriptor with `UNSUPPORTED_PROFILE` and `publishEmailShareV3` refuses it; `validateCredentialFlowDescriptor` stays shape-only. A held request that stopped after a failed wallet prompt (`SIGNATURE_REJECTED`, recoverable, the pending kept) or a failed notice (`ISSUER_UNAVAILABLE`) is retried with the same pending: the SDK reads the binding again and checks it, does not ask the wallet again after the signature was accepted, and mails no second code. On the retry the `jti` of the binding is format-checked only (contract addendum A3): a witness that serves a different `jti` is detected only when the credential disagrees with it, after the notice was sent. The file pending store persists a held request's non-secret `serverExpiresAt` (a ticket file is unchanged) and adds no other secret. `HELD_ACCOUNT_BINDING_PINS` (exported from `@tinycloud/node-sdk/credentials`) holds the static fields of the account binding; the create request, the binding checks and the web-sdk account signer all use it, and the signer refuses a binding with free text in any field. In `@tinycloud/web-sdk` the account signer copies its input once and decodes it strictly (a byte-order mark is refused); a cache miss without the opt-in is `PROFILE_UNAVAILABLE`. `email-publish-v3` refuses a descriptor that is not a ticket descriptor.
+
+  Details: TC-2254
+
+### Patch Changes
+
+- 614c1c2: Held credentials for the claim screen. `@tinycloud/sdk-core/held-credentials` adds `buildHeldPresentationSiwe` and `checkReturnedPresentation`, and `verifyHeldEmailCredential` now also returns the signed `issuedAt`. `@tinycloud/web-sdk/credentials` now exports `createAccountHolderSigner`, `storeHeldCredential`, `findHeldCredential`, `acquireHeldCredential` and a new `listHeldEmailCredentials`, which returns all of one account's valid held email credentials: owner only; expired, revoked, unverifiable and within-10-minutes-of-expiry records are left out (the same margin as `findHeldCredential`); newest `issuedAt` first. That entry now imports `@tinycloud/sdk-core` instead of bundling a copy, so parse the issuer set with `parseIssuerSet` from `@tinycloud/sdk-core/held-credentials` and `CredentialError` is sdk-core's own class. `HeldMatch` gains `recordId`, `email`, `issuedAt`, `expiresAt` and `issuer`, all read from the re-verified credential. `@tinycloud/node-sdk` keeps the held profile disabled and no longer resumes a pending code request of another profile for the same address.
+
+  Details: TC-1454
+
+- 9758dfd: A held-credential storage call the app session may not make is now `CredentialError` code `PERMISSION_DENIED`, not `OFFLINE`: `listHeldEmailCredentials`, `findHeldCredential`, `deleteHeldCredential`, `pruneHeldCredentials` and `acquireHeldCredential`'s read of the store throw it when kv answers 401 or 403 (`This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.`, or the same shape for delete with kv del; the node answers 401 both for a missing capability and for a stale session, so the text names both). The decision reads the typed kv error status, never its message text; a real network failure stays `OFFLINE`, and a failed write after a successful issue stays `VERIFIED_NOT_SAVED` (a write or read-back refused by kv 401/403 adds the fixed marker `details.state === "permission_denied"`, nothing else from the kv error). `PERMISSION_DENIED` is an additive code in `@tinycloud/sdk-core`'s `CredentialErrorCode` and is not recoverable by retrying. `findHeldCredential` still reads a failed list that is not a permission failure as "not found". `@tinycloud/web-sdk` `CREDENTIALS.md` now lists the manifest grant the held functions need (`tinycloud.kv` get, list, put, del on `v1/held/`, `skipPrefix: true`). `@tinycloud/node-sdk`: the local refusal of the disabled held profile (`PROFILE_UNAVAILABLE`, no witness contacted) now says "This SDK build doesn't enable the email verification profile."; the code is unchanged, and the witness-side `PROFILE_UNAVAILABLE` keeps "The witness does not offer the email verification profile.". `@tinycloud/web-sdk`: the account signer's refusals of its input (`HOLDER_INVALID`, 0 sign calls, behaviour unchanged) now say "The wallet signer signs only the exact account binding for this request." instead of the generic "Holder must be a did:key Ed25519 identifier."; the refusal of a non-mainnet-account did and of a bad signature returned by the wallet keep the shared text, and so does the did:key holder refusal in `@tinycloud/node-sdk`.
+
+  Details: TC-1454
+
+- f1744fb: `requestPermissions` on an OpenKey session signs the runtime grant through the OpenKey client the session was established with, so the Delegations tab's "Allow delegation list" completes. New `TinyCloudWeb.setRuntimePermissionSigner(signer?)` sets a signer for runtime permission grants only, for apps whose sign-in is not the SDK's OpenKey flow; sign-out, a new sign-in, a restore or a session for another account clear it. `grantRuntimePermissions` accepts `signMessage` to sign the prepared SIWE in place of the connected signer, and refuses a message that is not in canonical form, or a signature that does not recover to the session's account from the exact message bytes.
+
+  The permission prompt for `tinycloud.delegation/list` shows OpenKey's label and sentence for reading the delegation list; other delegation actions read "Manage your delegations (action)". When the panel's permission request throws, the error's name and code are written to the console and the SDK debug log; the panel text is unchanged.
+
+  Details: TC-2113
+
+- c523295: `requestPermissions` on a restored session whose OpenKey client was never connected no longer opens an OpenKey sign popup that hangs on "Please connect first to sign messages." It refuses before any popup and makes no OpenKey call. When no wallet provider is configured the node throws its usual "grantRuntimePermissions requires wallet mode with a signer or privateKey." error, as in 3.8.0; with a provider the grant falls through to the node's wallet signer exactly as in 3.8.0. The OpenKey client still signs the runtime grant when this instance's session was established through it, or when its `connect()` has run (the client's in-memory `lastAuth` is set); a client that does not expose `lastAuth` (an `@openkey/sdk` shape this SDK does not know) behaves as before. A signer set with `setRuntimePermissionSigner` still wins, and a wallet-mode session signs with its own signer. An app that connects through a different OpenKey instance than `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or `setRuntimePermissionSigner`.
+
+  Details: TC-2281
+
+- 7d3f8df: README: `signIn()` restores a stored session only when it covers the app's current manifest. The check is local and does not contact the node, so a session the node rejects is still restored; call `signOut()` before `signIn()` to force a fresh consent.
+
+  Details: TC-2267
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [a04807f]
+- Updated dependencies [5e47629]
+- Updated dependencies [b0da170]
+- Updated dependencies [853774e]
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.9.0
+  - @tinycloud/sdk-core@3.9.0
+  - @tinycloud/replica@0.4.1
+  - @tinycloud/share-envelope@1.4.1
+  - @tinycloud/share-sdk@1.4.2
+
+## 3.9.0-beta.9
+
+### Patch Changes
+
+- c523295: `requestPermissions` on a restored session whose OpenKey client was never connected no longer opens an OpenKey sign popup that hangs on "Please connect first to sign messages." It refuses before any popup and makes no OpenKey call. When no wallet provider is configured the node throws its usual "grantRuntimePermissions requires wallet mode with a signer or privateKey." error, as in 3.8.0; with a provider the grant falls through to the node's wallet signer exactly as in 3.8.0. The OpenKey client still signs the runtime grant when this instance's session was established through it, or when its `connect()` has run (the client's in-memory `lastAuth` is set); a client that does not expose `lastAuth` (an `@openkey/sdk` shape this SDK does not know) behaves as before. A signer set with `setRuntimePermissionSigner` still wins, and a wallet-mode session signs with its own signer. An app that connects through a different OpenKey instance than `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or `setRuntimePermissionSigner`.
+
+  Details: TC-2281
+
+## 3.9.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [b0da170]
+  - @tinycloud/share-envelope@1.4.1-beta.1
+  - @tinycloud/node-sdk@3.9.0-beta.8
+  - @tinycloud/sdk-core@3.9.0-beta.8
+  - @tinycloud/share-sdk@1.4.2-beta.2
+
+## 3.9.0-beta.7
+
+### Patch Changes
+
+- 7d3f8df: README: `signIn()` restores a stored session only when it covers the app's current manifest. The check is local and does not contact the node, so a session the node rejects is still restored; call `signOut()` before `signIn()` to force a fresh consent.
+
+  Details: TC-2267
+
+## 3.9.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [a04807f]
+  - @tinycloud/replica@0.4.1-beta.0
+  - @tinycloud/node-sdk@3.9.0-beta.6
+
+## 3.9.0-beta.5
+
+### Patch Changes
+
+- 9758dfd: A held-credential storage call the app session may not make is now `CredentialError` code `PERMISSION_DENIED`, not `OFFLINE`: `listHeldEmailCredentials`, `findHeldCredential`, `deleteHeldCredential`, `pruneHeldCredentials` and `acquireHeldCredential`'s read of the store throw it when kv answers 401 or 403 (`This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.`, or the same shape for delete with kv del; the node answers 401 both for a missing capability and for a stale session, so the text names both). The decision reads the typed kv error status, never its message text; a real network failure stays `OFFLINE`, and a failed write after a successful issue stays `VERIFIED_NOT_SAVED` (a write or read-back refused by kv 401/403 adds the fixed marker `details.state === "permission_denied"`, nothing else from the kv error). `PERMISSION_DENIED` is an additive code in `@tinycloud/sdk-core`'s `CredentialErrorCode` and is not recoverable by retrying. `findHeldCredential` still reads a failed list that is not a permission failure as "not found". `@tinycloud/web-sdk` `CREDENTIALS.md` now lists the manifest grant the held functions need (`tinycloud.kv` get, list, put, del on `v1/held/`, `skipPrefix: true`). `@tinycloud/node-sdk`: the local refusal of the disabled held profile (`PROFILE_UNAVAILABLE`, no witness contacted) now says "This SDK build doesn't enable the email verification profile."; the code is unchanged, and the witness-side `PROFILE_UNAVAILABLE` keeps "The witness does not offer the email verification profile.". `@tinycloud/web-sdk`: the account signer's refusals of its input (`HOLDER_INVALID`, 0 sign calls, behaviour unchanged) now say "The wallet signer signs only the exact account binding for this request." instead of the generic "Holder must be a did:key Ed25519 identifier."; the refusal of a non-mainnet-account did and of a bad signature returned by the wallet keep the shared text, and so does the did:key holder refusal in `@tinycloud/node-sdk`.
+
+  Details: TC-1454
+
+- Updated dependencies [9758dfd]
+  - @tinycloud/sdk-core@3.9.0-beta.5
+  - @tinycloud/node-sdk@3.9.0-beta.5
+
+## 3.9.0-beta.4
+
+### Minor Changes
+
+- a9bc978: The SDK can acquire a `tinycloud.email-held/v1` credential from the witness, for a caller that opts in per call. Nothing is enabled by default: the held profile stays disabled, and a call without `allowHeldProfile: true` is refused `PROFILE_UNAVAILABLE` before any request. `@tinycloud/node-sdk`: `acquireEmailProof`, `requestEmailProofCode` and `completeEmailProof` take `allowHeldProfile: true`; the holder is a canonical `did:pkh:eip155:1` (EIP-55) account with `EIP191`; the address is trimmed, refused if non-ASCII, lowercased and checked against the witness's rules (`ADDRESS_INVALID` before any request); the account binding the witness serves is checked against the SDK's own values before the wallet is asked to sign; the result is verified with the held verifier against the pinned issuer and cross-checked against the request. New public error code `CLIENT_CLOCK_SKEW` (not recoverable; default message "Your device clock is more than 5 minutes behind. Correct it and try again."): a device clock more than 5 minutes behind the witness is refused after the create call and before the code is mailed. `DESCRIPTOR_MISMATCH` and `UNSUPPORTED_VERSION` from the witness map to `PROFILE_UNAVAILABLE`. `EmailProofResult.verified` is now the ticket or the held verifier's result (`isTicketEmailProofResult` narrows it), and `EMAIL_PROOF_PINS` is exported from `@tinycloud/node-sdk/credentials`. `@tinycloud/sdk-core`: the credential descriptor and holder binding accept the held account shape next to the ticket shape (`AccountHolderBinding`, `TicketHolderBinding`, `ACCOUNT_HOLDER_BINDING_DOMAIN`). `@tinycloud/web-sdk`: `createAccountHolderSigner` signs only an exact held account binding for its own account and refuses any other bytes with `HOLDER_INVALID` before the wallet is called; `acquireHeldCredential` takes `allowHeldProfile`, checks that the issuer policy accepts the pinned issuer and reads the member's storage strictly before any request (a failed read is `OFFLINE`), and stores at `max(client time, credential iat)`. `@tinycloud/courier` stores ticket credentials only (a held result is refused there).
+
+  Only the email-proof functions (and the held source that forwards their `allowHeldProfile: true`) reach the held profile. `OpenCredentialsHttpTransport` (constructor option) and `interpretCredentialFlow` (input) refuse an account-bound descriptor with `UNSUPPORTED_PROFILE`, before any request, unless called with `allowAccountSubject: true`. That is a public option of both; the SDK's own callers pass it only for the held profile, after the per-call opt-in was accepted. The `CredentialsService` operations (`acquire`, `ensure`, `verify`) refuse a held requirement or descriptor with `UNSUPPORTED_PROFILE` and `publishEmailShareV3` refuses it; `validateCredentialFlowDescriptor` stays shape-only. A held request that stopped after a failed wallet prompt (`SIGNATURE_REJECTED`, recoverable, the pending kept) or a failed notice (`ISSUER_UNAVAILABLE`) is retried with the same pending: the SDK reads the binding again and checks it, does not ask the wallet again after the signature was accepted, and mails no second code. On the retry the `jti` of the binding is format-checked only (contract addendum A3): a witness that serves a different `jti` is detected only when the credential disagrees with it, after the notice was sent. The file pending store persists a held request's non-secret `serverExpiresAt` (a ticket file is unchanged) and adds no other secret. `HELD_ACCOUNT_BINDING_PINS` (exported from `@tinycloud/node-sdk/credentials`) holds the static fields of the account binding; the create request, the binding checks and the web-sdk account signer all use it, and the signer refuses a binding with free text in any field. In `@tinycloud/web-sdk` the account signer copies its input once and decodes it strictly (a byte-order mark is refused); a cache miss without the opt-in is `PROFILE_UNAVAILABLE`. `email-publish-v3` refuses a descriptor that is not a ticket descriptor.
+
+  Details: TC-2254
+
+### Patch Changes
+
+- Updated dependencies [a9bc978]
+  - @tinycloud/sdk-core@3.9.0-beta.4
+  - @tinycloud/node-sdk@3.9.0-beta.4
+
+## 3.9.0-beta.3
+
+### Patch Changes
+
+- 614c1c2: Held credentials for the claim screen. `@tinycloud/sdk-core/held-credentials` adds `buildHeldPresentationSiwe` and `checkReturnedPresentation`, and `verifyHeldEmailCredential` now also returns the signed `issuedAt`. `@tinycloud/web-sdk/credentials` now exports `createAccountHolderSigner`, `storeHeldCredential`, `findHeldCredential`, `acquireHeldCredential` and a new `listHeldEmailCredentials`, which returns all of one account's valid held email credentials: owner only; expired, revoked, unverifiable and within-10-minutes-of-expiry records are left out (the same margin as `findHeldCredential`); newest `issuedAt` first. That entry now imports `@tinycloud/sdk-core` instead of bundling a copy, so parse the issuer set with `parseIssuerSet` from `@tinycloud/sdk-core/held-credentials` and `CredentialError` is sdk-core's own class. `HeldMatch` gains `recordId`, `email`, `issuedAt`, `expiresAt` and `issuer`, all read from the re-verified credential. `@tinycloud/node-sdk` keeps the held profile disabled and no longer resumes a pending code request of another profile for the same address.
+
+  Details: TC-1454
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+  - @tinycloud/node-sdk@3.9.0-beta.3
+  - @tinycloud/sdk-core@3.9.0-beta.3
+
+## 3.8.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [853774e]
+  - @tinycloud/share-sdk@1.4.2-beta.1
+  - @tinycloud/node-sdk@3.8.1-beta.2
+  - @tinycloud/sdk-core@3.8.1-beta.2
+
+## 3.8.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [5e47629]
+  - @tinycloud/share-envelope@1.4.1-beta.0
+  - @tinycloud/node-sdk@3.8.1-beta.1
+  - @tinycloud/sdk-core@3.8.1-beta.1
+  - @tinycloud/share-sdk@1.4.2-beta.0
+
+## 3.8.1-beta.0
+
+### Patch Changes
+
+- f1744fb: `requestPermissions` on an OpenKey session signs the runtime grant through the OpenKey client the session was established with, so the Delegations tab's "Allow delegation list" completes. New `TinyCloudWeb.setRuntimePermissionSigner(signer?)` sets a signer for runtime permission grants only, for apps whose sign-in is not the SDK's OpenKey flow; sign-out, a new sign-in, a restore or a session for another account clear it. `grantRuntimePermissions` accepts `signMessage` to sign the prepared SIWE in place of the connected signer, and refuses a message that is not in canonical form, or a signature that does not recover to the session's account from the exact message bytes.
+
+  The permission prompt for `tinycloud.delegation/list` shows OpenKey's label and sentence for reading the delegation list; other delegation actions read "Manage your delegations (action)". When the panel's permission request throws, the error's name and code are written to the console and the SDK debug log; the panel text is unchanged.
+
+  Details: TC-2113
+
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.8.1-beta.0
+
+## 3.8.0
+
+### Minor Changes
+
+- c541786: Manifests can declare named keys in the app's key namespace, with an optional `keys_app_id`. Sign-in includes the declared key permissions when the node supports named keys, prepares creatable key paths, and exposes the signed-in named-key client through `keys`.
+
+  Details: TC-1977
+
+- 4a19c47: Signing out erases the local copy before `signOut()` resolves: the browser replica database is deleted under the origin gate lock after the deny commit, and the same erase runs when a different account signs in on a live session. The deny floor and logout marker in `localStorage` are kept.
+
+  If the delete is blocked or the deny kept the keys (`marker`, `unguarded`), the erase is retried three times in total (150 ms, then 450 ms apart), the logout marker makes the next load finish it, and `signOut()` still resolves for `marker`. `unguarded` still rejects, now with `code: "REPLICA_PURGE_FAILED"` unless the erase completed. After the retries `replica.purge.failed` fires (`TinyCloudWeb.on` / `TinyCloudNode.on`) with `trigger`, a typed `reason` and `retryNow`.
+
+  `tcw.replication.purgeLocalCopy()` runs the erase on demand and returns `{ ok: true }` or `{ ok: false, retryNow }`; it never touches a live session. New exported types: `ReplicaPurgeFailedEvent`, `ReplicaPurgeLocalCopyResult`, `ReplicaPurgeTrigger`, `ReplicaLocalEraseOutcome`, `ReplicaPurgeError`. `ReplicaLifecycleGate` gains the optional browser method `eraseLocalCopy`.
+
+  A restore with replication configured and no wallet provider stays gated, now with the gate reason `wallet_provider_required` instead of `gate_unavailable`. A read-only provider (silent `eth_accounts`, signing methods that throw) still restores.
+
+  Details: TC-1888
+
+- 5d9d314: TinyCloudWeb supports OpenKey authorize-sign with popup approval and an optional prepared SIWE for click-triggered sign-in.
+
+  Details: TC-1977
+
+- 2789240: Replication accepts `syncScope: "prefixes"`, which keeps kv/sync on the declared prefixes at sign-in instead of widening to a root entry that covers them.
+
+  Details: TC-2043
+
+- 7ad13f9: The Delegations tab of the TinyCloud panel has an "Allow delegation list" button when the session cannot list delegations and the page can show the SDK's permission prompt (a page signer and a manifest). It asks for `tinycloud.delegation/list` on the app's own space only, for up to 7 days (the SDK shortens it to the session's expiry), and reloads the tab when approved. The node answers a `delegation/list` proof for any of the owner's spaces with the whole account's delegation list, so the tab says the list covers every app and link across the account and shows no keys or contents. A decline leaves the tab as it was; an error shows a short error line. Without a page signer or manifest the tab keeps its text and tells the user to sign in again.
+
+  The permission the panel requests is kept with the stored session record and activated again when the session is restored after a reload. Only the panel's own grant is kept: a grant that is anything more than that one entry (for example an app's larger grant that already covered the request) is not stored. On restore each grant is verified from its signed bytes (CID, expiry, audience and abilities come from the signature, not from stored fields) and must be exactly the panel's entry. A grant the node refuses for good is removed (expired, issued to another session key, rejected by the node); a grant that failed because the node could not be reached or answered 408, 429 or 5xx is kept for the next reload. A sign-out, a new sign-in or the session's expiry removes them. A storage or node failure at this step never fails the restore, and the restore waits at most 4 seconds for the node. `BrowserSessionStorage` has `saveRuntimeGrants` and `loadRuntimeGrants` for this; neither rejects.
+
+  New `ui.platform` option: `"web"` (default) or `"native"`. With `"native"` the Delegations tab shows the button disabled with an explanation, because a desktop or mobile shell cannot show the permission prompt from the page.
+
+  Details: TC-2113
+
+### Patch Changes
+
+- 32ed899: Re-export `isAppKeyHostBound(keysAppId, origin)` from the web SDK entry point.
+
+  Details: TC-1977
+
+- 49f3665: The issued-delegation code (the `direction: "issued"` query and its paging, `queryAllIssued`, `revokeIssued`, the 401/403/400/503 mapping) is its own module, exported as `@tinycloud/sdk-core/delegations/issued`. `DelegationManager.query({ direction: "issued" })`, `queryAllIssued` and `revokeIssued` keep their signatures and results and load that module with a dynamic `import()` on first use. `@tinycloud/web-sdk` builds it as the lazy chunk `delegations-issued.mjs` / `delegations-issued.cjs` next to `index.*` and `credentials.*`, so those bundles carry only the loader.
+
+  Details: TC-2132
+
+- 44c439a: The settings panel's background reads only go out when the session holds the ability they need. The account index read, the delegation query (account space, then the session's own space) and the storage status read are each checked against the session's ReCap first; a read the session cannot make is not sent and shows as unavailable or needing permission. An account read refused with 401 or 403 is not retried; other failures keep their single retry. `DelegationManager.query` takes an optional second argument `{ spaces }` that sets which spaces the query is signed for. Sessions that hold the abilities make the same requests as before.
+
+  Details: TC-2038
+
+- ced1bbf: Constructing TinyCloudWeb without a location no longer throws; the UI client registers only when a location is present.
+
+  Details: TC-2072
+
+- 134bc7b: TinyCloudWeb reads the SIWE domain without throwing when window has no location.
+
+  Details: TC-2127
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+- 89241fb: The panel keeps its header, close control and content inside the device safe areas (iOS notch, status bar, home indicator, landscape side insets). The header stays at the top inside the safe area while the content scrolls, and a downward swipe of at least 60 px on the header closes the panel on touch devices. `tc.ui.setButtonVisible(visible: boolean)` shows or hides the floating button at runtime: `true` shows it even under `ui.button: false` and clears the stored hidden flag, `false` hides it without writing that flag.
+
+  Details: TC-2130
+
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [49f3665]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [19048ec]
+- Updated dependencies [c6b4703]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e839be0]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [0b024c2]
+- Updated dependencies [7b22f61]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [44c439a]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/sdk-core@3.8.0
+  - @tinycloud/share-envelope@1.4.0
+  - @tinycloud/replica@0.4.0
+  - @tinycloud/share-sdk@1.4.1
+
+## 3.8.0-beta.23
+
+### Patch Changes
+
+- Updated dependencies [e839be0]
+  - @tinycloud/share-sdk@1.4.1-beta.4
+  - @tinycloud/node-sdk@3.8.0-beta.23
+  - @tinycloud/sdk-core@3.8.0-beta.23
+
+## 3.8.0-beta.22
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.22
+- @tinycloud/replica@0.4.0-beta.6
+- @tinycloud/sdk-core@3.8.0-beta.22
+
+## 3.8.0-beta.21
+
+### Patch Changes
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/sdk-core@3.8.0-beta.21
+  - @tinycloud/node-sdk@3.8.0-beta.21
+
+## 3.8.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+  - @tinycloud/sdk-core@3.8.0-beta.20
+
+## 3.8.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.19
+  - @tinycloud/sdk-core@3.8.0-beta.19
+  - @tinycloud/share-sdk@1.4.1-beta.3
+
+## 3.8.0-beta.18
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.18
+- @tinycloud/replica@0.4.0-beta.5
+- @tinycloud/sdk-core@3.8.0-beta.18
+
+## 3.8.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [0b024c2]
+  - @tinycloud/share-sdk@1.4.1-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.17
+  - @tinycloud/sdk-core@3.8.0-beta.17
+
+## 3.8.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+  - @tinycloud/sdk-core@3.8.0-beta.16
+  - @tinycloud/share-envelope@1.3.1-beta.1
+  - @tinycloud/share-sdk@1.4.1-beta.1
+  - @tinycloud/replica@0.4.0-beta.4
+
+## 3.8.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [f167805]
+  - @tinycloud/sdk-core@3.8.0-beta.15
+  - @tinycloud/node-sdk@3.8.0-beta.15
+
+## 3.8.0-beta.14
+
+### Patch Changes
+
+- 49f3665: The issued-delegation code (the `direction: "issued"` query and its paging, `queryAllIssued`, `revokeIssued`, the 401/403/400/503 mapping) is its own module, exported as `@tinycloud/sdk-core/delegations/issued`. `DelegationManager.query({ direction: "issued" })`, `queryAllIssued` and `revokeIssued` keep their signatures and results and load that module with a dynamic `import()` on first use. `@tinycloud/web-sdk` builds it as the lazy chunk `delegations-issued.mjs` / `delegations-issued.cjs` next to `index.*` and `credentials.*`, so those bundles carry only the loader.
+
+  Details: TC-2132
+
+- Updated dependencies [49f3665]
+- Updated dependencies [e740a6d]
+  - @tinycloud/sdk-core@3.8.0-beta.14
+  - @tinycloud/node-sdk@3.8.0-beta.14
+
+## 3.8.0-beta.13
+
+### Patch Changes
+
+- 32ed899: Re-export `isAppKeyHostBound(keysAppId, origin)` from the web SDK entry point.
+
+  Details: TC-1977
+
+- Updated dependencies [32ed899]
+  - @tinycloud/node-sdk@3.8.0-beta.13
+
+## 3.8.0-beta.12
+
+### Patch Changes
+
+- 89241fb: The panel keeps its header, close control and content inside the device safe areas (iOS notch, status bar, home indicator, landscape side insets). The header stays at the top inside the safe area while the content scrolls, and a downward swipe of at least 60 px on the header closes the panel on touch devices. `tc.ui.setButtonVisible(visible: boolean)` shows or hides the floating button at runtime: `true` shows it even under `ui.button: false` and clears the stored hidden flag, `false` hides it without writing that flag.
+
+  Details: TC-2130
+
+## 3.8.0-beta.11
+
+### Minor Changes
+
+- 5d9d314: TinyCloudWeb supports OpenKey authorize-sign with popup approval and an optional prepared SIWE for click-triggered sign-in.
+
+  Details: TC-1977
+
+### Patch Changes
+
+- Updated dependencies [5d9d314]
+  - @tinycloud/node-sdk@3.8.0-beta.11
+
+## 3.8.0-beta.10
+
+### Minor Changes
+
+- 7ad13f9: The Delegations tab of the TinyCloud panel has an "Allow delegation list" button when the session cannot list delegations and the page can show the SDK's permission prompt (a page signer and a manifest). It asks for `tinycloud.delegation/list` on the app's own space only, for up to 7 days (the SDK shortens it to the session's expiry), and reloads the tab when approved. The node answers a `delegation/list` proof for any of the owner's spaces with the whole account's delegation list, so the tab says the list covers every app and link across the account and shows no keys or contents. A decline leaves the tab as it was; an error shows a short error line. Without a page signer or manifest the tab keeps its text and tells the user to sign in again.
+
+  The permission the panel requests is kept with the stored session record and activated again when the session is restored after a reload. Only the panel's own grant is kept: a grant that is anything more than that one entry (for example an app's larger grant that already covered the request) is not stored. On restore each grant is verified from its signed bytes (CID, expiry, audience and abilities come from the signature, not from stored fields) and must be exactly the panel's entry. A grant the node refuses for good is removed (expired, issued to another session key, rejected by the node); a grant that failed because the node could not be reached or answered 408, 429 or 5xx is kept for the next reload. A sign-out, a new sign-in or the session's expiry removes them. A storage or node failure at this step never fails the restore, and the restore waits at most 4 seconds for the node. `BrowserSessionStorage` has `saveRuntimeGrants` and `loadRuntimeGrants` for this; neither rejects.
+
+  New `ui.platform` option: `"web"` (default) or `"native"`. With `"native"` the Delegations tab shows the button disabled with an explanation, because a desktop or mobile shell cannot show the permission prompt from the page.
+
+  Details: TC-2113
+
+### Patch Changes
+
+- 134bc7b: TinyCloudWeb reads the SIWE domain without throwing when window has no location.
+
+  Details: TC-2127
+
+- Updated dependencies [20a872e]
+  - @tinycloud/node-sdk@3.8.0-beta.10
+
+## 3.8.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [92e4bd0]
+  - @tinycloud/node-sdk@3.8.0-beta.9
+  - @tinycloud/replica@0.4.0-beta.3
+  - @tinycloud/sdk-core@3.8.0-beta.9
+
+## 3.8.0-beta.8
+
+### Patch Changes
+
+- ced1bbf: Constructing TinyCloudWeb without a location no longer throws; the UI client registers only when a location is present.
+
+  Details: TC-2072
+
+## 3.8.0-beta.7
+
+### Patch Changes
+
+- Updated dependencies [c6b4703]
+  - @tinycloud/replica@0.4.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.7
+
+## 3.8.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [479205d]
+  - @tinycloud/node-sdk@3.8.0-beta.6
+
+## 3.8.0-beta.5
+
+### Patch Changes
+
+- 44c439a: The settings panel's background reads only go out when the session holds the ability they need. The account index read, the delegation query (account space, then the session's own space) and the storage status read are each checked against the session's ReCap first; a read the session cannot make is not sent and shows as unavailable or needing permission. An account read refused with 401 or 403 is not retried; other failures keep their single retry. `DelegationManager.query` takes an optional second argument `{ spaces }` that sets which spaces the query is signed for. Sessions that hold the abilities make the same requests as before.
+
+  Details: TC-2038
+
+- Updated dependencies [44c439a]
+  - @tinycloud/sdk-core@3.8.0-beta.5
+  - @tinycloud/node-sdk@3.8.0-beta.5
+
+## 3.8.0-beta.4
+
+### Minor Changes
+
+- c541786: Manifests can declare named keys in the app's key namespace, with an optional `keys_app_id`. Sign-in includes the declared key permissions when the node supports named keys, prepares creatable key paths, and exposes the signed-in named-key client through `keys`.
+
+  Details: TC-1977
+
+### Patch Changes
+
+- Updated dependencies [c541786]
+  - @tinycloud/sdk-core@3.8.0-beta.4
+  - @tinycloud/node-sdk@3.8.0-beta.4
+
+## 3.8.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [7b22f61]
+  - @tinycloud/share-envelope@1.3.1-beta.0
+  - @tinycloud/sdk-core@3.8.0-beta.3
+  - @tinycloud/share-sdk@1.4.1-beta.0
+  - @tinycloud/node-sdk@3.8.0-beta.3
+
+## 3.8.0-beta.2
+
+### Minor Changes
+
+- 4a19c47: Signing out erases the local copy before `signOut()` resolves: the browser replica database is deleted under the origin gate lock after the deny commit, and the same erase runs when a different account signs in on a live session. The deny floor and logout marker in `localStorage` are kept.
+
+  If the delete is blocked or the deny kept the keys (`marker`, `unguarded`), the erase is retried three times in total (150 ms, then 450 ms apart), the logout marker makes the next load finish it, and `signOut()` still resolves for `marker`. `unguarded` still rejects, now with `code: "REPLICA_PURGE_FAILED"` unless the erase completed. After the retries `replica.purge.failed` fires (`TinyCloudWeb.on` / `TinyCloudNode.on`) with `trigger`, a typed `reason` and `retryNow`.
+
+  `tcw.replication.purgeLocalCopy()` runs the erase on demand and returns `{ ok: true }` or `{ ok: false, retryNow }`; it never touches a live session. New exported types: `ReplicaPurgeFailedEvent`, `ReplicaPurgeLocalCopyResult`, `ReplicaPurgeTrigger`, `ReplicaLocalEraseOutcome`, `ReplicaPurgeError`. `ReplicaLifecycleGate` gains the optional browser method `eraseLocalCopy`.
+
+  A restore with replication configured and no wallet provider stays gated, now with the gate reason `wallet_provider_required` instead of `gate_unavailable`. A read-only provider (silent `eth_accounts`, signing methods that throw) still restores.
+
+  Details: TC-1888
+
+### Patch Changes
+
+- Updated dependencies [4a19c47]
+  - @tinycloud/sdk-core@3.8.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.2
+  - @tinycloud/replica@0.4.0-beta.1
+
+## 3.8.0-beta.1
+
+### Minor Changes
+
+- 2789240: Replication accepts `syncScope: "prefixes"`, which keeps kv/sync on the declared prefixes at sign-in instead of widening to a root entry that covers them.
+
+  Details: TC-2043
+
+### Patch Changes
+
+- Updated dependencies [2789240]
+  - @tinycloud/sdk-core@3.8.0-beta.1
+  - @tinycloud/node-sdk@3.8.0-beta.1
+  - @tinycloud/replica@0.3.5-beta.0
+
+## 3.8.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [15080ed]
+  - @tinycloud/node-sdk@3.8.0-beta.0
+
+## 3.7.0
+
+### Minor Changes
+
+- 279c8e9: `storage.full` now fires once per episode of the signed-in account's own storage being full, instead of re-arming on every status read. The episode ends only when a committing write succeeds on that account's own space (kv `put` and `batchPut`, vault `put`, and SQL and DuckDB write actions). A successful `delete` or `get`, or a committed write to another owner's space, does not end it, and `storage.status()` reporting room no longer re-arms the event. `StorageFullMonitor.rejection` reports the own episode only, and `clear()` (sign-out, sign-in as another account) ends it. Breaking for code that relied on a status read to re-arm `storage.full`: call a committing write to see the next event. Delegated owners each emit once until a status read or a successful committing write clears them.
+
+  web-sdk panel: adds a storage section showing the account's usage and state (ok, nearly full, full, unlimited). While the own-storage episode is active the panel shows "Storage is full" and hides the numbers, even if status still reports room. The needs-permission state offers "Allow" only when the client can ask for authority; otherwise it shows the permission note with no action. The manage link uses the status `manageUrl` only when it is https and otherwise falls back to the SDK's storage manage URL.
+
+  web-sdk host: while the own-storage episode is on, the button and panel show "Storage is full", and one info toast with a manage link is shown per episode, even with the panel closed. A new toast appears only after the episode ends and a new one starts. Each full delegated owner gets one info toast with the same copy. The toast reads the manage link from status at toast time, so each toast adds one status request. A toast whose status read finishes after its episode has ended is not shown. With `ui.toasts` off, no toast is shown and no status request is made.
+
+  Details: TC-848
+
+- cd59d64: Add the TinyCloud settings panel to `TinyCloudWeb`: a floating launcher button and a panel, controlled through `tc.ui` (`open(section?)`, `openPage(section?)`, `close()`, `toggle()`, `isOpen`, `available`) and the `ui` config option. `ui: false` turns the UI off, `ui: { button: false }` hides the button while `tc.ui` still opens the panel, and `ui: { mode: "sidebar" | "page" | "both" }` (default `"both"`) sets the layouts offered. The UI is not rendered in iframes or opaque origins.
+
+  Sections: Overview, Local TinyCloud, Local copy, Delegations, Nodes, Storage and Activity (Activity only with `ui: { developerMode: true }`). The panel is a sidebar or a full page with one button to switch between them. On phones it always opens as a full page, with a Sections menu and a Close button.
+
+  What the sections show with `TinyCloudWeb` today:
+  - Local copy appears only when the host supplies a sync facade, and sign-out removes the local copy only when the host supplies a purge. `TinyCloudWeb` supplies neither, so Local copy is not shown.
+  - Storage details need the `tinycloud.space/info` permission on the app's primary space, which the panel can't request itself. Add it to your app's manifest to show them: a permission with `service: "tinycloud.space"`, `actions: ["info"]`, an empty `path` and `skipPrefix: true`, on the same `space` as your app's first permission (`applications` when `space` is omitted). Without it, Storage says the app can't see your storage.
+  - Local TinyCloud says it can't be checked from this app, and Activity has nothing to show until the host supplies a request log.
+  - Delegations and Storage appear when signed in.
+
+  Behavior to know about:
+  - The panel loads on first open, or on hover or focus of the launcher, so it mounts after an asynchronous import. Code that queries the shadow root right after `open()` has to wait for it.
+  - The permission and space-creation dialogs load when the first prompt is shown. A dialog that cannot load is declined, never approved.
+  - After sign-in or session restore, once the browser is idle, the panel's reads (account, delegations, storage) start in the background, so a signed-in page makes them without the panel being opened. They are not retried after a failure until the next sign-in, restore, or hover, focus or open. Sign-out cancels a pending start. There is no option to disable this.
+
+  Changes for existing code:
+  - Toasts render in the TinyCloud UI host, an open shadow root (`[data-tinycloud-ui]`, reachable as `host.shadowRoot`), instead of `document.body`. The legacy toast stack and the `tinycloud-toast*` elements are removed, so selectors that matched them must search inside `host.shadowRoot`. At most three toasts show at a time (the oldest is dropped), each disappears after 7 seconds, an identical toast that is already visible is not shown again, and a link shows only when it is an absolute https URL. Toasts show fixed wording; the raw error description goes to the console, and the toast Retry action is removed.
+  - New `ui.toasts` option (default `true`). `ui: { toasts: false }` shows no toasts and stops the SDK's unhandled-rejection listener; prompts still render. `ui: false` creates no host, button, toasts or listeners.
+  - `notifications.popups`, `position`, `duration` and `maxVisible` are removed from the types. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning: `popups: false` becomes `ui: { button: false, toasts: false }` when `ui` is not set, `position` becomes `ui.position` when that is not set, and `duration` and `maxVisible` are ignored.
+  - `notifications.throwErrors` is kept. It rethrows an error's raw message asynchronously whenever the UI and toasts are enabled, and identical errors within 200 ms collapse into one throw.
+  - The `tinycloud:error`, `tinycloud:warning` and `tinycloud:success` window events are no longer dispatched; `tinycloud:awaiting-user-input*` events are unchanged.
+  - Permission and space-creation prompts render inside the same host instead of `document.body`. In a frame or with `ui: false` they are not shown and resolve as declined or dismissed, with one console warning; `popups: false` and `ui: { button: false, toasts: false }` keep them. A prompt still open when the host is reset or removed resolves as dismissed, and opening a prompt while another is open dismisses the first.
+  - Prompts sit at z-index 999990, so a page overlay above that paints over them, and OpenKey's own overlay (999999) paints over the host. Prompts are modal dialogs (`role="dialog"`, `aria-modal="true"`): focus moves into them on open, Tab stays inside, and closing returns focus to where it was and restores the page's previous `overflow`. Approve and Create act only when nothing covers their centre at the moment they're activated.
+  - The unused node selection modal is removed; the package entry point never exported it.
+
+  Details: TC-1932
+
+### Patch Changes
+
+- 5f38da5: The root, `credentials` and `replica` bundles do not carry the share links reader. `@tinycloud/share-envelope/links` is a package import that the bundles load with `import()` the first time a share link is resolved or published; it resolves to the installed `@tinycloud/share-envelope` dependency (`dist/links.js`). The CommonJS bundle sets `output.environment.dynamicImport` so that import is a real `import()` there too.
+
+  A test bundles the web-sdk root and the share-sdk entries it can reach and checks that every import of the links module is a dynamic one.
+
+  Details: TC-1737
+
+- 0deb6e1: Revoking a grant now asks the node to revoke it when its status cannot be read, instead of reporting it as already ended.
+
+  Details: TC-2031
+
+- Updated dependencies [c142537]
+- Updated dependencies [279c8e9]
+- Updated dependencies [71fa087]
+- Updated dependencies [60b79d0]
+- Updated dependencies [60b79d0]
+- Updated dependencies [20bc8d1]
+- Updated dependencies [147bb78]
+- Updated dependencies [14c685e]
+  - @tinycloud/node-sdk@3.7.0
+  - @tinycloud/sdk-core@3.7.0
+  - @tinycloud/share-envelope@1.3.0
+  - @tinycloud/share-sdk@1.4.0
+  - @tinycloud/replica@0.3.4
+
+## 3.7.0-beta.5
+
+### Patch Changes
+
+- 0deb6e1: Revoking a grant now asks the node to revoke it when its status cannot be read, instead of reporting it as already ended.
+
+  Details: TC-2031
+
+## 3.7.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [c142537]
+  - @tinycloud/node-sdk@3.7.0-beta.4
+  - @tinycloud/replica@0.3.4-beta.3
+  - @tinycloud/sdk-core@3.7.0-beta.4
+
+## 3.7.0-beta.3
+
+### Minor Changes
+
+- 279c8e9: `storage.full` now fires once per episode of the signed-in account's own storage being full, instead of re-arming on every status read. The episode ends only when a committing write succeeds on that account's own space (kv `put` and `batchPut`, vault `put`, and SQL and DuckDB write actions). A successful `delete` or `get`, or a committed write to another owner's space, does not end it, and `storage.status()` reporting room no longer re-arms the event. `StorageFullMonitor.rejection` reports the own episode only, and `clear()` (sign-out, sign-in as another account) ends it. Breaking for code that relied on a status read to re-arm `storage.full`: call a committing write to see the next event. Delegated owners each emit once until a status read or a successful committing write clears them.
+
+  web-sdk panel: adds a storage section showing the account's usage and state (ok, nearly full, full, unlimited). While the own-storage episode is active the panel shows "Storage is full" and hides the numbers, even if status still reports room. The needs-permission state offers "Allow" only when the client can ask for authority; otherwise it shows the permission note with no action. The manage link uses the status `manageUrl` only when it is https and otherwise falls back to the SDK's storage manage URL.
+
+  web-sdk host: while the own-storage episode is on, the button and panel show "Storage is full", and one info toast with a manage link is shown per episode, even with the panel closed. A new toast appears only after the episode ends and a new one starts. Each full delegated owner gets one info toast with the same copy. The toast reads the manage link from status at toast time, so each toast adds one status request. A toast whose status read finishes after its episode has ended is not shown. With `ui.toasts` off, no toast is shown and no status request is made.
+
+  Details: TC-848
+
+- cd59d64: Add the TinyCloud settings panel to `TinyCloudWeb`: a floating launcher button and a panel, controlled through `tc.ui` (`open(section?)`, `openPage(section?)`, `close()`, `toggle()`, `isOpen`, `available`) and the `ui` config option. `ui: false` turns the UI off, `ui: { button: false }` hides the button while `tc.ui` still opens the panel, and `ui: { mode: "sidebar" | "page" | "both" }` (default `"both"`) sets the layouts offered. The UI is not rendered in iframes or opaque origins.
+
+  Sections: Overview, Local TinyCloud, Local copy, Delegations, Nodes, Storage and Activity (Activity only with `ui: { developerMode: true }`). The panel is a sidebar or a full page with one button to switch between them. On phones it always opens as a full page, with a Sections menu and a Close button.
+
+  What the sections show with `TinyCloudWeb` today:
+  - Local copy appears only when the host supplies a sync facade, and sign-out removes the local copy only when the host supplies a purge. `TinyCloudWeb` supplies neither, so Local copy is not shown.
+  - Storage details need the `tinycloud.space/info` permission on the app's primary space, which the panel can't request itself. Add it to your app's manifest to show them: a permission with `service: "tinycloud.space"`, `actions: ["info"]`, an empty `path` and `skipPrefix: true`, on the same `space` as your app's first permission (`applications` when `space` is omitted). Without it, Storage says the app can't see your storage.
+  - Local TinyCloud says it can't be checked from this app, and Activity has nothing to show until the host supplies a request log.
+  - Delegations and Storage appear when signed in.
+
+  Behavior to know about:
+  - The panel loads on first open, or on hover or focus of the launcher, so it mounts after an asynchronous import. Code that queries the shadow root right after `open()` has to wait for it.
+  - The permission and space-creation dialogs load when the first prompt is shown. A dialog that cannot load is declined, never approved.
+  - After sign-in or session restore, once the browser is idle, the panel's reads (account, delegations, storage) start in the background, so a signed-in page makes them without the panel being opened. They are not retried after a failure until the next sign-in, restore, or hover, focus or open. Sign-out cancels a pending start. There is no option to disable this.
+
+  Changes for existing code:
+  - Toasts render in the TinyCloud UI host, an open shadow root (`[data-tinycloud-ui]`, reachable as `host.shadowRoot`), instead of `document.body`. The legacy toast stack and the `tinycloud-toast*` elements are removed, so selectors that matched them must search inside `host.shadowRoot`. At most three toasts show at a time (the oldest is dropped), each disappears after 7 seconds, an identical toast that is already visible is not shown again, and a link shows only when it is an absolute https URL. Toasts show fixed wording; the raw error description goes to the console, and the toast Retry action is removed.
+  - New `ui.toasts` option (default `true`). `ui: { toasts: false }` shows no toasts and stops the SDK's unhandled-rejection listener; prompts still render. `ui: false` creates no host, button, toasts or listeners.
+  - `notifications.popups`, `position`, `duration` and `maxVisible` are removed from the types. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning: `popups: false` becomes `ui: { button: false, toasts: false }` when `ui` is not set, `position` becomes `ui.position` when that is not set, and `duration` and `maxVisible` are ignored.
+  - `notifications.throwErrors` is kept. It rethrows an error's raw message asynchronously whenever the UI and toasts are enabled, and identical errors within 200 ms collapse into one throw.
+  - The `tinycloud:error`, `tinycloud:warning` and `tinycloud:success` window events are no longer dispatched; `tinycloud:awaiting-user-input*` events are unchanged.
+  - Permission and space-creation prompts render inside the same host instead of `document.body`. In a frame or with `ui: false` they are not shown and resolve as declined or dismissed, with one console warning; `popups: false` and `ui: { button: false, toasts: false }` keep them. A prompt still open when the host is reset or removed resolves as dismissed, and opening a prompt while another is open dismisses the first.
+  - Prompts sit at z-index 999990, so a page overlay above that paints over them, and OpenKey's own overlay (999999) paints over the host. Prompts are modal dialogs (`role="dialog"`, `aria-modal="true"`): focus moves into them on open, Tab stays inside, and closing returns focus to where it was and restores the page's previous `overflow`. Approve and Create act only when nothing covers their centre at the moment they're activated.
+  - The unused node selection modal is removed; the package entry point never exported it.
+
+  Details: TC-1932
+
+### Patch Changes
+
+- Updated dependencies [279c8e9]
+  - @tinycloud/node-sdk@3.7.0-beta.3
+  - @tinycloud/replica@0.3.4-beta.2
+  - @tinycloud/sdk-core@3.7.0-beta.3
+
+## 3.7.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [147bb78]
+  - @tinycloud/node-sdk@3.7.0-beta.2
+  - @tinycloud/replica@0.3.4-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.2
+
+## 3.7.0-beta.1
+
+### Patch Changes
+
+- 5f38da5: The root, `credentials` and `replica` bundles do not carry the share links reader. `@tinycloud/share-envelope/links` is a package import that the bundles load with `import()` the first time a share link is resolved or published; it resolves to the installed `@tinycloud/share-envelope` dependency (`dist/links.js`). The CommonJS bundle sets `output.environment.dynamicImport` so that import is a real `import()` there too.
+
+  A test bundles the web-sdk root and the share-sdk entries it can reach and checks that every import of the links module is a dynamic one.
+
+  Details: TC-1737
+
+- Updated dependencies [71fa087]
+- Updated dependencies [60b79d0]
+- Updated dependencies [60b79d0]
+- Updated dependencies [20bc8d1]
+  - @tinycloud/node-sdk@3.7.0-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.1
+  - @tinycloud/share-envelope@1.3.0-beta.0
+  - @tinycloud/share-sdk@1.4.0-beta.0
+
+## 3.6.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [14c685e]
+  - @tinycloud/replica@0.3.4-beta.0
+  - @tinycloud/node-sdk@3.6.2-beta.0
+
+## 3.6.1
+
+### Patch Changes
+
+- 271155a: In the browser, the SIWE sign-in `domain` now uses `window.location.host` (it keeps the port) and, when the domain comes from the page, the SIWE `uri` defaults to `window.location.origin` (it keeps the scheme), so local http dev origins satisfy OpenKey's origin check (TC-1486). Production https origins on default ports are unchanged. `TinyCloudNodeConfig` gains an optional `uri`; a caller `siweConfig.uri` still takes precedence. (TC-1488)
+
+  Details: TC-1488
+
+- Updated dependencies [271155a]
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1
+  - @tinycloud/sdk-core@3.6.1
+
+## 3.6.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+
+## 3.6.1-beta.0
+
+### Patch Changes
+
+- 271155a: In the browser, the SIWE sign-in `domain` now uses `window.location.host` (it keeps the port) and, when the domain comes from the page, the SIWE `uri` defaults to `window.location.origin` (it keeps the scheme), so local http dev origins satisfy OpenKey's origin check (TC-1486). Production https origins on default ports are unchanged. `TinyCloudNodeConfig` gains an optional `uri`; a caller `siweConfig.uri` still takes precedence. (TC-1488)
+
+  Details: TC-1488
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+
+## 3.6.0
+
+### Minor Changes
+
+- 7bd4ae6: `courier credential show` no longer deletes a stored credential that fails offline re-verification. The record is refused with `credential-record-invalid` and kept under `COURIER_HOME/credentials/` for inspection. Lifecycle drops are unchanged: a credential within 60 seconds of its own expiry, or older than the 3600-second maximum age, is still deleted.
+
+  `@tinycloud/node-sdk/credentials` also exports the `StoredEmailProofInput` type.
+
+  `@tinycloud/web-sdk/credentials` adds `verifyStoredEmailProof` and the `StoredEmailProofInput` and `StoredEmailProofRecord` types, so headless clients can re-verify a stored email-proof credential offline without importing `@tinycloud/node-sdk` directly.
+
+  Details: TC-712
+
+- e32bc41: feat(credentials): add email-proof credential acquisition
+  - `@tinycloud/node-sdk/credentials` exports `requestEmailProofCode`, `completeEmailProof`, and `acquireEmailProof` for a two-step flow: request a one-time code for an address, then exchange it for a verifiable credential.
+  - Errors are `EmailProofError` with a `step`, a stable `code`, `retryAfterMs`, and `recoverable`.
+  - `@tinycloud/node-sdk/credential-pending-store` provides a file-backed pending store: owner-only files, 15-minute maximum lifetime, deleted after success or any unrecoverable failure.
+  - `@tinycloud/web-sdk` re-exports the same types. Existing root behaviour is unchanged; the root bundle contains no email-proof code.
+  - `@tinycloud/sdk-core`: `CredentialError` accepts an explicit `recoverable` flag that overrides the per-code default. `@tinycloud/node-sdk` needs this to keep the witness's recoverable flag on server errors.
+
+  Release order: `@tinycloud/sdk-core`, then `@tinycloud/node-sdk`, then `@tinycloud/web-sdk`. Node-sdk pins sdk-core exactly, so sdk-core must publish first for that pin to carry the recoverable override.
+
+  Details: TC-712
+
+### Patch Changes
+
+- e600a1a: `TinyCloudWeb.requestPermissions` passes `expiryMs` through for decrypt grants, including wildcards, like any other entry.
+
+  Details: TC-1781
+
+- d867b7a: The default credential discovery URL is now `https://witness.credentials.org/.well-known/opencredentials`. A 2xx discovery response whose body is not JSON now rejects with a typed error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`, instead of a raw parse error. A 503 still rejects with `ISSUER_UNREADY`, and other non-2xx responses and network failures still reject with `OFFLINE`.
+
+  Details: TC-1807
+
+- 1f831e3: Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
+
+  Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
+
+  Details: TC-1855
+
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [dc61583]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0
+  - @tinycloud/sdk-core@3.6.0
+  - @tinycloud/replica@0.3.3
+
+## 3.6.0-beta.8
+
+### Patch Changes
+
+- 1f831e3: Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
+
+  Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
+
+  Details: TC-1855
+
+- Updated dependencies [1f831e3]
+  - @tinycloud/sdk-core@3.6.0-beta.8
+  - @tinycloud/node-sdk@3.6.0-beta.8
+
+## 3.6.0-beta.7
+
+### Minor Changes
+
+- 7bd4ae6: `courier credential show` no longer deletes a stored credential that fails offline re-verification. The record is refused with `credential-record-invalid` and kept under `COURIER_HOME/credentials/` for inspection. Lifecycle drops are unchanged: a credential within 60 seconds of its own expiry, or older than the 3600-second maximum age, is still deleted.
+
+  `@tinycloud/node-sdk/credentials` also exports the `StoredEmailProofInput` type.
+
+  `@tinycloud/web-sdk/credentials` adds `verifyStoredEmailProof` and the `StoredEmailProofInput` and `StoredEmailProofRecord` types, so headless clients can re-verify a stored email-proof credential offline without importing `@tinycloud/node-sdk` directly.
+
+  Details: TC-712
+
+### Patch Changes
+
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+  - @tinycloud/node-sdk@3.6.0-beta.7
+
+## 3.6.0-beta.6
+
+### Patch Changes
+
+- e600a1a: `TinyCloudWeb.requestPermissions` passes `expiryMs` through for decrypt grants, including wildcards, like any other entry.
+
+  Details: TC-1781
+
+- Updated dependencies [e600a1a]
+  - @tinycloud/node-sdk@3.6.0-beta.6
+
+## 3.6.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0-beta.5
+
+## 3.6.0-beta.4
+
+### Minor Changes
+
+- e32bc41: feat(credentials): add email-proof credential acquisition
+  - `@tinycloud/node-sdk/credentials` exports `requestEmailProofCode`, `completeEmailProof`, and `acquireEmailProof` for a two-step flow: request a one-time code for an address, then exchange it for a verifiable credential.
+  - Errors are `EmailProofError` with a `step`, a stable `code`, `retryAfterMs`, and `recoverable`.
+  - `@tinycloud/node-sdk/credential-pending-store` provides a file-backed pending store: owner-only files, 15-minute maximum lifetime, deleted after success or any unrecoverable failure.
+  - `@tinycloud/web-sdk` re-exports the same types. Existing root behaviour is unchanged; the root bundle contains no email-proof code.
+  - `@tinycloud/sdk-core`: `CredentialError` accepts an explicit `recoverable` flag that overrides the per-code default. `@tinycloud/node-sdk` needs this to keep the witness's recoverable flag on server errors.
+
+  Release order: `@tinycloud/sdk-core`, then `@tinycloud/node-sdk`, then `@tinycloud/web-sdk`. Node-sdk pins sdk-core exactly, so sdk-core must publish first for that pin to carry the recoverable override.
+
+  Details: TC-712
+
+### Patch Changes
+
+- Updated dependencies [e32bc41]
+  - @tinycloud/sdk-core@3.6.0-beta.4
+  - @tinycloud/node-sdk@3.6.0-beta.4
+
+## 3.6.0-beta.3
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.6.0-beta.3
+- @tinycloud/replica@0.3.3-beta.1
+- @tinycloud/sdk-core@3.6.0-beta.3
+
+## 3.6.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc61583]
+  - @tinycloud/replica@0.3.3-beta.0
+  - @tinycloud/node-sdk@3.6.0-beta.2
+  - @tinycloud/sdk-core@3.6.0-beta.2
+
+## 3.6.0-beta.1
+
+### Patch Changes
+
+- d867b7a: The default credential discovery URL is now `https://witness.credentials.org/.well-known/opencredentials`. A 2xx discovery response whose body is not JSON now rejects with a typed error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`, instead of a raw parse error. A 503 still rejects with `ISSUER_UNREADY`, and other non-2xx responses and network failures still reject with `OFFLINE`.
+
+  Details: TC-1807
+
+## 3.6.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [0c09d7b]
+  - @tinycloud/sdk-core@3.6.0-beta.0
+  - @tinycloud/node-sdk@3.6.0-beta.0
+
+## 3.5.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0
+  - @tinycloud/replica@0.3.2
+  - @tinycloud/sdk-core@3.5.0
+
+## 3.5.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0-beta.1
+
+## 3.5.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/node-sdk@3.5.0-beta.0
+  - @tinycloud/replica@0.3.2-beta.0
+  - @tinycloud/sdk-core@3.5.0-beta.0
+
+## 3.4.0
+
+### Minor Changes
+
+- f9b7e85: `TinyCloudWeb.requestPermissions(additional, { expiryMs })` now passes `expiryMs` to the step-up delegation it issues through `grantRuntimePermissions`, so the delegation expires at `now + expiryMs`. The expiry is capped at the session's expiry. The expiry applies when new permissions are requested. Calls without `expiryMs` are unchanged. A non-finite or non-positive `expiryMs` throws before the approval modal opens.
+
+  Decrypt grants (including wildcards) with `expiryMs` over one hour throw `DECRYPT_EXPIRY_TOO_LONG` before the approval modal opens.
+
+  `TinyCloudWeb.hasPermissions(entries)` returns whether the session or an unexpired runtime grant covers all entries. It never prompts.
+
+  Details: TC-1777
+
+### Patch Changes
+
+- 666f60b: Import the share recipient surface from `@tinycloud/share-sdk/web-recipient` instead of the share-sdk package root, so the built bundle no longer carries the rest of share-sdk. No runtime API change.
+
+  Details: TC-1757
+
+- Updated dependencies [6139879]
+- Updated dependencies [666f60b]
+  - @tinycloud/replica@0.3.1
+  - @tinycloud/share-sdk@1.3.0
+  - @tinycloud/node-sdk@3.4.0
+  - @tinycloud/sdk-core@3.4.0
+
+## 3.4.0-beta.2
+
+### Minor Changes
+
+- f9b7e85: `TinyCloudWeb.requestPermissions(additional, { expiryMs })` now passes `expiryMs` to the step-up delegation it issues through `grantRuntimePermissions`, so the delegation expires at `now + expiryMs`. The expiry is capped at the session's expiry. The expiry applies when new permissions are requested. Calls without `expiryMs` are unchanged. A non-finite or non-positive `expiryMs` throws before the approval modal opens.
+
+  Decrypt grants (including wildcards) with `expiryMs` over one hour throw `DECRYPT_EXPIRY_TOO_LONG` before the approval modal opens.
+
+  `TinyCloudWeb.hasPermissions(entries)` returns whether the session or an unexpired runtime grant covers all entries. It never prompts.
+
+  Details: TC-1777
+
+## 3.3.2-beta.1
+
+### Patch Changes
+
+- 666f60b: Import the share recipient surface from `@tinycloud/share-sdk/web-recipient` instead of the share-sdk package root, so the built bundle no longer carries the rest of share-sdk. No runtime API change.
+
+  Details: TC-1757
+
+- Updated dependencies [666f60b]
+  - @tinycloud/share-sdk@1.3.0-beta.0
+  - @tinycloud/sdk-core@3.3.2-beta.1
+  - @tinycloud/node-sdk@3.3.2-beta.1
+
+## 3.3.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [6139879]
+  - @tinycloud/replica@0.3.1-beta.0
+  - @tinycloud/node-sdk@3.3.2-beta.0
+
+## 3.3.1
+
+### Patch Changes
+
+- Updated dependencies [f8c2967]
+  - @tinycloud/share-envelope@1.2.1
+  - @tinycloud/sdk-core@3.3.1
+  - @tinycloud/share-sdk@1.2.1
+  - @tinycloud/node-sdk@3.3.1
+
+## 3.3.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f8c2967]
+  - @tinycloud/share-envelope@1.2.1-beta.0
+  - @tinycloud/sdk-core@3.3.1-beta.0
+  - @tinycloud/share-sdk@1.2.1-beta.0
+  - @tinycloud/node-sdk@3.3.1-beta.0
+
+## 3.3.0
+
+### Minor Changes
+
+- d2ad845: `tc delegation create` now signs and activates the delegation through `delegateTo`, reads it back through the node's account delegation query, and prints its CID only once the node lists it as active (`DELEGATION_NOT_CONFIRMED` otherwise). `tc delegation list` and `tc delegation info` use that query (`POST /delegation/query`) via `account.delegations.query()`, which includes delegations signed by the session key; `list` gains `--space`, and `--to` accepts a `did:key` with a `#fragment`. Previously `create` and `list` sent `tinycloud.delegation/create` and `tinycloud.delegation/list` invocations that the node does not handle (it answered an empty 200, surfaced as a JSON parse error), and `info` called a method that did not exist.
+
+  A plain `tc auth login` now also requests `tinycloud.delegation/list` on the default space (OpenKey's default grant omits it). A session that lacks it, on the account space and its own space, gets a `PERMISSION_DENIED` error saying to run `tc auth login` again. `DelegationManager.query()` signs for the account space and falls back to the session's own space when the node refuses (403).
+
+  Breaking: removed `DelegationManager.create()` (use `TinyCloudNode.delegateTo()`), `DelegationManager.list()` (use `account.delegations.query()`), `TinyCloudNode.delegate()` (use `delegateTo()`), `TinyCloudNode.listDelegations()` (use `account.delegations.query()`), and the web-sdk `TinyCloudWeb.delegate()` (use `delegateTo()`) and `TinyCloudWeb.listDelegations()` (use `account.delegations.query()`). They sent invocations the node never handled, so they never worked. `account.delegations.list()` is not a replacement: it reads the SQL index and omits session-signed delegations. Also removed the `delegationManager` option from `SharingService` config; sharing uses `createDelegation` or `createDelegationWasm`.
+
+  `TinyCloudNode.delegateTo()` takes a new `requireActivation` option: when set, it throws when the node answers 200 but lists a target space under `skipped` (a space it does not host), naming that space; this used to look like success. It is off by default, since grants to a not-yet-hosted space (e.g. secrets) are valid. `tc delegation create` sets it. `DelegationManager.getChain()` and `checkPermission()` now return an `UNSUPPORTED_OPERATION` error when the node answers with an empty body.
+
+- 87a137e: Retry node `NODE_BUSY` and `REQUEST_TIMEOUT` answers automatically. Both mean nothing was applied, so the services now retry them under the existing `retryPolicy` through the new `ServiceContext.invokeWithRetry(url, build)`, which calls `build` once per attempt so every attempt carries a freshly signed invocation (the node answers a repeated invocation with 409, so re-sending one could never succeed). `ServiceContext.fetch` itself no longer retries. A context without `invokeWithRetry` sends once. The policy: at most 4 attempts in about 12 s, honouring the node's `Retry-After` (capped at the remaining budget) and otherwise backing off exponentially with full jitter (250 ms base, 4 s cap). Aborts and per-request timeouts end the wait at once, and `OUTCOME_UNKNOWN` is never retried. `defaultRetryPolicy` changes accordingly (its retryable codes are now `NODE_BUSY` and `REQUEST_TIMEOUT`; `NETWORK_ERROR` and `TIMEOUT` are no longer listed because no service read them), and `RetryPolicy` gains an optional `maxTotalMs`. Opt out with `retryPolicy: { maxAttempts: 1 }`.
+
+  The CLI gains `--no-retry` and `TINYCLOUD_RETRY=0` for monitors and probes that must see the node's honest `NODE_BUSY`. KV responses (and `tc kv get|put|delete --json`) report `attempts` and `backoffMs`.
+
+- d1e4c3d: Accountless share receivers use a non-extractable WebCrypto Ed25519 signing key. Its handle is kept in IndexedDB (database `tinycloud.share.receiver-keys`, one key per origin, usable for at most one hour), so a reload keeps working. Where the handle cannot be kept, or the browser lacks WebCrypto Ed25519, the key is held in page memory only, its credentials stay in page memory too, and a reload asks the recipient to verify their email again. On the path without WebCrypto Ed25519 the seed buffer is overwritten with zeros when the page goes away or the session is forgotten; copies the signing library makes internally cannot be reached and are left to garbage collection. Where reading session storage throws (site data blocked), page memory is used instead. Receiver sessions stored by earlier versions are removed together with their credentials, and the recipient verifies again. `forgetShareReceiverSession(origin)` removes the key and its credentials. A session refuses to sign after it expires, after it is forgotten, or after its memory-only key was discarded with the page, with `ShareReceiverSessionEndedError`.
+
+  Real Apple Safari/iOS (including private-mode IndexedDB persistence of the key) is not yet verified.
+
+  Breaking changes:
+  - Removed exported type `ShareReceiverSessionRecordV1` (consumers referencing it must drop the import).
+  - `ShareReceiverIdentity.custody` is now `"persistent" | "memory"` instead of `"session"`.
+  - `ShareReceiverSession` adds `custody`, `expiresAt` and `credentialStorage`.
+  - `createOrRestoreShareReceiverSession` takes an optional third `options` argument, and its `storage` argument may be omitted.
+  - `ShareReceiverServiceOptions` accepts `indexedDB`.
+
+- cce8b26: Add an opt-in `registryPolicy: "fail-closed"` for host resolution and automatic space creation (TC-1443). The default does not change.
+
+  **Default (`"legacy-fallback"`, deprecated).** Sign-in resolves hosts exactly as before: when the location registry has no record or cannot be reached, the session silently uses the fallback host (`https://node.tinycloud.xyz` unless `tinycloudFallbackHosts` says otherwise). The first time a process takes that fallback it logs one `console.warn`; the fallback will be removed in a future major release. The default policy adds no registry request anywhere and no space-creation check.
+
+  **`registryPolicy: "fail-closed"`** (`TinyCloudNodeConfig`, `NodeUserAuthorizationConfig`, web `Config`):
+  - Sign-in without a configured host looks up the signer address in the registry first and acts on the three-state verdict. `registered`: the record's hosts, in record order. `unregistered`: `newUserHost` (default `https://node.tinycloud.xyz`; `null` refuses unregistered owners with `NodeNotFoundError`). `unavailable` (unreachable, timeout, bad status, oversize or malformed body, bad signature, a sequence below the remembered one, a not-found after a registration was seen, a failed read of the remembered sequence, or no registry configured): `RegistryUnavailableError`, never the new-user host. A record with no usable host is `NodeNotFoundError`. `newUserHost` governs routing only; a pinned host may still create spaces for an unregistered owner.
+  - One host-scheme rule: hosts from a signed record are used for routing and for space creation only if they are HTTPS or HTTP on loopback, the same rule as `newUserHost` and `use-host`. The default policy is unchanged.
+  - Local discovery probes the configured `localNodeUrl` / `localLinkName` and `*.local.tinycloud.link` hosts from a `registered` verdict; it no longer reads the registry itself, so an older or invalid record cannot route a session.
+  - The lookup key is the signer address, never the session chain. The v1 registry keys records on an exact `did:pkh:eip155:<chain>:<EIP-55 address>`, so v1 lookups use `registryOwnerSubjectV1(address, registryChainId)` (`registryChainId` default 1). Registry v2 will key on the address alone.
+  - `onNodeNotFound({ error, attempt })` decides what sign-in does instead of throwing: `{ action: "retry" }`, `{ action: "use-host", host }` (an HTTPS or loopback HTTP origin) or `{ action: "abort" }`. The SDK does not verify a `use-host` host's identity, and the choice persists with the session like any resolved host.
+  - Automatic space creation is guarded: `ensureSpaceExists` (before asking the creation handler), account bootstrap host steps, sign-in's owned-space hosting, `ensureOwnedSpaceHosted`, and `ensurePublicSpace` (which the vault calls on unlock). Creating a space is refused with `NodeRegistryEntryExistsError` when the owner's registry record does not list the host (including a record with no hosts), and with `RegistryUnavailableError` when the registry gives no verdict. The space-creation handler's `onSpaceCreationFailed` receives the error. Pinned-host apps look the verdict up once, at creation. An explicit `hostOwnedSpace()` call is not guarded.
+  - The highest record sequence seen per owner is remembered in `registrySequenceStore` (default in memory; web-sdk defaults to `localStorage` under `tinycloud.registrySequences.v1`). A failed write (full or read-only storage) logs one warning and keeps the verdict in hand, and the `localStorage` store still remembers the sequence for the page. A failed read or a corrupt stored value fails that lookup closed; remove the key to reset.
+
+  New sdk-core exports: `resolveOwnerHosts`, `lookupOwnerRegistryVerdict`, `resolveFailClosedTinyCloudHosts`, `assertSpaceCreationAllowed`, `registryOwnerSubjectV1`, `createInMemoryRegistrySequenceStore`, `createLocalStorageRegistrySequenceStore`, the errors `NodeNotFoundError` (`code: "node_not_found"`), `RegistryUnavailableError` (`"registry_unavailable"`) and `NodeRegistryEntryExistsError` (`"node_registry_entry_exists"`), their option and callback types, and `DEFAULT_NEW_USER_HOST`, `DEFAULT_REGISTRY_OWNER_CHAIN_ID`, `DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS` (3 s) and `DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY`. Match errors on `error.code`: web-sdk bundles its own sdk-core, so `instanceof` against an app's separate sdk-core copy does not hold.
+
+### Patch Changes
+
+- 2aa917e: Sign account-only manifests into the account space they authorize, and expose the active authorization CID after restoring a persisted browser session.
+- c92953f: Encode account-scoped `tinycloud.space/list` permissions in manifest-backed sessions.
+- 41e5fca: A pending persisted-session restore or delegation activation no longer resumes after `signOut()` if it was waiting for storage or SDK initialization. The signed-out session stays inactive, and a later explicit sign-in can start a new session. If replacement session-key creation fails during sign-out, the node still retires the old authority and clears its persisted session.
+- d9a412e: Fix share receivers opened in several tabs at once ending up with different signing keys: a key stored by another tab a moment after this tab started is no longer discarded as future-dated.
+- 94566db: Replication: enforce independently verified finite-expiration owner SIWE anchors with uncaveated KV get+sync coverage on the same verified scope in the exact space, bounded device-grant minting, and session-parent-only silent renewal. A `first_install` timestamp bounds expiry only; it cannot authorize minting. The controller uses the durable browser consent deadline for preflight, active timers, grant caps, and network fallback; compact restored sessions can only reuse a matching stamped, active installed grant with finite effective expiry while their current independently verified session still covers the requested prefix. A missing owner-backed compact proof fails closed, and session refusal never exposes installed local bytes or keys. Grant transitions use opaque replica IDs, including when a committed gate expiry beats the controller timer. The runtime subscribes only while its stamped controller is bound and detaches on rebind or close. Adds pure grant-lifetime policy helpers and validates `replication.grantTtlMs` (positive, at most 7 days).
+
+  Browser boot bounds replica recovery before constructing the node. Failed or timed-out recovery gates local admission without breaking the network session; explicit sign-out still reaches the real lifecycle denial. The root web bundle remains inert with replication off; `@tinycloud/web-sdk/replica` exports a pure optional plugin and async IndexedDB factory loader. Applications register that plugin once with root `registerBrowserReplica` before constructing an enabled client, so test fixtures can inject a scheduler into the same root-owned runtime registry without a public clock option.
+
+  Browser sign-in selects the connected wallet's persisted session. Explicit restore retains valid network authority for a different or unknown wallet, but refuses replica stamp admission; local reads recheck the provider account before returning cached bytes or keys.
+
+  The runtime binds pending writes to the supplied lifecycle stamp and creates a fresh pending store when the stamp changes; gated storage cannot fall back to volatile pending memory. Replica opens carry the configured quota alongside the stamped grant policy. When a shorter grant policy expires before the immutable seven-day gate, get/list use the network and report `GRANT_EXPIRED`; only gate expiry causes `CONSENT_EXPIRED` and scoped denial. Rejected offline network fallbacks retain their network error and emit one `replication.read` error with the gate or current-session refusal reason; no local bytes are returned.
+
+- 94566db: Persist the replica session stamp with browser sessions and forward it on restore.
+- 370a8e4: `TinyCloudWeb.signOut()` now ends the session on the instance, through the new `TinyCloudNode.signOut()`: session accessors return `undefined`, the session key is replaced, pending requests are aborted, and service calls fail instead of acting for the signed-out user. A sign-in or restore still in progress when sign-out is called does not establish its session; a later `signIn()` or `restoreSession()` starts a fresh one.
+
+  `useDelegation()` results now belong to the session that created them: they stop working when that session signs out or is replaced by another `signIn()` or `restoreSession()`.
+
+- 86815bd: `browserReplicaPlugin` and its loaders are frozen, and `registerBrowserReplica` registers a frozen copy, so a same-realm script cannot swap the recovery guard or a replica loader at runtime.
+- 86815bd: A browser replica startup recovery that outlives its 3 s bound and later finishes cleanly now re-admits the replica without a page reload. Only one recovery runs at a time. While a recovery is still running, stamp admission waits up to 3 s for it without spending a retry. A late clean startup finish triggers one fresh recovery under the origin gate, and only that fresh report can re-admit the replica. A failed recovery is retried at stamp admission at most twice per page. Admission still refuses while recovery fails, and a deny made in the meantime still refuses the old stamp. If another tab holds the origin gate lock long enough that these retries run out, the replica stays gated (fail closed) until a reload.
+- 86815bd: The published `index.d.ts` no longer imports the undeclared `siwe` package; the replica bridge re-exports `SiweMessage` through `@tinycloud/sdk-core`, so strict installs (for example pnpm) resolve every type import.
+- 94566db: `TinyCloudWeb` accepts an optional `replication` config and exposes `tcw.replication`. Apps enabling it import the pure `@tinycloud/web-sdk/replica` plugin, call root `registerBrowserReplica(browserReplicaPlugin)` before constructing the client, and await `loadIndexedDbReplicaStorage()` before supplying browser storage. Missing or duplicate registration throws immediately; importing the optional entry alone does not register it. With replication unset, the root import does not load replica storage or start a worker. Missing, stale or malformed replica stamps gate local reads without discarding an otherwise valid network session; only a fresh interactive finite-expiration owner sign-in can establish a new stamp. Network restore never repairs it.
+- Updated dependencies [2aa917e]
+- Updated dependencies [c92953f]
+- Updated dependencies [b6d0b9f]
+- Updated dependencies [d2ad845]
+- Updated dependencies [6ad58de]
+- Updated dependencies [29440be]
+- Updated dependencies [9592d3d]
+- Updated dependencies [4aae658]
+- Updated dependencies [4ac7592]
+- Updated dependencies [a553392]
+- Updated dependencies [fc88c48]
+- Updated dependencies [86815bd]
+- Updated dependencies [e7f709d]
+- Updated dependencies [94566db]
+- Updated dependencies [38980b0]
+- Updated dependencies [41e5fca]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [7578ee6]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [2d491f0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [ba650ce]
+- Updated dependencies [ac612c0]
+- Updated dependencies [87a137e]
+- Updated dependencies [ef9653b]
+- Updated dependencies [9067edd]
+- Updated dependencies [daf8561]
+- Updated dependencies [370a8e4]
+- Updated dependencies [ef49c14]
+- Updated dependencies [5827d70]
+- Updated dependencies [e68e911]
+- Updated dependencies [6e7ad8f]
+- Updated dependencies [d84e379]
+- Updated dependencies [c2fd94b]
+- Updated dependencies [02c0a44]
+- Updated dependencies [116b214]
+- Updated dependencies [cce8b26]
+- Updated dependencies [eb9defd]
+- Updated dependencies [0c4c6b2]
+- Updated dependencies [baca422]
+- Updated dependencies [8c95ddd]
+- Updated dependencies [e99a127]
+- Updated dependencies [f97d73d]
+- Updated dependencies [18b6c9f]
+- Updated dependencies [2292db7]
+  - @tinycloud/node-sdk@3.3.0
+  - @tinycloud/sdk-core@3.3.0
+  - @tinycloud/web-sdk-wasm@1.7.7
+  - @tinycloud/replica@0.3.0
+  - @tinycloud/share-sdk@1.2.0
+  - @tinycloud/share-envelope@1.2.0
+
+## 3.3.0-beta.39
+
+### Patch Changes
+
+- Updated dependencies [ef49c14]
+  - @tinycloud/node-sdk@3.3.0-beta.39
+  - @tinycloud/replica@0.3.0-beta.11
+  - @tinycloud/sdk-core@3.3.0-beta.39
+
+## 3.3.0-beta.38
+
+### Patch Changes
+
+- Updated dependencies [9067edd]
+  - @tinycloud/share-sdk@1.2.0-beta.7
+  - @tinycloud/sdk-core@3.3.0-beta.38
+  - @tinycloud/node-sdk@3.3.0-beta.38
+
+## 3.3.0-beta.37
+
+### Patch Changes
+
+- Updated dependencies [4ac7592]
+  - @tinycloud/sdk-core@3.3.0-beta.37
+  - @tinycloud/node-sdk@3.3.0-beta.37
+
+## 3.3.0-beta.36
+
+### Patch Changes
+
+- Updated dependencies [9592d3d]
+  - @tinycloud/sdk-core@3.3.0-beta.36
+  - @tinycloud/node-sdk@3.3.0-beta.36
+
+## 3.3.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies [2d491f0]
+  - @tinycloud/replica@0.3.0-beta.10
+  - @tinycloud/node-sdk@3.3.0-beta.35
+
+## 3.3.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [a553392]
+  - @tinycloud/node-sdk@3.3.0-beta.34
+
+## 3.3.0-beta.33
+
+### Patch Changes
+
+- Updated dependencies [8c95ddd]
+  - @tinycloud/replica@0.3.0-beta.9
+  - @tinycloud/node-sdk@3.3.0-beta.33
+
+## 3.3.0-beta.32
+
+### Patch Changes
+
+- Updated dependencies [ba650ce]
+  - @tinycloud/web-sdk-wasm@1.7.7-beta.1
+
+## 3.3.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [6ad58de]
+  - @tinycloud/sdk-core@3.3.0-beta.31
+  - @tinycloud/web-sdk-wasm@1.7.7-beta.0
+  - @tinycloud/node-sdk@3.3.0-beta.31
+
+## 3.3.0-beta.30
+
+### Patch Changes
+
+- Updated dependencies [fc88c48]
+  - @tinycloud/sdk-core@3.3.0-beta.30
+  - @tinycloud/node-sdk@3.3.0-beta.30
+
+## 3.3.0-beta.29
+
+### Patch Changes
+
+- Updated dependencies [e99a127]
+  - @tinycloud/node-sdk@3.3.0-beta.29
+  - @tinycloud/replica@0.3.0-beta.8
+
+## 3.3.0-beta.28
+
+### Patch Changes
+
+- Updated dependencies [ac612c0]
+  - @tinycloud/sdk-core@3.3.0-beta.28
+  - @tinycloud/node-sdk@3.3.0-beta.28
+
+## 3.3.0-beta.27
+
+### Patch Changes
+
+- Updated dependencies [4aae658]
+  - @tinycloud/sdk-core@3.3.0-beta.27
+  - @tinycloud/node-sdk@3.3.0-beta.27
+
+## 3.3.0-beta.26
+
+### Patch Changes
+
+- Updated dependencies [7578ee6]
+  - @tinycloud/replica@0.3.0-beta.7
+  - @tinycloud/node-sdk@3.3.0-beta.26
+
+## 3.3.0-beta.25
+
+### Minor Changes
+
+- 87a137e: Retry node `NODE_BUSY` and `REQUEST_TIMEOUT` answers automatically. Both mean nothing was applied, so the services now retry them under the existing `retryPolicy` through the new `ServiceContext.invokeWithRetry(url, build)`, which calls `build` once per attempt so every attempt carries a freshly signed invocation (the node answers a repeated invocation with 409, so re-sending one could never succeed). `ServiceContext.fetch` itself no longer retries. A context without `invokeWithRetry` sends once. The policy: at most 4 attempts in about 12 s, honouring the node's `Retry-After` (capped at the remaining budget) and otherwise backing off exponentially with full jitter (250 ms base, 4 s cap). Aborts and per-request timeouts end the wait at once, and `OUTCOME_UNKNOWN` is never retried. `defaultRetryPolicy` changes accordingly (its retryable codes are now `NODE_BUSY` and `REQUEST_TIMEOUT`; `NETWORK_ERROR` and `TIMEOUT` are no longer listed because no service read them), and `RetryPolicy` gains an optional `maxTotalMs`. Opt out with `retryPolicy: { maxAttempts: 1 }`.
+
+  The CLI gains `--no-retry` and `TINYCLOUD_RETRY=0` for monitors and probes that must see the node's honest `NODE_BUSY`. KV responses (and `tc kv get|put|delete --json`) report `attempts` and `backoffMs`.
+
+### Patch Changes
+
+- Updated dependencies [87a137e]
+  - @tinycloud/node-sdk@3.3.0-beta.25
+  - @tinycloud/replica@0.3.0-beta.6
+  - @tinycloud/sdk-core@3.3.0-beta.25
+
+## 3.3.0-beta.24
+
+### Patch Changes
+
+- Updated dependencies [b6d0b9f]
+  - @tinycloud/node-sdk@3.3.0-beta.24
+
+## 3.3.0-beta.23
+
+### Minor Changes
+
+- d2ad845: `tc delegation create` now signs and activates the delegation through `delegateTo`, reads it back through the node's account delegation query, and prints its CID only once the node lists it as active (`DELEGATION_NOT_CONFIRMED` otherwise). `tc delegation list` and `tc delegation info` use that query (`POST /delegation/query`) via `account.delegations.query()`, which includes delegations signed by the session key; `list` gains `--space`, and `--to` accepts a `did:key` with a `#fragment`. Previously `create` and `list` sent `tinycloud.delegation/create` and `tinycloud.delegation/list` invocations that the node does not handle (it answered an empty 200, surfaced as a JSON parse error), and `info` called a method that did not exist.
+
+  A plain `tc auth login` now also requests `tinycloud.delegation/list` on the default space (OpenKey's default grant omits it). A session that lacks it, on the account space and its own space, gets a `PERMISSION_DENIED` error saying to run `tc auth login` again. `DelegationManager.query()` signs for the account space and falls back to the session's own space when the node refuses (403).
+
+  Breaking: removed `DelegationManager.create()` (use `TinyCloudNode.delegateTo()`), `DelegationManager.list()` (use `account.delegations.query()`), `TinyCloudNode.delegate()` (use `delegateTo()`), `TinyCloudNode.listDelegations()` (use `account.delegations.query()`), and the web-sdk `TinyCloudWeb.delegate()` (use `delegateTo()`) and `TinyCloudWeb.listDelegations()` (use `account.delegations.query()`). They sent invocations the node never handled, so they never worked. `account.delegations.list()` is not a replacement: it reads the SQL index and omits session-signed delegations. Also removed the `delegationManager` option from `SharingService` config; sharing uses `createDelegation` or `createDelegationWasm`.
+
+  `TinyCloudNode.delegateTo()` takes a new `requireActivation` option: when set, it throws when the node answers 200 but lists a target space under `skipped` (a space it does not host), naming that space; this used to look like success. It is off by default, since grants to a not-yet-hosted space (e.g. secrets) are valid. `tc delegation create` sets it. `DelegationManager.getChain()` and `checkPermission()` now return an `UNSUPPORTED_OPERATION` error when the node answers with an empty body.
+
+### Patch Changes
+
+- Updated dependencies [d2ad845]
+  - @tinycloud/sdk-core@3.3.0-beta.23
+  - @tinycloud/node-sdk@3.3.0-beta.23
+
+## 3.3.0-beta.22
+
+### Patch Changes
+
+- Updated dependencies [6e7ad8f]
+  - @tinycloud/share-sdk@1.2.0-beta.6
+  - @tinycloud/sdk-core@3.3.0-beta.22
+  - @tinycloud/node-sdk@3.3.0-beta.22
+
+## 3.3.0-beta.21
+
+### Patch Changes
+
+- Updated dependencies [02c0a44]
+  - @tinycloud/share-envelope@1.2.0-beta.0
+  - @tinycloud/share-sdk@1.2.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.21
+  - @tinycloud/node-sdk@3.3.0-beta.21
+
+## 3.3.0-beta.20
+
+### Minor Changes
+
+- cce8b26: Add an opt-in `registryPolicy: "fail-closed"` for host resolution and automatic space creation (TC-1443). The default does not change.
+
+  **Default (`"legacy-fallback"`, deprecated).** Sign-in resolves hosts exactly as before: when the location registry has no record or cannot be reached, the session silently uses the fallback host (`https://node.tinycloud.xyz` unless `tinycloudFallbackHosts` says otherwise). The first time a process takes that fallback it logs one `console.warn`; the fallback will be removed in a future major release. The default policy adds no registry request anywhere and no space-creation check.
+
+  **`registryPolicy: "fail-closed"`** (`TinyCloudNodeConfig`, `NodeUserAuthorizationConfig`, web `Config`):
+  - Sign-in without a configured host looks up the signer address in the registry first and acts on the three-state verdict. `registered`: the record's hosts, in record order. `unregistered`: `newUserHost` (default `https://node.tinycloud.xyz`; `null` refuses unregistered owners with `NodeNotFoundError`). `unavailable` (unreachable, timeout, bad status, oversize or malformed body, bad signature, a sequence below the remembered one, a not-found after a registration was seen, a failed read of the remembered sequence, or no registry configured): `RegistryUnavailableError`, never the new-user host. A record with no usable host is `NodeNotFoundError`. `newUserHost` governs routing only; a pinned host may still create spaces for an unregistered owner.
+  - One host-scheme rule: hosts from a signed record are used for routing and for space creation only if they are HTTPS or HTTP on loopback, the same rule as `newUserHost` and `use-host`. The default policy is unchanged.
+  - Local discovery probes the configured `localNodeUrl` / `localLinkName` and `*.local.tinycloud.link` hosts from a `registered` verdict; it no longer reads the registry itself, so an older or invalid record cannot route a session.
+  - The lookup key is the signer address, never the session chain. The v1 registry keys records on an exact `did:pkh:eip155:<chain>:<EIP-55 address>`, so v1 lookups use `registryOwnerSubjectV1(address, registryChainId)` (`registryChainId` default 1). Registry v2 will key on the address alone.
+  - `onNodeNotFound({ error, attempt })` decides what sign-in does instead of throwing: `{ action: "retry" }`, `{ action: "use-host", host }` (an HTTPS or loopback HTTP origin) or `{ action: "abort" }`. The SDK does not verify a `use-host` host's identity, and the choice persists with the session like any resolved host.
+  - Automatic space creation is guarded: `ensureSpaceExists` (before asking the creation handler), account bootstrap host steps, sign-in's owned-space hosting, `ensureOwnedSpaceHosted`, and `ensurePublicSpace` (which the vault calls on unlock). Creating a space is refused with `NodeRegistryEntryExistsError` when the owner's registry record does not list the host (including a record with no hosts), and with `RegistryUnavailableError` when the registry gives no verdict. The space-creation handler's `onSpaceCreationFailed` receives the error. Pinned-host apps look the verdict up once, at creation. An explicit `hostOwnedSpace()` call is not guarded.
+  - The highest record sequence seen per owner is remembered in `registrySequenceStore` (default in memory; web-sdk defaults to `localStorage` under `tinycloud.registrySequences.v1`). A failed write (full or read-only storage) logs one warning and keeps the verdict in hand, and the `localStorage` store still remembers the sequence for the page. A failed read or a corrupt stored value fails that lookup closed; remove the key to reset.
+
+  New sdk-core exports: `resolveOwnerHosts`, `lookupOwnerRegistryVerdict`, `resolveFailClosedTinyCloudHosts`, `assertSpaceCreationAllowed`, `registryOwnerSubjectV1`, `createInMemoryRegistrySequenceStore`, `createLocalStorageRegistrySequenceStore`, the errors `NodeNotFoundError` (`code: "node_not_found"`), `RegistryUnavailableError` (`"registry_unavailable"`) and `NodeRegistryEntryExistsError` (`"node_registry_entry_exists"`), their option and callback types, and `DEFAULT_NEW_USER_HOST`, `DEFAULT_REGISTRY_OWNER_CHAIN_ID`, `DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS` (3 s) and `DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY`. Match errors on `error.code`: web-sdk bundles its own sdk-core, so `instanceof` against an app's separate sdk-core copy does not hold.
+
+### Patch Changes
+
+- Updated dependencies [cce8b26]
+  - @tinycloud/sdk-core@3.3.0-beta.20
+  - @tinycloud/node-sdk@3.3.0-beta.20
+
+## 3.3.0-beta.19
+
+### Patch Changes
+
+- d9a412e: Fix share receivers opened in several tabs at once ending up with different signing keys: a key stored by another tab a moment after this tab started is no longer discarded as future-dated.
+
+## 3.3.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [eb9defd]
+  - @tinycloud/sdk-core@3.3.0-beta.18
+  - @tinycloud/node-sdk@3.3.0-beta.18
+
+## 3.3.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [daf8561]
+  - @tinycloud/share-sdk@1.2.0-beta.4
+  - @tinycloud/sdk-core@3.3.0-beta.17
+  - @tinycloud/node-sdk@3.3.0-beta.17
+
+## 3.3.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [18b6c9f]
+  - @tinycloud/node-sdk@3.3.0-beta.16
+
+## 3.3.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [e68e911]
+  - @tinycloud/share-sdk@1.2.0-beta.3
+  - @tinycloud/sdk-core@3.3.0-beta.15
+  - @tinycloud/node-sdk@3.3.0-beta.15
+
+## 3.3.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [d84e379]
+  - @tinycloud/share-sdk@1.2.0-beta.2
+  - @tinycloud/sdk-core@3.3.0-beta.14
+  - @tinycloud/node-sdk@3.3.0-beta.14
+
+## 3.3.0-beta.13
+
+### Patch Changes
+
+- Updated dependencies [c2fd94b]
+  - @tinycloud/share-sdk@1.2.0-beta.1
+  - @tinycloud/sdk-core@3.3.0-beta.13
+  - @tinycloud/node-sdk@3.3.0-beta.13
+
+## 3.3.0-beta.12
+
+### Minor Changes
+
+- d1e4c3d: Accountless share receivers use a non-extractable WebCrypto Ed25519 signing key. Its handle is kept in IndexedDB (database `tinycloud.share.receiver-keys`, one key per origin, usable for at most one hour), so a reload keeps working. Where the handle cannot be kept, or the browser lacks WebCrypto Ed25519, the key is held in page memory only, its credentials stay in page memory too, and a reload asks the recipient to verify their email again. On the path without WebCrypto Ed25519 the seed buffer is overwritten with zeros when the page goes away or the session is forgotten; copies the signing library makes internally cannot be reached and are left to garbage collection. Where reading session storage throws (site data blocked), page memory is used instead. Receiver sessions stored by earlier versions are removed together with their credentials, and the recipient verifies again. `forgetShareReceiverSession(origin)` removes the key and its credentials. A session refuses to sign after it expires, after it is forgotten, or after its memory-only key was discarded with the page, with `ShareReceiverSessionEndedError`.
+
+  Real Apple Safari/iOS (including private-mode IndexedDB persistence of the key) is not yet verified.
+
+  Breaking changes:
+  - Removed exported type `ShareReceiverSessionRecordV1` (consumers referencing it must drop the import).
+  - `ShareReceiverIdentity.custody` is now `"persistent" | "memory"` instead of `"session"`.
+  - `ShareReceiverSession` adds `custody`, `expiresAt` and `credentialStorage`.
+  - `createOrRestoreShareReceiverSession` takes an optional third `options` argument, and its `storage` argument may be omitted.
+  - `ShareReceiverServiceOptions` accepts `indexedDB`.
+
+## 3.3.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [2292db7]
+  - @tinycloud/node-sdk@3.3.0-beta.11
+  - @tinycloud/replica@0.3.0-beta.5
+  - @tinycloud/sdk-core@3.3.0-beta.11
+
+## 3.3.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [116b214]
+  - @tinycloud/share-sdk@1.2.0-beta.0
+  - @tinycloud/sdk-core@3.3.0-beta.10
+  - @tinycloud/node-sdk@3.3.0-beta.10
+
+## 3.3.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [ef9653b]
+  - @tinycloud/node-sdk@3.3.0-beta.9
+
+## 3.3.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [f97d73d]
+  - @tinycloud/sdk-core@3.3.0-beta.8
+  - @tinycloud/node-sdk@3.3.0-beta.8
+
+## 3.3.0-beta.7
+
+### Patch Changes
+
+- 94566db: Replication: enforce independently verified finite-expiration owner SIWE anchors with uncaveated KV get+sync coverage on the same verified scope in the exact space, bounded device-grant minting, and session-parent-only silent renewal. A `first_install` timestamp bounds expiry only; it cannot authorize minting. The controller uses the durable browser consent deadline for preflight, active timers, grant caps, and network fallback; compact restored sessions can only reuse a matching stamped, active installed grant with finite effective expiry while their current independently verified session still covers the requested prefix. A missing owner-backed compact proof fails closed, and session refusal never exposes installed local bytes or keys. Grant transitions use opaque replica IDs, including when a committed gate expiry beats the controller timer. The runtime subscribes only while its stamped controller is bound and detaches on rebind or close. Adds pure grant-lifetime policy helpers and validates `replication.grantTtlMs` (positive, at most 7 days).
+
+  Browser boot bounds replica recovery before constructing the node. Failed or timed-out recovery gates local admission without breaking the network session; explicit sign-out still reaches the real lifecycle denial. The root web bundle remains inert with replication off; `@tinycloud/web-sdk/replica` exports a pure optional plugin and async IndexedDB factory loader. Applications register that plugin once with root `registerBrowserReplica` before constructing an enabled client, so test fixtures can inject a scheduler into the same root-owned runtime registry without a public clock option.
+
+  Browser sign-in selects the connected wallet's persisted session. Explicit restore retains valid network authority for a different or unknown wallet, but refuses replica stamp admission; local reads recheck the provider account before returning cached bytes or keys.
+
+  The runtime binds pending writes to the supplied lifecycle stamp and creates a fresh pending store when the stamp changes; gated storage cannot fall back to volatile pending memory. Replica opens carry the configured quota alongside the stamped grant policy. When a shorter grant policy expires before the immutable seven-day gate, get/list use the network and report `GRANT_EXPIRED`; only gate expiry causes `CONSENT_EXPIRED` and scoped denial. Rejected offline network fallbacks retain their network error and emit one `replication.read` error with the gate or current-session refusal reason; no local bytes are returned.
+
+- 94566db: Persist the replica session stamp with browser sessions and forward it on restore.
+- 86815bd: `browserReplicaPlugin` and its loaders are frozen, and `registerBrowserReplica` registers a frozen copy, so a same-realm script cannot swap the recovery guard or a replica loader at runtime.
+- 86815bd: A browser replica startup recovery that outlives its 3 s bound and later finishes cleanly now re-admits the replica without a page reload. Only one recovery runs at a time. While a recovery is still running, stamp admission waits up to 3 s for it without spending a retry. A late clean startup finish triggers one fresh recovery under the origin gate, and only that fresh report can re-admit the replica. A failed recovery is retried at stamp admission at most twice per page. Admission still refuses while recovery fails, and a deny made in the meantime still refuses the old stamp. If another tab holds the origin gate lock long enough that these retries run out, the replica stays gated (fail closed) until a reload.
+- 86815bd: The published `index.d.ts` no longer imports the undeclared `siwe` package; the replica bridge re-exports `SiweMessage` through `@tinycloud/sdk-core`, so strict installs (for example pnpm) resolve every type import.
+- 94566db: `TinyCloudWeb` accepts an optional `replication` config and exposes `tcw.replication`. Apps enabling it import the pure `@tinycloud/web-sdk/replica` plugin, call root `registerBrowserReplica(browserReplicaPlugin)` before constructing the client, and await `loadIndexedDbReplicaStorage()` before supplying browser storage. Missing or duplicate registration throws immediately; importing the optional entry alone does not register it. With replication unset, the root import does not load replica storage or start a worker. Missing, stale or malformed replica stamps gate local reads without discarding an otherwise valid network session; only a fresh interactive finite-expiration owner sign-in can establish a new stamp. Network restore never repairs it.
+- Updated dependencies [29440be]
+- Updated dependencies [86815bd]
+- Updated dependencies [e7f709d]
+- Updated dependencies [94566db]
+- Updated dependencies [38980b0]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [86815bd]
+- Updated dependencies [0c4c6b2]
+  - @tinycloud/node-sdk@3.3.0-beta.7
+  - @tinycloud/sdk-core@3.3.0-beta.7
+  - @tinycloud/replica@0.3.0-beta.4
+
+## 3.2.6-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.6-beta.6
+
+## 3.2.6-beta.5
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.6-beta.5
+
+## 3.2.6-beta.4
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.2.6-beta.4
+- @tinycloud/sdk-core@3.2.6-beta.4
+
 ## 3.2.6-beta.3
 
 ### Patch Changes

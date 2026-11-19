@@ -1,9 +1,12 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
 
 import {
   authorizationVerdictOf,
   CaveatedDelegationUnsupportedError,
+  ErrorCodes,
   canonicalHashHex,
   hexEncode,
   encryptionBase64Decode,
@@ -22,7 +25,33 @@ import {
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { DEFAULT_DELEGATION_EXPIRY_MS } from "./delegateToHelpers";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
 const revokeTargetCid = "bafkr4id4zlugcezsh7a5op53hdbepyi2buq5wx6s2czglg2xchvxeqqmn4";
+
+let registry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  registry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  registry?.stop(true);
+});
+
+function withRegistryMetadata(
+  businessFetch: typeof fetch,
+  registryFetch: typeof fetch,
+  identity?: { origin: string; nodeDid: string },
+): typeof fetch {
+  return mock((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === registry.url.origin) return registryFetch(input, init);
+    if (identity && url.origin === identity.origin && (init?.method ?? "GET") === "GET") {
+      if (url.pathname === "/info") return Response.json({ nodeId: identity.nodeDid });
+      if (url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: identity.nodeDid });
+    }
+    return businessFetch(input, init);
+  }) as typeof fetch;
+}
 
 function makeFakeSessionManager(): ISessionManager {
   return {
@@ -77,6 +106,7 @@ function makeFakeWasmBindings(
       };
     }),
     parseRecapFromSiwe: mock(() => []),
+    parseVerifiedRecapFromSiwe: mock(() => []),
     generateHostSIWEMessage: mock(() => ""),
     siweToDelegationHeaders: mock(() => ({})),
     protocolVersion: () => 1,
@@ -178,6 +208,7 @@ function makeNode(invoke: IWasmBindings["invoke"]): TinyCloudNode {
   };
   const node = new TinyCloudNode({
     host: "https://tinycloud.test",
+    tinycloudRegistryUrl: registry.url.origin,
     signer: signer as any,
     wasmBindings: makeFakeWasmBindings(invoke),
   });
@@ -194,6 +225,8 @@ Nonce: 32891756
 Issued At: 2026-05-05T00:00:00.000Z
 Expiration Time: 2999-01-01T00:00:00.000Z`;
   (node as any).auth = {
+    resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
+    nodeIdForHost: () => node.did,
     tinyCloudSession: {
       address,
       chainId: 1,
@@ -212,12 +245,12 @@ Expiration Time: 2999-01-01T00:00:00.000Z`;
 
 async function withActivatedDelegations(fn: () => Promise<void>): Promise<void> {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = mock(async () =>
+  globalThis.fetch = withRegistryMetadata(mock(async () =>
     new Response(JSON.stringify({ activated: ["runtime-cid"] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }),
-  ) as any;
+  ) as typeof fetch, originalFetch);
   try {
     await fn();
   } finally {
@@ -324,7 +357,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -402,7 +435,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     const networkUrl = `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}`;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = withRegistryMetadata(mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = (init?.method ?? "GET").toUpperCase();
       if (method === "GET" && url === networkUrl) return Response.json({ descriptor });
@@ -432,7 +465,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
         return new Response(`Unauthorized Action: ${networkId} / tinycloud.encryption/decrypt`, { status });
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
-    }) as typeof fetch;
+    }) as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encrypted = await (node as any).createEncryptionService().encryptToNetwork(
@@ -472,9 +505,9 @@ describe("TinyCloudNode runtime permission delegations", () => {
   test("failed runtime grant activation preserves the host verdict and diagnostic", async () => {
     const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () =>
+    globalThis.fetch = withRegistryMetadata(mock(async () =>
       new Response("Unauthorized Action: missing capability", { status: 403 }),
-    ) as unknown as typeof fetch;
+    ) as unknown as typeof fetch, originalFetch);
     try {
       await node.grantRuntimePermissions([{
         service: "tinycloud.kv",
@@ -909,13 +942,13 @@ describe("TinyCloudNode runtime permission delegations", () => {
       fn: () => Promise<void>,
     ): Promise<void> {
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = (async (input: RequestInfo | URL) => {
+      globalThis.fetch = withRegistryMetadata((async (input: RequestInfo | URL) => {
         events.push(`fetch:${String(input)}`);
         return new Response(JSON.stringify({ activated: ["child-runtime-cid"] }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
-      }) as typeof fetch;
+      }) as typeof fetch, originalFetch);
       try {
         await fn();
       } finally {
@@ -964,6 +997,83 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
       expect(events).toEqual(["hook"]);
     });
+  });
+
+  test("disableSubDelegation marks a runtime-grant delegation terminal with the grant's session key", async () => {
+    const address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const spaceId = `tinycloud:pkh:eip155:1:${address}:secrets`;
+    const permission: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: "secrets",
+      path: "vault/secrets/ANTHROPIC_API_KEY",
+      actions: ["tinycloud.kv/put"],
+    };
+    const privateKey = ed25519.utils.randomPrivateKey();
+    const publicKey = ed25519.getPublicKey(privateKey);
+    const grantDid = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...publicKey))}`;
+    const b64u = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url");
+    const node = makeNode(mock(() => ({})));
+    // The WASM builder's token: signed by the runtime grant's session key, no facts.
+    const input = [
+      { alg: "EdDSA", typ: "JWT", ucv: "0.10.0" },
+      { iss: `${grantDid}#${grantDid.slice(8)}`, aud: "did:key:backend", exp: 1_900_000_000, prf: ["runtime-cid"], att: {} },
+    ].map((part) => b64u(Buffer.from(JSON.stringify(part)))).join(".");
+    const wasmToken = `${input}.${b64u(ed25519.sign(Buffer.from(input), privateKey))}`;
+    Object.assign(Reflect.get(node, "wasmBindings"), { createDelegation: mock((_session: unknown, delegateDid: string, space: string) => ({
+      delegation: wasmToken,
+      cid: "wasm-cid",
+      delegateDid,
+      expiry: 1_900_000_000,
+      resources: [{ service: "kv", space, path: permission.path, actions: permission.actions }],
+    })) });
+    Object.assign(node, {
+      runtimePermissionGrants: [{
+        session: {
+          delegationHeader: { Authorization: "runtime-token" },
+          delegationCid: "runtime-cid",
+          spaceId,
+          verificationMethod: `${grantDid}#${grantDid.slice(8)}`,
+          jwk: { kty: "OKP", crv: "Ed25519", x: b64u(publicKey), d: b64u(privateKey) },
+        },
+        delegation: {
+          cid: "runtime-cid",
+          delegationHeader: { Authorization: "runtime-token" },
+          spaceId,
+          path: permission.path,
+          actions: permission.actions,
+          expiry: new Date(Date.now() + 3_600_000),
+          delegateDID: grantDid,
+          ownerAddress: address,
+          chainId: 1,
+        },
+        operations: [{ spaceId, service: "kv", path: permission.path, action: "tinycloud.kv/put" }],
+        expiresAt: new Date(Date.now() + 3_600_000),
+        provenance: "delegated",
+      }],
+    });
+    const activated: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = withRegistryMetadata((async (_input: RequestInfo | URL, init?: RequestInit) => {
+      activated.push(new Headers(init?.headers).get("Authorization") ?? "");
+      return new Response(JSON.stringify({ activated: ["x"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch, originalFetch);
+    try {
+      const result = await node.delegateTo("did:key:backend", [permission], { disableSubDelegation: true });
+      const token = result.delegation.delegationHeader.Authorization;
+      const [header, payload, signature] = token.split(".");
+      expect(JSON.parse(Buffer.from(payload!, "base64url").toString()).fct).toEqual([
+        { "xyz.tinycloud.policy/delegationMode": "terminal" },
+      ]);
+      expect(ed25519.verify(Buffer.from(signature!, "base64url"), Buffer.from(`${header}.${payload}`), publicKey)).toBe(true);
+      expect(result.delegation.disableSubDelegation).toBe(true);
+      expect(result.delegation.cid).not.toBe("wasm-cid");
+      expect(activated).toEqual([token]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("rejects an uncaveated public request selected against a caveated runtime grant", async () => {
@@ -1162,6 +1272,31 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(node.hasRuntimePermissions(request("tinycloud.kv/retain"))).toBe(false);
   });
 
+  test("hasRuntimePermissions does not count a runtime grant after it expires", () => {
+    const node = makeNode(mock(() => ({})));
+    const spaceId = "tinycloud:pkh:eip155:1:0x71C7656EC7ab88b098defB751B7401B5f6d8976F:default";
+    const operations = [{ spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/get" }];
+    const entries = [{ service: "tinycloud.kv", space: spaceId, path: "notes/", actions: ["tinycloud.kv/get"] }];
+
+    Reflect.set(node, "runtimePermissionGrants", [{
+      session: {},
+      delegation: {},
+      operations,
+      expiresAt: new Date(Date.now() - 1),
+      provenance: "runtime",
+    }]);
+    expect(node.hasRuntimePermissions(entries)).toBe(false);
+
+    Reflect.set(node, "runtimePermissionGrants", [{
+      session: {},
+      delegation: {},
+      operations,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      provenance: "runtime",
+    }]);
+    expect(node.hasRuntimePermissions(entries)).toBe(true);
+  });
+
   test("can reinstall a runtime delegation targeted at fragmentless session DID", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
@@ -1245,6 +1380,154 @@ describe("TinyCloudNode runtime permission delegations", () => {
     expect(node.hasRuntimePermissions([permission])).toBe(true);
   });
 
+function makeExpiryTestNode(): TinyCloudNode {
+  const invoke = mock((session: { delegationHeader: { Authorization: string } }) => ({
+    Authorization: session.delegationHeader.Authorization,
+  }));
+  // makeNode takes the wasm invoke type; the mock only echoes the auth header.
+  return makeNode(invoke as unknown as IWasmBindings["invoke"]);
+}
+
+function lastPrepareExpiryMs(node: TinyCloudNode): number {
+  // Test-only access to the wasm binding mock recorded by makeFakeWasmBindings.
+  const wasm = node as unknown as {
+    wasmBindings: { prepareSession: { mock: { calls: Array<[{ expirationTime: string }]> } } };
+  };
+  return new Date(wasm.wasmBindings.prepareSession.mock.calls[0][0].expirationTime).getTime();
+}
+
+const DECRYPT_EXPIRY_TEST_ACTIONS = ["tinycloud.encryption/decrypt"];
+
+test("runtime grants that include decrypt honour an explicit expiry of one hour or less", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([permission], { expiry: 3_540_000 });
+  });
+
+  const target = before + 3_540_000;
+  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
+  expect(delegations).toHaveLength(1);
+  expect(Math.abs(delegations[0].expiry.getTime() - target)).toBeLessThanOrEqual(5_000);
+});
+
+test("runtime grants without decrypt keep the 30-day default", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/get"],
+  };
+
+  const before = Date.now();
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission]);
+  });
+
+  expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60_000);
+});
+
+test("runtime grants that include decrypt end within a shorter session expiry", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+  const session = (node as unknown as {
+    auth: { tinyCloudSession: { siwe: string } };
+  }).auth.tinyCloudSession;
+  const sessionEnd = new Date(Date.now() + 20 * 60_000);
+  session.siwe = session.siwe.replace("2999-01-01T00:00:00.000Z", sessionEnd.toISOString());
+
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission]);
+  });
+
+  expect(lastPrepareExpiryMs(node)).toBe(Math.floor(sessionEnd.getTime() / 1000) * 1000);
+});
+
+function expectEveryExpiryNear(
+  node: TinyCloudNode,
+  delegations: Array<{ expiry: Date }>,
+  expectedMs: number,
+): void {
+  const expiries = [...allPrepareExpiryMs(node), ...delegations.map((d) => d.expiry.getTime())];
+  expect(expiries.length).toBeGreaterThan(0);
+  for (const expiry of expiries) {
+    expect(Math.abs(expiry - expectedMs)).toBeLessThanOrEqual(5_000);
+  }
+}
+
+const MIXED_DECRYPT_KV_PERMISSIONS = (node: TinyCloudNode): PermissionEntry[] => [
+  {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/get"],
+  },
+  {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  },
+];
+
+test("non-encryption wildcard runtime grants keep the 30-day default", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/*"],
+  };
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([permission]);
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 30 * 24 * 60 * 60_000);
+});
+
+test("non-encryption wildcard runtime grants accept an explicit 7d expiry", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/*"],
+  };
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([permission], { expiry: "7d" });
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 7 * 24 * 60 * 60_000);
+});
+
+test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for every delegation", async () => {
+  const node = makeExpiryTestNode();
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions(MIXED_DECRYPT_KV_PERMISSIONS(node), {
+      expiry: 3_600_000,
+    });
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 3_600_000);
+});
+
   test("grants mixed KV and raw encryption permissions in one runtime delegation", async () => {
     const invoke = mock((session: any) => ({
       Authorization: session.delegationHeader.Authorization,
@@ -1319,7 +1602,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
         actions: ["tinycloud.encryption/decrypt"],
       },
     ];
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: secretsSpaceId,
@@ -1365,7 +1648,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
       path: networkId,
       actions: ["tinycloud.encryption/decrypt"],
     };
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "encryption",
         space: "encryption",
@@ -1440,27 +1723,32 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     const node = new TinyCloudNode({
       host: "http://127.0.0.1:1",
+      tinycloudRegistryUrl: registry.url.origin,
       signer,
       wasmBindings: wasm,
     });
     await node.restoreSession(proof);
     const bindings = (node as any).wasmBindings;
     const originalInvokeAny = bindings.invokeAny;
-    const queryInvokeAny = mock((..._args: any[]) => ({ Authorization: "restored-query" }));
+    const queryInvokeAny = mock(originalInvokeAny.bind(bindings));
     bindings.invokeAny = queryInvokeAny;
-    (node.delegationManager as any).fetchFn = mock(async () => new Response(JSON.stringify({
-      schemaVersion: 2,
-      items: [],
-    }), { headers: { "content-type": "application/json" } }));
-    const restoredQuery = await node.delegationManager.query();
-    expect(restoredQuery.ok).toBe(true);
-    expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
-      spaceId: node.accountSpaceId,
-      service: "delegation",
-      path: "",
-      action: "tinycloud.delegation/list",
-    }]);
-    bindings.invokeAny = originalInvokeAny;
+    const queryFetch = globalThis.fetch;
+    globalThis.fetch = withRegistryMetadata(mock(async () => Response.json({
+      schemaVersion: 2, items: [],
+    })) as typeof fetch, queryFetch, { origin: "http://127.0.0.1:1", nodeDid: node.did });
+    try {
+      const restoredQuery = await node.delegationManager.query();
+      expect(restoredQuery.ok).toBe(true);
+      expect(queryInvokeAny.mock.calls[0]?.[1]).toEqual([{
+        spaceId: node.accountSpaceId,
+        service: "delegation",
+        path: "",
+        action: "tinycloud.delegation/list",
+      }]);
+    } finally {
+      globalThis.fetch = queryFetch;
+      bindings.invokeAny = originalInvokeAny;
+    }
     expect(node.getVerifiedSessionCapabilities()).toEqual([{
       service: "tinycloud.encryption",
       space: spaceId,
@@ -1623,9 +1911,9 @@ describe("TinyCloudNode runtime permission delegations", () => {
   test("classifies a host missing-parent rejection for raw CID revoke authority", async () => {
     const node = makeNode(mock(() => ({})) as any);
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () =>
+    globalThis.fetch = withRegistryMetadata(mock(async () =>
       new Response("Cannot find parent delegation", { status: 401 })
-    ) as any;
+    ) as typeof fetch, originalFetch);
 
     try {
       await expect(node.grantRuntimePermissions([{
@@ -1786,7 +2074,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
     });
 
     const prepareSession = (node as any).wasmBindings.prepareSession;
-    expect(prepareSession.mock.calls[0][0].expirationTime).toBe(expiry.toISOString());
+    expect(prepareSession.mock.calls[0][0].expirationTime).toBe(new Date(Math.floor(expiry.getTime() / 1000) * 1000).toISOString());
   });
 
   test("useDelegation installs encryption delegations as raw runtime grants", async () => {
@@ -1985,7 +2273,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -2013,14 +2301,18 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
     const signRawNetworkAuthorization = mock(
       async ({ targetNode, networkId: signedNetworkId, action, facts }: any) => {
+        const keyPath = facts.keyPath;
         expect(targetNode).toBe(node.did);
-        expect(signedNetworkId).toBe(networkId);
+        expect(signedNetworkId).toBe(keyPath === undefined ? networkId : `${networkId}/${keyPath}`);
         expect(action).toBe("tinycloud.encryption/decrypt");
         expect(facts.targetNode).toBe(node.did);
         expect(facts.networkId).toBe(networkId);
+        expect(facts.keyPath).toBe(keyPath);
         return {
           authorization: "Invocation node-encryption",
-          invocationCid: "bafy-node-encryption",
+          invocationCid: keyPath === undefined
+            ? "bafy-node-encryption"
+            : "bafy-node-encryption-scoped",
         };
       },
     );
@@ -2066,7 +2358,9 @@ describe("TinyCloudNode runtime permission delegations", () => {
           request.receiverPublicKey,
         );
         const wrappedKey = xor(receiverPublicKey, symmetricKey);
-        const invocationCid = "bafy-node-encryption";
+        const invocationCid = request.keyPath === undefined
+          ? "bafy-node-encryption"
+          : "bafy-node-encryption-scoped";
         const requestBodyHash = canonicalHashHex(crypto.sha256, request as any);
         const response: DecryptResponseBody = {
           type: "tinycloud.encryption.decrypt-result/v1",
@@ -2094,7 +2388,7 @@ describe("TinyCloudNode runtime permission delegations", () => {
 
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
-    globalThis.fetch = fetchMock as typeof fetch;
+    globalThis.fetch = withRegistryMetadata(fetchMock as typeof fetch, originalFetch, { origin: "https://tinycloud.test", nodeDid: node.did });
 
     try {
       const encryption = (node as any).createEncryptionService();
@@ -2109,14 +2403,33 @@ describe("TinyCloudNode runtime permission delegations", () => {
       });
       expect(decryptResult.ok).toBe(true);
       if (!decryptResult.ok) return;
-
       expect(new TextDecoder().decode(decryptResult.data)).toBe(
         "hello tinycloud encryption",
       );
-      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "POST"]);
-      expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(1);
 
-      const postCall = fetchCalls[1];
+      const keyPath = "share/abcdef1234567890";
+      const scopedEncryptResult = await encryption.encryptToNetwork(
+        networkId,
+        plaintext,
+        { keyPath },
+      );
+      expect(scopedEncryptResult.ok).toBe(true);
+      if (!scopedEncryptResult.ok) return;
+      const scopedDecryptResult = await encryption.decryptEnvelope(
+        scopedEncryptResult.data,
+        { proofs: ["bafyDelegationFromPrincipal"] },
+      );
+      expect(scopedDecryptResult.ok).toBe(true);
+      if (!scopedDecryptResult.ok) return;
+      expect(new TextDecoder().decode(scopedDecryptResult.data)).toBe(
+        "hello tinycloud encryption",
+      );
+
+      const postCalls = fetchCalls.filter((call) => call.method === "POST");
+      expect(postCalls).toHaveLength(2);
+      expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(2);
+
+      const postCall = postCalls[0];
       expect(postCall.url).toBe(
         `https://tinycloud.test/encryption/networks/${encodeURIComponent(networkId)}/decrypt`,
       );
@@ -2131,6 +2444,17 @@ describe("TinyCloudNode runtime permission delegations", () => {
       expect(request.receiverPublicKeyHash).toBe(
         canonicalHashHex(crypto.sha256, request.receiverPublicKey),
       );
+      const scopedPostCall = postCalls[1];
+      expect(scopedPostCall.url).toBe(postCall.url);
+      const scopedRequest = JSON.parse(
+        scopedPostCall.body ?? "{}",
+      ) as DecryptRequestBody;
+      expect(scopedRequest).toMatchObject({
+        networkId,
+        keyPath,
+        encryptedSymmetricKeyHash:
+          scopedEncryptResult.data.encryptedSymmetricKeyHash,
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2202,7 +2526,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put");
 
     // The primary session's own recap covers this native op.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2241,7 +2565,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
 
     installBroadGrant(node, defaultSpaceId, "sql", "tinycloud.sql/write");
 
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "sql",
         space: defaultSpaceId,
@@ -2291,7 +2615,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
 
     // Primary recap only covers the DEFAULT space — so the op on `secrets`
     // is not covered by the synthetic primary and the grant must win.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2334,7 +2658,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     // Primary recap claims Bob's identically-named "default" space. Because we
     // build primary ops from the RAW full URI, the owner is preserved and the
     // synthetic primary must NOT cover an op on Alice's space.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: bobSpaceId,
@@ -2378,7 +2702,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     // recap claims it, the synthetic primary must NOT include it — otherwise
     // the (non-working) primary would out-rank the working bootstrap grant.
     (node as any).auth.lastActivationSkippedSpaceIds = [defaultSpaceId];
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2453,7 +2777,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     });
 
     // Primary recap only covers the DEFAULT space.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "sql",
         space: defaultSpaceId,
@@ -2522,7 +2846,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
 
     // One real delegated grant plus the synthetic primary.
     installBroadGrant(node, defaultSpaceId, "kv", "tinycloud.kv/put", "delegated");
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: defaultSpaceId,
@@ -2575,7 +2899,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 
     // Primary recap covers BOTH the primary space AND the account space.
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: applicationsSpaceId,
@@ -2632,7 +2956,7 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
     const applicationsSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:default`;
     const accountSpaceId = `tinycloud:pkh:eip155:1:${ADDRESS}:account`;
 
-    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => [
       {
         service: "kv",
         space: applicationsSpaceId,
@@ -2754,5 +3078,299 @@ describe("TinyCloudNode primary-session grant precedence (TC-111)", () => {
       "bootstrap-token",
     );
     expect(invoke.mock.calls[1][0].spaceId).toBe(defaultSpaceId);
+  });
+});
+
+describe("TinyCloudNode grantRuntimePermissions issued expiry", () => {
+  const secretsPermission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/secrets/ANTHROPIC_API_KEY",
+    actions: ["tinycloud.kv/put"],
+  };
+  // makeNode() signs in with a SIWE whose expiration is 2999-01-01T00:00:00.000Z.
+  const SESSION_EXPIRY_MS = Date.parse("2999-01-01T00:00:00.000Z");
+
+  test("the issued delegation expires at the requested expiry", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    await withActivatedDelegations(async () => {
+      const before = Date.now();
+      const delegations = await node.grantRuntimePermissions([secretsPermission], {
+        expiry: 3_600_000,
+      });
+      const after = Date.now();
+      expect(delegations).toHaveLength(1);
+      const issued = new Date(delegations[0].expiry).getTime();
+      expect(issued).toBeGreaterThanOrEqual(before + 3_600_000);
+      expect(issued).toBeLessThanOrEqual(after + 3_600_000);
+    });
+  });
+
+  test("the issued delegation defaults to the 30-day window when no expiry is given", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    await withActivatedDelegations(async () => {
+      const before = Date.now();
+      const delegations = await node.grantRuntimePermissions([secretsPermission]);
+      const after = Date.now();
+      expect(delegations).toHaveLength(1);
+      const issued = new Date(delegations[0].expiry).getTime();
+      expect(issued).toBeGreaterThanOrEqual(before + DEFAULT_DELEGATION_EXPIRY_MS);
+      expect(issued).toBeLessThanOrEqual(after + DEFAULT_DELEGATION_EXPIRY_MS);
+    });
+  });
+
+  test("the issued delegation never outlives the session", async () => {
+    const node = makeNode(mock(() => ({})) as IWasmBindings["invoke"]);
+    await withActivatedDelegations(async () => {
+      const delegations = await node.grantRuntimePermissions([secretsPermission], {
+        expiry: 2_000 * 365 * 24 * 3_600_000,
+      });
+      expect(delegations).toHaveLength(1);
+      expect(new Date(delegations[0].expiry).getTime()).toBe(SESSION_EXPIRY_MS);
+    });
+  });
+});
+
+function allPrepareExpiryMs(node: TinyCloudNode): number[] {
+  const wasm = node as unknown as {
+    wasmBindings: { prepareSession: { mock: { calls: Array<[{ expirationTime: string }]> } } };
+  };
+  return wasm.wasmBindings.prepareSession.mock.calls.map(([call]) => new Date(call.expirationTime).getTime());
+}
+
+describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
+  const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+  const SECRETS_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
+  const KV_PATH = "vault/secrets/API_KEY";
+  const DECRYPT_ACTIONS = ["decrypt"];
+  const CLOCK_SLACK_MS = 5_000;
+  const KV_GET_ENTRY: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: SECRETS_SPACE,
+    path: KV_PATH,
+    actions: ["get"],
+    skipPrefix: true,
+  };
+  const KV_GET_RECAP = [{
+    service: "kv",
+    space: SECRETS_SPACE,
+    path: KV_PATH,
+    actions: ["tinycloud.kv/get"],
+  }];
+
+  function decryptEntryFor(node: TinyCloudNode): PermissionEntry {
+    return {
+      service: "tinycloud.encryption",
+      path: node.getEncryptionNetworkIdForSpace(SECRETS_SPACE),
+      actions: DECRYPT_ACTIONS,
+      skipPrefix: true,
+    };
+  }
+
+  function nodeWithSessionRecap(recap: unknown[]): TinyCloudNode {
+    const node = makeNode(mock(() => ({})));
+    Reflect.set(node, "_address", ADDRESS);
+    (node as any).wasmBindings.parseVerifiedRecapFromSiwe = mock(() => recap);
+    return node;
+  }
+
+  function stubBaseSecrets(node: TinyCloudNode) {
+    const base = { get: mock(async () => ({ ok: true, data: "value" })) };
+    (node as any).getBaseSecrets = () => base;
+    (node as any)._spaceService = {};
+    return base;
+  }
+
+  function spyOnGrant(node: TinyCloudNode) {
+    const spy = mock(node.grantRuntimePermissions.bind(node));
+    (node as any).grantRuntimePermissions = spy;
+    return spy;
+  }
+
+  async function withFetchActivated<T>(fn: () => Promise<T>): Promise<T> {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = withRegistryMetadata(mock(async () =>
+      new Response(JSON.stringify({ activated: ["runtime-cid"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as typeof fetch, originalFetch);
+    try {
+      return await fn();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  function walletCallCounts(node: TinyCloudNode) {
+    const wasm = (node as any).wasmBindings;
+    return {
+      signatures: ((node as any).signer.signMessage as ReturnType<typeof mock>).mock.calls.length,
+      prepareSession: wasm.prepareSession.mock.calls.length,
+      createDelegation: wasm.createDelegation.mock.calls.length,
+    };
+  }
+
+  function expectExpiriesNear(node: TinyCloudNode, expectedMs: number): void {
+    const now = Date.now();
+    const expiries = [
+      ...allPrepareExpiryMs(node),
+      ...node.getRuntimePermissionDelegations().map((d) => d.expiry.getTime()),
+    ];
+    expect(expiries.length).toBeGreaterThan(0);
+    for (const expiry of expiries) {
+      expect(Math.abs(expiry - now - expectedMs)).toBeLessThanOrEqual(CLOCK_SLACK_MS);
+    }
+  }
+
+  test("secrets.get succeeds on a session kv get plus a decrypt-only runtime grant, with zero new calls", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    expect(node.getRuntimePermissionDelegations([decryptEntry])).toHaveLength(1);
+
+    const base = stubBaseSecrets(node);
+    const before = walletCallCounts(node);
+
+    const result = await node.secrets.get("API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(base.get).toHaveBeenCalled();
+    expect(walletCallCounts(node)).toEqual(before);
+  });
+
+  test("hasRuntimePermissions requires every entry, each covered on its own", () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+
+    // Session covers the kv get; nothing covers decrypt.
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY])).toBe(true);
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(false);
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
+  });
+
+  test("a split set, kv from the session and decrypt from a runtime grant, is not covered jointly", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY])).toBe(true);
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(true);
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
+  });
+
+  test("a joint set held by one live runtime grant counts as covered", async () => {
+    const node = nodeWithSessionRecap([]);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([KV_GET_ENTRY, decryptEntry]));
+
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(true);
+  });
+
+  test("an entry covered only by an expired runtime grant does not count as covered", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(true);
+
+    const grants = (node as any).runtimePermissionGrants as Array<{ expiresAt: Date }>;
+    for (const grant of grants) grant.expiresAt = new Date(Date.now() - 1);
+
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(false);
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
+  });
+
+  test("a one-hour decrypt-only grant costs one signature in total, and repeat reads cost none", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry], { expiry: 3_540_000 }));
+    stubBaseSecrets(node);
+
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+    const afterFirst = walletCallCounts(node);
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+    const afterSecond = walletCallCounts(node);
+
+    expect(afterFirst.signatures).toBe(1);
+    expect(afterSecond).toEqual(afterFirst);
+    expectExpiriesNear(node, 3_540_000);
+  });
+
+  test("no prior step-up, session holds kv get: secrets.get escalates once, requesting only decrypt, on the default expiry", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(grant).toHaveBeenCalledTimes(1);
+    const requested = grant.mock.calls[0][0] as PermissionEntry[];
+    expect(requested.map((e) => e.actions)).toEqual([DECRYPT_ACTIONS]);
+    expect(node.getRuntimePermissionDelegations()).toHaveLength(1);
+    expectExpiriesNear(node, DEFAULT_DELEGATION_EXPIRY_MS);
+  });
+
+  test("kv get outside the session manifest, decrypt already held: escalation requests only the kv get", async () => {
+    const node = nodeWithSessionRecap([]);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(grant).toHaveBeenCalledTimes(1);
+    const requested = grant.mock.calls[0][0] as PermissionEntry[];
+    expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv"]);
+  });
+
+  test("nothing held: secrets.get grants the kv get and decrypt pair together, on the default expiry", async () => {
+    const node = nodeWithSessionRecap([]);
+    stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    expect(grant).toHaveBeenCalledTimes(1);
+    const requested = grant.mock.calls[0][0] as PermissionEntry[];
+    expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv", "tinycloud.encryption"]);
+    expectExpiriesNear(node, DEFAULT_DELEGATION_EXPIRY_MS);
+  });
+
+  test("session-only node: a get whose entries are each covered proceeds with no grant and no signer", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    (node as any).signer = undefined;
+    const base = stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await node.secrets.get("API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(base.get).toHaveBeenCalledTimes(1);
+    expect(grant).not.toHaveBeenCalled();
+  });
+
+  test("session-only node: a get with an uncovered entry is denied, with no grant attempt", async () => {
+    const node = nodeWithSessionRecap([]);
+    (node as any).signer = undefined;
+    const base = stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await node.secrets.get("API_KEY");
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: ErrorCodes.PERMISSION_DENIED,
+        message:
+          "Cannot autosign tinycloud.kv/get for API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
+      }),
+    });
+    expect(base.get).not.toHaveBeenCalled();
+    expect(grant).not.toHaveBeenCalled();
   });
 });

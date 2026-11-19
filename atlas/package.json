@@ -12,9 +12,9 @@
     "atlas:rebuild": "node scripts/rebuild.mjs"
   },
   "dependencies": {
-    "@astrojs/mdx": "^4.0.0",
-    "@astrojs/react": "^4.0.0",
-    "astro": "^5.0.0",
+    "@astrojs/mdx": "^8.0.0",
+    "@astrojs/react": "^7.0.0",
+    "astro": "^7.2.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

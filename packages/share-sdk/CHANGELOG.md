@@ -1,5 +1,550 @@
 # @tinycloud/share-sdk
 
+## 1.6.0-beta.1
+
+### Patch Changes
+
+- 313b056: Shares can be up to 95 MiB, the most the TinyCloud node accepts in one upload (99,614,720 bytes). A larger file stops before uploading with "Shared files can be up to 95 MiB. Use a smaller file or split it." When several files together pass the limit, the message reads "These files add up to more than 95 MiB. Share fewer at once or use smaller files." `--max-bytes` accepts 1 byte to 95 MiB, and a file over a smaller `--max-bytes` gets its own message naming that limit.
+
+  Details: TC-3252
+
+## 1.6.0-beta.0
+
+### Minor Changes
+
+- 2395340: Share one item made of several resources with a single link, and open it in an app.
+  - `sharing.generate({ resources: [{ path, actions? }, …] })` grants up to 16 distinct paths in one share, with one owner approval when a new root is needed. `path`/`actions` keep working for a single resource. `onRootDelegationNeeded` now also receives `resources`, and a root it returns must be the owner's signature over every resource.
+  - `sharing.delegateReceivedShare` signs one child over every shared resource (or narrows to one with `path`), and reports a node refusal for a revoked chain as `REVOKED` and an expired one as `AUTH_EXPIRED`.
+  - `inspectShareToken(token)` checks a share token offline against the owner's wallet signature and returns the owner, the exact resources, when access ends and the root delegation's CID. Use it for anything shown before a share is claimed.
+  - `useDelegation` on a delegation of several resources gives a `kv` that takes full keys; `DelegatedAccess.resources` and `ShareAccess.resources` list every resource.
+  - `@tinycloud/share-sdk/native-link` adds `publishNativeShareLink` and `openNativeShareLink`: a short link to a sealed record carrying the share and up to 8 KiB of app display data, opened without reading the owner's node. The display data is not signed by the owner.
+
+  Details: TC-3194
+
+## 1.5.0
+
+### Minor Changes
+
+- 649bb18: Share publishing no longer creates the share key. `encryptAddressedShareContent` encrypts to the public key of the share's deterministic `share/<shareId>` key (read without authentication) and returns the stored bytes; the node records the key when the share policy is registered. Publishing an addressed share therefore requires a node that records the share key at policy registration. Each published share adds one key record, which counts toward the network's key limit.
+
+  Breaking changes:
+  - `@tinycloud/share-sdk`: `pathBoundSessionPermissions` now returns `decrypt` on `<network>/share/` only (no `key.create`); removed `PathBoundSharePlan.requiredPermissions` and `PathBoundSharePlan.sessionPermissions` (use `registrationPermissions`, decrypt on `<network>/share/`), the `key-not-authorized` and `key-receipt-mismatch` error codes, and `createKey` from `AddressedShareKeyClient` (it now needs only `encrypt`).
+  - `@tinycloud/sdk-core`: removed `expandRuntimePermissionEntries`; the `<network>/share/` manifest prefix accepts `decrypt` only, so `key.create` there is an invalid manifest entry.
+  - `@tinycloud/node-sdk`: sign-in accepts only `decrypt` on the `<network>/share/` prefix; runtime permission grants no longer accept `key.create` on an exact `share/<id>` key; removed `RuntimePermissionGrantOptions.expectedSessionKey`.
+  - `@tinycloud/web-sdk`: `requestPermissions` no longer accepts `key.create` on an exact `share/<id>` key.
+
+  `key.create` for `apps/<appId>/` keys (`manifest.keys`) and `NamedKeyClient.createKey` / `ensureKey` are unchanged.
+
+  Details: TC-2525
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+- 7266493: `publishTargetShare` and the target publish input accept an optional `expiresInMs`, the relative expiry the caller asked for as a duration in milliseconds, and pass it to the target adapter unchanged. It lets a caller recognise a rerun of the same relative choice; it does not change how the expiry is computed.
+
+  Details: TC-2234
+
+### Patch Changes
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
+- Updated dependencies [e3cd63b]
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0
+
+## 1.5.0-beta.5
+
+### Minor Changes
+
+- 6010858: Add opt-in wallet-owner-signed placement for native sharing envelopes. Receivers verify the share, space, destination and validity without publishing a registry entry; verified registry placement remains authoritative. Version-2 envelopes need an updated receiver. Managed OpenKey placement approval remains a separate integration.
+
+  Details: TC-2937
+
+## 1.5.0-beta.4
+
+### Patch Changes
+
+- 0080686: Encryption-network calls for the production node always use `https://tee.node.tinycloud.xyz`, the origin whose TLS terminates inside the node's TEE, even when the session's host is `https://node.tinycloud.xyz`. This covers network descriptors, decrypt, network create and revoke, named keys, sign-in activation of encryption resources, share network admin and recipient decrypt, and the CLI named-key preflight. These calls never fall back to the other name and refuse redirects. Other hosts, including self-hosted and local nodes, are unchanged. `@tinycloud/sdk-core` exports `endToEndNodeHost()` for this mapping.
+
+  Named-key clients created by `createNamedKeyClient(node)` resolve each network's registry route, and refuse a node whose `/info` identity differs from the verified one (`NODE_IDENTITY_MISMATCH`). `NamedKeyClientConfig` gains an optional `resolveNode`.
+
+  Network discovery consults the advisory well-known descriptor only when the node reports no network, and never for an owner with a registry record. A failed node lookup now returns `TRANSPORT_ERROR` instead of falling back to the advisory record.
+
+  Details: TC-2923
+
+## 1.5.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [e3cd63b]
+  - @tinycloud/share-envelope@1.6.0-beta.1
+
+## 1.5.0-beta.2
+
+### Minor Changes
+
+- 7266493: `publishTargetShare` and the target publish input accept an optional `expiresInMs`, the relative expiry the caller asked for as a duration in milliseconds, and pass it to the target adapter unchanged. It lets a caller recognise a rerun of the same relative choice; it does not change how the expiry is computed.
+
+  Details: TC-2234
+
+## 1.5.0-beta.1
+
+### Patch Changes
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
+- Updated dependencies [e3e4bd7]
+- Updated dependencies [273491d]
+  - @tinycloud/share-envelope@1.6.0-beta.0
+
+## 1.5.0-beta.0
+
+### Minor Changes
+
+- 649bb18: Share publishing no longer creates the share key. `encryptAddressedShareContent` encrypts to the public key of the share's deterministic `share/<shareId>` key (read without authentication) and returns the stored bytes; the node records the key when the share policy is registered. Publishing an addressed share therefore requires a node that records the share key at policy registration. Each published share adds one key record, which counts toward the network's key limit.
+
+  Breaking changes:
+  - `@tinycloud/share-sdk`: `pathBoundSessionPermissions` now returns `decrypt` on `<network>/share/` only (no `key.create`); removed `PathBoundSharePlan.requiredPermissions` and `PathBoundSharePlan.sessionPermissions` (use `registrationPermissions`, decrypt on `<network>/share/`), the `key-not-authorized` and `key-receipt-mismatch` error codes, and `createKey` from `AddressedShareKeyClient` (it now needs only `encrypt`).
+  - `@tinycloud/sdk-core`: removed `expandRuntimePermissionEntries`; the `<network>/share/` manifest prefix accepts `decrypt` only, so `key.create` there is an invalid manifest entry.
+  - `@tinycloud/node-sdk`: sign-in accepts only `decrypt` on the `<network>/share/` prefix; runtime permission grants no longer accept `key.create` on an exact `share/<id>` key; removed `RuntimePermissionGrantOptions.expectedSessionKey`.
+  - `@tinycloud/web-sdk`: `requestPermissions` no longer accepts `key.create` on an exact `share/<id>` key.
+
+  `key.create` for `apps/<appId>/` keys (`manifest.keys`) and `NamedKeyClient.createKey` / `ensureKey` are unchanged.
+
+  Details: TC-2525
+
+## 1.4.4
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0
+
+## 1.4.4-beta.1
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+## 1.4.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+
+## 1.4.3
+
+### Patch Changes
+
+- e8d42b5: Addressed shares are path-bound. New `planPathBoundShare`, `encryptAddressedShareContent`, `bindPathBoundContentSource` (with `pathBoundStoredBytes`, `pathBoundKeyPath`, `wrappedKeyDigestHex`, `defaultEncryptionNetworkForOwner`) build the content source for a share encrypted under its own named key `share/<shareId>`: the key path, the raw-byte wrapped-key digest and the exact bytes to store are derived in one place. `publishAddressedShare` now requires that source and refuses anything else, with a typed `AddressedContentSourceError` (`code`: `share-id-invalid`, `network-invalid`, `network-not-checksummed`, `key-path-required`, `key-path-mismatch`, `digest-invalid`, `key-not-authorized`, `key-receipt-mismatch`, `envelope-invalid`, `stored-bytes-mismatch`) before it signs, registers or writes; the network-wide decrypt fallback is gone, so the recipient's only decrypt capability is `<network>/share/<shareId>`. The share id is one grammar everywhere, `[a-z0-9][a-z0-9_-]{15,63}`, checked before any key is created. `pathBoundSessionPermissions` returns the sign-in manifest entry. `planPathBoundShare` returns the permission entries for both ways to hold the key-creation capability: `sessionPermissions` (once, in the sign-in manifest) and `requiredPermissions` (per share, as a runtime request). `assertAddressedShareFits` and `addressedShareBodyUpperBound` derive the key path from `shareId`. Opening existing shares, with or without a key path, is unchanged.
+
+  Details: TC-2242
+
+## 1.4.3-beta.0
+
+### Patch Changes
+
+- e8d42b5: Addressed shares are path-bound. New `planPathBoundShare`, `encryptAddressedShareContent`, `bindPathBoundContentSource` (with `pathBoundStoredBytes`, `pathBoundKeyPath`, `wrappedKeyDigestHex`, `defaultEncryptionNetworkForOwner`) build the content source for a share encrypted under its own named key `share/<shareId>`: the key path, the raw-byte wrapped-key digest and the exact bytes to store are derived in one place. `publishAddressedShare` now requires that source and refuses anything else, with a typed `AddressedContentSourceError` (`code`: `share-id-invalid`, `network-invalid`, `network-not-checksummed`, `key-path-required`, `key-path-mismatch`, `digest-invalid`, `key-not-authorized`, `key-receipt-mismatch`, `envelope-invalid`, `stored-bytes-mismatch`) before it signs, registers or writes; the network-wide decrypt fallback is gone, so the recipient's only decrypt capability is `<network>/share/<shareId>`. The share id is one grammar everywhere, `[a-z0-9][a-z0-9_-]{15,63}`, checked before any key is created. `pathBoundSessionPermissions` returns the sign-in manifest entry. `planPathBoundShare` returns the permission entries for both ways to hold the key-creation capability: `sessionPermissions` (once, in the sign-in manifest) and `requiredPermissions` (per share, as a runtime request). `assertAddressedShareFits` and `addressedShareBodyUpperBound` derive the key path from `shareId`. Opening existing shares, with or without a key path, is unchanged.
+
+  Details: TC-2242
+
+## 1.4.2
+
+### Patch Changes
+
+- 853774e: Expose the existing owner record-schema context, schema checker and registration-time validator through `@tinycloud/share-sdk/share-index`. Admit canonical exact read-only artifact version files with their existing signed source checks. Retain original full-link renderer origin, signed header and signature beside one sealed body, and restore the original URL during readback with trusted-origin validation before owner admission. Existing three-field delivery material remains readable.
+
+  Metadata-bearing records require the updated reader; earlier strict readers reject the added `deliveryMaterial.fullLink` field. Upgrade every reader of the shared owner index before using the existing owner-agent `recheck` operation for affected agents: an older reader can cache schema rejections again or pause the agent. Updating the SDK alone does not clear those cached rejections.
+
+  `STORED_DELIVERY_MATERIAL_KEYS` now lists required keys rather than the exact allowed key set; external exact-key validators need to be updated for optional `fullLink` metadata.
+
+  Details: TC-1739
+
+- Updated dependencies [5e47629]
+- Updated dependencies [b0da170]
+  - @tinycloud/share-envelope@1.4.1
+
+## 1.4.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [b0da170]
+  - @tinycloud/share-envelope@1.4.1-beta.1
+
+## 1.4.2-beta.1
+
+### Patch Changes
+
+- 853774e: Expose the existing owner record-schema context, schema checker and registration-time validator through `@tinycloud/share-sdk/share-index`. Admit canonical exact read-only artifact version files with their existing signed source checks. Retain original full-link renderer origin, signed header and signature beside one sealed body, and restore the original URL during readback with trusted-origin validation before owner admission. Existing three-field delivery material remains readable.
+
+  Metadata-bearing records require the updated reader; earlier strict readers reject the added `deliveryMaterial.fullLink` field. Upgrade every reader of the shared owner index before using the existing owner-agent `recheck` operation for affected agents: an older reader can cache schema rejections again or pause the agent. Updating the SDK alone does not clear those cached rejections.
+
+  `STORED_DELIVERY_MATERIAL_KEYS` now lists required keys rather than the exact allowed key set; external exact-key validators need to be updated for optional `fullLink` metadata.
+
+  Details: TC-1739
+
+## 1.4.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5e47629]
+  - @tinycloud/share-envelope@1.4.1-beta.0
+
+## 1.4.1
+
+### Patch Changes
+
+- e839be0: The share recipient checks a V3 source's wrapped-key digest by source kind. A path-bound source (`encryptionKeyPath`) must register the digest of the raw wrapped-key bytes, as before; a legacy no-path source must register the canonical hash of the base64 key, which the node accepts for that case. Shares made by stable CLI 1.4.0 and the old share composer open again. The invoke body, facts and response checks are unchanged.
+
+  Details: TC-2242
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- 0b024c2: Support named-key v2 recipient content with optional AAD, checking canonical wrapped-key hashes independently from registered decoded-byte digests and enforcing source bindings before decrypt requests. Validate ciphertext framing before requesting decryption and retain AAD when re-encrypting content.
+
+  Details: TC-2192
+
+- Updated dependencies [19048ec]
+- Updated dependencies [812a818]
+- Updated dependencies [7b22f61]
+  - @tinycloud/share-envelope@1.4.0
+
+## 1.4.1-beta.4
+
+### Patch Changes
+
+- e839be0: The share recipient checks a V3 source's wrapped-key digest by source kind. A path-bound source (`encryptionKeyPath`) must register the digest of the raw wrapped-key bytes, as before; a legacy no-path source must register the canonical hash of the base64 key, which the node accepts for that case. Shares made by stable CLI 1.4.0 and the old share composer open again. The invoke body, facts and response checks are unchanged.
+
+  Details: TC-2242
+
+## 1.4.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+
+## 1.4.1-beta.2
+
+### Patch Changes
+
+- 0b024c2: Support named-key v2 recipient content with optional AAD, checking canonical wrapped-key hashes independently from registered decoded-byte digests and enforcing source bindings before decrypt requests. Validate ciphertext framing before requesting decryption and retain AAD when re-encrypting content.
+
+  Details: TC-2192
+
+## 1.4.1-beta.1
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- Updated dependencies [812a818]
+  - @tinycloud/share-envelope@1.3.1-beta.1
+
+## 1.4.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [7b22f61]
+  - @tinycloud/share-envelope@1.3.1-beta.0
+
+## 1.4.0
+
+### Minor Changes
+
+- 60b79d0: Addressed publish, receive, credential invitations, the sender index and `validateShareLink` use the `#v=4` link grammar of `@tinycloud/share-envelope/links`.
+  - `publishAddressedShare` returns the full `v=4` link (`/s/full#v=4&k=…&r=…`), its header signed by the key that signs the envelope. `AddressedSharePublishOptions.apiOrigin` (default `https://api.tinycloud.xyz`) is the header's audience. A sealed envelope over `MAX_LINK_BODY_BYTES` fails with a `LinkError` (`body_over_cap`) and returns no link.
+  - `inspectShare` and `receiveShare` resolve short and full links through `resolveLink`. `ShareFetchOptions` gains `apiOrigin` and `fetch`; `expectedOrigin` is the trusted viewer origin (default: the link's own origin).
+  - `deliverCredentialInvitation` accepts only the short share link (lowercase id, at most 512 bytes).
+  - `notifyShare` ends without a retry when the adapter throws an error with the code `delivery-authorization-invalid` (the node's refusal of a delivery authorization): the result is `partial-failure` with `attempts: 1` and `retryable: false`, as for HTTP 401 and 403.
+  - `validateShareLink` returns the shape `"link"` for both `v=4` forms.
+  - The share index keeps a short `v=4` link beside a record's delivery material and checks that it is the link of that material (`assertLinkBoundToMaterial`). A full link is not stored in an index record. `expandShareRecord(record)` takes no origin.
+  - `inspectShare`, `receiveShare`, `publishAddressedShare` and `deliverCredentialInvitation` load `@tinycloud/share-envelope/links` with `import()` when they first need it. The package build keeps it a package import, so a bundle that embeds `@tinycloud/share-sdk` holds no links code.
+
+  Removed:
+  - The `"inline"` link shape and the inline `#v=2&p=` reader and writer calls.
+  - `shareLinkForRecord` and the `shareOrigin` option of `AgentShareRecordStore`.
+
+  Do not release before the deploy window for the links API, witness, node, Share web and CLI.
+
+  Details: TC-1737
+
+- 20bc8d1: A sender can measure an addressed share against the link size limit before it writes anything.
+  - `addressedShareBodyUpperBound(input)` returns the largest sealed envelope the share can have, in bytes. It builds the envelope through the same serializer as `publishAddressedShare`, from the share's own inputs, with every value a write returns (root and registration identifiers, owner root authorizations, the enforcer's attestation, signatures, artifact version and digests) at its maximum encoded length, and seals it with a throwaway key. `assertAddressedShareFits(input)` throws a `SharePublishError` (`max-bytes-exceeded`, `ADDRESSED_SHARE_TOO_LARGE_MESSAGE`) when that is over `MAX_LINK_BODY_BYTES`.
+  - `publishAddressedShare` runs the same check before its first write and fails with that `SharePublishError`. It then measures the sealed envelope itself before it builds a link; if that is over the limit it throws `AddressedShareOverLimitError`, whose `written` names the policy and the two owner roots it registered so the caller can remove them. No link is built.
+
+  Do not release before the deploy window for the links API, witness, node, Share web and CLI.
+
+  Details: TC-1737
+
+### Patch Changes
+
+- Updated dependencies [60b79d0]
+  - @tinycloud/share-envelope@1.3.0
+
+## 1.4.0-beta.0
+
+### Minor Changes
+
+- 60b79d0: Addressed publish, receive, credential invitations, the sender index and `validateShareLink` use the `#v=4` link grammar of `@tinycloud/share-envelope/links`.
+  - `publishAddressedShare` returns the full `v=4` link (`/s/full#v=4&k=…&r=…`), its header signed by the key that signs the envelope. `AddressedSharePublishOptions.apiOrigin` (default `https://api.tinycloud.xyz`) is the header's audience. A sealed envelope over `MAX_LINK_BODY_BYTES` fails with a `LinkError` (`body_over_cap`) and returns no link.
+  - `inspectShare` and `receiveShare` resolve short and full links through `resolveLink`. `ShareFetchOptions` gains `apiOrigin` and `fetch`; `expectedOrigin` is the trusted viewer origin (default: the link's own origin).
+  - `deliverCredentialInvitation` accepts only the short share link (lowercase id, at most 512 bytes).
+  - `notifyShare` ends without a retry when the adapter throws an error with the code `delivery-authorization-invalid` (the node's refusal of a delivery authorization): the result is `partial-failure` with `attempts: 1` and `retryable: false`, as for HTTP 401 and 403.
+  - `validateShareLink` returns the shape `"link"` for both `v=4` forms.
+  - The share index keeps a short `v=4` link beside a record's delivery material and checks that it is the link of that material (`assertLinkBoundToMaterial`). A full link is not stored in an index record. `expandShareRecord(record)` takes no origin.
+  - `inspectShare`, `receiveShare`, `publishAddressedShare` and `deliverCredentialInvitation` load `@tinycloud/share-envelope/links` with `import()` when they first need it. The package build keeps it a package import, so a bundle that embeds `@tinycloud/share-sdk` holds no links code.
+
+  Removed:
+  - The `"inline"` link shape and the inline `#v=2&p=` reader and writer calls.
+  - `shareLinkForRecord` and the `shareOrigin` option of `AgentShareRecordStore`.
+
+  Do not release before the deploy window for the links API, witness, node, Share web and CLI.
+
+  Details: TC-1737
+
+- 20bc8d1: A sender can measure an addressed share against the link size limit before it writes anything.
+  - `addressedShareBodyUpperBound(input)` returns the largest sealed envelope the share can have, in bytes. It builds the envelope through the same serializer as `publishAddressedShare`, from the share's own inputs, with every value a write returns (root and registration identifiers, owner root authorizations, the enforcer's attestation, signatures, artifact version and digests) at its maximum encoded length, and seals it with a throwaway key. `assertAddressedShareFits(input)` throws a `SharePublishError` (`max-bytes-exceeded`, `ADDRESSED_SHARE_TOO_LARGE_MESSAGE`) when that is over `MAX_LINK_BODY_BYTES`.
+  - `publishAddressedShare` runs the same check before its first write and fails with that `SharePublishError`. It then measures the sealed envelope itself before it builds a link; if that is over the limit it throws `AddressedShareOverLimitError`, whose `written` names the policy and the two owner roots it registered so the caller can remove them. No link is built.
+
+  Do not release before the deploy window for the links API, witness, node, Share web and CLI.
+
+  Details: TC-1737
+
+### Patch Changes
+
+- Updated dependencies [60b79d0]
+  - @tinycloud/share-envelope@1.3.0-beta.0
+
+## 1.3.0
+
+### Minor Changes
+
+- 666f60b: Add the `@tinycloud/share-sdk/web-recipient` subpath. It exports `inspectShare`, `ShareRecipientClient`, and the `ShareMetadata` type, so browser bundles can import the recipient surface without the package root barrel. The root barrel's exports are unchanged.
+
+  Details: TC-1757
+
+## 1.3.0-beta.0
+
+### Minor Changes
+
+- 666f60b: Add the `@tinycloud/share-sdk/web-recipient` subpath. It exports `inspectShare`, `ShareRecipientClient`, and the `ShareMetadata` type, so browser bundles can import the recipient surface without the package root barrel. The root barrel's exports are unchanged.
+
+  Details: TC-1757
+
+## 1.2.1
+
+### Patch Changes
+
+- Updated dependencies [f8c2967]
+  - @tinycloud/share-envelope@1.2.1
+
+## 1.2.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f8c2967]
+  - @tinycloud/share-envelope@1.2.1-beta.0
+
+## 1.2.0
+
+### Minor Changes
+
+- 9067edd: New subpath `@tinycloud/share-sdk/html-bundle`: the HTML folder rewriter the Share viewer carries (`prepareHtmlArtifact`, `canonicalArtifactPath`, `detectHtmlArtifact`, ...), moved here so the Share app and `tc share publish ./site/` use one implementation. Additive: the package root does not re-export it, so browser bundles that import the root do not grow.
+
+  Changes against the viewer's reviewed `bundle.ts`, all stricter or additive (`assertSelfContainedPage` is the final pass: it reads the produced page again, with a tokenizer of its own and with the DOM parser, and refuses anything but `data:` URLs and `#fragment`s, and any attribute outside a text allow-list whose value reads as a URL; inline SVG `<script>`, `<xmp>`, `<plaintext>` and a `<script>` whose type is not JavaScript (`speculationrules`, `importmap`, ...) are refused; pages are limited to 20,000 comments and 5,000 attributes per element (`limit`); CSS escapes in `url`/`@import`/`image-set`/`src` are decoded before matching; `<noscript>`, `<area href>`, `ping`, SVG `url()` attributes and `<template>` content are handled; the 10 MiB output cap and a 2,000-reference cap are enforced as the page is built): `prepareHtmlArtifact(files, { parseHtml, singlePage })` (`parseHtml` supplies the HTML5 parser outside a browser; `singlePage` transforms only `index.html` and refuses links to other pages); an `ArtifactBundleError` now carries `path` and `reference` (untrusted text: escape before printing); inline SVG elements whose `href` / `xlink:href` is not a same-document `#fragment` are refused; the module-script check reads the `type` attribute so it behaves the same in every DOM. New: `inlineHtmlFolder(files)` inlines a folder into one self-contained document, and `isPassiveArtifactPath` / `InlinedHtmlFolder.passive` keep `manifest.json` and `knowledge/**` out of the page and return them untouched (the extension point for publishing an app manifest and knowledge bundle as sidecars).
+
+- daf8561: Shared share index, SDK layer (TC-1432 design C, slice 2), published as the new subpath `@tinycloud/share-sdk/share-index`. Additive: the package root's runtime code is unchanged and does not re-export it, so browser bundles that import the root do not grow.
+  - Record store: `WebShareRecordStore` (`records/<shareId>`, owner-network vault) and `AgentShareRecordStore` (`records/agents/<agentId>/<shareId>`), both `SenderShareRecordStorage`. `isShareId` is enforced on every operation; agent lists use the explicit prefix with its trailing slash.
+  - Key classifier `classifyRecordKey`: rejects `%`, `\`, `.`/`..` and empty segments and a leading `/` before anything else; a rejected key inside an agent prefix is charged to that agent once (as a 16-character hash, never the agent's text).
+  - Agent record codec: a fresh 32-byte data key and fresh nonces on every write, HKDF subkeys bound to the record location, a key commitment checked in constant time, and two wraps of the data key (`wrapAgent` under a key derived from the agent's signing key, `wrapOwner` to the owner network). The owner path refuses an owner wrap whose declared AAD is not the record's binding before any decrypt request, and zeroes the data key on every path. Records larger than `MAX_AGENT_RECORD_BYTES` (32 KiB) are refused.
+  - Stored form, each blob once: `AgentShareRecordStore.put` stores a Policy/v3 record without `deliveryMaterial.envelope` and its `/s/inline` link (`compactShareRecord`, after checking both are exactly what the sealed material rebuilds), and the reconciler refuses an agent record that stores either again. `openDeliveryEnvelope` (the verifier opens the envelope from `sealedEnvelope`, bound to `shareCid`), `shareLinkForRecord` (the link rebuilt at Open/Copy) and `expandShareRecord` (the full record back). A real CLI v3 record is about 29.5 KB stored, under the 32 KiB cap.
+  - The adapter sends the record cap as the KV `maxResponseBytes`, so the node refuses an oversize agent value (413) before sending its body; `readRaw(key, maxBytes)` reports it `too_large` and the reconciler rejects it `size`.
+  - Record times are RFC 3339 UTC with or without a fraction, as `publishAddressedShare` writes them.
+  - Chain verifier `verifyAgentRecordChain` (bearer link delegations, Policy/v3 envelopes, Policy/v2 owner policies) with proof states `proven` / `chained` / `unproven`, a separate `expired` flag, and the signed issuance window `registeredAt` is checked against (link `nbf`, the session's `Issued At`, the v3 binding's `issuedAt`, the node's v2 `registeredAt`). Precedence web > proven > chained > unproven in any arrival order (`decideClaim`). New verifiers: signed UCAN parsing with `prf`/`nbf`/`exp`, attenuation containment, owner→session SIWE checks (time window, issuer = account owner, audience = delegation issuer), a Policy/v2 enforcement-delegation signature verifier, `checkRegistrationReceipt` (a Policy/v2 node registration with expired reported apart from invalid), and `verifyEnvelopeV3At` (Policy/v3 verification at an explicit time, so an expired share is reported as Expired).
+  - A record's content may live in any space of the account owner (`isSpaceOwnedBy`); the records stay in `applications`.
+  - `provenance: "migrated"` (one-time owner import, row `pv: "migrated"`) is accepted only at owner-layout keys: it is exempt from the ±1-day `registeredAt` anchor and nothing else, ranks by its proof state, and never displaces a node-confirmed revocation. A record in `records/agents/<id>/` claiming it is rejected (`provenance`).
+  - `SenderShareIndex`: the encrypted display-only index at `records/_index/main` with compare-and-swap writes, an outbox interface, the budgeted reconciler with the §5 checks (every agent fetch spends its 50-per-pass allowance), per-agent rejected lists, caps and pause, status sync, compaction into `records/_index/archive-<yyyy>` and header garbage collection. A full header stops new agent state (`headerFull`) but never blocks the owner's own ops or evicts rows. A refused ETag (`INVALID_ETAG`, for example one weakened in transit) throws `ShareIndexCasError` on its first occurrence and is never retried.
+  - Reference: `docs/share-index.md`, including what revocation does today: the owner wallet's generic `/revoke` of a v3 root ends that share at once (open recipient sessions included); revoking an agent's session kills its bearer links and new v3 claims, while an already-open v3 recipient session keeps reading for its lifetime until the node liveness check (N3).
+  - SIWE `Not Before` and `Issued At` are read from the CACAO bytes the injected parser (sdk-core `parseSignedSiweCacao`) has verified; sdk-core and share-envelope are unchanged.
+
+- e68e911: Per-share encryption networks in `@tinycloud/share-sdk/share-root` (TC-1423 D3). Every addressed (email/domain) or edit share now has its own network, `urn:tinycloud:encryption:<owner did:pkh, lowercase>:share-<shareId>`, so a key or recipient holding decrypt reaches that one share only. The main entry is unchanged.
+
+  Removed (allowed between betas; these shipped only in prereleases):
+  - `ShareRoot` no longer has a decrypt scope: `ShareRootScope`, `root.scope`, `root.policyCapable`, `root.policyRootSigner()`, the `shareRootPolicyRoots` and `policyOwnerModeProbe` options, `ensureShareRoot`'s `purpose`, and the owner-authority probe (`POLICY_OWNER_AUTHORITY_FEATURES`, `POLICY_OWNER_AUTHORITY_PROBE_TTL_MS`, `readPolicyOwnerAuthorityMode`, `PolicyOwnerModeProbe`, `createPolicyOwnerModeProbe`, `defaultPolicyOwnerModeProbe`) are removed, with the error codes `policy-roots-disabled`, `policy-roots-not-enforced-by-node` and `root-not-policy-capable`. A share root is kv/bearer only, before and after the Node enforces owner-authority binding; the root record no longer has `scope`.
+  - The owner-wide `:share` network is gone from the SDK: `ensureShareNetwork`, `shareNetworkIdFor` and `ShareNetworkResult` are removed.
+  - `ShareRootPolicySigner` is renamed `SharePolicySigner`.
+  - `ShareGrantRecord` is now version 2 (`shareId`, `networkId`); version 1 records are refused by `ShareGrant.restore`.
+
+  Added:
+  - `perShareNetworkIdFor(ownerDid, shareId)` and `assertNetworkSafeShareId`: a shareId must match `^[a-z0-9][a-z0-9-]{15,35}$` (UUIDs and 32-hex ids do), checked before any prompt (`share-id-not-network-safe`).
+  - `ShareGrant.prepare(...)` (all checks, a network lookup, the key, and a `pending` row to persist before the prompt) then `pending.approve()`: one approval for kv `get` + `metadata` (+ `put` for `edit`) on the share's one key (`xyz.tinycloud.share/shares/<shareId>/<file>`, or for `view` only a TC-1428 version file) and `network.create`, `network.revoke`, `decrypt` on the share's network only. A shareId whose network already exists or was retired is refused before the prompt (`share-id-in-use`; `resumeExistingNetwork` accepts an active one for key-gone recovery). `ShareGrant.create` does both. A signed grant that is only narrower than requested is refused without `mustRevoke`.
+  - `grant.ensureNetwork()` creates the network with the per-share key (no approval) and accepts it only after a fresh lookup shows it `active` with the expected owner, name, algorithm, key version 1 and threshold 1/1; a retired network is never re-created. `grant.publishAuthority(registerPolicy)` re-reads the network as `active` before every registration; `grant.assertContentSource` checks the stored object is this share's. `grant.row(state)` gives the history row for each publish step.
+  - `grant.retireNetwork()` retires the network (permanent; every holder of decrypt is refused at the next request; idempotent; no approval). `revokeShareGrant` retires first, then revokes the grant with one owner SIWE; if that fails the error `grant-revoke-incomplete` says decrypt is already cut.
+  - `openEditShare`: the owner reads back an edit share with one approval, to an in-memory key that lives at most one hour.
+  - Owner kill-all: `planShareControlBatches` splits shares into owner controls sized by the exact `Authorization` bytes, at most `SHARE_CONTROL_HEADER_BUDGET_BYTES` (30,000; the production ingress refuses values above 32,751 bytes): 34 shares per control with the `applications`/`default` delegation rows, which every control carries. Targets must be the owner's per-share networks (`share-<shareId>`); `:default`, `:share` or any other network is refused (`control-target-invalid`) before anything is signed, in planning and again in `runShareControlBatch`, which also re-checks the domain, space rows and byte budget of the batch it is given. `runShareControlBatch` signs one control (one approval), retires every network first, then revokes each grant through the control, counting only a `{ revoked: true, cid }` receipt. A kill-all of L shares costs ceil(L/34) approvals on v1.20.6 and NODE-B2 N4' (measured live across two controls); 1.21.0 and N1b refuse control revokes of decrypt-bearing grants, so with `revokeFallback` each grant costs one more owner SIWE (ceil(L/34) + L).
+
+- 6e7ad8f: Add bearer links via the share root to `@tinycloud/share-sdk/share-root` (TC-1423 D3, slice 3). The main entry is unchanged.
+  - `publishRootBearerLink({ root, path, expiresAt, viewerOrigin })` mints a view-only link with no owner approval: the share key signs `kv/get` on one exact key under `xyz.tinycloud.share/shares/` (never beyond the root, never more than 30 days, exactly the requested expiry to the second), the Node imports it, and the link is encoded exactly like today's SharingService links (`/viewer#tc1=<token>`, the token carrying a fresh per-link key and its delegation), so the viewer and `openNativeShare` open it unchanged. Use `ensureShareRoot` first; a re-root costs one approval.
+  - `revokeRootBearerLink({ root, delegationCid })` revokes one link with the share key that issued it (no approval) and accepts only a matching `{ revoked: true, cid }` receipt; the owner can revoke the same CID with an owner SIWE (one approval). `ShareRoot.signLinkRevocation` signs that request and refuses the root's own CID.
+  - A Node refusing a link delegation or revocation (for example after the root was revoked: re-root) throws `node-refused`.
+
+- d84e379: Add the owner's `:share` network and per-share grants to `@tinycloud/share-sdk/share-root` (TC-1423 D3, slice 2). The main entry is unchanged.
+  - `ensureShareNetwork` makes sure the owner-owned `urn:tinycloud:encryption:<owner did:pkh>:share` network exists (`shareNetworkIdFor` names it). When it exists, nothing is signed. Otherwise the owner approves one 10-minute CACAO granting only `network.create` on that URN to a throwaway non-extractable key, which creates the network with the owner as owner and is then cleared. The signed grant is decoded and must match exactly. Share and per-share keys never own a network.
+  - `ShareGrant.create` asks the owner for one approval per addressed (email/domain) or edit share: a CACAO to a fresh non-extractable per-share key granting kv `get` + `metadata` (+ `put` for `edit`) on exactly one key under `xyz.tinycloud.share/shares/`, plus `decrypt` on the owner's `:share` network (a Policy/v3 owner must hold decrypt on the source's network), for at most 30 days. Broader paths, longer expiries, other spaces or access levels are refused before the wallet prompt; the signed CACAO is decoded and must match exactly, or the key is cleared and the error carries the CID with `mustRevoke`.
+  - `ShareGrant.publishAuthority(registerPolicy)` is the `publishAddressedShare` authority for that one share: policy roots owned by the per-share key, no later than the grant, naming only its exact key (no action the grant lacks) and `:share` decrypt; 32-byte digests only. `restore` rebuilds a grant from a CLI-held key; no browser persistence.
+  - The owner revokes one share by revoking its grant (one approval); other shares are untouched. Until the Node binds policy registrations to the owner delegation, an already-registered policy keeps admitting recipients until its own expiry, which never exceeds the grant's.
+  - Wording: a `kv` share root's key cannot own a policy over `:share`-encrypted content (the Node answers `policy-owner-not-authorized`).
+
+- c2fd94b: Add `ShareRoot` (TC-1423 D3, slice 1) under the new subpath `@tinycloud/share-sdk/share-root` (the main entry is unchanged, so its consumers' bundles do not grow): a wallet-signed, read-only root delegated to one non-extractable Ed25519 share key, so shares can outlive the owner's login session.
+  - `ShareRoot.create` asks the owner once through `createOwnerDelegation({ permissions })`. The scope is chosen at creation from the Node's advertised owner-authority mode: `kv` (get + metadata on `xyz.tinycloud.share/shares/` in `applications`) unless the `shareRootPolicyRoots` option is on and the Node's `GET /info` `features` list `policy-owner-authority-v1` + `policy-owner-authority-enforce`, in which case decrypt on the owner's `:share` network is added (`kv+share-decrypt`). Agent roots are always `kv`, in `default`. The scope and the Node origin are kept in the root record.
+  - The signed CACAO is decoded and anything else is rejected: other abilities or caveats, other resources, a parent, another audience or owner, a lifetime over 37 days (agents: 30; up to 5 minutes of signer clock skew on the issue time), or an expiry other than the one requested. The key is cleared, and the error carries the imported CID, the CID of the signed bytes when they differ, and `mustRevoke` when the imported root may grant more than requested.
+  - `create` generates the key itself and never exposes it; `clear()` drops the only handle. Browser persistence of a share key is not provided and needs the composer on its own origin first.
+  - `signBearerLink` signs a `kv/get` link on one exact key under the prefix, outside WASM; it never outlives the root or 30 days.
+  - `policyRootSigner` is the only ShareRoot API that signs Policy/v3 owner material. It needs a `kv+share-decrypt` root and the flag, and its `createOwnerRoot` / `sign` (32-byte digests only) re-check the flag, the root's expiry and the Node's advertised mode on every call. Policy roots are built by the signer and may not outlive the share root. A share key holder can still sign through other APIs; the Node refuses a policy registered by a `kv` root's key (`policy-owner-not-authorized`).
+  - `ensureShareRoot` re-roots (new key, one approval, the cap minus 10 minutes) only when the current root does not cover the requested expiry, or, for `purpose: "policy"`, when the Node enforces and the current root is `kv`. It never returns a `kv` root for policy use.
+  - `createPolicyOwnerModeProbe` caches each Node's answer for at most 5 minutes, probes only https (http on loopback), requires a JSON answer of at most 64 KiB, and accepts the features a sign-in already read (`observe`); any failure counts as not enforcing.
+  - `signShareKeyDelegation`, `assertNonExtractableShareKey`, `decodeOwnerRootCacao` and `ownerRootCacaoCid` are exported for these flows.
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
+- 116b214: Artifact versions for `share publish` (TC-1428). `share publish --artifact <id|new>` stores the file as a write-once version under `artifacts/<id>/versions/<n>/` (created with `If-None-Match: *`, `manifest.json` written last) in the owner's space and pins the share to that version: bearer and addressed shares read one version file and never carry `put`. Re-publishing the same bytes to a bearer link returns the same version and changed content makes the next, so an agent retry is safe. An addressed share is a fresh encryption each time, so each is its own version; the manifest records only the sha256 of the stored bytes, never of the plaintext. `share versions <id>` lists versions and the shares pinned to each. `--action edit` on an artifact share is refused; every artifact share pins one version. The layout helpers (`publishArtifactVersion`, `listArtifactVersions`, `parseArtifactManifest`, path helpers) are a new `@tinycloud/share-sdk/artifact` entry point, kept out of the main barrel so browser bundles do not carry them. No node change.
+
+  The built-in `builtin:share-publishing` manifest now also requests `artifacts/` (get, metadata, put, list). Profiles signed in before this version must sign in again to use `--artifact` (`auth login --device --manifest builtin:share-publishing`); other `share publish` use is unchanged. Versions are kept by default and count against the owner's storage; reclaiming bytes depends on history GC (TC-1277).
+
+### Patch Changes
+
+- Updated dependencies [02c0a44]
+  - @tinycloud/share-envelope@1.2.0
+
+## 1.2.0-beta.7
+
+### Minor Changes
+
+- 9067edd: New subpath `@tinycloud/share-sdk/html-bundle`: the HTML folder rewriter the Share viewer carries (`prepareHtmlArtifact`, `canonicalArtifactPath`, `detectHtmlArtifact`, ...), moved here so the Share app and `tc share publish ./site/` use one implementation. Additive: the package root does not re-export it, so browser bundles that import the root do not grow.
+
+  Changes against the viewer's reviewed `bundle.ts`, all stricter or additive (`assertSelfContainedPage` is the final pass: it reads the produced page again, with a tokenizer of its own and with the DOM parser, and refuses anything but `data:` URLs and `#fragment`s, and any attribute outside a text allow-list whose value reads as a URL; inline SVG `<script>`, `<xmp>`, `<plaintext>` and a `<script>` whose type is not JavaScript (`speculationrules`, `importmap`, ...) are refused; pages are limited to 20,000 comments and 5,000 attributes per element (`limit`); CSS escapes in `url`/`@import`/`image-set`/`src` are decoded before matching; `<noscript>`, `<area href>`, `ping`, SVG `url()` attributes and `<template>` content are handled; the 10 MiB output cap and a 2,000-reference cap are enforced as the page is built): `prepareHtmlArtifact(files, { parseHtml, singlePage })` (`parseHtml` supplies the HTML5 parser outside a browser; `singlePage` transforms only `index.html` and refuses links to other pages); an `ArtifactBundleError` now carries `path` and `reference` (untrusted text: escape before printing); inline SVG elements whose `href` / `xlink:href` is not a same-document `#fragment` are refused; the module-script check reads the `type` attribute so it behaves the same in every DOM. New: `inlineHtmlFolder(files)` inlines a folder into one self-contained document, and `isPassiveArtifactPath` / `InlinedHtmlFolder.passive` keep `manifest.json` and `knowledge/**` out of the page and return them untouched (the extension point for publishing an app manifest and knowledge bundle as sidecars).
+
+## 1.2.0-beta.6
+
+### Minor Changes
+
+- 6e7ad8f: Add bearer links via the share root to `@tinycloud/share-sdk/share-root` (TC-1423 D3, slice 3). The main entry is unchanged.
+  - `publishRootBearerLink({ root, path, expiresAt, viewerOrigin })` mints a view-only link with no owner approval: the share key signs `kv/get` on one exact key under `xyz.tinycloud.share/shares/` (never beyond the root, never more than 30 days, exactly the requested expiry to the second), the Node imports it, and the link is encoded exactly like today's SharingService links (`/viewer#tc1=<token>`, the token carrying a fresh per-link key and its delegation), so the viewer and `openNativeShare` open it unchanged. Use `ensureShareRoot` first; a re-root costs one approval.
+  - `revokeRootBearerLink({ root, delegationCid })` revokes one link with the share key that issued it (no approval) and accepts only a matching `{ revoked: true, cid }` receipt; the owner can revoke the same CID with an owner SIWE (one approval). `ShareRoot.signLinkRevocation` signs that request and refuses the root's own CID.
+  - A Node refusing a link delegation or revocation (for example after the root was revoked: re-root) throws `node-refused`.
+
+## 1.2.0-beta.5
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
+### Patch Changes
+
+- Updated dependencies [02c0a44]
+  - @tinycloud/share-envelope@1.2.0-beta.0
+
+## 1.2.0-beta.4
+
+### Minor Changes
+
+- daf8561: Shared share index, SDK layer (TC-1432 design C, slice 2), published as the new subpath `@tinycloud/share-sdk/share-index`. Additive: the package root's runtime code is unchanged and does not re-export it, so browser bundles that import the root do not grow.
+  - Record store: `WebShareRecordStore` (`records/<shareId>`, owner-network vault) and `AgentShareRecordStore` (`records/agents/<agentId>/<shareId>`), both `SenderShareRecordStorage`. `isShareId` is enforced on every operation; agent lists use the explicit prefix with its trailing slash.
+  - Key classifier `classifyRecordKey`: rejects `%`, `\`, `.`/`..` and empty segments and a leading `/` before anything else; a rejected key inside an agent prefix is charged to that agent once (as a 16-character hash, never the agent's text).
+  - Agent record codec: a fresh 32-byte data key and fresh nonces on every write, HKDF subkeys bound to the record location, a key commitment checked in constant time, and two wraps of the data key (`wrapAgent` under a key derived from the agent's signing key, `wrapOwner` to the owner network). The owner path refuses an owner wrap whose declared AAD is not the record's binding before any decrypt request, and zeroes the data key on every path. Records larger than `MAX_AGENT_RECORD_BYTES` (32 KiB) are refused.
+  - Stored form, each blob once: `AgentShareRecordStore.put` stores a Policy/v3 record without `deliveryMaterial.envelope` and its `/s/inline` link (`compactShareRecord`, after checking both are exactly what the sealed material rebuilds), and the reconciler refuses an agent record that stores either again. `openDeliveryEnvelope` (the verifier opens the envelope from `sealedEnvelope`, bound to `shareCid`), `shareLinkForRecord` (the link rebuilt at Open/Copy) and `expandShareRecord` (the full record back). A real CLI v3 record is about 29.5 KB stored, under the 32 KiB cap.
+  - The adapter sends the record cap as the KV `maxResponseBytes`, so the node refuses an oversize agent value (413) before sending its body; `readRaw(key, maxBytes)` reports it `too_large` and the reconciler rejects it `size`.
+  - Record times are RFC 3339 UTC with or without a fraction, as `publishAddressedShare` writes them.
+  - Chain verifier `verifyAgentRecordChain` (bearer link delegations, Policy/v3 envelopes, Policy/v2 owner policies) with proof states `proven` / `chained` / `unproven`, a separate `expired` flag, and the signed issuance window `registeredAt` is checked against (link `nbf`, the session's `Issued At`, the v3 binding's `issuedAt`, the node's v2 `registeredAt`). Precedence web > proven > chained > unproven in any arrival order (`decideClaim`). New verifiers: signed UCAN parsing with `prf`/`nbf`/`exp`, attenuation containment, owner→session SIWE checks (time window, issuer = account owner, audience = delegation issuer), a Policy/v2 enforcement-delegation signature verifier, `checkRegistrationReceipt` (a Policy/v2 node registration with expired reported apart from invalid), and `verifyEnvelopeV3At` (Policy/v3 verification at an explicit time, so an expired share is reported as Expired).
+  - A record's content may live in any space of the account owner (`isSpaceOwnedBy`); the records stay in `applications`.
+  - `provenance: "migrated"` (one-time owner import, row `pv: "migrated"`) is accepted only at owner-layout keys: it is exempt from the ±1-day `registeredAt` anchor and nothing else, ranks by its proof state, and never displaces a node-confirmed revocation. A record in `records/agents/<id>/` claiming it is rejected (`provenance`).
+  - `SenderShareIndex`: the encrypted display-only index at `records/_index/main` with compare-and-swap writes, an outbox interface, the budgeted reconciler with the §5 checks (every agent fetch spends its 50-per-pass allowance), per-agent rejected lists, caps and pause, status sync, compaction into `records/_index/archive-<yyyy>` and header garbage collection. A full header stops new agent state (`headerFull`) but never blocks the owner's own ops or evicts rows. A refused ETag (`INVALID_ETAG`, for example one weakened in transit) throws `ShareIndexCasError` on its first occurrence and is never retried.
+  - Reference: `docs/share-index.md`, including what revocation does today: the owner wallet's generic `/revoke` of a v3 root ends that share at once (open recipient sessions included); revoking an agent's session kills its bearer links and new v3 claims, while an already-open v3 recipient session keeps reading for its lifetime until the node liveness check (N3).
+  - SIWE `Not Before` and `Issued At` are read from the CACAO bytes the injected parser (sdk-core `parseSignedSiweCacao`) has verified; sdk-core and share-envelope are unchanged.
+
+## 1.2.0-beta.3
+
+### Minor Changes
+
+- e68e911: Per-share encryption networks in `@tinycloud/share-sdk/share-root` (TC-1423 D3). Every addressed (email/domain) or edit share now has its own network, `urn:tinycloud:encryption:<owner did:pkh, lowercase>:share-<shareId>`, so a key or recipient holding decrypt reaches that one share only. The main entry is unchanged.
+
+  Removed (allowed between betas; these shipped only in prereleases):
+  - `ShareRoot` no longer has a decrypt scope: `ShareRootScope`, `root.scope`, `root.policyCapable`, `root.policyRootSigner()`, the `shareRootPolicyRoots` and `policyOwnerModeProbe` options, `ensureShareRoot`'s `purpose`, and the owner-authority probe (`POLICY_OWNER_AUTHORITY_FEATURES`, `POLICY_OWNER_AUTHORITY_PROBE_TTL_MS`, `readPolicyOwnerAuthorityMode`, `PolicyOwnerModeProbe`, `createPolicyOwnerModeProbe`, `defaultPolicyOwnerModeProbe`) are removed, with the error codes `policy-roots-disabled`, `policy-roots-not-enforced-by-node` and `root-not-policy-capable`. A share root is kv/bearer only, before and after the Node enforces owner-authority binding; the root record no longer has `scope`.
+  - The owner-wide `:share` network is gone from the SDK: `ensureShareNetwork`, `shareNetworkIdFor` and `ShareNetworkResult` are removed.
+  - `ShareRootPolicySigner` is renamed `SharePolicySigner`.
+  - `ShareGrantRecord` is now version 2 (`shareId`, `networkId`); version 1 records are refused by `ShareGrant.restore`.
+
+  Added:
+  - `perShareNetworkIdFor(ownerDid, shareId)` and `assertNetworkSafeShareId`: a shareId must match `^[a-z0-9][a-z0-9-]{15,35}$` (UUIDs and 32-hex ids do), checked before any prompt (`share-id-not-network-safe`).
+  - `ShareGrant.prepare(...)` (all checks, a network lookup, the key, and a `pending` row to persist before the prompt) then `pending.approve()`: one approval for kv `get` + `metadata` (+ `put` for `edit`) on the share's one key (`xyz.tinycloud.share/shares/<shareId>/<file>`, or for `view` only a TC-1428 version file) and `network.create`, `network.revoke`, `decrypt` on the share's network only. A shareId whose network already exists or was retired is refused before the prompt (`share-id-in-use`; `resumeExistingNetwork` accepts an active one for key-gone recovery). `ShareGrant.create` does both. A signed grant that is only narrower than requested is refused without `mustRevoke`.
+  - `grant.ensureNetwork()` creates the network with the per-share key (no approval) and accepts it only after a fresh lookup shows it `active` with the expected owner, name, algorithm, key version 1 and threshold 1/1; a retired network is never re-created. `grant.publishAuthority(registerPolicy)` re-reads the network as `active` before every registration; `grant.assertContentSource` checks the stored object is this share's. `grant.row(state)` gives the history row for each publish step.
+  - `grant.retireNetwork()` retires the network (permanent; every holder of decrypt is refused at the next request; idempotent; no approval). `revokeShareGrant` retires first, then revokes the grant with one owner SIWE; if that fails the error `grant-revoke-incomplete` says decrypt is already cut.
+  - `openEditShare`: the owner reads back an edit share with one approval, to an in-memory key that lives at most one hour.
+  - Owner kill-all: `planShareControlBatches` splits shares into owner controls sized by the exact `Authorization` bytes, at most `SHARE_CONTROL_HEADER_BUDGET_BYTES` (30,000; the production ingress refuses values above 32,751 bytes): 34 shares per control with the `applications`/`default` delegation rows, which every control carries. Targets must be the owner's per-share networks (`share-<shareId>`); `:default`, `:share` or any other network is refused (`control-target-invalid`) before anything is signed, in planning and again in `runShareControlBatch`, which also re-checks the domain, space rows and byte budget of the batch it is given. `runShareControlBatch` signs one control (one approval), retires every network first, then revokes each grant through the control, counting only a `{ revoked: true, cid }` receipt. A kill-all of L shares costs ceil(L/34) approvals on v1.20.6 and NODE-B2 N4' (measured live across two controls); 1.21.0 and N1b refuse control revokes of decrypt-bearing grants, so with `revokeFallback` each grant costs one more owner SIWE (ceil(L/34) + L).
+
+## 1.2.0-beta.2
+
+### Minor Changes
+
+- d84e379: Add the owner's `:share` network and per-share grants to `@tinycloud/share-sdk/share-root` (TC-1423 D3, slice 2). The main entry is unchanged.
+  - `ensureShareNetwork` makes sure the owner-owned `urn:tinycloud:encryption:<owner did:pkh>:share` network exists (`shareNetworkIdFor` names it). When it exists, nothing is signed. Otherwise the owner approves one 10-minute CACAO granting only `network.create` on that URN to a throwaway non-extractable key, which creates the network with the owner as owner and is then cleared. The signed grant is decoded and must match exactly. Share and per-share keys never own a network.
+  - `ShareGrant.create` asks the owner for one approval per addressed (email/domain) or edit share: a CACAO to a fresh non-extractable per-share key granting kv `get` + `metadata` (+ `put` for `edit`) on exactly one key under `xyz.tinycloud.share/shares/`, plus `decrypt` on the owner's `:share` network (a Policy/v3 owner must hold decrypt on the source's network), for at most 30 days. Broader paths, longer expiries, other spaces or access levels are refused before the wallet prompt; the signed CACAO is decoded and must match exactly, or the key is cleared and the error carries the CID with `mustRevoke`.
+  - `ShareGrant.publishAuthority(registerPolicy)` is the `publishAddressedShare` authority for that one share: policy roots owned by the per-share key, no later than the grant, naming only its exact key (no action the grant lacks) and `:share` decrypt; 32-byte digests only. `restore` rebuilds a grant from a CLI-held key; no browser persistence.
+  - The owner revokes one share by revoking its grant (one approval); other shares are untouched. Until the Node binds policy registrations to the owner delegation, an already-registered policy keeps admitting recipients until its own expiry, which never exceeds the grant's.
+  - Wording: a `kv` share root's key cannot own a policy over `:share`-encrypted content (the Node answers `policy-owner-not-authorized`).
+
+## 1.2.0-beta.1
+
+### Minor Changes
+
+- c2fd94b: Add `ShareRoot` (TC-1423 D3, slice 1) under the new subpath `@tinycloud/share-sdk/share-root` (the main entry is unchanged, so its consumers' bundles do not grow): a wallet-signed, read-only root delegated to one non-extractable Ed25519 share key, so shares can outlive the owner's login session.
+  - `ShareRoot.create` asks the owner once through `createOwnerDelegation({ permissions })`. The scope is chosen at creation from the Node's advertised owner-authority mode: `kv` (get + metadata on `xyz.tinycloud.share/shares/` in `applications`) unless the `shareRootPolicyRoots` option is on and the Node's `GET /info` `features` list `policy-owner-authority-v1` + `policy-owner-authority-enforce`, in which case decrypt on the owner's `:share` network is added (`kv+share-decrypt`). Agent roots are always `kv`, in `default`. The scope and the Node origin are kept in the root record.
+  - The signed CACAO is decoded and anything else is rejected: other abilities or caveats, other resources, a parent, another audience or owner, a lifetime over 37 days (agents: 30; up to 5 minutes of signer clock skew on the issue time), or an expiry other than the one requested. The key is cleared, and the error carries the imported CID, the CID of the signed bytes when they differ, and `mustRevoke` when the imported root may grant more than requested.
+  - `create` generates the key itself and never exposes it; `clear()` drops the only handle. Browser persistence of a share key is not provided and needs the composer on its own origin first.
+  - `signBearerLink` signs a `kv/get` link on one exact key under the prefix, outside WASM; it never outlives the root or 30 days.
+  - `policyRootSigner` is the only ShareRoot API that signs Policy/v3 owner material. It needs a `kv+share-decrypt` root and the flag, and its `createOwnerRoot` / `sign` (32-byte digests only) re-check the flag, the root's expiry and the Node's advertised mode on every call. Policy roots are built by the signer and may not outlive the share root. A share key holder can still sign through other APIs; the Node refuses a policy registered by a `kv` root's key (`policy-owner-not-authorized`).
+  - `ensureShareRoot` re-roots (new key, one approval, the cap minus 10 minutes) only when the current root does not cover the requested expiry, or, for `purpose: "policy"`, when the Node enforces and the current root is `kv`. It never returns a `kv` root for policy use.
+  - `createPolicyOwnerModeProbe` caches each Node's answer for at most 5 minutes, probes only https (http on loopback), requires a JSON answer of at most 64 KiB, and accepts the features a sign-in already read (`observe`); any failure counts as not enforcing.
+  - `signShareKeyDelegation`, `assertNonExtractableShareKey`, `decodeOwnerRootCacao` and `ownerRootCacaoCid` are exported for these flows.
+
+## 1.2.0-beta.0
+
+### Minor Changes
+
+- 116b214: Artifact versions for `share publish` (TC-1428). `share publish --artifact <id|new>` stores the file as a write-once version under `artifacts/<id>/versions/<n>/` (created with `If-None-Match: *`, `manifest.json` written last) in the owner's space and pins the share to that version: bearer and addressed shares read one version file and never carry `put`. Re-publishing the same bytes to a bearer link returns the same version and changed content makes the next, so an agent retry is safe. An addressed share is a fresh encryption each time, so each is its own version; the manifest records only the sha256 of the stored bytes, never of the plaintext. `share versions <id>` lists versions and the shares pinned to each. `--action edit` on an artifact share is refused; every artifact share pins one version. The layout helpers (`publishArtifactVersion`, `listArtifactVersions`, `parseArtifactManifest`, path helpers) are a new `@tinycloud/share-sdk/artifact` entry point, kept out of the main barrel so browser bundles do not carry them. No node change.
+
+  The built-in `builtin:share-publishing` manifest now also requests `artifacts/` (get, metadata, put, list). Profiles signed in before this version must sign in again to use `--artifact` (`auth login --device --manifest builtin:share-publishing`); other `share publish` use is unchanged. Versions are kept by default and count against the owner's storage; reclaiming bytes depends on history GC (TC-1277).
+
 ## 1.1.1
 
 ### Patch Changes

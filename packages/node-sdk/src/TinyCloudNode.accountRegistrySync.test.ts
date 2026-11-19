@@ -17,9 +17,9 @@
  * `syncAccessible()`.
  */
 
-import { afterEach, describe, expect, jest, mock, spyOn, test, type Mock } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, jest, mock, spyOn, test, type Mock } from "bun:test";
 import { inspect } from "node:util";
-import { SQLMigrations } from "@tinycloud/sdk-services";
+import { SQLMigrations, tinyCloudDebugLogger } from "@tinycloud/sdk-services";
 
 import {
   AccountService,
@@ -37,6 +37,15 @@ import {
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "./test-support/unregistered-location-registry";
+
+let locationRegistry: UnregisteredLocationRegistry;
+beforeAll(() => {
+  locationRegistry = startUnregisteredLocationRegistry();
+});
+afterAll(() => {
+  locationRegistry?.stop(true);
+});
 
 async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
   const started = Date.now();
@@ -143,6 +152,7 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   node: TinyCloudNode;
   wasm: IWasmBindings;
   syncAccessible: ReturnType<typeof mock>;
+  ensure: ReturnType<typeof mock>;
 } {
   const wasm = makeFakeWasmBindings();
   const signer = {
@@ -152,11 +162,16 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   };
   const node = new TinyCloudNode({
     host: "https://tinycloud.test",
+    tinycloudRegistryUrl: locationRegistry.url.origin,
     signer: signer as any,
     wasmBindings: wasm,
   });
 
   (node as any).auth = {
+    // The real NodeUserAuthorization reports its signed-in address; sign-in reads it.
+    address: () => ADDRESS,
+    // This no-entry fixture places every account resource on its explicit host.
+    resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
     tinyCloudSession: {
       address: ADDRESS,
       chainId: 1,
@@ -173,8 +188,9 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
   Reflect.set(node, "_address", ADDRESS);
   Reflect.set(node, "_chainId", 1);
   const syncAccessible = mock(async () => ({ ok: true, data: [] }));
+  const ensure = mock(async () => ({ ok: true, data: undefined }));
   (node as any)._account = {
-    index: { ensure: mock(async () => ({ ok: true, data: undefined })) },
+    index: { ensure },
     spaces: { syncAccessible },
   };
   const context = new ServiceContext({
@@ -195,7 +211,7 @@ function makeNode(options: { hasSiwe?: boolean } = {}): {
     contexts: [operationContext],
   });
 
-  return { node, wasm, syncAccessible };
+  return { node, wasm, syncAccessible, ensure };
 }
 
 /** Settle promise chains without advancing (fake) timers. */
@@ -798,6 +814,8 @@ describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
     const { node, wasm, syncAccessible } = makeNode();
     (wasm.parseRecapFromSiwe as any).mockImplementation(() => [
       { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get"] },
+      // Registry sync needs the account index; see the TC-1287 gate below.
+      { service: "sql", space: ACCOUNT_SPACE, path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
       {
         service: "space",
         space: SPACE_URI,
@@ -815,6 +833,7 @@ describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
   test("recap granting the space/* wildcard → calls syncAccessible", async () => {
     const { node, wasm, syncAccessible } = makeNode();
     (wasm.parseRecapFromSiwe as any).mockImplementation(() => [
+      { service: "sql", space: ACCOUNT_SPACE, path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
       { service: "space", space: SPACE_URI, path: "", actions: ["tinycloud.space/*"] },
     ]);
 
@@ -832,6 +851,74 @@ describe("TC-110: scheduleAccountRegistrySync recap gate", () => {
     (node as any).scheduleAccountRegistrySync();
     await waitFor(() => syncAccessible.mock.calls.length > 0);
 
+    expect(syncAccessible).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TC-1287: scheduleAccountRegistrySync account-space authority gate", () => {
+  /** Sign-in's private scheduling step, then the public barrier for its result. */
+  async function scheduleAndSettle(node: TinyCloudNode): Promise<void> {
+    Reflect.apply(Reflect.get(node, "scheduleAccountRegistrySync"), node, []);
+    await node.waitForAccountRegistrySync();
+  }
+  function recap(wasm: IWasmBindings, entries: Array<{ service: string; space: string; path: string; actions: string[] }>): void {
+    // makeFakeWasmBindings installs a bun mock here.
+    const parse = wasm.parseRecapFromSiwe as unknown as ReturnType<typeof mock>;
+    parse.mockImplementation(() => entries);
+  }
+
+  test("a session without account-space SQL authority makes no registry calls", async () => {
+    const { node, wasm, syncAccessible, ensure } = makeNode();
+    // A scoped CLI login: its own space and list authority, nothing on `account`.
+    recap(wasm, [
+      { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "space", space: SPACE_URI, path: "", actions: ["tinycloud.space/list"] },
+    ]);
+
+    await scheduleAndSettle(node);
+
+    expect(ensure).not.toHaveBeenCalled();
+    expect(syncAccessible).not.toHaveBeenCalled();
+  });
+
+  test("records the skip once, only as a debug event, however many sessions skip", async () => {
+    Reflect.set(TinyCloudNode, "accountRegistrySkipLogged", false);
+    const warn = spyOn(console, "warn");
+    const info = spyOn(console, "info");
+    tinyCloudDebugLogger.enable({ persist: false });
+    tinyCloudDebugLogger.clear();
+    try {
+      for (let i = 0; i < 2; i += 1) {
+        const { node, wasm } = makeNode();
+        recap(wasm, [
+          { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get"] },
+        ]);
+        await scheduleAndSettle(node);
+      }
+      const skips = tinyCloudDebugLogger.getLogs().filter((e) => e.event === "registry.skip");
+      expect(skips).toHaveLength(1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      tinyCloudDebugLogger.disable({ persist: false });
+      tinyCloudDebugLogger.clear();
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  test("a session holding account-space SQL authority still syncs the registry", async () => {
+    const { node, wasm, syncAccessible, ensure } = makeNode();
+    recap(wasm, [
+      { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get"] },
+      // EIP-55 and lowercase owner addresses name the same account space.
+      { service: "sql", space: ACCOUNT_SPACE.toLowerCase(), path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+      { service: "space", space: SPACE_URI, path: "", actions: ["tinycloud.space/list"] },
+    ]);
+
+    await scheduleAndSettle(node);
+
+    expect(ensure).toHaveBeenCalledTimes(1);
     expect(syncAccessible).toHaveBeenCalledTimes(1);
   });
 });
@@ -1203,7 +1290,9 @@ describe("TC-110: withAccountRegistryRetry verdict-aware retry", () => {
     // Activation and host delegation both POST `/delegate` through the global
     // fetch; the host delegation carries its own Authorization header.
     let activations = 0;
-    const delegateFetch = async (_input: unknown, init?: { headers?: Record<string, string> }) => {
+    const delegateFetch = async (input: string | URL | Request, init?: { headers?: Record<string, string> }) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === locationRegistry.url.origin) return originalFetch(input, init);
       const ok = new Response("{}", { status: 200 });
       if (init?.headers?.Authorization === HOST_DELEGATION_AUTHORIZATION) {
         return wrapper === "owned-space create" ? failingResponse() : ok;

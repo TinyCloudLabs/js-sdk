@@ -111,7 +111,9 @@ export async function notifyShare(input: {
           retryable: false, reason: "delivery-window-expired",
         };
       }
-      if (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)) {
+      // A refused authorization (the node's HTTP 400 and 422 are one refusal, carrying this code) is final, like a 401 or 403.
+      const refused = error !== null && typeof error === "object" && "code" in error && error.code === "delivery-authorization-invalid";
+      if (refused || (error !== null && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403))) {
         return {
           protocol: "tinycloud-share", version: 1, shareId: input.shareId,
           state: "partial-failure", idempotencyKey, attempts, retryable: false,

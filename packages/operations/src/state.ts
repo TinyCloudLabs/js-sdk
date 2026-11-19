@@ -1,14 +1,16 @@
+import type { RegistryCacheEntry, RegistryCacheRecord, RegistryCacheStore, RegistryCacheTombstone, RegistryRegistrationEvidence, RegistryRegistrationKind, RegistrySequenceStore } from "@tinycloud/sdk-core";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFileSync, readlinkSync } from "node:fs";
+import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from "node:fs";
 import {
   chmod,
   link,
-  lstat,
   mkdir,
+  lstat,
   open,
   readFile,
   readdir,
+  realpath,
   rename,
   rmdir,
   rm,
@@ -16,6 +18,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import { connect, createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -47,7 +50,10 @@ interface HeldProfileLock {
   readonly turnSlot: number;
   /** A deletion of the profile ran while this acquisition waited for the lock. */
   readonly deletedWhileWaiting: boolean;
+  /** The pin opened by this acquisition, not a borrowed lexical scope. Details: TC-2481. */
+  readonly ownedPin: PinnedProfileDirectory | undefined;
   active: boolean;
+  deletedProfile?: boolean;
 }
 /**
  * Async context shared by every copy of this module in the process. Each
@@ -69,6 +75,19 @@ function processWideContext<T>(key: string): AsyncLocalStorage<T> {
 const invocationStateRoot = processWideContext<string>("tinycloud.operations.invocationStateRoot.v1");
 /** Profile lock acquisitions held by the current async call chain (see withProfileLock). */
 const heldProfileLocks = processWideContext<readonly HeldProfileLock[]>("tinycloud.operations.heldProfileLocks.v2");
+/** Descriptors inherited by deferred async work are unusable after their owner's action returns. */
+interface PinnedProfileDirectory {
+  readonly path: string;
+  readonly fd: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
+  active: boolean;
+}
+const pinnedProfiles = processWideContext<ReadonlyMap<string, PinnedProfileDirectory>>("tinycloud.operations.pinnedProfiles.v2");
+const pinnedHomes = processWideContext<ReadonlyMap<string, PinnedProfileDirectory>>("tinycloud.operations.pinnedHomes.v2");
+/** One canonical target per configured home across ESM/CJS copies in this process. */
+const canonicalHomes: Map<string, string> =
+  (globalThis as unknown as Record<symbol, Map<string, string> | undefined>)[Symbol.for("tinycloud.operations.canonicalHomes.v1")] ??= new Map();
 /** One ID across separately bundled ESM, CJS, CLI and MCP copies in this process. */
 const processInstanceId: string =
   (globalThis as unknown as Record<symbol, string | undefined>)[Symbol.for("tinycloud.operations.profileLockInstance.v1")] ??=
@@ -358,7 +377,9 @@ async function sweepLiveness(acquisition: AcquisitionLiveness): Promise<void> {
 export type ProfileStoreName =
   | "session"
   | "additional-delegations"
-  | "auth-requests";
+  | "auth-requests"
+  | "registry-cache"
+  | "registry-sequences";
 
 export interface StoreMetadata {
   formatVersion: number;
@@ -440,8 +461,14 @@ export function profilesPath(): string {
   return join(tinycloudHomePath(), "profiles");
 }
 
-export function profilePath(profile: string): string {
+export function namedProfilePath(profile: string): string {
   return join(profilesPath(), validateProfileName(profile));
+}
+
+export function profilePath(profile: string): string {
+  const named = namedProfilePath(profile);
+  const pinned = pinnedProfiles.getStore()?.get(named);
+  return pinned ? livePinnedPath(profile, pinned) : named;
 }
 
 export function profileConfigPath(profile: string): string {
@@ -470,7 +497,7 @@ export function profileStoreMetadataPath(profile: string, store: ProfileStoreNam
 }
 
 export function profileLockPath(profile: string): string {
-  return join(profilePath(profile), ".lock");
+  return join(namedProfilePath(profile), ".lock");
 }
 
 export function profileLockMetadataPath(profile: string): string {
@@ -483,7 +510,9 @@ export function profileLockMetadataPath(profile: string): string {
  * removes it.
  */
 export function profileTurnLockPath(profile: string): string {
-  return join(tinycloudHomePath(), "profile-locks", validateProfileName(profile));
+  const home = tinycloudHomePath();
+  const pinned = pinnedHomes.getStore()?.get(home);
+  return join(pinned ? livePinnedPath(profile, pinned) : home, "profile-locks", validateProfileName(profile));
 }
 
 /**
@@ -495,6 +524,53 @@ export async function readJson<T>(filePath: string): Promise<T | null> {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
   } catch (error) {
     if (isErrno(error, "ENOENT")) return null;
+    throw error;
+  }
+}
+
+/** A profile's direct JSON files must not resolve through a child alias. */
+async function readProfileJson<T>(profile: string, filePath: string, rejectNull = false): Promise<T | null> {
+  // On platforms without descriptor-relative profile paths, check the named file on
+  // both sides of the read so a replacement cannot silently redirect it.
+  const before = process.platform !== "linux"
+    ? await lstat(filePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    })
+    : null;
+  if (process.platform !== "linux" && !before) return null;
+  if (before && !before.isFile()) throw new ProfileSymlinkError(profile);
+  const dev = before && exactFileId(before.dev);
+  const ino = before && exactFileId(before.ino);
+  try {
+    const handle = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      if (before) {
+        const opened = await handle.stat({ bigint: true });
+        if (!opened.isFile() || dev === null || ino === null ||
+            dev !== exactFileId(opened.dev) || ino !== exactFileId(opened.ino)) {
+          throw new ProfileSymlinkError(profile, "changed while opening its file");
+        }
+      }
+      const contents = await handle.readFile("utf8");
+      if (before) {
+        const named = await lstat(filePath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (!named?.isFile() || dev !== exactFileId(named.dev) || ino !== exactFileId(named.ino)) {
+          throw new ProfileSymlinkError(profile, "changed while reading its file");
+        }
+      }
+      const value = JSON.parse(contents) as T;
+      if (rejectNull && value === null) throw new Error("Invalid registry store");
+      return value;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return null;
+    if (isErrno(error, "ELOOP") || isErrno(error, "ENOTDIR")) throw new ProfileSymlinkError(profile);
     throw error;
   }
 }
@@ -547,14 +623,18 @@ async function writeFileDurably(path: string, contents: string): Promise<void> {
 export async function readProfile<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
-  return readJson<T>(profileConfigPath(profile));
+  return withPinnedProfileDirectory(profile, (directory) =>
+    directory ? readProfileJson<T>(profile, join(directory, "profile.json")) : Promise.resolve(null));
 }
 
 export async function readSession<T extends object = Record<string, unknown>>(
   profile: string,
 ): Promise<T | null> {
-  await readStoreMetadata(profile, "session");
-  return readJson<T>(sessionPath(profile));
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return null;
+    await readStoreMetadata(profile, "session");
+    return readProfileJson<T>(profile, sessionPath(profile));
+  });
 }
 
 export async function readAdditionalDelegations<T = Record<string, unknown>>(
@@ -573,29 +653,172 @@ export async function readStoreMetadata(
   profile: string,
   store: ProfileStoreName,
 ): Promise<StoreMetadata> {
-  const metadata = await readJson<StoreMetadata>(profileStoreMetadataPath(profile, store));
-  if (metadata === null) return { formatVersion: 1 };
-  if (
-    typeof metadata !== "object" ||
-    metadata.formatVersion !== 1
-  ) {
-    throw new TypeError(`Unsupported store format for "${store}".`);
-  }
-  return metadata;
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    const metadata = directory ? await readProfileJson<StoreMetadata>(profile, profileStoreMetadataPath(profile, store), store === "registry-cache" || store === "registry-sequences") : null;
+    if (metadata === null) return { formatVersion: 1 };
+    if (
+      typeof metadata !== "object" ||
+      metadata.formatVersion !== 1
+    ) {
+      throw new TypeError(`Unsupported store format for "${store}".`);
+    }
+    return metadata;
+  });
 }
 
 export async function readProfileStore<T>(
   profile: string,
   store: Exclude<ProfileStoreName, "session">,
 ): Promise<ProfileStoreContents<T>> {
-  const [metadata, raw] = await Promise.all([
-    readStoreMetadata(profile, store),
-    readJson<unknown>(profileStorePath(profile, store)),
-  ]);
-  return {
-    formatVersion: metadata.formatVersion,
-    records: Array.isArray(raw) ? raw as T[] : [],
-  };
+  return withPinnedProfileDirectory(profile, async (directory) => {
+    if (!directory) return { formatVersion: 1, records: [] };
+    const [metadata, raw] = await Promise.all([
+      readStoreMetadata(profile, store),
+      readProfileJson<unknown>(profile, profileStorePath(profile, store), store === "registry-cache" || store === "registry-sequences"),
+    ]);
+    if ((store === "registry-cache" || store === "registry-sequences") && raw !== null && !Array.isArray(raw)) {
+      throw new Error("Invalid registry cache store");
+    }
+    return {
+      formatVersion: metadata.formatVersion,
+      records: Array.isArray(raw) ? raw as T[] : [],
+    };
+  });
+}
+
+export class ProfileSymlinkError extends Error {
+  readonly code = "PROFILE_SYMLINK";
+
+  constructor(profile: string, detail = "must be a real directory, not a symlink or another file type") {
+    super(`Profile "${profile}" ${detail}.`);
+    this.name = "ProfileSymlinkError";
+  }
+}
+
+/** Bun versions may return numeric FileHandle.stat IDs despite bigint: true. */
+function exactFileId(value: number | bigint): bigint | null {
+  if (typeof value === "bigint") return value >= 0n ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+}
+
+function isPinnedLive(pinned: PinnedProfileDirectory): boolean {
+  if (!pinned.active) return false;
+  try {
+    const stats = fstatSync(pinned.fd, { bigint: true });
+    return exactFileId(stats.dev) === pinned.dev && exactFileId(stats.ino) === pinned.ino;
+  } catch {
+    return false;
+  }
+}
+
+function livePinnedPath(profile: string, pinned: PinnedProfileDirectory): string {
+  if (isPinnedLive(pinned)) return pinned.path;
+  throw new ProfileSymlinkError(profile, "its pinned directory is no longer active or changed during use");
+}
+
+/** Missing profiles remain missing; existing profiles are always opened without following aliases. */
+export async function withPinnedProfileDirectory<T>(
+  profile: string,
+  action: (directory: string | null) => Promise<T>,
+  options: { create?: boolean } = {},
+): Promise<T> {
+  const named = namedProfilePath(profile);
+  const existing = pinnedProfiles.getStore()?.get(named);
+  if (existing) return action(livePinnedPath(profile, existing));
+  if (process.platform !== "linux") {
+    // Only destructive replica purge needs a descriptor-relative child path.
+    // Preserve ordinary profile state access on platforms without /proc/self/fd.
+    if (options.create) await mkdir(named, { recursive: true, mode: PRIVATE_DIR_MODE });
+    const stats = await lstat(named).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!stats) return action(null);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) throw new ProfileSymlinkError(profile);
+    return action(named);
+  }
+  const home = tinycloudHomePath();
+  const handles: FileHandle[] = [];
+  const fdPath = (fd: number) => `/proc/self/fd/${fd}`;
+  const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
+  try {
+    if (options.create) await mkdir(home, { recursive: true, mode: PRIVATE_DIR_MODE });
+    // User-owned home aliases are allowed, but each configured home resolves
+    // only once in this process. A later alias retarget cannot select another profile.
+    const resolved = canonicalHomes.get(home) ?? await realpath(home).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" && !options.create) return null;
+      if (error.code === "ELOOP" || error.code === "ENOTDIR") throw new ProfileSymlinkError(profile);
+      throw error;
+    });
+    if (!resolved) return await action(null);
+    const root = canonicalHomes.get(home) ?? resolved;
+    canonicalHomes.set(home, root);
+    const segments = [root, "profiles", validateProfileName(profile)];
+    for (let index = 0; index < segments.length; index++) {
+      const path = handles.length ? join(fdPath(handles[handles.length - 1]!.fd), segments[index]!) : segments[index]!;
+      if (options.create && handles.length) {
+        await mkdir(path, { mode: PRIVATE_DIR_MODE }).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "EEXIST") throw error;
+        });
+      }
+      // A profiles/ container may be shared by two homes; pin its target, but never follow an alias for the selected profile.
+      const handle = await open(path, index === 1 ? flags & ~fsConstants.O_NOFOLLOW : flags).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" && !options.create) return null;
+        if (error.code === "ELOOP" || error.code === "ENOTDIR") throw new ProfileSymlinkError(profile);
+        throw error;
+      });
+      if (!handle) return await action(null);
+      handles.push(handle);
+      if (options.create) await handle.chmod(PRIVATE_DIR_MODE);
+    }
+    const opened = handles[2]!;
+    const [actual, namedStats] = await Promise.all([opened.stat({ bigint: true }), lstat(named, { bigint: true })]);
+    const dev = exactFileId(actual.dev);
+    const ino = exactFileId(actual.ino);
+    if (!namedStats.isDirectory() || dev === null || ino === null ||
+        dev !== exactFileId(namedStats.dev) || ino !== exactFileId(namedStats.ino)) {
+      throw new ProfileSymlinkError(profile, "changed while opening its directory");
+    }
+    const directory = fdPath(opened.fd);
+    const pinned: PinnedProfileDirectory = {
+      path: directory, fd: opened.fd, dev, ino, active: true,
+    };
+    const homeHandle = handles[0]!;
+    const homeStats = await homeHandle.stat({ bigint: true });
+    const homeDev = exactFileId(homeStats.dev);
+    const homeIno = exactFileId(homeStats.ino);
+    if (homeDev === null || homeIno === null) throw new ProfileSymlinkError(profile, "has an unverified home directory identity");
+    const homePinned: PinnedProfileDirectory = {
+      path: fdPath(homeHandle.fd), fd: homeHandle.fd, dev: homeDev, ino: homeIno, active: true,
+    };
+    const context = new Map(pinnedProfiles.getStore());
+    context.set(named, pinned);
+    const homes = new Map(pinnedHomes.getStore());
+    homes.set(home, homePinned);
+    try {
+      return await pinnedHomes.run(homes, () => pinnedProfiles.run(context, () => action(directory)));
+    } finally {
+      pinned.active = false;
+      homePinned.active = false;
+    }
+  } finally {
+    for (const handle of handles.reverse()) await handle.close();
+  }
+}
+
+/** Missing profiles retain their existing read/create behavior; aliases never do. */
+export async function assertRealProfileDirectory(profile: string): Promise<void> {
+  const named = namedProfilePath(profile);
+  const pinned = pinnedProfiles.getStore()?.get(named);
+  if (pinned) {
+    livePinnedPath(profile, pinned);
+    return;
+  }
+  const stats = await lstat(named).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (stats && (!stats.isDirectory() || stats.isSymbolicLink())) throw new ProfileSymlinkError(profile);
 }
 
 /**
@@ -610,6 +833,9 @@ export async function readProfileStore<T>(
  * still takes the other root's lock) and lasts exactly as long as the
  * acquisition: it is revoked before release, so work deferred past the
  * critical section waits for the lock like any other caller.
+ *
+ * Independent acquisitions reopen pin scopes owned by completed acquisitions.
+ * Live lexical pin scopes remain intact. Details: TC-2481.
  */
 export async function withProfileLock<T>(
   profile: string,
@@ -618,24 +844,51 @@ export async function withProfileLock<T>(
 ): Promise<T> {
   const normalizedProfile = validateProfileName(profile);
   const lockPath = profileLockPath(normalizedProfile);
-  const held = (heldProfileLocks.getStore() ?? []).filter((ownership) => ownership.active);
-  if (held.some((ownership) => ownership.lockPath === lockPath)) return action();
-  const acquired = await acquireProfileLock(normalizedProfile, options);
-  const ownership: HeldProfileLock = {
-    lockPath,
-    turnSlot: acquired.turnSlot,
-    deletedWhileWaiting: acquired.deletedWhileWaiting,
-    active: true,
-  };
-  try {
-    return await heldProfileLocks.run([...held, ownership], action);
-  } finally {
-    ownership.active = false;
-    await acquired.release();
-    // Taking the lock recreated the deleted profile's directory; remove it
-    // again unless something was written into it (rmdir needs it empty).
-    if (acquired.deletedWhileWaiting) await rmdir(profilePath(normalizedProfile)).catch(() => undefined);
+  const inheritedOwnership = heldProfileLocks.getStore() ?? [];
+  const held = inheritedOwnership.filter((ownership) => ownership.active);
+  if (held.some((ownership) => ownership.lockPath === lockPath)) {
+    await assertRealProfileDirectory(normalizedProfile);
+    return action();
   }
+  const named = namedProfilePath(normalizedProfile);
+  const inherited = pinnedProfiles.getStore()?.get(named);
+  if (inherited && (!isPinnedLive(inherited) || inheritedOwnership.some((ownership) =>
+    !ownership.active && ownership.lockPath === lockPath && ownership.ownedPin === inherited))) {
+    // Deferred work may explicitly acquire a new lock, but never reuse its old fd.
+    const profiles = new Map(pinnedProfiles.getStore());
+    profiles.delete(named);
+    const homes = new Map(pinnedHomes.getStore());
+    homes.delete(tinycloudHomePath());
+    return pinnedHomes.run(homes, () =>
+      pinnedProfiles.run(profiles, () => withProfileLock(normalizedProfile, action, options)));
+  }
+  return withPinnedProfileDirectory(normalizedProfile, async (directory) => {
+    if (!directory) throw new ProfileDeletedError(normalizedProfile);
+    const acquired = await acquireProfileLock(normalizedProfile, options);
+    const ownership: HeldProfileLock = {
+      lockPath,
+      turnSlot: acquired.turnSlot,
+      deletedWhileWaiting: acquired.deletedWhileWaiting,
+      ownedPin: inherited ? undefined : pinnedProfiles.getStore()?.get(named),
+      active: true,
+    };
+    try {
+      return await heldProfileLocks.run([...held, ownership], action);
+    } finally {
+      ownership.active = false;
+      await acquired.release();
+      if (ownership.deletedProfile || acquired.deletedWhileWaiting) {
+        const current = await lstat(namedProfilePath(normalizedProfile), { bigint: true }).catch(() => null);
+        const original = await stat(directory, { bigint: true }).catch(() => null);
+        const currentDev = current && exactFileId(current.dev);
+        const currentIno = current && exactFileId(current.ino);
+        if (currentDev !== null && currentIno !== null && original &&
+            currentDev === exactFileId(original.dev) && currentIno === exactFileId(original.ino)) {
+          await rmdir(namedProfilePath(normalizedProfile)).catch(() => undefined);
+        }
+      }
+    }
+  }, { create: !options.requireProfile });
 }
 
 /**
@@ -651,6 +904,7 @@ export async function recordProfileDeletion(profile: string): Promise<void> {
   const ownership = (heldProfileLocks.getStore() ?? []).find((candidate) => candidate.active && candidate.lockPath === lockPath);
   if (!ownership) throw new Error(`Recording the deletion of profile "${profile}" requires holding its lock.`);
   await replaceJson(join(profileTurnLockPath(profile), "deleted.json"), { slot: ownership.turnSlot }, true);
+  ownership.deletedProfile = true;
 }
 
 /**
@@ -736,6 +990,183 @@ async function updateProfileStoreWhileLocked<T, Result>(
   return next.result;
 }
 
+type RegistryProfileStore = "registry-cache" | "registry-sequences";
+/** Shared across bundled entry points, but never across profile-lock acquisitions. */
+const registryStoreUpdates: WeakMap<HeldProfileLock, Map<RegistryProfileStore, Promise<unknown>>> =
+  (globalThis as unknown as Record<symbol, WeakMap<HeldProfileLock, Map<RegistryProfileStore, Promise<unknown>>> | undefined>)[
+    Symbol.for("tinycloud.operations.registryStoreUpdates.v1")
+  ] ??= new WeakMap();
+
+async function withRegistryStoreUpdate<Result>(
+  profile: string,
+  store: RegistryProfileStore,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  // Acquire the profile first: an outside waiter must not reserve a queue
+  // needed by an already-held caller. Reentrant siblings share this acquisition.
+  return withProfileLock(profile, async () => {
+    // This acquisition already binds the canonical pinned profile; queue
+    // identity must not survive into another root or a later acquisition.
+    const lockPath = profileLockPath(profile);
+    const ownership = heldProfileLocks.getStore()!.find((held) => held.active && held.lockPath === lockPath)!;
+    let updates = registryStoreUpdates.get(ownership);
+    if (!updates) registryStoreUpdates.set(ownership, updates = new Map());
+    const next = (updates.get(store) ?? Promise.resolve()).then(action);
+    const settled = next.catch(() => undefined);
+    updates.set(store, settled);
+    try {
+      return await next;
+    } finally {
+      if (updates.get(store) === settled) updates.delete(store);
+      if (updates.size === 0) registryStoreUpdates.delete(ownership);
+    }
+  });
+}
+
+function validateProfileRegistryCacheRecord(entry: RegistryCacheRecord): void {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry) ||
+      typeof entry.ownerKey !== "string" || entry.ownerKey.length === 0 ||
+      !Number.isSafeInteger(entry.revision === undefined ? 0 : entry.revision) ||
+      (entry.revision !== undefined && entry.revision < 0)) {
+    throw new Error("Invalid registry cache store");
+  }
+  if ("invalidated" in entry) {
+    if (entry.invalidated !== true || entry.revision === undefined || entry.revision === 0 || Object.keys(entry).length !== 3) {
+      throw new Error("Invalid registry cache tombstone");
+    }
+  } else if (typeof entry.responseBody !== "string" ||
+      !Number.isSafeInteger(entry.fetchedAt) || entry.fetchedAt < 0 ||
+      !Number.isSafeInteger(entry.sequence) || entry.sequence < 0) {
+    throw new Error("Invalid registry cache store");
+  }
+}
+
+/** Plain, owner-only profile file with the same atomic writer and process lock as grants. */
+export function createProfileRegistryCacheStore(profile: string): RegistryCacheStore {
+  const find = (records: readonly RegistryCacheRecord[], key: string): RegistryCacheRecord | undefined => {
+    if (typeof key !== "string" || key.length === 0) throw new Error("Invalid registry cache owner");
+    const keys = new Set<string>();
+    let found: RegistryCacheRecord | undefined;
+    for (const entry of records) {
+      validateProfileRegistryCacheRecord(entry);
+      if (keys.has(entry.ownerKey)) throw new Error("Invalid registry cache store");
+      keys.add(entry.ownerKey);
+      if (entry.ownerKey === key) found = entry;
+    }
+    return found;
+  };
+  return {
+    async get(key) {
+      const entry = find((await readProfileStore<RegistryCacheRecord>(profile, "registry-cache")).records, key);
+      return entry === undefined || "invalidated" in entry ? undefined : entry;
+    },
+    async getRevision(key) {
+      return find((await readProfileStore<RegistryCacheRecord>(profile, "registry-cache")).records, key)?.revision ?? 0;
+    },
+    update(key, update) {
+      return withRegistryStoreUpdate(profile, "registry-cache", () =>
+        updateProfileStoreWhileLocked<RegistryCacheRecord, RegistryCacheEntry>(profile, "registry-cache", async (records) => {
+          const current = find(records, key);
+          const revision = current?.revision ?? 0;
+          const entry = await update(current === undefined || "invalidated" in current ? undefined : current, revision);
+          if (entry.ownerKey !== key) throw new Error("Registry cache owner mismatch");
+          const next = { ...entry, revision };
+          if ("invalidated" in next) throw new Error("Registry cache update requires a signed entry");
+          validateProfileRegistryCacheRecord(next);
+          return { records: [...records.filter((record) => record.ownerKey !== key), next], result: next };
+        }));
+    },
+    delete(key, expectedRevision?: number, maximumSequence?: number) {
+      return withRegistryStoreUpdate(profile, "registry-cache", () =>
+        updateProfileStoreWhileLocked<RegistryCacheRecord, void>(profile, "registry-cache", (records) => {
+          const current = find(records, key);
+          const revision = current?.revision ?? 0;
+          if ((expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) ||
+              (maximumSequence !== undefined && (!Number.isSafeInteger(maximumSequence) || maximumSequence < 0))) {
+            throw new Error("Invalid registry cache deletion guard");
+          }
+          if ((expectedRevision !== undefined && expectedRevision !== revision) ||
+              (maximumSequence !== undefined && current !== undefined && !("invalidated" in current) && current.sequence > maximumSequence)) {
+            throw new Error("Registry cache changed");
+          }
+          if (revision === Number.MAX_SAFE_INTEGER) throw new Error("Registry cache revision overflow");
+          const tombstone: RegistryCacheTombstone = { ownerKey: key, revision: revision + 1, invalidated: true };
+          return { records: [...records.filter((entry) => entry.ownerKey !== key), tombstone], result: undefined };
+        }));
+    },
+  };
+}
+
+/** Independent high-water state survives an absent cache file without inventing absence. */
+export function createProfileRegistrySequenceStore(profile: string): RegistrySequenceStore {
+  type Sequence = { ownerKey: string; sequence: number; kind?: RegistryRegistrationKind };
+  const memory = new Map<string, RegistryRegistrationEvidence>();
+  // Only durable signed provenance may be reused after its original profile scope ends.
+  const durablySigned = new Set<string>();
+  const rank = (kind: RegistryRegistrationKind): number => kind === "signed-v2" ? 2 : kind === "unknown" ? 1 : 0;
+  const remember = (key: string, next: RegistryRegistrationEvidence): void => {
+    const previous = memory.get(key);
+    if (!previous || next.sequence > previous.sequence ||
+        (next.sequence === previous.sequence && rank(next.kind) > rank(previous.kind))) {
+      memory.set(key, next);
+    }
+  };
+  const find = (records: readonly Sequence[], key: string): RegistryRegistrationEvidence | undefined => {
+    const keys = new Set<string>();
+    for (const entry of records) {
+      if (!entry || typeof entry.ownerKey !== "string" || keys.has(entry.ownerKey) ||
+          !Number.isSafeInteger(entry.sequence) || entry.sequence < 0 ||
+          (entry.kind !== undefined && entry.kind !== "legacy-v1" && entry.kind !== "signed-v2" && entry.kind !== "unknown") ||
+          (entry.kind === "legacy-v1" && entry.sequence !== 0)) {
+        throw new Error("Invalid registry sequence store");
+      }
+      keys.add(entry.ownerKey);
+    }
+    const stored = records.find((entry) => entry.ownerKey === key);
+    return stored === undefined ? undefined : { sequence: stored.sequence, kind: stored.kind ?? "unknown" };
+  };
+  const getRegistration = async (key: string): Promise<RegistryRegistrationEvidence | undefined> => {
+    const cached = memory.get(key);
+    if (cached?.kind === "signed-v2" && durablySigned.has(key)) return cached;
+    const stored = find((await readProfileStore<Sequence>(profile, "registry-sequences")).records, key);
+    if (stored) {
+      remember(key, stored);
+      if (stored.kind === "signed-v2") durablySigned.add(key);
+    }
+    const current = memory.get(key);
+    if (current?.kind === "signed-v2" && !durablySigned.has(key)) {
+      return { sequence: current.sequence, kind: "unknown" };
+    }
+    return current;
+  };
+  return {
+    async get(key) {
+      return (await getRegistration(key))?.sequence;
+    },
+    getRegistration,
+    async set(key, sequence, kind = "signed-v2") {
+      if (!Number.isSafeInteger(sequence) || sequence < 0 ||
+          (kind !== "legacy-v1" && kind !== "signed-v2" && kind !== "unknown") ||
+          (kind === "legacy-v1" && sequence !== 0)) {
+        throw new Error("Invalid registry registration evidence");
+      }
+      // A failed write retains knowledge, but cannot fake a durable promotion.
+      remember(key, { sequence, kind });
+      const stored = await withRegistryStoreUpdate(profile, "registry-sequences", () =>
+        updateProfileStoreWhileLocked<Sequence, RegistryRegistrationEvidence>(profile, "registry-sequences", (records) => {
+          const current = find(records, key);
+          if (current) remember(key, current);
+          const highest = memory.get(key)!;
+          return {
+            records: current?.sequence === highest.sequence && current.kind === highest.kind ? records
+              : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, ...highest }],
+            result: highest,
+          };
+        }));
+      if (stored.kind === "signed-v2") durablySigned.add(key);
+    },
+  };
+}
 export async function writeSession<T extends object>(
   profile: string,
   session: T,
@@ -799,22 +1230,18 @@ async function acquireProfileLock(
     retryMs: options.retryMs ?? DEFAULT_LOCK_RETRY_MS,
   };
   const staleAfterMs = options.staleAfterMs ?? DEFAULT_STALE_LOCK_MS;
-  const lockPath = profileLockPath(profile);
+  const lockPath = join(profilePath(profile), ".lock");
   const turnDirectory = profileTurnLockPath(profile);
 
   const directory = profilePath(profile);
+  await assertRealProfileDirectory(profile);
   if (options.requireProfile && !(await exists(profileConfigPath(profile)))) throw new ProfileDeletedError(profile);
   if (!options.requireProfile) await mkdir(directory, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await assertRealProfileDirectory(profile);
   await mkdir(dirname(turnDirectory), { recursive: true, mode: PRIVATE_DIR_MODE });
   // Every store write takes this lock: tighten the tree older releases
   // created 0775 before writing sessions or delegations into it.
-  for (const path of [tinycloudHomePath(), profilesPath(), directory]) {
-    await chmod(path, PRIVATE_DIR_MODE).catch((error: unknown) => {
-      // A profile deletion can remove the profile directory right after the
-      // mkdir above; the lock attempt below recreates it 0700.
-      if (path !== directory || !isErrno(error, "ENOENT")) throw error;
-    });
-  }
+  await chmod(directory, PRIVATE_DIR_MODE);
 
   // Bound before this acquisition's first turn record (or first probe of
   // another's socket), closed once the acquisition is over.
@@ -842,6 +1269,7 @@ async function acquireProfileLock(
     // acquisition; it is written durably, so only damage makes it so.
     const deletion = await readJson<{ slot?: unknown }>(join(turnDirectory, "deleted.json")).catch(() => null);
     const deletedWhileWaiting = typeof deletion?.slot === "number" && deletion.slot >= firstWaitedTurn;
+    if (deletedWhileWaiting && !(await exists(profileConfigPath(profile)))) throw new ProfileDeletedError(profile);
     while (true) {
       const token = randomUUID();
       if (await publishProfileLock(profile, lockPath, token, options.requireProfile === true, liveness.held ?? null)) {
@@ -1057,15 +1485,23 @@ async function readLatestTurn(directory: string): Promise<TurnState | number | "
  * thrown: it says nothing about the turn. `done` is read before `held`,
  * which every writer creates first, so a turn read as done is never misread
  * as void.
+ *
+ * A missing owner record is damage only if the directory is there on a second
+ * read too. A turn number can be removed and published again (a paused
+ * process does it): the directory may appear between the failed read and the
+ * look at it, and it appears whole, with its owner record inside.
  */
 async function readTurn(directory: string, slot: number): Promise<TurnState | "damaged" | null> {
   const path = join(directory, String(slot));
-  let text: string;
-  try {
-    text = await readFile(join(path, "owner.json"), "utf8");
-  } catch (error) {
-    if (!isErrno(error, "ENOENT") && !isErrno(error, "ENOTDIR")) throw error;
-    return await exists(path) ? "damaged" : null;
+  let text: string | undefined;
+  for (let attempt = 0; text === undefined; attempt++) {
+    try {
+      text = await readFile(join(path, "owner.json"), "utf8");
+    } catch (error) {
+      if (!isErrno(error, "ENOENT") && !isErrno(error, "ENOTDIR")) throw error;
+      if (!await exists(path)) return null;
+      if (attempt > 0) return "damaged";
+    }
   }
   let owner: (RecordedProcess & { token?: unknown; after?: unknown }) | null;
   try {
@@ -1124,7 +1560,7 @@ async function takeTurn(profile: string, directory: string, latest: TurnState, l
     if (published) await markTurn(path, token, "done");
     return null;
   } catch (error) {
-    if (published) settleOwnTurn(directory, slot, token);
+    if (published) await settleOwnTurn(directory, slot, token);
     throw error;
   }
 }
@@ -1152,18 +1588,26 @@ async function settleAbandonedTurn(directory: string, abandoned: TurnState): Pro
  * otherwise (by this process's next acquisition, or by another process once
  * this one has exited). The timer does not keep the process alive.
  */
-function settleOwnTurn(directory: string, slot: number, token: string, retries = SETTLE_RETRIES): void {
+async function settleOwnTurn(directory: string, slot: number, token: string): Promise<void> {
   relinquishedTurns.add(token);
-  void (async () => {
-    try {
-      const turn = await readTurn(directory, slot);
-      if (turn !== null && turn !== "damaged" && turn.token === token && !turn.done) await settleAbandonedTurn(directory, turn);
-      relinquishedTurns.delete(token);
-    } catch {
-      // Still relinquished: this process's next acquisition settles it too.
-      if (retries > 0) setTimeout(() => settleOwnTurn(directory, slot, token, retries - 1), SETTLE_RETRY_MS).unref();
-    }
-  })();
+  const pinned = await pinDirectory(directory).catch(() => null);
+  const path = pinned?.path(".") ?? directory;
+  let retries = SETTLE_RETRIES;
+  const attempt = () => {
+    void (async () => {
+      try {
+        const turn = await readTurn(path, slot);
+        if (turn !== null && turn !== "damaged" && turn.token === token && !turn.done) await settleAbandonedTurn(path, turn);
+        relinquishedTurns.delete(token);
+        await pinned?.close();
+      } catch {
+        // Still relinquished: this process's next acquisition settles it too.
+        if (retries-- > 0) setTimeout(attempt, SETTLE_RETRY_MS).unref();
+        else await pinned?.close();
+      }
+    })();
+  };
+  attempt();
 }
 
 /**
@@ -1236,7 +1680,7 @@ async function releaseTurn(profile: string, turn: Turn, liveness: AcquisitionLiv
   try {
     await markTurn(join(turn.directory, String(turn.slot)), turn.token, "done");
   } catch {
-    settleOwnTurn(turn.directory, turn.slot, turn.token);
+    await settleOwnTurn(turn.directory, turn.slot, turn.token);
     return;
   }
   await collectTurns(profile, turn, liveness).catch(() => undefined);

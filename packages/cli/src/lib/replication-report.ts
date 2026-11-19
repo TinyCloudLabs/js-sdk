@@ -1,4 +1,4 @@
-import type { ReplicaStatusEntry, ReplicationEvent } from "@tinycloud/node-sdk";
+import type { ReplicationEvent } from "@tinycloud/node-sdk";
 
 export interface ReplicationPartitionSummary {
   idHash: string;
@@ -16,25 +16,22 @@ export interface ReplicationReport {
   syncs: Record<string, number>;
   writes: Record<string, number>;
   divergences: ReplicationEvent[];
-  replicas: ReplicaStatusEntry[];
+  replicas: [];
   partitions: ReplicationPartitionSummary[];
-  warning?: string;
+  replicasUnavailable: true;
 }
 
-export const CLEAR_PENDING_WARNING = "Clearing pending writes stops pinning keys whose last write had an unknown outcome or never finished. If such a write did commit, or commits later, this device can serve the older value for that key until the next sync after the commit, as it would for a write from another device.";
 function percentile(values: number[], fraction: number): number | null {
   if (values.length === 0) return null;
   values.sort((left, right) => left - right);
   return values[Math.ceil(fraction * values.length) - 1] ?? values[values.length - 1]!;
 }
 
-/** Aggregate already-filtered JSONL events with live replica and partition state. */
+/** Aggregate already-filtered persisted JSONL events and partition metadata. */
 export function createReplicationReport(
   since: string,
   events: readonly ReplicationEvent[],
-  replicas: ReplicaStatusEntry[],
   partitions: ReplicationPartitionSummary[],
-  warning?: string,
 ): ReplicationReport {
   const reads = events.filter((event) => event.type === "replication.read");
   const replicaReads = reads.filter((event) => event.source === "replica");
@@ -78,9 +75,9 @@ export function createReplicationReport(
     syncs,
     writes,
     divergences,
-    replicas,
+    replicas: [],
     partitions,
-    ...(warning === undefined ? {} : { warning }),
+    replicasUnavailable: true,
   };
 }
 
@@ -94,22 +91,16 @@ export function renderReplicationReport(report: ReplicationReport): string {
     `Writes: ${Object.entries(report.writes).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
     `Read source/reason: ${Object.entries(report.readsBySourceReason).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
     `Divergences: ${report.totals.divergences}; showing ${report.divergences.length} of ${report.totals.divergences}`,
-    `Replicas: ${report.replicas.length}`,
+    "Replicas: unavailable (read-only report)",
   ];
   for (const divergence of report.divergences) {
     if (divergence.type === "replication.divergence") {
       lines.push(`  ${divergence.space} ${divergence.key}: ${divergence.kind} stalenessMs=${divergence.stalenessMs}`);
     }
   }
-  for (const replica of report.replicas) {
-    const grant = replica.grant ? ` grant=${replica.grant.cid} parent=${replica.grant.parentCid ?? "—"} expires=${replica.grant.expiresAt ?? "—"}` : " grant=missing";
-    lines.push(`  ${replica.prefix}: ${replica.state}; pending in_flight=${replica.pending.inFlight} committed=${replica.pending.committed} ambiguous=${replica.pending.ambiguous}${grant}`);
-    for (const pinned of replica.pinned) lines.push(`    pinned ${pinned.key} ${pinned.state} ${pinned.op} since=${pinned.since} code=${pinned.code ?? "—"} likelyOrphaned=${pinned.likelyOrphaned}`);
-  }
   for (const partition of report.partitions) {
     lines.push(`Partition ${partition.idHash}: host=${partition.host ?? "unknown"} space=${partition.space ?? "unknown"} pinned=${partition.pinned}`);
   }
   if (report.partitions.some((partition) => partition.pinned > 100)) lines.push("Warning: a partition holds more than 100 pinned records.");
-  if (report.warning) lines.push(`Warning: ${report.warning}`);
   return lines.join("\n");
 }

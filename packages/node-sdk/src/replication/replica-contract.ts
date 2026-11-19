@@ -1,3 +1,5 @@
+import type { ReplicaConsentAnchor } from "@tinycloud/sdk-services/kv/replication";
+
 /**
  * The structural contract for `@tinycloud/replica` and
  * `@tinycloud/replica/sqlite`, as the Node adapter (`./sqlite.ts`) uses it.
@@ -30,6 +32,7 @@ export type ReplicaErrorCode =
   | "REPLICA_INVALID_ARGUMENT"
   | "STORAGE_ERROR"
   | "STORAGE_FULL"
+  | "STORAGE_BUDGET"
   | "NOT_COVERED"
   | "SECRETS_OPT_IN_REQUIRED"
   | "GRANT_MISSING"
@@ -51,7 +54,10 @@ export type ReplicaErrorCode =
   | "SCOPE_VIOLATION"
   | "CONTENT_MISMATCH"
   | "INTEGRITY_ERROR"
-  | "REPLICA_CLOSED";
+  | "REPLICA_CLOSED"
+  | "REPLICA_GATED"
+  | "STORAGE_BUDGET"
+  | "CONSENT_EXPIRED";
 
 /** The instance shape of replica's `ReplicaError` class. */
 export interface ReplicaError extends Error {
@@ -336,6 +342,8 @@ export type ReplicaOptions = {
    * that later fails. Lets the caller report partial progress immediately.
    */
   onCommit?: () => void;
+  /** `"lazy"` syncs entry names without downloading values; default `"eager"`. */
+  contentFetch?: "eager" | "lazy";
 };
 
 /** The instance shape of replica's `Replica` engine class (the members the adapter calls). */
@@ -410,6 +418,32 @@ export type SqliteReplicaStoreOptions = {
   /** Clock for leases and status (ms since epoch). */
   now?: () => number;
   guard?: MutationGuard;
+  /** Quota admission (TC-858 S5): partition id for the page facts handed to `admit`. */
+  partitionId?: string;
+  /**
+   * Runs inside the guarded page commit, before any write. Throwing aborts the
+   * page with nothing committed. Mirrors replica's `ReplicaAdmitHook`.
+   */
+  admit?: (page: {
+    partitionId: string;
+    blobBytes: number;
+    entries: number;
+    freeBytes: number | null;
+  }) => void | Promise<void>;
+};
+
+export type SqliteGrantInstall = {
+  installedAt: number;
+  effectiveExpiresAt: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
+};
+
+export type SqliteGrantPolicy = {
+  at: number;
+  ttlMs: number;
+  consentDeadline: number;
+  consentAnchor: ReplicaConsentAnchor;
 };
 
 /**
@@ -418,7 +452,22 @@ export type SqliteReplicaStoreOptions = {
  * (`destroy` removes the replica directory under a live lease).
  */
 export interface SqliteReplicaStore extends ReplicaStore {
-  destroy(t: LeaseToken): Promise<void>;
+  getGrantInstall(cid: string): Promise<SqliteGrantInstall | null>;
+  grantInstallTimes(): Promise<Array<{ cid: string; installedAt: number }>>;
+  installGatedGrant(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall>;
+  recomputeGrantInstall(g: GrantRecord, policy: SqliteGrantPolicy): Promise<SqliteGrantInstall | null>;
+  destroy(t: LeaseToken, options?: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    allowMissingDatabase?: boolean;
+    expectedRoot?: { dev: string; ino: string };
+    allowAdapterFence?: boolean;
+  }): Promise<void>;
+  readTransaction<T>(
+    generation: number,
+    checkGate: () => Promise<void>,
+    section: (store: SqliteReplicaStore) => Promise<T>,
+  ): Promise<T>;
 }
 
 /* --------------------------------------------------------------------------
@@ -442,6 +491,7 @@ export interface ReplicaRuntime {
     SECRETS_OPT_IN_REQUIRED: ReplicaErrorCode;
     GRANT_NOT_COVERING: ReplicaErrorCode;
     RESET_REQUIRED: ReplicaErrorCode;
+    STORAGE_BUDGET: ReplicaErrorCode;
   };
   isReplicaError(error: unknown, code?: ReplicaErrorCode): error is ReplicaError;
   parseUcanGrant(input: Uint8Array | string): ParsedUcanGrant;
@@ -452,10 +502,40 @@ export interface ReplicaRuntime {
   kvSyncTransport(kv: KVSyncClient): ReplicaTransport;
 }
 
+/** JSON-safe identity of a source-unknown path approved before logout. */
+export type SqliteLayoutEntry = {
+  path: string;
+  kind: "file" | "directory" | "symlink";
+  dev: string;
+  ino: string;
+};
 /** The members of `@tinycloud/replica/sqlite` the adapter uses. */
+export type SqliteReplicaLayout = {
+  knownEntries: SqliteLayoutEntry[];
+  rootIdentity: { dev: string; ino: string };
+  unknownPaths: string[];
+  unknownEntries: SqliteLayoutEntry[];
+};
 export interface SqliteRuntime {
+  inspectSqliteReplicaLayout(dir: string, options?: { allowAdapterFence?: boolean }): Promise<SqliteReplicaLayout>;
+  removeSqliteReplicaLayout(dir: string, options?: {
+    approvedUnknown?: readonly SqliteLayoutEntry[];
+    expectedKnown?: readonly SqliteLayoutEntry[];
+    allowMissingDatabase?: boolean;
+    expectedRoot?: { dev: string; ino: string };
+    allowAdapterFence?: boolean;
+  }): Promise<void>;
   SqliteReplicaStore: {
     open(dir: string, options: SqliteReplicaStoreOptions): Promise<SqliteReplicaStore>;
-    inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{ state: ReplicaState; status: ReplicaStatus } | null>;
+    inspect(dir: string, options?: { now?: () => number; signal?: AbortSignal }): Promise<{
+      state: ReplicaState;
+      status: ReplicaStatus;
+      grantInstall: SqliteGrantInstall | null;
+      activeGrantInstall: SqliteGrantInstall | null;
+    } | null>;
+    /** Distinct content blob bytes stored in one replica directory (read-only; 0 when absent). */
+    contentBytes(dir: string): Promise<number>;
+    /** Remove unreferenced blobs and temp files in one replica directory. Caller must hold the profile guard. */
+    collectOrphans(dir: string): Promise<number>;
   };
 }

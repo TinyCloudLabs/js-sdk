@@ -43,6 +43,8 @@ export function resolveProfileOperatorType(profile: {
 
 export interface ProfileConfig {
   name: string;
+  /** Stored registry override; TC_REGISTRY_URL takes precedence at invocation time. */
+  tinycloudRegistryUrl?: string;
   host: string;
   chainId: number;
   spaceName: string;
@@ -68,6 +70,13 @@ export interface ProfileConfig {
   authMethod?: AuthMethod;
   /** Hex-encoded Ethereum private key (only present when authMethod is "local") */
   privateKey?: string;
+  /** Explicit logout fences profile-key auto-login until a verified explicit login commits. */
+  authSignedOut?: boolean;
+  /**
+   * Another account's logout removed both credentials but not yet the profile's legacy
+   * `replicas/` mirror; startup (or the next logout) finishes that erase.
+   */
+  legacyReplicaCleanup?: boolean;
   /** Ethereum address derived from privateKey (only present when authMethod is "local") */
   address?: string;
   /**
@@ -96,6 +105,8 @@ export interface ProfileConfig {
    * re-pin (e.g. after intentionally re-keying a local node).
    */
   pinnedLocalNodeDids?: Record<string, string>;
+  /** Named-key prefix the current session was signed for (`auth login --keys`). Unsigned metadata: never authority. */
+  namedKeys?: { prefix: string; resource: string };
   /** Prefixes explicitly opted into the read-through replication flag at login. */
   replication?: { prefixes: string[]; allowSecrets?: boolean };
 }
@@ -103,6 +114,8 @@ export interface ProfileConfig {
 export interface CLIContext {
   profile: string;
   host: string;
+  /** Effective registry URL from TC_REGISTRY_URL or the selected profile; absent for SDK default. */
+  tinycloudRegistryUrl?: string;
   verbose: boolean;
   noCache: boolean;
   quiet: boolean;
@@ -110,5 +123,7 @@ export interface CLIContext {
   replicationDebug: boolean;
   /** Set when local-node discovery waited for a stored session that did not verify; `host` is then `deferredFrom`. */
   localDiscovery?: { readonly deferredFrom: string };
+  /** The resolved profile's posture; absent when the profile does not exist yet. */
+  posture?: CLIProfilePosture;
 }
 

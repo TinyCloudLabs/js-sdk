@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // A long-lived writer (as an MCP server is) that takes the profile lock once,
 // stays alive, and takes it again when told. Each outcome ("ok" or the error
 // code) is written to `<signals>/first` and `<signals>/second`. With a third
@@ -6,7 +7,14 @@
 import { rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withProfileLock } from "../src/state.js";
-import { signalProfileLockProtocol, waitForProfileLockProtocol } from "../src/test-support/profile-lock-protocol.js";
+import {
+  PROFILE_LOCK_HELPER_DEADLINE_MS,
+  signalProfileLockProtocol,
+  waitForProfileLockProtocol,
+} from "../src/test-support/profile-lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
 
 const [profile, holdersDir, signals, mode] = process.argv.slice(2);
 if (!profile || !holdersDir || !signals) throw new Error("Expected profile, holders dir and signals dir.");

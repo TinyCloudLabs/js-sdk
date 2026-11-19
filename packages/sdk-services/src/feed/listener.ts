@@ -1,0 +1,102 @@
+import { ErrorCodes } from "../types";
+import { initializeFeedHandoff, deliverFeedResponse } from "./handoff";
+import { listFeedResponseDeliveries } from "./delivery-policy";
+import { isDispatchDeadlineFailure } from "./dispatch";
+import type { FeedApi } from "./types";
+
+export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (options) => {
+  const { signal } = options;
+  const renewalSeconds = options.renewalSeconds ?? 300;
+  if (!Number.isInteger(renewalSeconds) || renewalSeconds < 60 || renewalSeconds > 300) {
+    throw new Error("Feed renewal must be between 60 and 300 seconds");
+  }
+  if (options.subscription.service !== "sql" || !options.subscription.pathPrefix) {
+    throw new Error("Feed listener requires the exact response SQL resource subscription");
+  }
+  if (signal.aborted) return;
+  const initialized = await initializeFeedHandoff(options.handoff);
+  if (!initialized.ok) throw initialized.error;
+  let ready = false;
+  let dirty = false;
+  let draining: Promise<void> | undefined;
+  let failed = false;
+  let failure: unknown;
+  let current: AbortController | undefined;
+  let attempted = false;
+  let done = false;
+  const deliver: typeof options.deliver = options.once
+    ? (response) => { attempted = true; return options.deliver(response); }
+    : options.deliver;
+
+  const drain = async (): Promise<void> => {
+    try { await options.onWake?.(); } catch { /* advisory only */ }
+    do {
+      dirty = false;
+      let afterSequence = 0;
+      while (!signal.aborted) {
+        const page = await listFeedResponseDeliveries(options.responses, { recipient: options.recipient, afterSequence, limit: 100, signal });
+        if (!page.ok) {
+          if (signal.aborted && page.error.code === ErrorCodes.ABORTED) return;
+          throw page.error;
+        }
+        for (const response of page.data.responses) {
+          if (signal.aborted) return;
+          const handoff = await deliverFeedResponse({
+            handoff: options.handoff, recipient: options.recipient, response, deliver,
+          });
+          if (!handoff.ok && !isDispatchDeadlineFailure(handoff.error)) throw handoff.error;
+        }
+        if (page.data.hasMore && page.data.nextSequence <= afterSequence) throw new Error("Delivery page did not advance a verified cursor");
+        afterSequence = page.data.nextSequence;
+        if (!page.data.hasMore) break;
+      }
+    } while (dirty && !signal.aborted && !attempted);
+  };
+  const schedule = (): void => {
+    if (!ready || signal.aborted || failed || done) return;
+    dirty = true;
+    if (draining) return;
+    draining = drain().catch((error: unknown) => {
+      failed = true;
+      failure = error;
+      current?.abort();
+    }).finally(() => {
+      draining = undefined;
+      if (attempted && !failed) {
+        done = true;
+        current?.abort();
+      } else if (dirty && !failed) schedule();
+    });
+  };
+
+  while (!signal.aborted && !failed && !done) {
+    const connection = new AbortController();
+    current = connection;
+    const stop = () => connection.abort();
+    signal.addEventListener("abort", stop, { once: true });
+    // Periodic subscription renewal also bounds recovery of a missed wakeup.
+    // No response query runs until the new stream's authorized ready callback.
+    const renewal = setTimeout(stop, renewalSeconds * 1000);
+    renewal.unref?.();
+    try {
+      for await (const _event of options.hooks.subscribe([options.subscription], {
+        signal: connection.signal,
+        ttlSeconds: renewalSeconds,
+        onReady: () => {
+          if (current !== connection || connection.signal.aborted || signal.aborted) return;
+          ready = true;
+          schedule();
+        },
+      })) schedule();
+    } finally {
+      ready = false;
+      clearTimeout(renewal);
+      signal.removeEventListener("abort", stop);
+      await draining;
+    }
+    if (failed) throw failure;
+    // Sign-out/terminal completion belongs to hooks; do not restart it as a retry.
+    if (!connection.signal.aborted) return;
+  }
+  if (failed) throw failure;
+};

@@ -6,7 +6,7 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
 /**
  * Exactly the owner-space authority `tc share` needs, in the app manifest
  * shape `tc auth login --manifest` accepts. One space (`default`), the
- * capability-read entry OpenKey requires, two KV prefixes, no delete:
+ * capability-read entry OpenKey requires, three KV prefixes, no delete:
  *
  * - `tinycloud.capabilities/read` on path `""`: required by OpenKey to sign
  *   any delegation (its consent page shows it as required, not uncheckable);
@@ -21,6 +21,17 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  *   - `get` + `metadata` back the Policy/v3 root that grants recipients read,
  *     and `get` signs `--notify` delivery authorization;
  *   - `list` backs `--action list` (recipient listing of a `--prefix` share).
+ * - `artifacts/` (`--artifact`, TC-1428):
+ *   - `put` writes write-once `artifacts/<aid>/versions/<n>/` files (`If-None-Match: *`) and their manifest;
+ *   - `get` mints the pinned share's read-only child delegation and reads back a version on a 412;
+ *   - `metadata` backs the Policy/v3 root for addressed artifact shares;
+ *   - `list` finds the next version number and backs `share versions`.
+ *   Profiles signed in before this entry need `auth login --manifest builtin:share-publishing` again.
+ *
+ * - `tinycloud.encryption/decrypt` on the account's own `default/share/` prefix:
+ *   an email-addressed share's policy ceiling includes decrypt on one leaf in that prefix, and without it
+ *   `tc share publish --to email:...` is refused (`decrypt-not-held`). A paste sign-in requests it;
+ *   OpenKey's device sign-in refuses encryption grants, so `--device` and `enable share` leave it out.
  *
  * Not requested:
  * - `del`: no `tc share` command deletes stored sources.
@@ -53,12 +64,24 @@ export const SHARE_PUBLISHING_MANIFEST = {
       skipPrefix: true,
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
     },
+    {
+      service: "tinycloud.kv",
+      path: "artifacts/",
+      skipPrefix: true,
+      actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
+    },
+    {
+      service: "tinycloud.encryption",
+      path: "share/",
+      skipPrefix: true,
+      actions: ["tinycloud.encryption/decrypt"],
+    },
   ],
 } as const;
 
-/** The manifest as logical-space permission entries (no profile lookup required). */
+/** The manifest as logical-space permission entries (no profile lookup required), without the decrypt entry: the scope an OpenKey device sign-in can carry. */
 export function sharePublishingPermissions(): PermissionEntry[] {
-  return SHARE_PUBLISHING_MANIFEST.permissions.map((permission) => ({
+  return SHARE_PUBLISHING_MANIFEST.permissions.filter((permission) => permission.service !== "tinycloud.encryption").map((permission) => ({
     service: permission.service,
     space: SHARE_PUBLISHING_MANIFEST.space,
     path: permission.path,

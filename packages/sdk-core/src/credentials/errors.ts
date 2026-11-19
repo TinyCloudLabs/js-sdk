@@ -5,6 +5,7 @@ export const CREDENTIAL_ERROR_CODES = [
   "HOLDER_MISMATCH",
   "ISSUER_UNREADY",
   "OFFLINE",
+  "PERMISSION_DENIED",
   "POPUP_BLOCKED",
   "PROOF_REJECTED",
   "REQUEST_EXPIRED",
@@ -43,11 +44,12 @@ export class CredentialError extends Error {
       readonly retryAfterMs?: number;
       readonly state?: string;
       readonly correlationId?: string;
+      readonly recoverable?: boolean;
       readonly cause?: unknown;
     } = {},
   ) {
     super(message);
-    this.recoverable = RECOVERABLE.has(code);
+    this.recoverable = details.recoverable ?? RECOVERABLE.has(code);
   }
 }
 

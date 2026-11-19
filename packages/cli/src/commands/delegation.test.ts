@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import { DelegationManager } from "@tinycloud/sdk-core/delegations";
 import type { ServiceSession } from "@tinycloud/sdk-services";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 let hasRevokeAuthority = false;
 const authorityRequests: unknown[] = [];
@@ -20,16 +22,38 @@ let readGrantHistoryCalls: number;
 let historyReadError: Error | undefined;
 let artifactReadError: Error | undefined;
 let artifactReadCalls: number;
+let profileAuthMethod = "local";
+
+// Isolated home: set before anything runs, and checked before any write.
+const originalHome = { HOME: process.env.HOME, TC_HOME: process.env.TC_HOME };
+const testHome = mkdtempSync(join("/var/tmp", "tc1923."));
+process.env.HOME = testHome;
+process.env.TC_HOME = testHome;
+function assertTestHome(): void {
+  if (!testHome.startsWith("/var/tmp/tc1923.") || process.env.HOME !== testHome || process.env.TC_HOME !== testHome) {
+    throw new Error("test HOME/TC_HOME is not the isolated tc1923 dir");
+  }
+}
+
+afterAll(() => {
+  assertTestHome();
+  rmSync(testHome, { recursive: true, force: true });
+  for (const [key, value] of Object.entries(originalHome)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
     resolveContext: async () => ({ profile: "owner", host: "https://node.example.test" }),
+    getSession: async () => null,
     getProfile: async () => ({
       name: "owner",
       host: "https://node.example.test",
       ownerDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
       spaceId: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default",
-      authMethod: "local",
+      authMethod: profileAuthMethod,
     }),
   },
 }));
@@ -80,11 +104,17 @@ mock.module("./auth.js", () => ({
     hasRevokeAuthority = true;
     return { cid: "bafy-command-authority" };
   },
-  requirePermissionConsent: async () => {},
+  prepareProfileRemoteLogout: async () => {
+    throw new Error("Unrelated-CID tests must not prepare the current-session logout gate");
+  },
+  finishProfileLogout: async () => {
+    throw new Error("Unrelated-CID tests must not complete current-session logout");
+  },
 }));
 
 mock.module("../output/formatter.js", () => ({
   outputJson: (value: unknown) => outputs.push(value),
+  isInteractive: () => false,
 }));
 
 mock.module("../output/errors.js", () => ({
@@ -115,6 +145,7 @@ async function runRevoke(cid = "bafy-device-grant", yes = false): Promise<void> 
 }
 
 beforeEach(() => {
+  profileAuthMethod = "local";
   delegationManagerOverride = undefined;
   hasRevokeAuthority = false;
   authorityRequests.length = 0;
@@ -161,10 +192,9 @@ describe("tc delegation revoke authority", () => {
         path: "",
         actions: ["tinycloud.delegation/revoke"],
       }],
-      reason: "Revoke delegation bafy-device-grant",
-      yes: false,
       persist: false,
     });
+    expect(authorityRequests[0]).not.toHaveProperty("reason");
     expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
     expect(outputs).toEqual([{
       cid: "bafy-device-grant",
@@ -173,14 +203,6 @@ describe("tc delegation revoke authority", () => {
       authorityScopeSource: "cid-resource",
       authorityScopeReason: "The revoke authority is scoped to the exact delegation CID.",
     }]);
-    expect(errors).toEqual([]);
-  });
-
-  test("--yes is forwarded as explicit consent", async () => {
-    await runRevoke("bafy-device-grant", true);
-
-    expect(authorityRequests[0]).toMatchObject({ yes: true, persist: false });
-    expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
     expect(errors).toEqual([]);
   });
 
@@ -301,6 +323,7 @@ describe("tc delegation revoke authority", () => {
       }],
       persist: false,
     });
+    expect(authorityRequests[0]).not.toHaveProperty("reason");
     expect(outputs).toEqual([{
       cid: "bafy-device-grant",
       revoked: true,
@@ -330,6 +353,49 @@ describe("tc delegation revoke authority", () => {
     ]);
     expect(revokeCalls).toEqual([]);
     expect(errors[0]).toMatchObject({ code: "RAW_RECAP_RESOURCE_UNSUPPORTED" });
+  });
+
+  test("the OpenKey space-wide fallback asks for 5 minutes, persists nothing and writes no profile files", async () => {
+    profileAuthMethod = "openkey";
+    authorityError = Object.assign(new Error("invalid ReCap resource URI urn:cid:bafy-device-grant"), {
+      code: "RAW_RECAP_RESOURCE_UNSUPPORTED",
+    });
+    // The node's own record names a space the signed-in owner owns; that is the fallback space.
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+          delegateDid: "did:key:device",
+          resources: [{ resource: `${targetSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    assertTestHome();
+
+    await runRevoke("bafy-device-grant", true);
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(2);
+    expect(authorityRequests[1]).toMatchObject({
+      requested: [{
+        service: "tinycloud.delegation",
+        space: targetSpaceId,
+        path: "",
+        actions: ["tinycloud.delegation/revoke"],
+      }],
+      expiryOption: "5m",
+      persist: false,
+    });
+    expect(revokeCalls).toEqual([[
+      "bafy-device-grant",
+      { targetSpaceId: targetSpaceId, authorityCid: "bafy-command-authority" },
+    ]]);
+    // Nothing under the isolated home: no grant history, no additional-delegations store.
+    assertTestHome();
+    expect(readdirSync(testHome, { recursive: true })).toEqual([]);
   });
 
   test("reports a target absent from node and local sources", async () => {

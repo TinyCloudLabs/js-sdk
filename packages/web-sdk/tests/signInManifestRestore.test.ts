@@ -1,6 +1,42 @@
-import { expect, mock, test } from "bun:test";
+import { signedBrowserSession } from "./fixtures/signed-browser-session";
+import { describe, expect, mock, test } from "bun:test";
+import { IDBKeyRange as fakeIDBKeyRange, indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { ledgerFor } from "../../replica/src/kv-storage/ledger";
+import { createIndexedDbLifecycle, inspectReplicaKeyPresence } from "../../replica/src/kv-storage/lifecycle";
+import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
+import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
+import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
+import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
+import {
+  CaveatedDelegationUnsupportedError,
+  REGISTRY_NOT_FOUND_BODY,
+  composeManifestRequest,
+  pkhDid,
+} from "@tinycloud/sdk-core";
+import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/memoryPendingStore";
+import type { Config } from "../src/modules/tcw";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
+const SIGNED_PERSISTED = await signedBrowserSession(undefined, "1".padStart(64, "0"));
+const SIGNED_OTHER = await signedBrowserSession(undefined, "2".padStart(64, "0"));
+const TEST_REGISTRY_URL = "https://registry.test";
+
+function registryNoEntryResponse(): Response {
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+}
+
+async function withNoEntryRegistry<T>(action: () => Promise<T>): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    return await action();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
 
 global.TextEncoder = TE;
 global.TextDecoder = TD;
@@ -20,7 +56,7 @@ global.TextDecoder = TD;
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
   dispatchEvent: () => true,
-  location: { hostname: "test.local" },
+  location: { hostname: "home.tinycloud.xyz", host: "home.tinycloud.xyz", origin: "https://home.tinycloud.xyz" },
 };
 (globalThis as any).document = {
   createElement: () => ({
@@ -44,6 +80,7 @@ mock.module("@tinycloud/web-sdk-wasm", () => ({
       `tinycloud:pkh:eip155:${chainId}:${address}:${prefix}`,
     createDelegation: () => ({}),
     parseRecapFromSiwe: () => [],
+    parseVerifiedRecapFromSiwe: () => [],
     generateHostSIWEMessage: () => "",
     siweToDelegationHeaders: () => ({}),
     protocolVersion: () => 1,
@@ -95,23 +132,60 @@ const { TinyCloudWeb } = require("../src/modules/tcw");
 const { BrowserWasmBindings } = require("../src/adapters/BrowserWasmBindings");
 const { BrowserSessionStorage } = require("../src/adapters/BrowserSessionStorage");
 const { restoreDataFromPersisted } = require("../src/modules/browserSessionPersistence");
-const { dispatchSDKEvent } = require("../src/notifications");
 const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinycloud/node-sdk");
 
+test("optional replica import is inert until one explicit root registration", () => {
+  const plugin = require("../src/replica").browserReplicaPlugin;
+  const { registerBrowserReplica } = require("../src/modules/replica-wiring");
+  const config = {
+    replication: { enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" } as never },
+  };
+  expect(() => new TinyCloudWeb(config)).toThrow("registerBrowserReplica");
+  registerBrowserReplica(plugin);
+  expect(() => registerBrowserReplica(plugin)).toThrow("already registered");
+  expect(() => new TinyCloudWeb({ ...config, replication: {
+    ...config.replication, grantTtlMs: 8 * 24 * 60 * 60 * 1000,
+  } })).toThrow(TypeError);
+  expect(() => new TinyCloudWeb({ ...config, replication: {
+    ...config.replication, prefixes: ["notes/", "notes/sub/"],
+  } })).toThrow(TypeError);
+  expect(() => new TinyCloudWeb({ ...config, replication: {
+    ...config.replication, prefixes: ["/"],
+  } })).toThrow(TypeError);
+});
+
+// L2 (#548 security review): the static common gate cannot be swapped at runtime.
+test("the browser replica plugin and its registered loaders are immutable", () => {
+  const plugin = require("../src/replica").browserReplicaPlugin;
+  const originalRecover = plugin.recover;
+  const originalAuthority = plugin.loaders.authority;
+  const swap = async () => ({});
+  expect(Reflect.set(plugin, "recover", swap)).toBe(false);
+  expect(Reflect.set(plugin.loaders, "authority", swap)).toBe(false);
+  expect(Reflect.set(plugin, "loaders", {})).toBe(false);
+  expect(plugin.recover).toBe(originalRecover);
+  expect(plugin.loaders.authority).toBe(originalAuthority);
+
+  const registered = getNodeReplicationLoaders();
+  expect(registered.authority).toBe(originalAuthority);
+  expect(Reflect.set(registered, "authority", swap)).toBe(false);
+  expect(registered.authority).toBe(originalAuthority);
+});
+
 test("passes persisted additional spaces and expiry through browser restore data", () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const expiresAt = "2099-01-01T00:00:00.000Z";
   const spaces = { public: `tinycloud:pkh:eip155:1:${address}:public` };
 
   const restored = restoreDataFromPersisted({
     address,
     chainId: 1,
-    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-    siwe: "siwe",
-    signature: "signature",
+    sessionKey: SIGNED_PERSISTED.sessionKey,
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
     tinycloudSession: {
-      delegationHeader: { Authorization: "Bearer persisted" },
-      delegationCid: "bafy-persisted",
+      delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+      delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
       spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
       spaces,
       verificationMethod: "did:key:zPersisted#zPersisted",
@@ -144,19 +218,65 @@ test("forwards signStrategy to the underlying TinyCloudNode", async () => {
   expect((tcw as any)._node.config.signStrategy).toBe(signStrategy);
 });
 
+test("SIWE domain carries the origin host and port (TC-1488)", async () => {
+  const globalWithWindow = globalThis as unknown as { window: { location: unknown } };
+  const previousLocation = globalWithWindow.window.location;
+  globalWithWindow.window.location = { hostname: "localhost", host: "localhost:5173", origin: "http://localhost:5173" };
+  try {
+    const tcw = new TinyCloudWeb({});
+    const internals = tcw as unknown as { _initPromise: Promise<void>; _node: { config: { domain?: string } } };
+    await internals._initPromise;
+    expect(internals._node.config.domain).toBe("localhost:5173");
+  } finally {
+    globalWithWindow.window.location = previousLocation;
+  }
+});
+
+test("SIWE uri follows the page origin when domain comes from the window (TC-1488)", async () => {
+  const globalWithWindow = globalThis as unknown as { window: { location: unknown } };
+  const previousLocation = globalWithWindow.window.location;
+  const initWithOrigin = async (origin: string, host: string) => {
+    globalWithWindow.window.location = { hostname: new URL(origin).hostname, host, origin };
+    const tcw = new TinyCloudWeb({});
+    const internals = tcw as unknown as { _initPromise: Promise<void>; _node: { config: { uri?: string } } };
+    await internals._initPromise;
+    return internals._node.config.uri;
+  };
+  try {
+    expect(await initWithOrigin("http://localhost:5173", "localhost:5173")).toBe("http://localhost:5173");
+    expect(await initWithOrigin("https://app.example.com", "app.example.com")).toBe("https://app.example.com");
+  } finally {
+    globalWithWindow.window.location = previousLocation;
+  }
+});
+
+test("SIWE uri is not defaulted to the page origin when the caller sets domain (TC-1488)", async () => {
+  const globalWithWindow = globalThis as unknown as { window: { location: unknown } };
+  const previousLocation = globalWithWindow.window.location;
+  globalWithWindow.window.location = { hostname: "localhost", host: "localhost:5173", origin: "http://localhost:5173" };
+  try {
+    const tcw = new TinyCloudWeb({ domain: "app.example.com" });
+    const internals = tcw as unknown as { _initPromise: Promise<void>; _node: { config: { uri?: string } } };
+    await internals._initPromise;
+    expect(internals._node.config.uri).toBeUndefined();
+  } finally {
+    globalWithWindow.window.location = previousLocation;
+  }
+});
+
 test("accountAuthorizationCid returns the delegation CID of a restored walletless session", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-restored-account",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         verificationMethod: "did:key:default",
       },
@@ -167,18 +287,30 @@ test("accountAuthorizationCid returns the delegation CID of a restored walletles
     })),
     clear: mock(async () => undefined),
   };
-  // No provider: the node has no auth layer, so the restored session is held by the node itself.
-  const tcw = new TinyCloudWeb({ sessionStorage: storage });
-
-  const result = await tcw.restoreSession(address);
-
-  expect(result.error).toBeUndefined();
-  expect(result.status).toBe("restored");
-  expect(tcw.accountAuthorizationCid()).toBe("bafy-restored-account");
+  // A restored walletless session uses the canonical two-namespace no-entry response.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    throw new TypeError(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  const tcw = new TinyCloudWeb({
+    sessionStorage: storage,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
+    autoDiscoverLocalNode: false,
+  });
+  try {
+    const result = await tcw.restoreSession(address);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("restored");
+    expect(tcw.accountAuthorizationCid()).toBe(SIGNED_PERSISTED.tinycloudSession!.delegationCid);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const signedMessages: string[] = [];
   const provider = {
     request: async ({ method, params }: { method: string; params?: unknown[] }) => {
@@ -194,6 +326,7 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
     if (url.endsWith("/info")) {
       return Response.json({ protocol: 1, version: "1.0.0", features: [] });
     }
@@ -205,6 +338,7 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
   const tcw = new TinyCloudWeb({
     provider,
     persistSession: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
     tinycloudHosts: ["https://node.test.local"],
   });
 
@@ -214,8 +348,6 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
     await tcw._node.waitForAccountRegistrySync();
   } finally {
     globalThis.fetch = originalFetch;
-    // Drop the debounced "signed in" event so it cannot fire into a later file's window shim.
-    dispatchSDKEvent.cleanup();
   }
 
   expect(signedMessages).toHaveLength(1);
@@ -223,18 +355,18 @@ test("accountAuthorizationCid returns the delegation CID of a wallet sign-in", a
 });
 
 test("keeps a valid persisted session when the loaded binding cannot restore its signer", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         verificationMethod: "did:key:zPersisted#zPersisted",
       },
@@ -264,18 +396,18 @@ test("keeps a valid persisted session when the loaded binding cannot restore its
 });
 
 test("keeps persisted storage and reports the original rejection when cleanup would fail", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         spaces: { public: `tinycloud:pkh:eip155:1:${address}:public` },
         verificationMethod: "did:key:zPersisted#zPersisted",
@@ -302,7 +434,7 @@ test("keeps persisted storage and reports the original rejection when cleanup wo
 });
 
 test("reports storage load exceptions as restore failures without clearing persisted state", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const persisted = { marker: "leave-me-intact" };
   const storage = {
     save: mock(async () => undefined),
@@ -322,7 +454,7 @@ test("reports storage load exceptions as restore failures without clearing persi
 });
 
 test("reports browser getItem exceptions as restore failures without attempting storage cleanup", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const removeItem = mock(() => undefined);
   const backend = {
     get length() { return 1; },
@@ -363,8 +495,8 @@ test("signIn refreshes a restored session that does not cover the configured man
   });
 
   const restoredSession = {
-    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
-    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    address: SIGNED_PERSISTED.address,
+    walletAddress: SIGNED_PERSISTED.address,
     chainId: 1,
     sessionKey: {} as any,
     siwe: "old-siwe",
@@ -427,7 +559,7 @@ test("a manifest refresh cannot change restore status after signOut()", async ()
     },
   });
   await (tcw as any)._initPromise;
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const cleared = Promise.withResolvers<void>();
   const releaseClear = Promise.withResolvers<void>();
   (tcw as any)._node = {
@@ -458,8 +590,8 @@ test("a manifest refresh cannot change restore status after signOut()", async ()
 test("plain restored sessions require all canonical account permissions", async () => {
   const tcw = new TinyCloudWeb();
   const restoredSession = {
-    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
-    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    address: SIGNED_PERSISTED.address,
+    walletAddress: SIGNED_PERSISTED.address,
     chainId: 1,
     sessionKey: {} as any,
     siwe: "canonical-siwe",
@@ -467,7 +599,7 @@ test("plain restored sessions require all canonical account permissions", async 
   };
   const hasRuntimePermissions = mock(() => true);
   const node = {
-    accountSpaceId: "tinycloud:pkh:eip155:1:0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1:account",
+    accountSpaceId: `tinycloud:pkh:eip155:1:${SIGNED_PERSISTED.address}:account`,
     hasRuntimePermissions,
     signIn: mock(async () => undefined),
     session: restoredSession,
@@ -521,21 +653,37 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
   const signature = await signer.signMessage(prepared.siwe);
   const completed = wasm.completeSessionSetup({ ...prepared, signature });
   // A real node-sdk session; the browser wallet flow is not under test.
-  const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
-  await node.restoreSession({
-    delegationHeader: completed.delegationHeader,
-    delegationCid: completed.delegationCid,
-    spaceId,
-    jwk,
-    verificationMethod: manager.getDID("default"),
-    address,
-    chainId,
-    siwe: prepared.siwe,
-    signature,
-    expiresAt: expirationTime,
-    tinycloudHosts: [host],
+  const node = new TinyCloudNode({
+    host,
+    signer,
+    wasmBindings: wasm,
+    autoBootstrapAccount: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
   });
-  const tcw = new TinyCloudWeb({});
+  const originalRestoreFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    return originalRestoreFetch(input, init);
+  }) as typeof fetch;
+  try {
+    await node.restoreSession({
+      delegationHeader: completed.delegationHeader,
+      delegationCid: completed.delegationCid,
+      spaceId,
+      jwk,
+      verificationMethod: manager.getDID("default"),
+      address,
+      chainId,
+      siwe: prepared.siwe,
+      signature,
+      expiresAt: expirationTime,
+      tinycloudHosts: [host],
+    });
+  } finally {
+    globalThis.fetch = originalRestoreFetch;
+  }
+  // This fixture checks in-memory authority, not an unavailable browser persistence backend.
+  const tcw = new TinyCloudWeb({ persistSession: false });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
 
@@ -567,6 +715,77 @@ test("signOut() ends the session on the TinyCloudWeb instance", async () => {
   }
 });
 
+test("signOut then signIn uses a fresh wallet SIWE even if another tab restores the old persisted entry", async () => {
+  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+  const address = await signer.getAddress();
+  const wasm = Object.assign(new NodeWasmBindings(), { ensureInitialized: async () => undefined });
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const sessionStorage = new BrowserSessionStorage({ storage: backend });
+  const signedMessages: string[] = [];
+  const provider = {
+    request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+      if (method === "eth_requestAccounts" || method === "eth_accounts") return [address];
+      if (method === "eth_chainId") return "0x1";
+      if (method === "personal_sign") {
+        signedMessages.push(String(params?.[0]));
+        return signer.signMessage(Buffer.from(String(params?.[0]).slice(2), "hex").toString("utf8"));
+      }
+      throw new Error(`Unexpected wallet request: ${method}`);
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      return Response.json({ activated: ["space"], skipped: [] });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+  const web = new TinyCloudWeb({
+    provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
+    includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
+  });
+  (web as any).wasmBindings = wasm;
+  try {
+    await web.signIn();
+    const original = await sessionStorage.load(address);
+    expect(original).not.toBeNull();
+    expect(signedMessages).toHaveLength(1);
+    await web.signOut();
+    expect(sessionStorage.exists(address)).toBe(false);
+    await expect(Promise.resolve().then(() => sessionStorage.save(address, original!))).rejects.toBeInstanceOf(Error);
+    // Simulate a legacy tab writing raw bytes without participating in the owned-storage fence.
+    backend.setItem(`tinycloud:session:${address.toLowerCase()}`, JSON.stringify(original));
+    const separatePage = new TinyCloudWeb({
+      provider, sessionStorage, tinycloudHosts: ["https://node.test.local"],
+      includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+      tinycloudRegistryUrl: TEST_REGISTRY_URL,
+    });
+    (separatePage as any).wasmBindings = wasm;
+    const restored = await separatePage.restoreSession(address);
+    expect(restored.status).toBe("missing");
+    expect((await web.restoreSession(address)).status).toBe("missing");
+    expect(signedMessages).toHaveLength(1);
+    const next = await web.signIn();
+    expect(next.address).toBe(address);
+    expect(signedMessages).toHaveLength(2);
+    expect(web.sessionRestoreStatus).toBe("logging-in");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("signIn() does not sign in again after a sign-out during its restore", async () => {
   const tcw = new TinyCloudWeb({});
   await (tcw as any)._initPromise;
@@ -588,48 +807,278 @@ test("signIn() does not sign in again after a sign-out during its restore", asyn
 });
 
 async function persistedRealSession(host: string) {
-  const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
-  const manager = wasm.createSessionManager();
-  const sessionKey = manager.jwk("default")!;
-  const jwk = JSON.parse(sessionKey);
-  const address = await signer.getAddress();
-  const chainId = await signer.getChainId();
-  const spaceId = wasm.makeSpaceId(address, chainId, "default");
-  const now = Date.now();
-  const expirationTime = new Date(now + 60 * 60_000).toISOString();
-  const prepared = wasm.prepareSession({
-    abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/put"] } },
-    address,
-    chainId,
-    domain: "signout.test",
-    issuedAt: new Date(now).toISOString(),
-    expirationTime,
-    spaceId,
-    jwk,
+  const proof = await signedRestorableSession({
+    abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
   });
-  const signature = await signer.signMessage(prepared.siwe);
-  const completed = wasm.completeSessionSetup({ ...prepared, signature });
-  const node = new TinyCloudNode({ host, signer, wasmBindings: wasm, autoBootstrapAccount: false });
+  const wasm = new NodeWasmBindings();
+  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+  const node = new TinyCloudNode({
+    host,
+    signer,
+    wasmBindings: wasm,
+    autoBootstrapAccount: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
+  });
   const persisted = {
-    address,
-    chainId,
-    sessionKey,
-    siwe: prepared.siwe,
-    signature,
+    address: proof.address,
+    chainId: proof.chainId,
+    sessionKey: JSON.stringify(proof.jwk),
+    siwe: proof.siwe,
+    signature: proof.signature,
     tinycloudSession: {
-      delegationHeader: completed.delegationHeader,
-      delegationCid: completed.delegationCid,
-      spaceId,
-      verificationMethod: manager.getDID("default"),
+      delegationHeader: proof.delegationHeader,
+      delegationCid: proof.delegationCid,
+      spaceId: proof.spaceId,
+      verificationMethod: proof.verificationMethod,
     },
-    expiresAt: expirationTime,
-    createdAt: new Date(now).toISOString(),
+    expiresAt: proof.expiresAt,
+    createdAt: proof.siwe.match(/^Issued At: (.+)$/m)![1]!,
     version: "1.0",
     tinycloudHosts: [host],
   };
-  return { node, wasm, persisted, address };
+  return { node, wasm, persisted, address: proof.address, signer };
 }
+test("provider-free renewal restore discovers an expired active session before clearing its address", async () => {
+  const host = "https://renewal-restore.test";
+  const { persisted, address } = await persistedRealSession(host);
+  const expired = {
+    ...persisted,
+    expiresAt: new Date(Date.now() - 1_000).toISOString(),
+  };
+  const entries = new Map<string, string>([
+    [`tinycloud:session:${address.toLowerCase()}`, JSON.stringify(expired)],
+    ["tinycloud:session:active-address", address.toLowerCase()],
+  ]);
+  const backend = {
+    get length() { return entries.size; },
+    clear: () => entries.clear(),
+    getItem: (key: string) => entries.get(key) ?? null,
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    removeItem: (key: string) => entries.delete(key),
+    setItem: (key: string, value: string) => entries.set(key, String(value)),
+  } satisfies Storage;
+  const sessionStorage = new BrowserSessionStorage({ storage: backend });
+  const web = new TinyCloudWeb({
+    sessionStorage,
+    tinycloudHosts: [host],
+    includeAccountRegistryPermissions: false,
+    autoBootstrapAccount: false,
+  });
+  await (web as any)._initPromise;
+  const node = {
+    spaceId: undefined as string | undefined,
+    hosts: [host],
+    restorableSession: undefined as { address: string; chainId: number; spaceId: string } | undefined,
+    spaceHosting: "unknown",
+    restoreSessionWithRenewal: mock(async () => {
+      node.spaceId = expired.tinycloudSession.spaceId;
+      node.restorableSession = {
+        address,
+        chainId: expired.chainId,
+        spaceId: expired.tinycloudSession.spaceId,
+      };
+    }),
+    checkSpaceHosting: mock(async () => "unknown"),
+  };
+  (web as any)._node = node;
+
+  const restored = await web.restoreSessionWithRenewal("owner-signed lease authorization");
+
+  expect(restored.status).toBe("restored");
+  expect(node.restoreSessionWithRenewal).toHaveBeenCalledTimes(1);
+  expect(entries.get("tinycloud:session:active-address")).toBe(address.toLowerCase());
+  await web.restoredNetworkWork?.hosting;
+});
+
+test("implicit signIn ignores persisted wallet A after the connected provider switches to B", async () => {
+  const { persisted, address: walletA } = await persistedRealSession("https://wallet-switch.test");
+  const walletB = "0x1111111111111111111111111111111111111111";
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const storage = new BrowserSessionStorage({ storage: backend });
+  await storage.save(walletA, persisted);
+  let connected = walletA;
+  const provider = {
+    request: async ({ method }: { method: string }) => {
+      if (method === "eth_accounts") return [connected];
+      throw new Error(`Unexpected wallet request: ${method}`);
+    },
+  };
+  const web = new TinyCloudWeb({ provider, sessionStorage: storage, includeAccountRegistryPermissions: false });
+  await (web as any)._initPromise;
+  const freshSession = { address: walletB, chainId: 1, sessionKey: {}, siwe: "fresh-B", signature: "signed-B" };
+  const node = {
+    address: walletA,
+    hasRuntimePermissions: () => true,
+    restoreSession: mock(async () => undefined),
+    signIn: mock(async () => { node.session = freshSession; }),
+    session: undefined as typeof freshSession | undefined,
+  };
+  (web as any)._node = node;
+  expect(await (web as any).walletSigner.getConnectedAddress()).toBe(walletA);
+  connected = walletB;
+
+  const result = await web.signIn();
+
+  expect(result.address).toBe(walletB);
+  expect(node.restoreSession).not.toHaveBeenCalled();
+  expect(node.signIn).toHaveBeenCalledTimes(1);
+  expect(storage.exists(walletA)).toBe(true);
+});
+
+test.each([
+  { name: "a different connected wallet", accounts: ["0x1111111111111111111111111111111111111111"], gate: "principal_mismatch" },
+  { name: "an unknown wallet", accounts: [], gate: "gate_unavailable" },
+  { name: "an unavailable provider", accounts: "error", gate: "gate_unavailable" },
+  { name: "the matching wallet", accounts: null, gate: null },
+])("explicit restore preserves network authority and matches replica admission for $name", async ({ accounts, gate }) => {
+  const { persisted, address, wasm } = await persistedRealSession("https://wallet-restore.test");
+  const entries = new Map<string, string>();
+  const backend = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const storage = new BrowserSessionStorage({ storage: backend });
+  const stamp = { incarnation: "wallet-restore", lifecycleEpoch: 1 };
+  await storage.save(address, { ...persisted, replicaStamp: stamp });
+  let restoredStamps = 0;
+  let opened = 0;
+  const expiresAt = Date.now() + 60_000;
+  const lifecycle = {
+    kind: "indexeddb" as const,
+    recover: async () => ({ erased: [], failed: [], remaining: 0 }),
+    restoreSessionStamp: async () => { restoredStamps++; return stamp; },
+    checkDelivery: () => ({ status: "allow" as const }),
+    consentDeadline: () => expiresAt,
+  };
+  registerReplicationLoaders({
+    validateConfig: assertValidReplicationConfig,
+    runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
+    authority: () => import("@tinycloud/node-sdk/replication/authority"),
+    gatedNetwork: () => import("@tinycloud/node-sdk/replication/gated-network"),
+    gate: () => import("@tinycloud/replica/profile-gate"),
+  });
+  const events: unknown[] = [];
+  let activeAccounts = accounts === "error" ? [] : accounts ?? [address];
+  let localReads = 0;
+  let localLists = 0;
+  const provider = { request: async ({ method }: { method: string }) => {
+    if (method === "eth_accounts") {
+      if (accounts === "error") throw new Error("Wallet unavailable");
+      return activeAccounts;
+    }
+    throw new Error(`Unexpected wallet request: ${method}`);
+  } };
+  const web = new TinyCloudWeb({
+    provider, sessionStorage: storage, tinycloudHosts: ["https://wallet-restore.test"],
+    includeAccountRegistryPermissions: false,
+    tinycloudRegistryUrl: TEST_REGISTRY_URL,
+    replication: { enabled: true, prefixes: ["notes/"], onEvent: (event: unknown) => events.push(event),
+      storage: {
+        kind: "indexeddb", lifecycle,
+        pendingWrites: () => createMemoryPendingStore({
+          host: "https://wallet-restore.test", space: persisted.tinycloudSession.spaceId,
+          principal: pkhDid(address, persisted.chainId),
+        }),
+        open: async (spec: { identity: { principal: string }; prefix: string }) => {
+          opened++;
+          const grant = {
+            cid: "installed-grant", parentCid: null, expiresAt, state: "active" as const,
+            unconstrained: true, installedAt: Date.now(), effectiveExpiresAt: expiresAt, consentDeadline: expiresAt,
+          };
+          const localStatus = {
+            coverage: "complete" as const, lastSyncAt: new Date().toISOString(), syncedThroughEpoch: 0,
+            authority: { state: "valid" as const, expiresAt },
+            grant, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null,
+          };
+          return {
+            spec, deviceDid: spec.identity.principal, replicaId: "opaque-wallet-test",
+            grant: async () => grant, status: async () => localStatus,
+            sync: async ({ syncStartEpoch }: { syncStartEpoch: number }) => {
+              localStatus.syncedThroughEpoch = syncStartEpoch;
+              localStatus.lastSyncAt = new Date().toISOString();
+              return { status: "synced" as const, pages: 1, changes: 0, deleted: 0, fetched: 0,
+                contentMissing: 0, coverage: "complete" as const, syncedThroughEpoch: syncStartEpoch };
+            },
+            get: async (key: string) => {
+              localReads++;
+              return {
+                status: "present" as const, key, value: new TextEncoder().encode('"local"'),
+                etag: '"local"', metadata: { "content-type": "application/json" },
+                meta: { asOf: new Date().toISOString(), coverage: "complete" as const,
+                  authority: "valid" as const, syncedThroughEpoch: 0 },
+              };
+            },
+            list: async () => {
+              localLists++;
+              return { keys: ["notes/a"], meta: { asOf: new Date().toISOString(),
+                coverage: "complete" as const, authority: "valid" as const, syncedThroughEpoch: 0 } };
+            },
+            close: async () => undefined,
+          };
+        },
+      } as never },
+  });
+  (web as any).wasmBindings = wasm;
+  const originalFetch = globalThis.fetch;
+  let networkReads = 0;
+  let offline = false;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: ["kv-sync-v1"] });
+    networkReads++;
+    if (offline) throw new Error("Network unavailable during local read");
+    return Response.json({ data: "network" });
+  }) as typeof fetch;
+  try {
+    const restored = await web.restoreSession(address);
+    expect(restored.status).toBe("restored");
+    expect(web.session()?.address).toBe(address);
+    expect(restoredStamps).toBe(gate ? 0 : 1);
+    const statuses = await web.replication?.status();
+    if (gate) expect(statuses).toEqual([expect.objectContaining({ state: "gated", gate, errorCode: "REPLICA_GATED" })]);
+    else expect(statuses?.[0]?.state).not.toBe("gated");
+    offline = !gate;
+    const result = await web.kv.get("notes/a");
+    if (gate) {
+      expect(networkReads).toBeGreaterThan(0);
+      expect(opened).toBe(0);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "replication.read", source: "replica" }));
+    } else {
+      expect(result.ok && result.data.data).toBe("local");
+      expect(opened).toBeGreaterThan(0);
+      expect(localReads).toBe(1);
+      const localList = await web.kv.list({ path: "notes/" });
+      expect(localList.ok && localList.data.keys).toContain("notes/a");
+      expect(localLists).toBe(1);
+      offline = false;
+      activeAccounts = ["0x1111111111111111111111111111111111111111"];
+      const before = networkReads;
+      await web.kv.get("notes/a");
+      expect(networkReads).toBeGreaterThan(before);
+      expect(localReads).toBe(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "replication.read", source: "network", reason: "replica_gated" }));
+      await web.kv.list({ path: "notes/" });
+      expect(localLists).toBe(1);
+      expect(events).toContainEqual(expect.objectContaining({ type: "replication.read", op: "list", source: "network", reason: "replica_gated" }));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 
 test("signOut() clears an explicit pending restore address even without activeAddress()", async () => {
   const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
@@ -696,7 +1145,7 @@ test("signIn() starting during signOut() cannot reload the session being cleared
   } satisfies Storage;
   const storage = new BrowserSessionStorage({ storage: backend });
   await storage.save(address, persisted);
-  await node.restoreSession({
+  await withNoEntryRegistry(() => node.restoreSession({
     ...persisted.tinycloudSession,
     jwk: JSON.parse(persisted.sessionKey),
     address,
@@ -705,7 +1154,7 @@ test("signIn() starting during signOut() cannot reload the session being cleared
     signature: persisted.signature,
     expiresAt: persisted.expiresAt,
     tinycloudHosts: persisted.tinycloudHosts,
-  });
+  }));
   const tcw = new TinyCloudWeb({ sessionStorage: storage, includeAccountRegistryPermissions: false });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -737,7 +1186,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
   } satisfies Storage;
   const storage = new BrowserSessionStorage({ storage: backend });
   await storage.save(address, persisted);
-  await node.restoreSession({
+  await withNoEntryRegistry(() => node.restoreSession({
     ...persisted.tinycloudSession,
     jwk: JSON.parse(persisted.sessionKey),
     address,
@@ -746,7 +1195,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
     signature: persisted.signature,
     expiresAt: persisted.expiresAt,
     tinycloudHosts: persisted.tinycloudHosts,
-  });
+  }));
   const tcw = new TinyCloudWeb({ sessionStorage: storage });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -779,7 +1228,7 @@ test("signOut() cannot retain web authority when node key rotation fails", async
 
 test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale authority", async () => {
   const { node, persisted, address } = await persistedRealSession("https://restore-race.test");
-  const otherAddress = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const otherAddress = SIGNED_PERSISTED.address;
   const entries = new Map<string, string>();
   const blockedKey = `tinycloud:session:${address.toLowerCase()}`;
   const backend = {
@@ -796,7 +1245,7 @@ test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale a
   const storage = new BrowserSessionStorage({ storage: backend });
   await storage.save(address, persisted);
   await storage.save(otherAddress, { ...persisted, address: otherAddress });
-  await node.restoreSession({
+  await withNoEntryRegistry(() => node.restoreSession({
     ...persisted.tinycloudSession,
     jwk: JSON.parse(persisted.sessionKey),
     address,
@@ -805,7 +1254,7 @@ test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale a
     signature: persisted.signature,
     expiresAt: persisted.expiresAt,
     tinycloudHosts: persisted.tinycloudHosts,
-  });
+  }));
   const tcw = new TinyCloudWeb({ sessionStorage: storage, includeAccountRegistryPermissions: false });
   await (tcw as any)._initPromise;
   (tcw as any)._node = node;
@@ -818,8 +1267,8 @@ test("a failed signOut cleanup keeps concurrent sign-outs from restoring stale a
   const outcomes = await Promise.allSettled([first, second]);
 
   expect(outcomes[0].status).toBe("rejected");
-  expect(storage.exists(address)).toBe(true);
-  expect(storage.exists(otherAddress)).toBe(false);
+  expect(backend.getItem(blockedKey) !== null).toBe(true);
+  expect(storage.activeAddress()).toBe(otherAddress.toLowerCase());
   expect((await tcw.restoreSession(address)).status).toBe("restore-failed");
   expect(tcw.session()).toBeUndefined();
 });
@@ -884,19 +1333,141 @@ test("signIn() rejects and leaves no session when signOut() lands during its per
   expect(() => tcw.kv).toThrow("Not signed in");
 });
 
+test("signOut during real browser gate restore and awaited storage clear cannot reinstate authority", async () => {
+  const globals = ["indexedDB", "IDBKeyRange", "localStorage", "navigator"] as const;
+  const previous = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
+  const values = new Map<string, string>();
+  const backend = {
+    get length() { return values.size; },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+    clear: () => values.clear(),
+  } satisfies Storage;
+  const setGlobal = (name: string, value: unknown) =>
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+  setGlobal("indexedDB", fakeIndexedDB);
+  setGlobal("IDBKeyRange", fakeIDBKeyRange);
+  setGlobal("localStorage", backend);
+  setGlobal("navigator", { locks: { request: (_name: string, options: unknown, section?: () => Promise<unknown>) =>
+    (typeof options === "function" ? options : section!)() } });
+  const gateEntered = Promise.withResolvers<void>();
+  const releaseGate = Promise.withResolvers<void>();
+  const clearEntered = Promise.withResolvers<void>();
+  const releaseClear = Promise.withResolvers<void>();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(`${TEST_REGISTRY_URL}/`)) return registryNoEntryResponse();
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  try {
+    const { KV_DATABASE } = require("../../replica/src/kv-storage/schema");
+    await new Promise<void>((resolve, reject) => {
+      const request = fakeIndexedDB.deleteDatabase(KV_DATABASE);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+    const source = await persistedRealSession("https://restore-race.test");
+    const { persisted, address, signer, wasm } = source;
+    let pauseClear = true;
+    class PausedStorage extends BrowserSessionStorage {
+      override async clear(target: string): Promise<void> {
+        if (pauseClear) {
+          pauseClear = false;
+          clearEntered.resolve();
+          await releaseClear.promise;
+        }
+        await super.clear(target);
+      }
+    }
+    const storage = new PausedStorage({ storage: backend });
+    await storage.save(address, persisted);
+    const realGate = createIndexedDbLifecycle({ ledger: ledgerFor() });
+    let pauseRestore = false;
+    const lifecycle = {
+      ...realGate,
+      restoreSessionStamp: async (...args: Parameters<typeof realGate.restoreSessionStamp>) => {
+        if (pauseRestore) {
+          gateEntered.resolve();
+          await releaseGate.promise;
+        }
+        return realGate.restoreSessionStamp(...args);
+      },
+    };
+    const replicaStorage = indexedDbReplicaStorage({ lifecycle });
+    registerReplicationLoaders({
+      validateConfig: assertValidReplicationConfig,
+      runtime: () => import("@tinycloud/node-sdk/replication/runtime"),
+      authority: () => import("@tinycloud/node-sdk/replication/authority"),
+      gatedNetwork: () => import("@tinycloud/node-sdk/replication/gated-network"),
+      gate: () => import("@tinycloud/replica/profile-gate"),
+    });
+    const replication = { enabled: true, prefixes: ["notes/"], storage: replicaStorage };
+    const node = new ReplicationNode({
+      host: "https://restore-race.test",
+      signer,
+      wasmBindings: wasm,
+      autoBootstrapAccount: false,
+      sessionStorage: storage,
+      tinycloudRegistryUrl: TEST_REGISTRY_URL,
+      replication,
+    });
+    const web = new TinyCloudWeb({
+      sessionStorage: storage,
+      includeAccountRegistryPermissions: false,
+      tinycloudRegistryUrl: TEST_REGISTRY_URL,
+      replication,
+    });
+    await (web as any)._initPromise;
+    (web as any)._node = node;
+
+    expect((await web.restoreSession(address)).status).toBe("restored");
+    expect(storage.exists(address)).toBe(true);
+    const stamp = await realGate.establishSessionStamp(pkhDid(address, persisted.chainId), {
+      consentAnchor: { source: "siwe", at: Date.parse(persisted.createdAt) },
+    });
+    await storage.save(address, { ...persisted, replicaStamp: stamp });
+    pauseRestore = true;
+
+    const restoring = web.restoreSession(address);
+    await gateEntered.promise;
+    const signingOut = web.signOut();
+    await clearEntered.promise;
+    releaseGate.resolve();
+    expect((await restoring).status).toBe("restore-failed");
+    expect(web.session()).toBeUndefined();
+    releaseClear.resolve();
+    await signingOut;
+
+    expect(await storage.loadWithStatus(address)).toEqual({ status: "missing", data: null });
+    expect(realGate.deliverable(stamp)).toBe(false);
+    expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+    expect((await web.restoreSession(address)).status).toBe("missing");
+  } finally {
+    releaseGate.resolve();
+    releaseClear.resolve();
+    globalThis.fetch = originalFetch;
+    globals.forEach((name, index) => {
+      if (previous[index]) Object.defineProperty(globalThis, name, previous[index]);
+      else Reflect.deleteProperty(globalThis, name);
+    });
+  }
+});
+
 test("a restore waiting for SDK initialisation is cancelled by signOut() before the node exists", async () => {
-  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const address = SIGNED_PERSISTED.address;
   const storage = {
     save: mock(async () => undefined),
     load: mock(async () => ({
       address,
       chainId: 1,
-      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "x", d: "d" }),
-      siwe: "siwe",
-      signature: "signature",
+      sessionKey: SIGNED_PERSISTED.sessionKey,
+      siwe: SIGNED_PERSISTED.siwe,
+      signature: SIGNED_PERSISTED.signature,
       tinycloudSession: {
-        delegationHeader: { Authorization: "Bearer persisted" },
-        delegationCid: "bafy-persisted",
+        delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
         spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
         verificationMethod: "did:key:zPersisted#zPersisted",
       },
@@ -946,9 +1517,699 @@ test("useDelegation() and useRuntimeDelegation() waiting for initialisation are 
   const [delegationError, runtimeError] = await Promise.all([using, usingRuntime]);
   await signingOut;
   expect(delegationError).toBeInstanceOf(Error);
-  expect((delegationError as Error).message).toContain("cancelled by sign-out");
   expect(runtimeError).toBeInstanceOf(Error);
-  expect((runtimeError as Error).message).toContain("cancelled by sign-out");
   expect(node.useDelegation).not.toHaveBeenCalled();
   expect(node.useRuntimeDelegation).not.toHaveBeenCalled();
+});
+
+describe("TinyCloudWeb offline restore host hints. Details: TC-2481", () => {
+  const EXPLICIT_HOST = "https://explicit-hint.test";
+  const PERSISTED_HOST = "https://persisted-hint.test";
+  const owner = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+
+  async function restore(options: { explicitHosts?: string[]; persistedHosts?: string[] }) {
+    const address = await owner.getAddress();
+    const signed = await signedBrowserSession();
+    const storage = {
+      save: mock(async () => undefined),
+      load: mock(async () => ({
+        address,
+        chainId: 1,
+        sessionKey: signed.sessionKey,
+        siwe: signed.siwe,
+        signature: signed.signature,
+        ...(options.persistedHosts === undefined ? {} : { tinycloudHosts: options.persistedHosts }),
+        tinycloudSession: {
+          delegationHeader: { Authorization: signed.tinycloudSession!.delegationHeader.Authorization },
+          delegationCid: signed.tinycloudSession!.delegationCid,
+          spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+          verificationMethod: "did:key:default",
+        },
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        version: "1.0",
+      })),
+      clear: mock(async () => undefined),
+    };
+    const requests: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      throw new TypeError(`unreachable: ${url}`);
+    }) as typeof fetch;
+    try {
+      const tcw = new TinyCloudWeb({
+        sessionStorage: storage,
+        ...(options.explicitHosts === undefined ? {} : { tinycloudHosts: options.explicitHosts }),
+        tinycloudRegistryUrl: TEST_REGISTRY_URL,
+        autoDiscoverLocalNode: false,
+      });
+      return { tcw, result: await tcw.restoreSession(address), requests };
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  test("an explicit host hint takes precedence over persisted hints. Details: TC-2481", async () => {
+    const { tcw, result, requests } = await restore({
+      explicitHosts: [EXPLICIT_HOST],
+      persistedHosts: [PERSISTED_HOST],
+    });
+
+    expect(result.status).toBe("restored");
+    expect(tcw.hosts).toEqual([EXPLICIT_HOST]);
+    expect(requests).toEqual([]);
+  });
+
+  test("persisted host hints are retained without an explicit hint. Details: TC-2481", async () => {
+    const { tcw, result, requests } = await restore({
+      persistedHosts: [PERSISTED_HOST],
+    });
+
+    expect(result.status).toBe("restored");
+    expect(tcw.hosts).toEqual([PERSISTED_HOST]);
+    expect(requests).toEqual([]);
+  });
+});
+
+// The panel keeps per-account state (read cache, open dialogs, receipts). A session that replaces a
+// live one with a different principal must reset it; the same principal signing in again must not.
+describe("panel reset when the principal changes over a live session", () => {
+  const ACCOUNT_A = SIGNED_PERSISTED.address;
+  const ACCOUNT_B = SIGNED_OTHER.address;
+  const principal = (address: string, chainId = 1) => ({
+    address,
+    chainId,
+    sessionKey: {} as any,
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
+  });
+
+  /** A TinyCloudWeb with a fake node. `live` is the session already on the node; `next` is what signIn/restore leaves behind. */
+  async function webWith(
+    live: ReturnType<typeof principal> | undefined,
+    next: ReturnType<typeof principal>,
+    // `failAfterCommit`: the node commits `next`, then a later step throws, as establishSignIn can. `stale`: restored permissions are not enough.
+    opts: { failAfterCommit?: Error; stale?: boolean } = {},
+  ) {
+    const signed = next.address === ACCOUNT_B ? SIGNED_OTHER : SIGNED_PERSISTED;
+    const persisted = {
+      address: next.address,
+      chainId: next.chainId,
+      sessionKey: signed.sessionKey,
+      siwe: signed.siwe,
+      signature: signed.signature,
+      tinycloudSession: {
+        delegationHeader: { Authorization: signed.tinycloudSession!.delegationHeader.Authorization },
+        delegationCid: signed.tinycloudSession!.delegationCid,
+        spaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:default`,
+        verificationMethod: "did:key:zPersisted#zPersisted",
+      },
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: "1.0",
+    };
+    const storage = { save: mock(async () => undefined), load: mock(async () => persisted), clear: mock(async () => undefined) };
+    const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+    await (tcw as any)._initPromise;
+    const node: any = {
+      session: live,
+      // The real node reads this from the session; the primary space id encodes address and chain.
+      get spaceId() {
+        return this.session && `tinycloud:pkh:eip155:${this.session.chainId}:${this.session.address}:default`;
+      },
+      accountSpaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:account`,
+      hasRuntimePermissions: mock(() => !opts.stale),
+      signIn: mock(async () => {
+        node.session = next;
+        if (opts.failAfterCommit) throw opts.failAfterCommit;
+      }),
+      restoreSession: mock(async () => {
+        node.session = next;
+        if (opts.failAfterCommit) throw opts.failAfterCommit;
+      }),
+      signOut: mock(async () => {
+        node.session = undefined;
+      }),
+    };
+    (tcw as any)._node = node;
+    (tcw as any)._initPromise = Promise.resolve();
+    const reset = mock(() => undefined);
+    (tcw as any).uiClient.reset = reset;
+    return { tcw, reset, node };
+  }
+
+  /** signIn() with nothing to restore, so it takes the fresh node.signIn path. */
+  async function freshSignIn(live: ReturnType<typeof principal> | undefined, next: ReturnType<typeof principal>) {
+    const { tcw, reset } = await webWith(live, next);
+    (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+    await tcw.signIn();
+    return reset;
+  }
+
+  test("a different account signing in over a live session resets the panel exactly once", async () => {
+    const reset = await freshSignIn(principal(ACCOUNT_A), principal(ACCOUNT_B));
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("the same account re-signing in (same address and chain) does not reset the panel", async () => {
+    expect(await freshSignIn(principal(ACCOUNT_A), principal(ACCOUNT_A))).not.toHaveBeenCalled();
+    // The same address on another chain is a different principal.
+    expect(await freshSignIn(principal(ACCOUNT_A, 1), principal(ACCOUNT_A, 10))).toHaveBeenCalledTimes(1);
+    // The first sign-in on a node with no live session has no previous account to clear.
+    expect(await freshSignIn(undefined, principal(ACCOUNT_A))).not.toHaveBeenCalled();
+  });
+
+  test("a session restore that replaces a live session with a different principal resets once; a plain or same-principal restore does not", async () => {
+    const restoreOver = async (live: ReturnType<typeof principal> | undefined, next: ReturnType<typeof principal>) => {
+      const { tcw, reset } = await webWith(live, next);
+      const result = await tcw.restoreSession(next.address);
+      expect(result.status).toBe("restored");
+      return reset;
+    };
+    expect(await restoreOver(principal(ACCOUNT_B), principal(ACCOUNT_A))).toHaveBeenCalledTimes(1);
+    expect(await restoreOver(undefined, principal(ACCOUNT_A))).not.toHaveBeenCalled();
+    expect(await restoreOver(principal(ACCOUNT_A), principal(ACCOUNT_A))).not.toHaveBeenCalled();
+  });
+
+  test("signIn that restores a different principal over a live session resets once, not twice", async () => {
+    const { tcw, reset } = await webWith(principal(ACCOUNT_B), principal(ACCOUNT_A));
+    // The wallet reports account A, so signIn restores A's persisted session instead of asking for a new signature.
+    (tcw as any).walletSigner = { getConnectedAddress: async () => ACCOUNT_A };
+    await tcw.signIn();
+    expect((tcw as any)._node.restoreSession).toHaveBeenCalledTimes(1);
+    expect((tcw as any)._node.signIn).not.toHaveBeenCalled();
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("a sign-in that fails after the node committed a different account still resets the panel once, and the error propagates", async () => {
+    const failure = new Error("hosting failed");
+    const { tcw, reset } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B), { failAfterCommit: failure });
+    (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+    await expect(tcw.signIn()).rejects.toBe(failure);
+    expect(tcw.session()?.address).toBe(ACCOUNT_B);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("a restore that fails after the node committed a different account still resets the panel once, and the failure is reported", async () => {
+    const failure = new Error("hosting failed");
+    const { tcw, reset } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B), { failAfterCommit: failure });
+    const result = await tcw.restoreSession(ACCOUNT_B);
+    expect(result.status).toBe("restore-failed");
+    expect(result.error).toBe(failure);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("a restore with stale permissions that falls through to a fresh sign-in resets once for a principal swap and not for the same principal", async () => {
+    const swap = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B), { stale: true });
+    (swap.tcw as any).walletSigner = { getConnectedAddress: async () => ACCOUNT_B };
+    await swap.tcw.signIn();
+    expect(swap.node.restoreSession).toHaveBeenCalledTimes(1);
+    expect(swap.node.signIn).toHaveBeenCalledTimes(1);
+    expect(swap.reset).toHaveBeenCalledTimes(1);
+
+    const same = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_A), { stale: true });
+    (same.tcw as any).walletSigner = { getConnectedAddress: async () => ACCOUNT_A };
+    await same.tcw.signIn();
+    expect(same.node.signIn).toHaveBeenCalledTimes(1);
+    expect(same.reset).not.toHaveBeenCalled();
+  });
+
+  test("a sign-out during the node call leaves exactly one reset, signOut's own, for sign-in and for restore", async () => {
+    const swapDuringSignOut = async (via: "signIn" | "restore") => {
+      const { tcw, reset, node } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B));
+      const commit = via === "signIn" ? node.signIn : node.restoreSession;
+      const original = commit.getMockImplementation() as () => Promise<void>;
+      const slow = mock(async () => {
+        await original();
+        await tcw.signOut();
+      });
+      node[via === "signIn" ? "signIn" : "restoreSession"] = slow;
+      if (via === "signIn") (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+      const outcome = via === "signIn" ? tcw.signIn() : tcw.restoreSession(ACCOUNT_B);
+      await outcome.catch(() => undefined);
+      return reset;
+    };
+    expect(await swapDuringSignOut("signIn")).toHaveBeenCalledTimes(1);
+    expect(await swapDuringSignOut("restore")).toHaveBeenCalledTimes(1);
+  });
+
+  test("a sign-in for the same account that fails after the node committed does not reset the panel", async () => {
+    const failure = new Error("hosting failed");
+    const { tcw, reset } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_A), { failAfterCommit: failure });
+    (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+    await expect(tcw.signIn()).rejects.toBe(failure);
+    expect(reset).not.toHaveBeenCalled();
+  });
+});
+
+describe("signIn refuses caveated manifests (TC-1855)", () => {
+  // `tcw` comes from `require`, so it is untyped here; the error class must be the
+  // same ESM instance the source throws, hence the static import at the top.
+  type Caveats = Array<Record<string, unknown>> | undefined;
+  const restoredSession = {
+    address: SIGNED_PERSISTED.address,
+    walletAddress: SIGNED_PERSISTED.address,
+    chainId: 1,
+    sessionKey: {},
+    siwe: "persisted-siwe",
+    signature: "persisted-signature",
+  };
+  const manifestWith = (caveats: Caveats) => ({
+    app_id: "xyz.tinycloud.refuse-caveats",
+    name: "Refuse caveats",
+    defaults: false,
+    permissions: [
+      {
+        service: "tinycloud.kv",
+        path: "notes/",
+        actions: ["get"],
+        ...(caveats === undefined ? {} : { caveats }),
+      },
+    ],
+  });
+
+  async function webWith(config: Record<string, unknown>) {
+    const walletRequest = mock(async () => {
+      throw new Error("wallet is closed in this test");
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => {
+      throw new Error("network is closed in this test");
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const tcw = new TinyCloudWeb({
+      provider: { request: walletRequest },
+      includeAccountRegistryPermissions: false,
+      autoBootstrapAccount: false,
+      ...config,
+    });
+    await tcw._initPromise;
+    walletRequest.mockClear();
+    fetchMock.mockClear();
+    const node = {
+      hasRuntimePermissions: mock(() => true),
+      signIn: mock(async () => undefined),
+    };
+    const restoreSession = mock(async () => ({ status: "restored", session: restoredSession }));
+    tcw._node = node;
+    tcw.restoreSession = restoreSession;
+    return {
+      tcw,
+      node,
+      restoreSession,
+      walletRequest,
+      fetchMock,
+      restore: () => {
+        globalThis.fetch = originalFetch;
+      },
+    };
+  }
+
+  const constrained: Caveats[] = [
+    [{ kind: "prefix", prefix: "notes/" }],
+    [{}, { kind: "prefix", prefix: "notes/" }],
+    [{}, {}],
+  ];
+
+  for (const caveats of constrained) {
+    test(`manifest ${JSON.stringify(caveats)}: no restore, wallet request, fetch or node sign-in`, async () => {
+      const harness = await webWith({ manifest: manifestWith(caveats) });
+      try {
+        const error = await harness.tcw.signIn().then(() => undefined, (rejected: unknown) => rejected);
+
+        expect(error).toBeInstanceOf(CaveatedDelegationUnsupportedError);
+        expect(error).toMatchObject({ code: "CAVEATED_DELEGATION_UNSUPPORTED" });
+        expect(harness.restoreSession).not.toHaveBeenCalled();
+        expect(harness.node.hasRuntimePermissions).not.toHaveBeenCalled();
+        expect(harness.node.signIn).not.toHaveBeenCalled();
+        expect(harness.walletRequest).not.toHaveBeenCalled();
+        expect(harness.fetchMock).not.toHaveBeenCalled();
+      } finally {
+        harness.restore();
+      }
+    });
+  }
+
+  test("a pre-composed capabilityRequest is refused the same way", async () => {
+    const harness = await webWith({
+      capabilityRequest: composeManifestRequest([manifestWith([{ kind: "prefix", prefix: "notes/" }])], {
+        includeAccountRegistryPermissions: false,
+      }),
+    });
+    try {
+      const error = await harness.tcw.signIn().then(() => undefined, (rejected: unknown) => rejected);
+
+      expect(error).toBeInstanceOf(CaveatedDelegationUnsupportedError);
+      expect(harness.restoreSession).not.toHaveBeenCalled();
+      expect(harness.node.signIn).not.toHaveBeenCalled();
+      expect(harness.walletRequest).not.toHaveBeenCalled();
+      expect(harness.fetchMock).not.toHaveBeenCalled();
+    } finally {
+      harness.restore();
+    }
+  });
+
+  for (const caveats of [undefined, [], [{}]] as Caveats[]) {
+    test(`manifest ${JSON.stringify(caveats) ?? "without caveats"}: unchanged, still restores`, async () => {
+      const harness = await webWith({ manifest: manifestWith(caveats) });
+      try {
+        const session = await harness.tcw.signIn();
+
+        expect(session).toBe(restoredSession);
+        expect(harness.restoreSession).toHaveBeenCalledTimes(1);
+        expect(harness.node.hasRuntimePermissions).toHaveBeenCalledTimes(1);
+      } finally {
+        harness.restore();
+      }
+    });
+  }
+});
+
+describe("space hosting on restore (TC-2380)", () => {
+  const address = SIGNED_PERSISTED.address;
+  const persisted = {
+    address,
+    chainId: 1,
+    sessionKey: SIGNED_PERSISTED.sessionKey,
+    siwe: SIGNED_PERSISTED.siwe,
+    signature: SIGNED_PERSISTED.signature,
+    tinycloudSession: {
+      delegationHeader: { Authorization: SIGNED_PERSISTED.tinycloudSession!.delegationHeader.Authorization },
+      delegationCid: SIGNED_PERSISTED.tinycloudSession!.delegationCid,
+      spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+      verificationMethod: "did:key:zPersisted#zPersisted",
+    },
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    version: "1.0",
+  };
+
+  type Hosting = "hosted" | "not-hosted" | "unknown";
+
+  /** A TinyCloudWeb over a fake node whose probe is `probe`; `node.spaceHosting` is what the probe last recorded. */
+  async function webWith(probe: (node: { spaceHosting: Hosting }) => Promise<Hosting>) {
+    const storage = { save: mock(async () => undefined), load: mock(async () => persisted), clear: mock(async () => undefined) };
+    const walletRequest = mock(async (_request: { method: string }): Promise<never> => {
+      throw new Error("wallet is closed in this test");
+    });
+    const tcw = new TinyCloudWeb({
+      sessionStorage: storage,
+      provider: { request: walletRequest },
+      includeAccountRegistryPermissions: false,
+      autoBootstrapAccount: false,
+    });
+    await tcw._initPromise;
+    walletRequest.mockClear();
+    const statusDuringProbe: string[] = [];
+    const node = {
+      spaceHosting: "unknown" as Hosting,
+      spaceId: persisted.tinycloudSession.spaceId,
+      hasRuntimePermissions: mock(() => true),
+      restoreSession: mock(async () => undefined),
+      signIn: mock(async () => undefined),
+      checkSpaceHosting: mock(async () => {
+        statusDuringProbe.push(tcw.sessionRestoreStatus);
+        return probe(node);
+      }),
+    };
+    tcw._node = node;
+    tcw._initPromise = Promise.resolve();
+    return { tcw, node, walletRequest, statusDuringProbe };
+  }
+  /** A TinyCloudWeb fixture with a signer and a recording space-creation handler. */
+  async function webWithCreation(
+    probe: (node: { spaceHosting: Hosting }) => Promise<Hosting>,
+    options: {
+      hasSigner?: boolean;
+      confirm?: boolean;
+      confirmFn?: () => Promise<boolean>;
+      openkey?: boolean;
+      walletAddress?: string;
+    } = {},
+  ) {
+    const storage = {
+      save: mock(async () => undefined),
+      load: mock(async () => persisted),
+      clear: mock(async () => undefined),
+      activeAddress: () => address,
+    };
+    const walletRequest = mock(async (request: { method: string }): Promise<unknown> => {
+      if (request.method === "eth_accounts" || request.method === "eth_requestAccounts") {
+        return [options.walletAddress ?? address];
+      }
+      throw new Error(`Unexpected wallet request: ${request.method}`);
+    });
+    const confirm = mock(async () => options.confirmFn ? options.confirmFn() : options.confirm ?? true);
+    const tcw = new TinyCloudWeb({
+      sessionStorage: storage,
+      ...(options.hasSigner === false ? {} : { provider: { request: walletRequest } }),
+      ...(options.openkey ? { openkey: { client: { authorizeTinyCloud: mock() } as unknown as NonNullable<Config["openkey"]>["client"] } } : {}),
+      includeAccountRegistryPermissions: false,
+      autoBootstrapAccount: false,
+      spaceCreationHandler: { confirmSpaceCreation: confirm },
+    });
+    await tcw._initPromise;
+    walletRequest.mockClear();
+    const statusDuringProbe: string[] = [];
+    const node = {
+      spaceHosting: "unknown" as Hosting,
+      spaceId: persisted.tinycloudSession.spaceId,
+      restorableSession: { address, chainId: 1, spaceId: persisted.tinycloudSession.spaceId },
+      hasRuntimePermissions: mock(() => true),
+      restoreSession: mock(async () => undefined),
+      signIn: mock(async () => undefined),
+      ensurePrimarySpaceHosted: mock(async () => {
+        const spaceId = node.spaceId;
+        if (await confirm() && node.spaceId === spaceId) node.spaceHosting = "hosted";
+      }),
+      checkSpaceHosting: mock(async () => {
+        statusDuringProbe.push(tcw.sessionRestoreStatus);
+        return probe(node);
+      }),
+    };
+    tcw._node = node;
+    tcw._initPromise = Promise.resolve();
+    return { tcw, node, walletRequest, statusDuringProbe, confirm };
+  }
+
+  test("restore returns locally and the background hosting probe updates it without a prompt", async () => {
+    const { tcw, node, walletRequest, statusDuringProbe } = await webWith(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    });
+
+    const result = await tcw.restoreSession(address);
+
+    expect(result.status).toBe("restored");
+    expect(result.session?.address).toBe(address);
+    expect(tcw.sessionRestoreStatus).toBe("restored");
+    expect(tcw.spaceHosting).toBe("unknown");
+    expect(node.checkSpaceHosting).not.toHaveBeenCalled();
+    await tcw.restoredNetworkWork.hosting;
+    expect(tcw.spaceHosting).toBe("not-hosted");
+    expect(node.checkSpaceHosting).toHaveBeenCalledTimes(1);
+    expect(statusDuringProbe).toEqual(["restored"]);
+    expect(node.signIn).not.toHaveBeenCalled();
+    expect(walletRequest).not.toHaveBeenCalled();
+  });
+
+  test("a hung background probe is bounded and a throwing probe leaves the restore usable", async () => {
+    const hung = await webWith(() => new Promise<Hosting>(() => undefined));
+    hung.tcw.spaceHostingCapMs = 50;
+    const started = Date.now();
+    const result = await hung.tcw.restoreSession(address);
+    expect(result.status).toBe("restored");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(hung.node.checkSpaceHosting).not.toHaveBeenCalled();
+    await hung.tcw.restoredNetworkWork.hosting;
+    expect(hung.node.checkSpaceHosting).toHaveBeenCalledTimes(1);
+    expect(hung.tcw.spaceHosting).toBe("unknown");
+
+    const failing = await webWith(async () => {
+      throw new Error("node unreachable");
+    });
+    expect((await failing.tcw.restoreSession(address)).status).toBe("restored");
+    await failing.tcw.restoredNetworkWork.hosting;
+    expect(failing.tcw.spaceHosting).toBe("unknown");
+  });
+
+  test("prepareSignIn on a restored not-hosted session does not prompt", async () => {
+    const { tcw, node, confirm, walletRequest } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, { openkey: true });
+
+    await tcw.prepareSignIn();
+
+    expect(walletRequest.mock.calls.map(([request]) => request.method)).toContain("eth_accounts");
+    expect(node.checkSpaceHosting).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
+    expect(node.signIn).not.toHaveBeenCalled();
+  });
+
+  test("a restored not-hosted session signs only the host delegation and returns the same session", async () => {
+    const { tcw, node, confirm, walletRequest } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    });
+    const restoredSession = { address, walletAddress: address, chainId: 1, sessionKey: {}, siwe: SIGNED_PERSISTED.siwe, signature: "signature" };
+    tcw.restoreSession = mock(async () => ({ status: "restored", session: restoredSession }));
+    node.spaceHosting = "not-hosted";
+
+    const session = await tcw.signIn();
+
+    expect(session).toBe(restoredSession);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledWith("not-hosted");
+    expect(node.signIn).not.toHaveBeenCalled();
+    // eth_accounts is a silent read; nothing that prompts (an accounts request, a signature) was asked of the wallet.
+    expect(walletRequest.mock.calls.map(([request]) => request.method).filter((method) => method !== "eth_accounts")).toEqual([]);
+    expect(tcw.spaceHosting).toBe("hosted");
+  });
+
+  test("ensureSpaceHosted shares one in-flight approval", async () => {
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    });
+    await tcw.restoreSession(address);
+
+    const first = tcw.ensureSpaceHosted();
+    const second = tcw.ensureSpaceHosted();
+    expect(await Promise.all([first, second])).toEqual(["hosted", "hosted"]);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledTimes(1);
+  });
+  test("a new primary space starts its own approval while the prior session is pending", async () => {
+    const approvals: Array<(approved: boolean) => void> = [];
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, {
+      confirmFn: () => {
+        const approval = Promise.withResolvers<boolean>();
+        approvals.push(approval.resolve);
+        return approval.promise;
+      },
+    });
+    await tcw.restoreSession(address);
+    await tcw.restoredNetworkWork.hosting;
+
+    const first = tcw.ensureSpaceHosted().then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(confirm).toHaveBeenCalledTimes(1);
+
+    node.spaceId = `${address}:secondary`;
+    node.restorableSession = {
+      address,
+      chainId: 1,
+      spaceId: node.spaceId,
+    };
+    node.spaceHosting = "not-hosted";
+    const second = tcw.ensureSpaceHosted();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledTimes(2);
+    approvals[1]!(true);
+    expect(await second).toBe("hosted");
+    approvals[0]!(true);
+    // Both approvals succeeded; only the first call's authority was replaced.
+    // It must reject, not adopt the newer session's "hosted" result.
+    expect(await first).toEqual({ status: "rejected", error: expect.any(Error) });
+  });
+  test("ensureSpaceHosted skips creation without a signer", async () => {
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, { hasSigner: false });
+    await tcw.restoreSession(address);
+    expect(await tcw.ensureSpaceHosted()).toBe("not-hosted");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
+  });
+
+  test("a restored session and a different connected signer do not request hosting", async () => {
+    const otherAddress = "0x0000000000000000000000000000000000000002";
+    const { tcw, node, confirm, walletRequest } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, { walletAddress: otherAddress });
+    await tcw.restoreSession(address);
+
+    expect(await tcw.ensureSpaceHosted()).toBe("not-hosted");
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
+    expect(walletRequest.mock.calls.some(([request]) => request.method === "eth_sign" || request.method === "personal_sign")).toBe(false);
+  });
+
+  test("a declined confirmation leaves the restored space not-hosted", async () => {
+    const { tcw, node, confirm } = await webWithCreation(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    }, { confirm: false });
+    await tcw.restoreSession(address);
+    expect(await tcw.ensureSpaceHosted()).toBe("not-hosted");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(node.spaceHosting).toBe("not-hosted");
+  });
+
+  test("unknown hosting does not prompt", async () => {
+    const { tcw, node, confirm } = await webWithCreation(async () => "unknown");
+    expect(await tcw.ensureSpaceHosted()).toBe("unknown");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
+  });
+
+  test("ensureSpaceHosted does not prompt or request when already hosted", async () => {
+    const { tcw, node, walletRequest, confirm } = await webWithCreation(async (n) => {
+      n.spaceHosting = "hosted";
+      return "hosted";
+    });
+    await tcw.restoreSession(address);
+    expect(await tcw.ensureSpaceHosted()).toBe("hosted");
+    expect(node.ensurePrimarySpaceHosted).not.toHaveBeenCalled();
+    expect(walletRequest).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  test("a restore whose probe answers at once leaves no cap timer pending", async () => {
+    const { tcw } = await webWith(async (n) => {
+      n.spaceHosting = "hosted";
+      return "hosted";
+    });
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    const pending = new Set<unknown>();
+    let capTimers = 0;
+    globalThis.setTimeout = ((handler: () => void, delay?: number, ...args: unknown[]) => {
+      const timer = realSet(handler, delay, ...args);
+      if (delay === 5_000) {
+        capTimers++;
+        pending.add(timer);
+      }
+      return timer;
+    }) as unknown as typeof setTimeout;
+    globalThis.clearTimeout = ((timer?: unknown) => {
+      pending.delete(timer);
+      return realClear(timer as Parameters<typeof clearTimeout>[0]);
+    }) as typeof clearTimeout;
+    try {
+      expect((await tcw.restoreSession(address)).status).toBe("restored");
+      await tcw.restoredNetworkWork.hosting;
+    } finally {
+      globalThis.setTimeout = realSet;
+      globalThis.clearTimeout = realClear;
+    }
+    // The 5 s cap was armed, and nothing keeps the process alive once the probe has answered.
+    expect(capTimers).toBe(1);
+    expect(pending.size).toBe(0);
+  });
 });

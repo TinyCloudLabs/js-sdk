@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-services",
-  "version": "3.2.6-beta.2",
+  "version": "3.13.0-beta.8",
   "description": "TinyCloud SDK Services - Platform-agnostic service implementations",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -26,6 +26,21 @@
       "import": "./dist/kv/index.js",
       "require": "./dist/kv/index.cjs"
     },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "import": "./dist/context.js",
+      "require": "./dist/context.cjs"
+    },
+    "./telemetry/requestLog": {
+      "import": {
+        "types": "./dist/telemetry/requestLog.d.ts",
+        "default": "./dist/telemetry/requestLog.js"
+      },
+      "require": {
+        "types": "./dist/telemetry/requestLog.d.cts",
+        "default": "./dist/telemetry/requestLog.cjs"
+      }
+    },
     "./kv/replication/prefix": {
       "import": {
         "types": "./dist/kv/replication/prefix.d.ts",
@@ -34,6 +49,46 @@
       "require": {
         "types": "./dist/kv/replication/prefix.d.cts",
         "default": "./dist/kv/replication/prefix.cjs"
+      }
+    },
+    "./kv/replication/contractConstants": {
+      "import": {
+        "types": "./dist/kv/replication/contractConstants.d.ts",
+        "default": "./dist/kv/replication/contractConstants.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/contractConstants.d.cts",
+        "default": "./dist/kv/replication/contractConstants.cjs"
+      }
+    },
+    "./kv/replication/grantPolicyConstants": {
+      "import": {
+        "types": "./dist/kv/replication/grantPolicyConstants.d.ts",
+        "default": "./dist/kv/replication/grantPolicyConstants.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/grantPolicyConstants.d.cts",
+        "default": "./dist/kv/replication/grantPolicyConstants.cjs"
+      }
+    },
+    "./kv/replication/grantPolicyTypes": {
+      "import": {
+        "types": "./dist/kv/replication/grantPolicyTypes.d.ts",
+        "default": "./dist/kv/replication/grantPolicyTypes.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/grantPolicyTypes.d.cts",
+        "default": "./dist/kv/replication/grantPolicyTypes.cjs"
+      }
+    },
+    "./kv/replication/grantPolicy": {
+      "import": {
+        "types": "./dist/kv/replication/grantPolicy.d.ts",
+        "default": "./dist/kv/replication/grantPolicy.js"
+      },
+      "require": {
+        "types": "./dist/kv/replication/grantPolicy.d.cts",
+        "default": "./dist/kv/replication/grantPolicy.cjs"
       }
     },
     "./kv/replication": {
@@ -46,6 +101,11 @@
         "default": "./dist/kv/replication/index.cjs"
       }
     },
+    "./feed": {
+      "types": "./dist/feed/index.d.ts",
+      "import": "./dist/feed/index.js",
+      "require": "./dist/feed/index.cjs"
+    },
     "./sql": {
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js",
@@ -55,6 +115,36 @@
       "types": "./dist/encryption/index.d.ts",
       "import": "./dist/encryption/index.js",
       "require": "./dist/encryption/index.cjs"
+    },
+    "./encryption/resource": {
+      "import": {
+        "types": "./dist/encryption/resource.d.ts",
+        "default": "./dist/encryption/resource.js"
+      },
+      "require": {
+        "types": "./dist/encryption/resource.d.cts",
+        "default": "./dist/encryption/resource.cjs"
+      }
+    },
+    "./encryption/named-keys": {
+      "import": {
+        "types": "./dist/encryption/named-keys.d.ts",
+        "default": "./dist/encryption/named-keys.js"
+      },
+      "require": {
+        "types": "./dist/encryption/named-keys.d.cts",
+        "default": "./dist/encryption/named-keys.cjs"
+      }
+    },
+    "./secrets/totp": {
+      "import": {
+        "types": "./dist/secrets/totp.d.ts",
+        "default": "./dist/secrets/totp.js"
+      },
+      "require": {
+        "types": "./dist/secrets/totp.d.cts",
+        "default": "./dist/secrets/totp.cjs"
+      }
     },
     "./internal/decrypt-transport-response-error": {
       "types": "./dist/internal/decrypt-transport-response-error.d.cts",
@@ -69,6 +159,30 @@
       ],
       "kv/replication/prefix": [
         "dist/kv/replication/prefix.d.ts"
+      ],
+      "kv/replication/contractConstants": [
+        "dist/kv/replication/contractConstants.d.ts"
+      ],
+      "kv/replication/grantPolicyConstants": [
+        "dist/kv/replication/grantPolicyConstants.d.ts"
+      ],
+      "kv/replication/grantPolicyTypes": [
+        "dist/kv/replication/grantPolicyTypes.d.ts"
+      ],
+      "kv/replication/grantPolicy": [
+        "dist/kv/replication/grantPolicy.d.ts"
+      ],
+      "encryption/resource": [
+        "dist/encryption/resource.d.ts"
+      ],
+      "encryption/named-keys": [
+        "dist/encryption/named-keys.d.ts"
+      ],
+      "secrets/totp": [
+        "dist/secrets/totp.d.ts"
+      ],
+      "telemetry/requestLog": [
+        "dist/telemetry/requestLog.d.ts"
       ]
     }
   },
@@ -78,15 +192,19 @@
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck:contract": "tsc --noEmit -p tsconfig.contract.json"
   },
   "dependencies": {
-    "@tinycloud/bootstrap": "2.8.0",
+    "@noble/ciphers": "1.3.0",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "1.8.0",
+    "@tinycloud/bootstrap": "2.9.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20",
-    "@tinycloud/node-sdk-wasm": "1.7.7",
+    "@tinycloud/node-sdk-wasm": "1.7.9",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"
   },

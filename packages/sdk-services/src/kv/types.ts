@@ -4,7 +4,7 @@
  * Type definitions for the KV (Key-Value) service operations.
  */
 
-import type { Result } from "../types";
+import type { Result, RetryStats } from "../types";
 
 /**
  * Configuration for KVService.
@@ -385,6 +385,9 @@ export interface KVResponse<T = unknown> {
    * Response headers with metadata.
    */
   headers: KVResponseHeaders;
+
+  /** Attempts and total backoff for the request behind this response; see `RetryPolicy`. */
+  retry?: RetryStats;
 }
 
 /**

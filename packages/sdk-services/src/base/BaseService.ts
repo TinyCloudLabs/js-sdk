@@ -16,6 +16,9 @@ import {
   TelemetryEvents,
   err,
   Result,
+  FetchRequestInit,
+  FetchResponse,
+  ServiceHeaders,
 } from "../types";
 import { authRequiredError, wrapError, RequestTimeoutError } from "../errors";
 import type { RequestSignal } from "./types";
@@ -261,6 +264,29 @@ export abstract class BaseService implements IService {
     }
 
     return controller.signal;
+  }
+
+  /** POST a signed invocation with retry; `mint` re-signs per attempt, `init.headers` add to the signed ones. */
+  protected invokeWithRetry(
+    url: string,
+    mint: () => ServiceHeaders,
+    { headers: extra, ...init }: Omit<FetchRequestInit, "headers"> & {
+      headers?: Record<string, string>;
+    } = {}
+  ): Promise<FetchResponse> {
+    const build = (): FetchRequestInit => {
+      const signed = mint();
+      return {
+        method: "POST",
+        ...init,
+        headers: Array.isArray(signed)
+          ? [...signed, ...Object.entries(extra ?? {})]
+          : { ...signed, ...extra },
+      };
+    };
+    return this.context.invokeWithRetry
+      ? this.context.invokeWithRetry(url, build)
+      : this.context.fetch(url, build());
   }
 
   /**

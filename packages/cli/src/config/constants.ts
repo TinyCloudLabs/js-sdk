@@ -10,8 +10,8 @@ export const CONFIG_DIR = tinycloudHomePath();
 export const PROFILES_DIR = profilesPath();
 export const CONFIG_FILE = tinycloudConfigPath();
 
-// Production TinyCloud node. `node.tinycloud.xyz` does not resolve.
-export const DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
+// Production TinyCloud node.
+export const DEFAULT_HOST = "https://node.tinycloud.xyz";
 // OpenKey serves browser approval and its device API from distinct origins.
 export const DEFAULT_OPENKEY_HOST = "https://openkey.so";
 export const DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
@@ -44,3 +44,12 @@ export const ExitCode = {
   /** Interrupted by SIGINT/SIGTERM (`CANCELLED`). */
   CANCELLED: 130,
 } as const;
+export type ExitCode = (typeof ExitCode)[keyof typeof ExitCode];
+
+/**
+ * The advice for an OpenKey profile whose space is not hosted yet. `tc space
+ * host` cannot help it: that command needs a signer, and an OpenKey session
+ * has none. OpenKey hosts the space itself, in the background after approval.
+ */
+export const OPENKEY_SPACE_SETUP_RETRY_HINT =
+  "Wait a minute and retry; approving again in OpenKey re-runs the setup.";

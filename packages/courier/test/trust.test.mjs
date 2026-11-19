@@ -88,12 +88,12 @@ test('profile identities are atomically stored with private modes', () => {
     for (const file of ['key.json', 'profile.json']) assert.equal(fs.statSync(path.join(home, file)).mode & 0o777, 0o600);
     assert.equal(loadKey().did, key.did);
     fs.chmodSync(path.join(home, 'key.json'), 0o644);
-    assert.throws(() => loadKey(), { code: 'insecure-profile' });
+    assert.throws(() => loadKey(), { code: 'profile-permissions', message: 'key.json must be owner-only (mode 0600); found mode 644.' });
     fs.chmodSync(path.join(home, 'key.json'), 0o600);
     fs.writeFileSync(path.join(home, 'profile.json'), JSON.stringify({ version: 2 }), { mode: 0o600 });
     assert.throws(() => loadProfile(), { code: 'profile-outdated' });
     fs.chmodSync(home, 0o755);
-    assert.throws(() => loadKey(), { code: 'insecure-profile' });
+    assert.throws(() => loadKey(), { code: 'profile-permissions', message: `${home} must be owner-only (mode 0700); found mode 755.` });
   } finally {
     process.env.COURIER_HOME = previous;
     fs.rmSync(home, { recursive: true, force: true });

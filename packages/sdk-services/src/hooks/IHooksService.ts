@@ -22,6 +22,9 @@ export interface IHooksService {
    * so `for await` consumers can branch on it. Stream diagnostics contain only
    * SDK allow-listed identifiers; foreign error messages and causes are not
    * copied.
+   * `options.onReady` schedules catch-up after each server-confirmed ready
+   * stream, including an unchanged ready stream joined by a late subscriber.
+   * Subscribe/consume before draining stored rows; notifications are not replay.
    */
   subscribe(
     subscriptions: HookSubscription[],

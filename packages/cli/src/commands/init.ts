@@ -3,9 +3,37 @@ import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { ProfileManager } from "../config/profiles.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
 import { handleError, CLIError } from "../output/errors.js";
+import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { ExitCode, DEFAULT_HOST, DEFAULT_CHAIN_ID } from "../config/constants.js";
 import { generateKey } from "../auth/local-key.js";
 import { refreshOpenKeySession } from "./auth.js";
+import { ensureSpaceSetup } from "../auth/space-setup.js";
+
+/**
+ * A new profile with a fresh session key and no sign-in, as `init --key-only`
+ * makes it. It becomes the default profile when it is named `default` or no
+ * default profile exists yet.
+ */
+export async function createKeyOnlyProfile(profileName: string, host: string, defaultSpace?: string): Promise<{ did: string; previousDefaultProfile: string }> {
+  await ProfileManager.ensureConfigDir();
+  const { jwk, did } = await generateKey();
+  await ProfileManager.setKey(profileName, jwk);
+  await ProfileManager.setProfile(profileName, {
+    name: profileName,
+    host,
+    chainId: DEFAULT_CHAIN_ID,
+    spaceName: "default",
+    did,
+    createdAt: new Date().toISOString(),
+    ...(defaultSpace ? { defaultSpace } : {}),
+  });
+  const config = await ProfileManager.getConfig();
+  if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
+    await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
+  }
+  // What the default profile was before this one: removing the profile again restores it.
+  return { did, previousDefaultProfile: config.defaultProfile };
+}
 
 export function registerInitCommand(program: Command): void {
   program
@@ -40,33 +68,7 @@ export function registerInitCommand(program: Command): void {
           );
         }
 
-        await ProfileManager.ensureConfigDir();
-
-        // Generate key
-        const { jwk, did } = await withSpinner("Generating key...", async () => {
-          return generateKey();
-        });
-
-        await ProfileManager.setKey(profileName, jwk);
-
-        // Create initial profile
-        const profileConfig = {
-          name: profileName,
-          host,
-          chainId: DEFAULT_CHAIN_ID,
-          spaceName: "default",
-          did,
-          createdAt: new Date().toISOString(),
-          ...(defaultSpace ? { defaultSpace } : {}),
-        };
-
-        await ProfileManager.setProfile(profileName, profileConfig);
-
-        // Set as default if this is "default" or no default exists
-        const config = await ProfileManager.getConfig();
-        if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
-          await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
-        }
+        const { did, previousDefaultProfile } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
 
         if (options.keyOnly) {
           outputJson({
@@ -84,7 +86,9 @@ export function registerInitCommand(program: Command): void {
           paste: options.paste,
           noPopup: options.popup === false,
           persistHost: true,
+          createdProfile: { previousDefaultProfile },
         });
+        await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
 
         outputJson({
           profile: profileName,

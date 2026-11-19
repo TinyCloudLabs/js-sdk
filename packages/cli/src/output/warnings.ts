@@ -1,3 +1,4 @@
+import type { RegistryFallbackReason } from "@tinycloud/sdk-core";
 import type { OperationWarningOutput } from "./formatter.js";
 
 // The entry and legacy command graph are separate bundles. Keep the sink on
@@ -32,6 +33,14 @@ export function recordWarnings(warnings: readonly OperationWarningOutput[]): voi
   if (warnings.length === 0) return;
   const holder = globalThis as WarningHolder;
   holder[PENDING_WARNINGS] = mergeWarnings(holder[PENDING_WARNINGS] ?? [], warnings);
+}
+
+/** Record the selected fallback without interpreting the SDK's human explanation. */
+export function recordRegistryFallbackWarning(
+  _message: string,
+  reason: RegistryFallbackReason = "using_default_node",
+): void {
+  recordWarnings([{ code: "REGISTRY_UNAVAILABLE", reason }]);
 }
 
 export function drainWarnings(): OperationWarningOutput[] {

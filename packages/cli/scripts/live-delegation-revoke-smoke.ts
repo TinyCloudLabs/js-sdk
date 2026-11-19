@@ -125,7 +125,7 @@ try {
     "auth", "request", "--cap", `tinycloud.kv:${ownerSpace}:${key.slice(0, key.lastIndexOf("/"))}/:get,metadata`, "--emit", requestFile,
   ]);
   requireSuccess(request, "Device permission request");
-  const grant = await run(cliEntry, ownerHome, HOST, ["auth", "grant", requestFile, "--yes"]);
+  const grant = await run(cliEntry, ownerHome, HOST, ["auth", "grant", requestFile]);
   requireSuccess(grant, "Owner auth grant");
   const cid = requireStringProperty(parseJson(grant.stdout, "Owner auth grant"), "delegationCid", "Owner auth grant");
   await writeFile(grantFile, grant.stdout, "utf8");
@@ -143,20 +143,7 @@ try {
   );
   if (beforeData !== payload) throw new Error("Pre-revoke scoped read returned the wrong data.");
 
-  const unconfirmedRevoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid]);
-  const unconfirmedError = property(parseJson(unconfirmedRevoke.stderr, "Unconfirmed owner delegation revoke"), "error");
-  if (
-    unconfirmedRevoke.exitCode === 0 ||
-    property(unconfirmedError, "code") !== "CONFIRMATION_REQUIRED"
-  ) {
-    throw new Error(
-      `Noninteractive revoke without --yes did not require confirmation.\n` +
-      `Exit code: ${unconfirmedRevoke.exitCode}\nSTDERR:\n${redact(unconfirmedRevoke.stderr)}`,
-    );
-  }
-
-
-  const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid, "--yes"]);
+  const revoke = await run(cliEntry, ownerHome, HOST, ["delegation", "revoke", cid]);
   requireSuccess(revoke, "Owner delegation revoke");
   const revokeValue = parseJson(revoke.stdout, "Owner delegation revoke");
   const revokedCid = requireStringProperty(revokeValue, "cid", "Owner delegation revoke");
@@ -186,10 +173,11 @@ try {
   const afterError = property(afterValue, "error");
   const afterCode = property(afterError, "code");
   const afterMessage = property(afterError, "message");
-  const afterMeta = property(afterError, "meta");
-  const afterStatus = property(afterMeta, "status");
-  const revokedMessage = `delegation-revoked: ${cid}`;
-  if (afterRead.exitCode === 0 || afterStatus !== 401 || typeof afterMessage !== "string" || !afterMessage.includes(revokedMessage)) {
+  // The node's `delegation-revoked: <cid>` 401 is reported as GRANT_REVOKED (exit 5) with one fixed message; the node's text and the CID are not shown.
+  if (
+    afterRead.exitCode !== 5 || afterCode !== "GRANT_REVOKED" || typeof afterMessage !== "string" ||
+    !afterMessage.startsWith("This grant was revoked.") || afterRead.stderr.includes(cid)
+  ) {
     throw new Error(
       `Post-revoke scoped read did not fail with the revocation verdict.\n` +
       `Exit code: ${afterRead.exitCode}\nSTDOUT:\n${redact(afterRead.stdout)}\nSTDERR:\n${redact(afterRead.stderr)}`,
@@ -227,7 +215,6 @@ try {
       exitCode: afterRead.exitCode,
       code: afterCode,
       message: afterMessage,
-      status: afterStatus,
     },
   }) + "\n");
 } finally {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { CLIError, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
+import { CLIError, GRANT_REVOKED_EXIT_CODE, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
 import { buildSecretRequestUrl, secretSetupFor } from "@tinycloud/operations/secret-request";
 
 afterEach(() => {
@@ -52,6 +52,22 @@ describe("wrapError", () => {
     expect(cliErrorFromService(deliberate)).toBe(deliberate);
   });
 
+  test("a node 401 that names a revoked grant is GRANT_REVOKED (exit 5, the same as `tc replica`) and drops the node text; other 401s are unchanged", () => {
+    for (const body of ["delegation-revoked: bafkr4icid", "delegation-ancestor-revoked: ancestor=bafkr4icid invoked=bafkr4icid"]) {
+      const error = cliErrorFromService({
+        code: "KV_ERROR", message: `Failed to list keys: 401 - ${body}`, meta: { status: 401 },
+      });
+      expect(error).toMatchObject({ code: "GRANT_REVOKED", exitCode: 5, status: 401 });
+      expect(error.exitCode).toBe(GRANT_REVOKED_EXIT_CODE);
+      expect(error.message).toMatch(/^This grant was revoked\. Ask the owner for a new grant \(`\w+ auth request \.\.\.`\)\.$/);
+      expect(error.message).not.toContain("bafkr4icid");
+    }
+    expect(cliErrorFromService({ code: "KV_ERROR", message: "Failed to list keys: 401 - expired", meta: { status: 401 } }))
+      .toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });
+    expect(cliErrorFromService({ code: "KV_ERROR", message: "403 - delegation-revoked", meta: { status: 403 } }))
+      .toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+  });
+
   test("an operation's typed auth decision without an HTTP status keeps its exit code; a status still decides", () => {
     expect(cliErrorFromService({ code: "AUTH_REQUIRED", message: "The stored session has expired." }))
       .toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });
@@ -61,6 +77,37 @@ describe("wrapError", () => {
       .toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
     expect(cliErrorFromService({ code: "NODE_ERROR", message: "The node failed." }))
       .toMatchObject({ code: "NODE_ERROR", exitCode: 1 });
+  });
+
+  test.each(["no-saved-settings", "http", "timeout"] as const)(
+    "projects unavailable settings to one safe CLI code without exposing %s detail",
+    (reason) => {
+      const detail = "TEST_PRIVATE_DETAIL_\u001b[2J";
+      const error = cliErrorFromService({
+        code: "registry_unavailable",
+        message: detail,
+        meta: { reason, subject: "did:key:TEST_PRIVATE_OWNER", hint: detail },
+      });
+      expect(error).toMatchObject({ code: "REGISTRY_UNAVAILABLE", exitCode: 1 });
+      expect(error.message).not.toContain(detail);
+      expect(error.message).not.toContain("did:key:");
+      expect(error.metadata).toBeUndefined();
+      expect(wrapError(Object.assign(new Error(detail), {
+        code: "registry_unavailable", meta: { reason },
+      }))).toMatchObject({ code: "REGISTRY_UNAVAILABLE", exitCode: 1 });
+    },
+  );
+
+  test("HTTP auth refusals still outrank a settings-unavailable-looking code", () => {
+    for (const [status, code, exitCode] of [[401, "AUTH_REQUIRED", 3], [403, "PERMISSION_DENIED", 5]] as const) {
+      expect(cliErrorFromService({
+        code: "registry_unavailable",
+        message: "TEST_AUTH_REFUSAL",
+        meta: { status, reason: "no-saved-settings" },
+      })).toMatchObject({ code, exitCode, status });
+    }
+    expect(cliErrorFromService({ code: "KEY_NOT_FOUND", message: "TEST_MISSING" })).toMatchObject({ code: "KEY_NOT_FOUND", exitCode: 1 });
+    expect(cliErrorFromService({ code: "STORAGE_ERROR", message: "TEST_STORAGE_FAILURE" })).toMatchObject({ code: "STORAGE_ERROR", exitCode: 1 });
   });
 
   test("preserves the shipped not-found, permission, and network exit mappings", () => {
@@ -280,7 +327,7 @@ describe("handleError authorization output", () => {
 });
 
 describe("storage full", () => {
-  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/billing";
+  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/storage";
   // Node 402 as the SDK reports it: per-space numbers (limit 0) plus the account's.
   const fullSpace = {
     code: "STORAGE_QUOTA_EXCEEDED",
@@ -503,4 +550,86 @@ describe("error.setup, error.recovery and error.progress", () => {
       });
     }
   }, SPAWN_TEST_TIMEOUT_MS);
+});
+
+describe("node retry signals (TC-1413)", () => {
+  function render(error: unknown): { exitCode: number | undefined; error: Record<string, unknown> } {
+    const stderr = process.stderr as unknown as { write: (chunk: unknown) => boolean };
+    const originalWrite = stderr.write;
+    const originalExit = process.exit;
+    let output = "";
+    let exitCode: number | undefined;
+    stderr.write = (chunk: unknown) => {
+      output += String(chunk);
+      return true;
+    };
+    process.exit = ((code?: number): never => {
+      exitCode = code;
+      throw new Error("expected process exit");
+    }) as typeof process.exit;
+    try {
+      expect(() => handleError(error)).toThrow("expected process exit");
+    } finally {
+      stderr.write = originalWrite;
+      process.exit = originalExit;
+    }
+    return { exitCode, error: JSON.parse(output).error };
+  }
+
+  const busy = {
+    code: "NODE_BUSY",
+    message: "SQL query failed: 503 - sql_busy: lock_wait: the database is busy; retry the request",
+    service: "sql",
+    meta: { status: 503, stage: "lock_wait", retryable: true, retryAfterMs: 5000 },
+  };
+
+  test("a busy node says when to try again and exits 7", () => {
+    const { exitCode, error } = render(busy);
+    expect(exitCode).toBe(7);
+    expect(error).toEqual({ code: "NODE_BUSY", message: "The node is busy, try again in 5 s." });
+  });
+
+  test("a request timeout says nothing was applied", () => {
+    const { exitCode, error } = render({
+      code: "REQUEST_TIMEOUT",
+      message: "raw",
+      meta: { status: 503, retryable: true, retryAfterMs: 1000 },
+    });
+    expect(exitCode).toBe(7);
+    expect(error).toEqual({
+      code: "REQUEST_TIMEOUT",
+      message: "The node timed out before applying anything, try again in 1 s.",
+    });
+  });
+
+  test("an unknown outcome says to check before retrying", () => {
+    const { exitCode, error } = render({ code: "OUTCOME_UNKNOWN", message: "raw", meta: { status: 500, retryable: false } });
+    expect(exitCode).toBe(7);
+    expect(error.code).toBe("OUTCOME_UNKNOWN");
+    expect(error.message).toBe("Outcome unknown: the node may have applied the write. Check before retrying.");
+    expect(String(error.hint)).toContain("Read the data back");
+  });
+
+  test("without a Retry-After the message does not invent a delay, and a fraction rounds up", () => {
+    expect(cliErrorFromService({ code: "NODE_BUSY", message: "raw", meta: { status: 503 } }).message).toBe(
+      "The node is busy, try again shortly.",
+    );
+    expect(cliErrorFromService({ code: "NODE_BUSY", message: "raw", meta: { retryAfterMs: 1200 } }).message).toBe(
+      "The node is busy, try again in 2 s.",
+    );
+  });
+
+  test("maps every command's shape: service result, CLIError carrying SDK meta, wrapped cause", () => {
+    expect(cliErrorFromService(busy)).toMatchObject({ code: "NODE_BUSY", exitCode: 7 });
+    expect(wrapError(new CLIError("NODE_BUSY", "SQL failed", 1, busy.meta))).toMatchObject({
+      code: "NODE_BUSY",
+      exitCode: 7,
+      message: "The node is busy, try again in 5 s.",
+    });
+    expect(wrapError(busy)).toMatchObject({ code: "NODE_BUSY", exitCode: 7 });
+  });
+
+  test("a real transport failure keeps NETWORK_ERROR", () => {
+    expect(wrapError(new CLIError("NETWORK_ERROR", "fetch failed", 6))).toMatchObject({ code: "NETWORK_ERROR", exitCode: 6 });
+  });
 });

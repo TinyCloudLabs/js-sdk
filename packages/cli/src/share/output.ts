@@ -1,4 +1,3 @@
-import type { PublishedShare } from "@tinycloud/share-sdk";
 import type { ShareInspection, ShareReceiveResult } from "@tinycloud/share-sdk";
 
 type AuthorizationRequired = {
@@ -19,8 +18,9 @@ export function authorizationRequiredJson(result: AuthorizationRequired): Author
   };
 }
 
-export function publishHuman(result: PublishedShare): void {
-  process.stdout.write(`${result.url}\n`);
+/** Human publish output is exactly one URL. */
+export function publishHuman(url: string): void {
+  process.stdout.write(`${url}\n`);
 }
 
 export function inspectHuman(result: ShareInspection): void {

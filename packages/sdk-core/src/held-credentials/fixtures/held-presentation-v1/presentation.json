@@ -1,0 +1,68 @@
+{
+  "format": "tinycloud.held-presentation-builder-vector/v1",
+  "description": "A held presentation built by buildHeldPresentationSiwe for domain credentials.org with a hex nonce, in the case shape of OpenCredentials rust/opencredentials_witness/specs/held-presentation-v1/verifier-vectors.json. The credential and issuer set are the held-email-v1 vector. The SIWE is signed with the public Anvil account 0 key (test only). Signing is deterministic (RFC 6979), so the sdk-core test regenerates this file byte for byte.",
+  "case": {
+    "name": "ok/builder-credentials-org-hex-nonce",
+    "now_ms": 1767229200000,
+    "audience": "credentials.org",
+    "caller_account": "did:pkh:eip155:1:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "accepted_issuers": [
+      {
+        "issuerDid": "did:web:issuer.credentials.org"
+      }
+    ],
+    "did_methods": [
+      "web"
+    ],
+    "issuer_set": {
+      "format": "tinycloud.credentials-issuers/v1",
+      "issuers": [
+        {
+          "alg": "EdDSA",
+          "issuerDid": "did:web:issuer.credentials.org",
+          "kid": "did:web:issuer.credentials.org#controller",
+          "notAfter": null,
+          "notBefore": "2025-01-01T00:00:00Z",
+          "profiles": [
+            "tinycloud.email-held/v1"
+          ],
+          "publicKey": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+          "retiredAt": null,
+          "vcts": [
+            "opencredentials.email/v1"
+          ]
+        }
+      ],
+      "version": 1
+    },
+    "seeded_nonce": {
+      "audience": "credentials.org",
+      "nonce": "a1b2c3d4e5f6a7b8c9d0e1f2",
+      "account": "did:pkh:eip155:1:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    },
+    "presentation": {
+      "sdJwt": "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6aXNzdWVyLmNyZWRlbnRpYWxzLm9yZyNjb250cm9sbGVyIn0.eyJfc2QiOlsiOUZSM1NySExrSW4tc01vOUIyQ3RIZWtIRTlWdFVjQkpkZDBOdlFDYUJpNCIsIklYb1BsMDRYeEc2YnRNOUE1YzZPYkxmdHBHVmt4UXFrdGxCMl96Vnl2RW8iXSwiX3NkX2FsZyI6InNoYS0yNTYiLCJleHAiOjE3Njk4MTc2MDAsImhvbGRlckJpbmRpbmciOnsiZGlkIjoiZGlkOnBraDplaXAxNTU6MToweGYzOUZkNmU1MWFhZDg4RjZGNGNlNmFCODgyNzI3OWNmZkZiOTIyNjYiLCJzaWduaW5nRG9tYWluIjoidGlueWNsb3VkLmNyZWRlbnRpYWxzL2FjY291bnQtYmluZGluZy92MSJ9LCJpYXQiOjE3NjcyMjU2MDAsImlzcyI6ImRpZDp3ZWI6aXNzdWVyLmNyZWRlbnRpYWxzLm9yZyIsImp0aSI6InVybjp1dWlkOjVmMWM5YTJlLTdiM2QtNGU4YS05YzYxLTJkNGI4ZTdmMGExMyIsIm5iZiI6MTc2NzIyNTYwMCwicHJvZmlsZSI6InRpbnljbG91ZC5lbWFpbC1oZWxkL3YxIiwicHJvZmlsZVZlcnNpb24iOjEsInN0YXR1cyI6eyJtZXRob2QiOiJub25lIn0sInN1YiI6ImRpZDpwa2g6ZWlwMTU1OjE6MHhmMzlGZDZlNTFhYWQ4OEY2RjRjZTZhQjg4MjcyNzljZmZGYjkyMjY2IiwidmN0Ijoib3BlbmNyZWRlbnRpYWxzLmVtYWlsL3YxIn0.N-SNVObviWKHuCgoAlp5rPw_B_URBh3NbRlEzQN5RbqjygjBBo4gwhbZ-Bw7aMR9aXZs2vpkAI27Ev-nO3UsBg~WyIwMHFGc0Jjd1hFckhwWkdoZXp2RlNBIiwiZW1haWwiLCJhbGljZUBleGFtcGxlLmNvbSJd~",
+      "siwe": {
+        "message": "credentials.org wants you to sign in with your Ethereum account:\n0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\n\nPresent a TinyCloud held credential\n\nURI: https://credentials.org\nVersion: 1\nChain ID: 1\nNonce: a1b2c3d4e5f6a7b8c9d0e1f2\nIssued At: 2026-01-01T00:59:00Z\nResources:\n- urn:tinycloud:sd-hash:ckhIrRuNXcUubmv_3hOoE9KZNNXctzgGKHl0z9sPk6I",
+        "signature": "0xaac8816b9b08d1f960a5a49ada686c912eb7f88602784b689a19761b0a7bdc52058d1979edab9662afa64c9de945c8a083e82c4f1269ad692c235ee29873c1b71c"
+      }
+    },
+    "expected": {
+      "ok": true,
+      "stage": "verify",
+      "issuer": "did:web:issuer.credentials.org",
+      "subject": "did:pkh:eip155:1:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "subject_address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "credential_id": "urn:uuid:5f1c9a2e-7b3d-4e8a-9c61-2d4b8e7f0a13",
+      "profile": "tinycloud.email-held/v1",
+      "profile_version": 1,
+      "vct": "opencredentials.email/v1",
+      "claims": {
+        "email": "alice@example.com"
+      },
+      "normalised_email": "alice@example.com",
+      "issued_at": 1767225600,
+      "expires_at": 1769817600
+    }
+  }
+}

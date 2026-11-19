@@ -22,7 +22,7 @@ function options(overrides: Partial<AddressedSharePublishOptions>): AddressedSha
     spaceId: "tinycloud:test-space", target: { kind: "emailDomain", domain: "tinycloud.xyz" },
     resource: { kind: "exact", path: "shares/emaildomainpublish0001/readme.md" },
     actions: ["read"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
-    contentSource: { shareId: "emaildomainpublish0001", kvResource: "tinycloud:test-space/kv/shares/emaildomainpublish0001/readme.md", selector: "exact", encryptionNetwork: "urn:tinycloud:encryption:did:key:z:default", encryptedSymmetricKeyDigestHex: "1".repeat(64), keyVersion: 1, mode: "immutable", initialCiphertextDigestHex: "2".repeat(64) },
+    contentSource: { shareId: "emaildomainpublish0001", kvResource: "tinycloud:test-space/kv/shares/emaildomainpublish0001/readme.md", selector: "exact", encryptionNetwork: "urn:tinycloud:encryption:did:key:z:default", encryptionKeyPath: "share/emaildomainpublish0001", encryptedSymmetricKeyDigestHex: "1".repeat(64), keyVersion: 1, mode: "immutable", initialCiphertextDigestHex: "2".repeat(64) },
     credentialRequirement: commitmentFor("tinycloud.xyz"),
     filename: "readme.md", mediaType: "text/markdown", byteLength: 8, expiresAt: new Date("2030-01-01T00:00:00.000Z"),
     authority: { ownerDid: "did:key:z6MkOwner", createOwnerRoot: refuse, sign: refuse, registerPolicy: refuse },

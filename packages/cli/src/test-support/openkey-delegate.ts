@@ -9,7 +9,7 @@ export type OpenKeyCallback = {
 
 export type OpenKeyDelegate = (
   did: string,
-  options?: { permissions?: PermissionEntry[] },
+  options?: { permissions?: PermissionEntry[]; expiry?: string | number },
 ) => Promise<OpenKeyCallback>;
 
 const RAW_NETWORK = /^urn:tinycloud:encryption:did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40}):([^:]*)$/;
@@ -41,7 +41,10 @@ export function openKeyDelegate(params: {
 }): { delegate: OpenKeyDelegate; requests: PermissionEntry[][]; refusals: Array<{ code: "invalid_permissions"; message: string }> } {
   const requests: PermissionEntry[][] = [];
   const refusals: Array<{ code: "invalid_permissions"; message: string }> = [];
-  const delegate: OpenKeyDelegate = async (_did, { permissions = [] } = {}) => {
+  const delegate: OpenKeyDelegate = async (_did, { permissions = [], expiry } = {}) => {
+    // OpenKey's `/delegate?expiry=` takes `<seconds>s`; without it the session lasts an hour here.
+    const requestedSeconds = expiry === undefined ? undefined : /^(\d+)s$/.exec(String(expiry))?.[1];
+    const lifetimeSeconds = requestedSeconds === undefined ? 3600 : Number(requestedSeconds);
     requests.push(permissions);
     const refuse = (message: string): never => {
       refusals.push({ code: "invalid_permissions", message });
@@ -102,7 +105,7 @@ export function openKeyDelegate(params: {
       ...(Object.keys(rawAbilities).length > 0 ? { rawAbilities } : {}),
       address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId, jwk: params.sessionKey,
       issuedAt: new Date(now - 60_000).toISOString(),
-      expirationTime: new Date(now + 3600_000).toISOString(),
+      expirationTime: new Date(now + lifetimeSeconds * 1000).toISOString(),
     });
     const signature = await params.signer.signMessage(prepared.siwe);
     return {

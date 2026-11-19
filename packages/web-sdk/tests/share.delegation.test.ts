@@ -84,7 +84,7 @@ function fixture() {
     return new Response(JSON.stringify({ cid: "imported" }), { status: 200 });
   }) as typeof fetch;
   const receivedAs = (holderDid: string, key: Uint8Array, options: Partial<ShareReceiveOptions> = {}) => new ReceivedShareImpl(
-    { kind: "receiver", holderDid, custody: "session", origin: "https://share.example" },
+    { kind: "receiver", holderDid, custody: "persistent", origin: "https://share.example" },
     { shareId: "share-531" } as never,
     envelope,
     { claims: { email: "reader@example.com" } } as never,

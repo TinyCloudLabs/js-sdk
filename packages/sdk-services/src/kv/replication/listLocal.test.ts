@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decodeTcr1, encodeTcr1, listPathCovered, localList, utf8Compare } from "./listLocal";
+import type { LocalReadMeta } from "./types";
 
 const allKeys = ["notes", "notes/a", "notes/b", "notes-x"];
 const meta = { asOf: new Date(1_000_000).toISOString(), coverage: "complete" as const, authority: "valid" as const, syncedThroughEpoch: 0 };
@@ -20,7 +21,7 @@ describe("local list parity", () => {
     expect(page.keys).toEqual([...allKeys].sort(utf8Compare));
   });
   test("exact key and children advance strictly through tcr1 pages", async () => {
-    const validateMeta = (value: typeof meta) => { if (value.coverage !== "complete" || value.authority !== "valid") throw new Error("ineligible local read"); };
+    const validateMeta = (value: LocalReadMeta) => { if (value.coverage !== "complete" || value.authority !== "valid") throw new Error("ineligible local read"); };
     const first = await localList(handle, "space", "notes", 1, undefined, validateMeta);
     expect(first.keys).toEqual(["notes"]);
     expect(first.truncated).toBe(true);
@@ -55,7 +56,7 @@ describe("local list parity", () => {
         };
       },
     };
-    const validateMeta = (value: typeof meta) => {
+    const validateMeta = (value: LocalReadMeta) => {
       if (value.coverage !== "complete" || value.authority !== "valid") throw Object.assign(new Error("ineligible local read"), { code: "COVERAGE_INCOMPLETE" });
     };
     await expect(localList(changing, "space", "notes", undefined, undefined, validateMeta)).rejects.toMatchObject({ code: "COVERAGE_INCOMPLETE" });

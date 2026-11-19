@@ -1,9 +1,11 @@
+import { peerReadError, partialReadText, type PeerReadError } from './thread.js';
+import { defer } from './defer.js';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
-import { errInfo } from './errors.js';
+import { CourierError } from './errors.js';
 import { k, PREFIX } from './keys.js';
 import type { StoredPeer } from './profile.js';
 import { COUNTERPARTY_NOTICE, isRecord, messageView, oneLine } from './a2a.js';
-import { getJson, listAll, putCreate, putMatch } from './store.js';
+import { getJson, getJsonMany, listAll, putCreate, putMatch } from './store.js';
 import { cmd } from './program.js';
 
 export type KV = ReturnType<TinyCloudNode['kvForSpace']>;
@@ -40,6 +42,7 @@ export interface InboundCollection {
 }
 
 const MSG_KEY = /\/threads\/([^/]+)\/msg\/([^/]+)\.json$/;
+const SAFE_ID = /^[0-9A-Za-z_-]{1,64}$/;
 
 export function selectUndelivered(msgKeys: string[], receipts: Receipts): { key: string; threadId: string; messageId: string }[] {
   const selected: { key: string; threadId: string; messageId: string }[] = [];
@@ -66,37 +69,48 @@ export async function collectInbound(input: {
     if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
     try {
       const peerKv = await input.kvFor(peer);
-      const keys = await listAll(peerKv, `${PREFIX}/to/${peer.theirHandleForMe}/threads/`);
+      const keys = await listAll(peerKv, peer.sessionId ? `${k.threadRoot(peer.theirHandleForMe, peer.sessionId)}/` : `${PREFIX}/to/${peer.theirHandleForMe}/threads/`);
       const receipts = (await getJson<Receipts>(input.selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
       receipts.threads ??= {};
       const deliveries: PendingDelivery[] = [];
-      for (const selected of selectUndelivered(keys, receipts)) {
-        const result = await getJson<unknown>(peerKv, selected.key);
+      // Ids come from the peer's key names. An unsafe one is never fetched, listed or receipted, and is reported
+      // escaped, so no control or bidi character from a peer reaches the text or `--json` output.
+      const selected = selectUndelivered(keys, receipts).filter(item => {
+        if (SAFE_ID.test(item.threadId) && SAFE_ID.test(item.messageId)) return true;
+        errors.push({ peer: peer.handle, code: 'bad-message', message: `message ${oneLine(item.messageId, 80)} in thread ${oneLine(item.threadId, 80)}: ignored, unsafe id` });
+        return false;
+      });
+      const fetched = await getJsonMany<unknown>(peerKv, selected.map(item => item.key));
+      for (const item of selected.filter(item => fetched.tooLarge.includes(item.key))) {
+        errors.push({ peer: peer.handle, code: 'message-too-large', message: `message ${oneLine(item.messageId, 80)} in thread ${oneLine(item.threadId, 80)}: too large to read` });
+      }
+      for (const item of selected) {
+        const result = fetched.values.get(item.key);
         if (!result) continue;
         const value = result.value;
-        if (!isRecord(value) || value.messageId !== selected.messageId || value.contextId !== selected.threadId) continue;
+        if (!isRecord(value) || value.messageId !== item.messageId || value.contextId !== item.threadId) continue;
         const view = messageView(value);
         if (view.invalid.length) {
           errors.push({
             peer: peer.handle,
             code: 'bad-message',
-            message: `message ${selected.messageId} in thread ${selected.threadId}: ignored malformed ${view.invalid.join(', ')}`,
+            message: `message ${oneLine(item.messageId, 80)} in thread ${oneLine(item.threadId, 80)}: ignored malformed ${view.invalid.join(', ')}`,
           });
         }
         items.push({
           peer: peer.handle,
-          threadId: selected.threadId,
-          messageId: selected.messageId,
+          threadId: item.threadId,
+          messageId: item.messageId,
           from: view.from,
           intent: view.intent,
           asks: view.asks,
           text: view.text,
         });
-        deliveries.push({ threadId: selected.threadId, messageId: selected.messageId });
+        deliveries.push({ threadId: item.threadId, messageId: item.messageId });
       }
       if (deliveries.length) pending.set(peer.handle, deliveries);
     } catch (error) {
-      errors.push({ peer: peer.handle, ...errInfo(error) });
+      errors.push(peerReadError(peer.handle));
     }
   }
   return { items, errors, pending };
@@ -122,16 +136,17 @@ export async function commitReceipts(selfKv: KV, pending: Map<string, PendingDel
         else await putCreate(selfKv, key, receipts);
         break;
       } catch (error) {
-        const conflict = /conflict|412|precondition/i.test(`${errInfo(error).code ?? ''} ${errInfo(error).message}`);
+        const conflict = error instanceof CourierError && error.code === 'conflict';
         if (conflict && attempt < 2) continue;
-        console.error(`warning: could not advance receipts for ${peer}: ${errInfo(error).message}`);
+        console.error(`Warning: Couldn't update delivery receipts for ${oneLine(peer, 80)}. Messages you've already read may show up again.`);
         break;
       }
     }
   }
 }
 
-export function renderInboxText(items: readonly InboundItem[]): string {
+export function renderInboxText(items: readonly InboundItem[], errors: readonly PeerReadError[] = []): string {
+  if (!items.length && errors.length) return partialReadText('Inbox', errors);
   if (!items.length) return 'Inbox empty.\n';
   const lines = [COUNTERPARTY_NOTICE, ''];
   for (const item of items) {
@@ -143,11 +158,11 @@ export function renderInboxText(items: readonly InboundItem[]): string {
     lines.push(`   ${oneLine(item.text.split('\n')[0] ?? '')}`);
   }
   lines.push('', `Read a thread: ${cmd('read <threadId>')}. Orders: ${cmd('orders <peer>')}.`, '');
-  return lines.join('\n');
+  return lines.join('\n') + partialReadText('Inbox', errors);
 }
 
 export function writeOut(value: string): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const { promise, resolve, reject } = defer<void>();
   process.stdout.write(value, (error) => error ? reject(error) : resolve());
   return promise;
 }

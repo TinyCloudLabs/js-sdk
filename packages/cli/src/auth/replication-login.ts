@@ -5,7 +5,7 @@ import { ExitCode } from "../config/constants.js";
 import { ownerLoginPermissions } from "./owner-key.js";
 import { ownerSpaceId, sameLoginSpace } from "./scoped-login.js";
 export interface ReplicationLoginOptions {
-  prefixes: readonly string[];
+  prefixes: string[];
   allowSecrets?: boolean;
   ownerDid?: string;
   ownerOpenKey?: boolean;

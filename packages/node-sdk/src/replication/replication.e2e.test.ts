@@ -1,7 +1,7 @@
 import { createPrivateKey, sign as signEd25519 } from "node:crypto";
 import { ucanCid } from "@tinycloud/replica";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { ServiceContext } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, ServiceContext, pkhDid } from "@tinycloud/sdk-core";
 import {
   type KVReadThrough,
   type KVReplicaHandle,
@@ -17,14 +17,16 @@ import { ReplicationRuntime } from "./runtime";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import "./node-loader";
+import { getNodeReplicationLoaders } from "./module-registry";
 import { TinyCloudNode } from "../TinyCloudNode";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, rmdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSqliteReplicaStorage } from "./sqlite";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../test-support/unregistered-location-registry";
 
 const address = "0x0000000000000000000000000000000000000001";
 const space = `tinycloud:pkh:eip155:1:${address}:default`;
@@ -36,6 +38,18 @@ const identity = canonicalReplicationIdentity({
 const now = 1_700_000_000_000;
 const REAL_NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const expiringAt = now + 240_000;
+function profileGuard(dir: string): <T>(section: () => Promise<T>) => Promise<T> {
+  const lock = join(dir, ".replica-test-profile-lock");
+  return async (section) => {
+    await mkdir(lock);
+    try {
+      return await section();
+    } finally {
+      await rmdir(lock);
+    }
+  };
+}
+
 const session = {
   delegationHeader: { Authorization: "Bearer session" },
   delegationCid: "bafy-session",
@@ -50,7 +64,10 @@ const scheduler: ReplicationScheduler = {
 
 const RESTORE_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
 
-async function replicationRestorableSession() {
+async function replicationRestorableSession(
+  kvAbilities: Record<string, string[]> = { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+  includeDecryption = false,
+) {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(RESTORE_PRIVATE_KEY);
   const manager = wasm.createSessionManager();
@@ -62,7 +79,12 @@ async function replicationRestorableSession() {
   const expiresAt = new Date(now.getTime() + 4 * 60_000);
   const verificationMethod = manager.getDID("default");
   const prepared = wasm.prepareSession({
-    abilities: { kv: { "notes/": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    abilities: { kv: kvAbilities },
+    ...(includeDecryption ? {
+      rawAbilities: {
+        [`urn:tinycloud:encryption:${pkhDid(address, chainId)}:default`]: ["tinycloud.encryption/decrypt"],
+      },
+    } : {}),
     address,
     chainId,
     domain: "replication.test",
@@ -98,6 +120,7 @@ function harness(options: {
   sessionGrant?: ReplicationAuthority["sessionGrant"];
   plan?: ReplicationAuthority["plan"];
   mint?: ReplicationAuthority["mint"];
+  ownerAnchor?: boolean;
   scheduler?: ReplicationScheduler;
 } = {}) {
   const pendingByIdentity = new Map<string, PendingWriteStore>();
@@ -164,6 +187,7 @@ function harness(options: {
     },
   };
   const authority: ReplicationAuthority = {
+    consentAnchor: () => options.ownerAnchor ? { at: now, source: "siwe" } : null,
     sessionGrant: options.sessionGrant ?? (() => ({ refused: "NOT_COVERED" })),
     plan: options.plan ?? (() => ({ refused: "NOT_COVERED" })),
     async mint(deviceDid, prefix, signal) {
@@ -241,6 +265,7 @@ describe("node replication integration", () => {
 
   test("partial authority opens only covered prefixes and preserves pending state on re-sign-in", async () => {
     const env = harness({
+      ownerAnchor: true,
       prefixes: ["notes/", "photos/"],
       sessionGrant: (prefix) => prefix === "notes/"
         ? { ucan: "session-grant", device: { did: "did:key:zSession", jwk: {} } }
@@ -290,6 +315,7 @@ describe("node replication integration", () => {
 
   test("unconstrained installed grants survive an offline mint failure near expiry", async () => {
     const env = harness({
+      ownerAnchor: true,
       initialGrant: () => ({ cid: "bafy-installed", parentCid: "bafy-old-parent", expiresAt: expiringAt, state: "active", unconstrained: true }),
       plan: () => ({ path: "runtime", parentCid: "bafy-parent", expiresAt: expiringAt }),
       mint: async () => { throw new Error("offline"); },
@@ -318,10 +344,21 @@ describe("node replication integration", () => {
   });
   test("ten TinyCloudNode restores near the four-minute grant boundary issue zero POST /delegate calls", async () => {
     const { proof } = await replicationRestorableSession();
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-restored-owner-"));
+    const gate = await getNodeReplicationLoaders().gate();
+    const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
+    const lifecycle = createSqliteReplicaStorage({
+      dir: join(profileDir, "replicas"),
+      guard: profileGuard(profileDir),
+    }).lifecycle;
     const originalFetch = globalThis.fetch;
     let delegatePosts = 0;
     let opened = 0;
-    const expiresAt = Date.now() + 240_000;
+    const expiresAt = Date.parse(proof.expiresAt);
+    const installedAt = Date.now() - 10_000;
+    const consentDeadline = Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!) + 7 * 24 * 60 * 60_000;
     const parentCid = proof.delegationCid;
     const host = "https://replication.restore.test";
     globalThis.fetch = async (input, init) => {
@@ -336,6 +373,9 @@ describe("node replication integration", () => {
         const grant = {
           cid: `bafy-installed-${index}`,
           parentCid,
+          installedAt,
+          effectiveExpiresAt: expiresAt,
+          consentDeadline,
           expiresAt,
           state: "active" as const,
           unconstrained: true,
@@ -352,6 +392,7 @@ describe("node replication integration", () => {
         };
         const storage: KVReplicaStorage = {
           kind: "sqlite",
+          lifecycle,
           async open(spec) {
             opened++;
             const handle: KVReplicaHandle = {
@@ -380,9 +421,9 @@ describe("node replication integration", () => {
           host,
           autoBootstrapAccount: false,
           wasmBindings: new NodeWasmBindings(),
-          replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+          replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground", profileDir },
         });
-        await node.restoreSession({ ...proof, tinycloudHosts: [host] });
+        await node.restoreSession({ ...proof, replicaStamp, tinycloudHosts: [host] });
         const control = node.replication;
         if (!control) throw new Error("replication control missing after restore");
         await control.sync();
@@ -393,37 +434,104 @@ describe("node replication integration", () => {
       expect(delegatePosts).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  });
+  test("replica hydration does not authorize cold network reads writes or grant activation", async () => {
+    const { proof } = await replicationRestorableSession({
+      "": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/sync"],
+    }, true);
+    const profileDir = await mkdtemp(join(tmpdir(), "tc2481-cold-replica-"));
+    const gate = await getNodeReplicationLoaders().gate();
+    const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(proof.address, proof.chainId), {
+      siweIssuedAt: Date.parse(proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
+    const host = "https://cold-replica.storage.test";
+    const registry = "https://cold-replica.registry.test";
+    const node = new TinyCloudNode({
+      host,
+      tinycloudRegistryUrl: registry,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      wasmBindings: new NodeWasmBindings(),
+      replication: { enabled: true, prefixes: ["notes/"], storage: harness().storage, mode: "foreground", profileDir },
+    });
+    const originalFetch = globalThis.fetch;
+    const attempts: Array<{ origin: string; pathname: string; method: string }> = [];
+    let dataCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+      attempts.push({ origin: url.origin, pathname: url.pathname, method });
+      if (url.origin === registry) return new Response("unavailable", { status: 503 });
+      if (url.origin === host && url.pathname === "/info" && method === "GET") {
+        return new Response("offline", { status: 500 });
+      }
+      dataCalls++;
+      throw new Error("Cold network data must not be attempted");
+    }) as typeof fetch;
+    try {
+      await node.restoreSession({ ...proof, replicaStamp, tinycloudHosts: [host] });
+      expect(node.restorableSession?.delegationCid).toBe(proof.delegationCid);
+      expect(attempts.filter(({ origin }) => origin === registry)).toEqual([]);
+      const write = await node.kv.put("outside/value", "TEST");
+      expect(write.ok).toBe(false);
+      if (!write.ok) expect(write.error.code).toBe("registry_unavailable");
+      const secret = await node.secretsForSpace(proof.spaceId).get("TC2481_COLD_READ");
+      expect(secret.ok).toBe(false);
+      if (!secret.ok) expect(secret.error.code).toBe("registry_unavailable");
+      const delegate = new NodeWasmBindings().createSessionManager().getDID("default").split("#")[0]!;
+      await expect(node.delegateTo(delegate, [{
+        service: "tinycloud.kv", space: proof.spaceId, path: "outside/", actions: ["tinycloud.kv/get"],
+      }], { expiry: 60_000 })).rejects.toMatchObject({ code: "registry_unavailable" });
+      expect(attempts.some(({ origin }) => origin === registry)).toBe(true);
+      expect(dataCalls).toBe(0);
+    } finally {
+      await node.replication?.close();
+      globalThis.fetch = originalFetch;
+      await rm(profileDir, { recursive: true, force: true });
     }
   });
   test("two hosts sharing one storage directory keep separate replica partitions", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tc858-replication-e2e-"));
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-replication-e2e-"));
+    const root = join(profileDir, "replicas");
     const storage = createSqliteReplicaStorage({
-      dir,
+      dir: root,
+      guard: profileGuard(profileDir),
       createDevice: async () => ({ did: "did:key:replica-e2e", jwk: {} }),
     });
-    const first = await storage.open({
-      identity: canonicalReplicationIdentity({ ...identity, host: "https://one.example" }),
+    const anchor = { source: "siwe" as const, at: Date.now() };
+    const stamp = await storage.lifecycle!.establishSessionStamp(identity.principal, { consentAnchor: anchor });
+    const open = (host: string) => storage.open({
+      identity: canonicalReplicationIdentity({ ...identity, host }),
       space,
       prefix: "notes/",
       allowSecrets: false,
+      stamp,
+      grantPolicy: { grantTtlMs: 60_000, consentAnchor: anchor },
     });
-    const second = await storage.open({
-      identity: canonicalReplicationIdentity({ ...identity, host: "https://two.example" }),
-      space,
-      prefix: "notes/",
-      allowSecrets: false,
-    });
+    const first = await open("https://one.example");
+    const second = await open("https://two.example");
     try {
       expect(first.spec.identity.host).toBe("https://one.example");
       expect(second.spec.identity.host).toBe("https://two.example");
-      expect(await readdir(dir)).toHaveLength(2);
+      expect(await readdir(root)).toHaveLength(2);
     } finally {
       await Promise.all([first.close(), second.close()]);
-      await rm(dir, { recursive: true, force: true });
+      await rm(profileDir, { recursive: true, force: true });
     }
   });
   test("signed graph retirement unbinds before metadata-light compact delegate activation", async () => {
     const signed = await replicationRestorableSession();
+    const profileDir = await mkdtemp(join(tmpdir(), "tc858-restored-compact-"));
+    const gate = await getNodeReplicationLoaders().gate();
+    const replicaStamp = await gate.establishSessionStamp(profileDir, pkhDid(signed.address, signed.chainId), {
+      siweIssuedAt: Date.parse(signed.proof.siwe.match(/^Issued At: (.+)$/m)![1]!),
+    });
+    const lifecycle = createSqliteReplicaStorage({
+      dir: join(profileDir, "replicas"),
+      guard: profileGuard(profileDir),
+    }).lifecycle;
     const wasm = new NodeWasmBindings();
     const delegateManager = wasm.createSessionManager();
     const delegateKeyId = delegateManager.createSessionKey("delegate-session");
@@ -452,6 +560,7 @@ describe("node replication integration", () => {
     let persistedStatus: LocalReplicaStatus | undefined;
     const storage: KVReplicaStorage = {
       kind: "sqlite",
+      lifecycle,
       async open(spec) {
         const state: LocalReplicaStatus = {
           coverage: "complete",
@@ -491,21 +600,24 @@ describe("node replication integration", () => {
     };
     const node = new TinyCloudNode({
       host: "https://signed-restore.example",
+      tinycloudRegistryUrl: "https://registry.test",
       autoBootstrapAccount: false,
       wasmBindings: wasm,
-      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground", profileDir },
     });
     const originalFetch = globalThis.fetch;
     try {
-      globalThis.fetch = async (input) => new Response(JSON.stringify(
-        String(input).endsWith("/info")
-          ? { protocol: wasm.protocolVersion(), version: "test", features: ["kv-sync-v1"] }
-          : { activated: [space, delegateSpace], skipped: [] },
-      ), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-      await node.restoreSession({ ...signed.proof, tinycloudHosts: ["https://signed-restore.example"] });
+      globalThis.fetch = async (input) => {
+        if (new URL(String(input)).origin === "https://registry.test") {
+          return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+        }
+        return Response.json(
+          String(input).endsWith("/info")
+            ? { protocol: wasm.protocolVersion(), version: "test", features: ["kv-sync-v1"] }
+            : { activated: [space, delegateSpace], skipped: [] },
+        );
+      };
+      await node.restoreSession({ ...signed.proof, replicaStamp, tinycloudHosts: ["https://signed-restore.example"] });
       await node.replication!.sync();
       expect(opened).toHaveLength(1);
       await node.restoreSession({
@@ -515,22 +627,16 @@ describe("node replication integration", () => {
         jwk: delegateJwk,
         verificationMethod: delegateVerificationMethod,
         tinycloudHosts: ["https://signed-restore.example"],
+        replicaStamp,
       });
-      expect(closed).toEqual(["https://signed-restore.example"]);
-      expect(await node.replication!.status()).toMatchObject([{ prefix: "notes/", state: "ready" }]);
       expect(opened).toHaveLength(1);
-      expect(closed).toEqual(["https://signed-restore.example"]);
-      await node.replication!.sync();
-      expect(opened).toHaveLength(2);
-      expect(opened[1]!.spec.identity).toMatchObject({
-        host: "https://signed-restore.example",
-        space: delegateSpace.toLowerCase(),
-        principal: `did:pkh:eip155:${signed.chainId}:${signed.address.toLowerCase()}`,
-      });
       expect((await node.replication!.status()).map((entry) => entry.prefix)).toEqual(["notes/"]);
+      expect(closed).toEqual(["https://signed-restore.example"]);
+      expect(opened).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
       await node.replication?.close();
+      await rm(profileDir, { recursive: true, force: true });
     }
   });
 });
@@ -538,6 +644,17 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
   let dataDir: string;
   let host: string;
   let child: ChildProcess | undefined;
+  let registry: UnregisteredLocationRegistry;
+  async function guardedProfile(name: string) {
+    const profileDir = await mkdtemp(join(tmpdir(), name));
+    const guard = profileGuard(profileDir);
+    return {
+      profileDir,
+      guard,
+      storage: createSqliteReplicaStorage({ dir: join(profileDir, "replicas"), guard }),
+    };
+  }
+
 
   async function startNode(): Promise<void> {
     const server = createServer();
@@ -593,20 +710,22 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
 
   beforeAll(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "tc858-real-node-"));
+    registry = startUnregisteredLocationRegistry();
     await startNode();
   }, 60_000);
 
   afterAll(async () => {
     await stopNode();
     await rm(dataDir, { recursive: true, force: true });
+    registry?.stop(true);
   });
 
   test("default SQLite owner grants sync, scoped writes are read-your-writes, and offline reads fail closed", async () => {
-    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-real-replica-"));
+    const profile = await guardedProfile("tc858-real-replica-");
     const events: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
-    const storage = createSqliteReplicaStorage({ dir: replicaDir });
     const node = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -616,16 +735,16 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       replication: {
         enabled: true,
         prefixes: ["notes/"],
-        storage,
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
         mode: "foreground",
         onEvent: (event) => events.push(event),
       },
     });
     try {
       await node.signIn();
-      // The pinned SQLite node (d7f511f) predates TC-899: a write overlapping the
-      // background registry writes can fail with 517. Let the registry settle.
-      await node.waitForAccountRegistrySync();
+      expect(node.replicaStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
       const primarySpace = node.restorableSession!.spaceId;
       expect((await node.kv.put("notes/seed", "seed-v0")).ok).toBe(true);
       await node.replication!.sync();
@@ -654,7 +773,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await node.replication!.sync();
 
       const restoredSession = node.restorableSession!;
-      await node.restoreSession({ ...restoredSession, tinycloudHosts: [host] });
+      await node.restoreSession({ ...restoredSession, replicaStamp: node.replicaStamp, tinycloudHosts: [host] });
       const restoredSpaceKv = node.space(primarySpace).kv;
       expect((await restoredSpaceKv.put("notes/restored-ryw", "restored-v1")).ok).toBe(true);
       expect((await node.kv.get("notes/restored-ryw")).data?.data).toBe("restored-v1");
@@ -669,14 +788,15 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       expect(uncovered.ok ? undefined : uncovered.error.code).toBe("NETWORK_ERROR");
     } finally {
       await node.replication?.close();
-      await rm(replicaDir, { recursive: true, force: true });
+      await rm(profile.profileDir, { recursive: true, force: true });
     }
   }, 120_000);
   test("folder replica serves descendants locally and falls back for its ancestor LIST", async () => {
-    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-folder-prefix-"));
+    const profile = await guardedProfile("tc858-folder-prefix-");
     const events: ReplicationEvent[] = [];
     const node = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
@@ -686,14 +806,16 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       replication: {
         enabled: true,
         prefixes: ["notes/"],
-        storage: createSqliteReplicaStorage({ dir: replicaDir }),
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
         mode: "foreground",
         onEvent: (event) => events.push(event),
       },
     });
     try {
       await node.signIn();
-      await node.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node; see above.
+      expect(node.replicaStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
       const write = await node.kv.put("notes/a", "descendant");
       expect(write.ok, JSON.stringify(write.ok ? undefined : write.error)).toBe(true);
       await node.replication!.sync();
@@ -719,24 +841,28 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       )).toBe(true);
     } finally {
       await node.replication?.close();
-      await rm(replicaDir, { recursive: true, force: true });
+      await rm(profile.profileDir, { recursive: true, force: true });
     }
   }, 120_000);
-  test("compact delegates stay inside their signed scope across shared replica partitions", async () => {
-    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-delegate-scope-"));
-    const storage = createSqliteReplicaStorage({ dir: replicaDir });
-    const config = (key: string, prefixes: string[]) => new TinyCloudNode({
+  test("compact delegates stay inside their signed scope across isolated owner profiles", async () => {
+    const ownerProfile = await guardedProfile("tc858-delegate-owner-");
+    const otherProfile = await guardedProfile("tc858-delegate-other-");
+    const config = (key: string, prefixes: string[], profile: Awaited<ReturnType<typeof guardedProfile>>) => new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(key),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
-      replication: { enabled: true, prefixes, storage, mode: "foreground" },
+      replication: {
+        enabled: true, prefixes, storage: profile.storage, profileDir: profile.profileDir,
+        profileGuard: profile.guard, mode: "foreground",
+      },
     });
-    const owner = config(RESTORE_PRIVATE_KEY, ["notes/"]);
-    const otherOwner = config("6cbed15c177e29b05bd3d60c4e1dd63e172b4b3b0b34f5a38e7f92e2c79ef801", ["notes/"]);
+    const owner = config(RESTORE_PRIVATE_KEY, ["notes/"], ownerProfile);
+    const otherOwner = config("6cbed15c177e29b05bd3d60c4e1dd63e172b4b3b0b34f5a38e7f92e2c79ef801", ["notes/"], otherProfile);
     const wasm = new NodeWasmBindings();
     const manager = wasm.createSessionManager();
     const keyId = manager.createSessionKey("scope-limited");
@@ -753,38 +879,47 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       jwk: object;
       verificationMethod: string;
       tinycloudHosts: string[];
+      replicaStamp: NonNullable<TinyCloudNode["replicaStamp"]>;
     };
     const delegateEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
     const delegate = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       enablePublicSpace: false,
       replication: {
         enabled: true,
         prefixes: ["notes/"],
-        storage,
+        storage: ownerProfile.storage,
+        profileDir: ownerProfile.profileDir,
+        profileGuard: ownerProfile.guard,
         mode: "foreground",
         onEvent: (event) => delegateEvents.push(event),
       },
     });
     const mismatched = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       enablePublicSpace: false,
-      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+      replication: {
+        enabled: true, prefixes: ["notes/"], storage: ownerProfile.storage,
+        profileDir: ownerProfile.profileDir, profileGuard: ownerProfile.guard, mode: "foreground",
+      },
     });
     try {
       await owner.signIn();
-      await owner.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node.
+      const ownerStamp = owner.replicaStamp;
+      if (!ownerStamp) throw new Error("Verified owner sign-in did not establish a replica stamp.");
       ownerSpace = owner.restorableSession!.spaceId;
       expect((await owner.kv.put("notes/secret", "owner-x")).ok).toBe(true);
       expect((await owner.kv.put("other/x", "owner-x-other")).ok).toBe(true);
       await owner.replication!.sync();
 
       await otherOwner.signIn();
-      await otherOwner.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node.
+      expect(otherOwner.replicaStamp).toMatchObject({ incarnation: expect.any(String), lifecycleEpoch: 0 });
       otherSpace = otherOwner.restorableSession!.spaceId;
       expect(otherSpace).not.toBe(ownerSpace);
       expect((await otherOwner.kv.put("notes/secret", "owner-y")).ok).toBe(true);
@@ -802,10 +937,15 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         spaceId: ownerSpace,
         jwk: delegateJwk,
         verificationMethod: delegateVerificationMethod,
+        replicaStamp: ownerStamp,
         tinycloudHosts: [host],
       };
       await owner.replication!.close();
       await otherOwner.replication!.close();
+      // Isolate the /delegate counter: sign-in's background registry sync can still be
+      // hosting the account space (a /delegate POST) after the first writes.
+      await owner.waitForAccountRegistrySync();
+      await otherOwner.waitForAccountRegistrySync();
 
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).endsWith("/delegate")) delegatePosts++;
@@ -823,8 +963,9 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await mismatched.restoreSession({ ...compact, spaceId: otherSpace });
       expect(await mismatched.replication!.status()).toMatchObject([{
         prefix: "notes/",
-        state: "unavailable",
-        lastError: { code: "SESSION_SCOPE_MISMATCH" },
+        state: "gated",
+        gate: "principal_mismatch",
+        errorCode: "REPLICA_GATED",
       }]);
       const crossOwner = await mismatched.kv.get("notes/secret");
       expect(crossOwner.ok ? undefined : crossOwner.error.code).toBe("AUTH_UNAUTHORIZED");
@@ -832,22 +973,28 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     } finally {
       globalThis.fetch = originalFetch;
       await Promise.all([owner.replication?.close(), otherOwner.replication?.close(), delegate.replication?.close(), mismatched.replication?.close()]);
-      await rm(replicaDir, { recursive: true, force: true });
+      await Promise.all([
+        rm(ownerProfile.profileDir, { recursive: true, force: true }),
+        rm(otherProfile.profileDir, { recursive: true, force: true }),
+      ]);
     }
   }, 120_000);
 
-  test("compact delegate restore works offline and serves its covered replica scope", async () => {
-    const replicaDir = await mkdtemp(join(tmpdir(), "tc858-delegate-offline-"));
-    const storage = createSqliteReplicaStorage({ dir: replicaDir });
+  test("compact delegate cannot reuse an owner's grant, but can serve its own installed signed grant offline", async () => {
+    const profile = await guardedProfile("tc858-delegate-offline-");
     const owner = new TinyCloudNode({
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
       wasmBindings: new NodeWasmBindings(),
       domain: "replication.test",
       autoCreateSpace: true,
       autoBootstrapAccount: false,
       enablePublicSpace: false,
-      replication: { enabled: true, prefixes: ["notes/"], storage, mode: "foreground" },
+      replication: {
+        enabled: true, prefixes: ["notes/"], storage: profile.storage,
+        profileDir: profile.profileDir, profileGuard: profile.guard, mode: "foreground",
+      },
     });
     const wasm = new NodeWasmBindings();
     const manager = wasm.createSessionManager();
@@ -857,26 +1004,38 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     const offlineEvents: import("@tinycloud/sdk-services").ReplicationEvent[] = [];
     const offlineOptions = {
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       wasmBindings: new NodeWasmBindings(),
       autoBootstrapAccount: false,
       enablePublicSpace: false,
       replication: {
         enabled: true,
         prefixes: ["notes/"],
-        storage,
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
         mode: "foreground" as const,
         onEvent: (event: import("@tinycloud/sdk-services").ReplicationEvent) => offlineEvents.push(event),
       },
     };
     const onlineDelegate = new TinyCloudNode(offlineOptions);
     const offline = new TinyCloudNode(offlineOptions);
+    const installedOffline = new TinyCloudNode(offlineOptions);
     const originalFetch = globalThis.fetch;
     try {
       await owner.signIn();
-      await owner.waitForAccountRegistrySync(); // TC-899 on the pinned SQLite node.
-      const spaceId = owner.restorableSession!.spaceId;
+      const ownerStamp = owner.replicaStamp;
+      if (!ownerStamp) throw new Error("Verified owner sign-in did not establish a replica stamp.");
+      const signedOwner = owner.restorableSession!;
+      if (typeof signedOwner.siwe !== "string" || typeof signedOwner.address !== "string" ||
+          typeof signedOwner.chainId !== "number") throw new Error("Signed owner proof is required.");
+      const spaceId = signedOwner.spaceId;
       expect((await owner.kv.put("notes/covered", "cached")).ok).toBe(true);
       await owner.replication!.sync();
+      const ownerSyncedEpoch = (await owner.replication!.status())[0]?.syncedThroughEpoch;
+      if (ownerSyncedEpoch === undefined || !Number.isSafeInteger(ownerSyncedEpoch)) {
+        throw new Error("Owner replica must have a committed sync fence.");
+      }
       const grant = await owner.delegateTo(verificationMethod.split("#")[0]!, [{
         service: "tinycloud.kv",
         space: spaceId,
@@ -890,9 +1049,12 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         jwk: compactSession,
         verificationMethod,
         tinycloudHosts: [host],
+        replicaStamp: ownerStamp,
       });
-      await onlineDelegate.replication!.sync();
+      await expect(onlineDelegate.replication!.sync()).rejects.toMatchObject({ name: "ReplicaError", code: "GRANT_MISSING" });
       await onlineDelegate.replication!.close();
+      // Isolate the /delegate counter from sign-in's background registry sync (see above).
+      await owner.waitForAccountRegistrySync();
       let delegatePosts = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         if (String(input).endsWith("/delegate")) delegatePosts++;
@@ -905,17 +1067,145 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         jwk: compactSession,
         verificationMethod,
         tinycloudHosts: [host],
+        replicaStamp: ownerStamp,
       });
       expect(delegatePosts).toBe(0);
-      const read = await offline.kv.get("notes/covered");
-      expect(read.data?.data).toBe("cached");
+      const withoutInstall = await offline.kv.get("notes/covered");
+      expect(withoutInstall.ok).toBe(false);
       expect(offlineEvents.some((event) =>
+        event.type === "replication.read" && event.key === "notes/covered" &&
+        event.source === "network" && event.reason === "grant_missing" && event.outcome === "error"
+      )).toBe(true);
+      expect(offlineEvents.some((event) =>
+        event.type === "replication.read" && event.key === "notes/covered" &&
+        event.source === "replica" && event.reason === "hit"
+      )).toBe(false);
+
+      globalThis.fetch = originalFetch;
+      await owner.replication!.close();
+      await offline.replication!.close();
+      const handle = await profile.storage.open({
+        identity: canonicalReplicationIdentity({
+          host, space: spaceId, principal: pkhDid(signedOwner.address, signedOwner.chainId),
+        }),
+        space: spaceId,
+        prefix: "notes/",
+        allowSecrets: false,
+        stamp: ownerStamp,
+        device: { did: verificationMethod, jwk: compactSession },
+        grantPolicy: {
+          grantTtlMs: 24 * 60 * 60_000,
+          consentAnchor: { source: "siwe", at: Date.parse(signedOwner.siwe.match(/^Issued At: (.+)$/m)![1]!) },
+        },
+      });
+      try {
+        const installed = await handle.installGrant(grant.delegation.delegationHeader.Authorization);
+        expect(installed).toMatchObject({ parentCid: expect.any(String), unconstrained: true });
+        await handle.sync({ signal: new AbortController().signal, syncStartEpoch: ownerSyncedEpoch });
+        expect((await handle.get("notes/covered")).status).toBe("present");
+      } finally {
+        await handle.close();
+      }
+      globalThis.fetch = async () => {
+        throw Object.assign(new TypeError("network unavailable"), { code: "ECONNREFUSED" });
+      };
+      const eventCursor = offlineEvents.length;
+      await installedOffline.restoreSession({
+        delegationHeader: grant.delegation.delegationHeader,
+        delegationCid: grant.delegation.cid,
+        spaceId,
+        jwk: compactSession,
+        verificationMethod,
+        tinycloudHosts: [host],
+        replicaStamp: ownerStamp,
+      });
+      const read = await installedOffline.kv.get("notes/covered");
+      expect(read.data?.data).toBe("cached");
+      expect(offlineEvents.slice(eventCursor).some((event) =>
         event.type === "replication.read" && event.key === "notes/covered" &&
         event.source === "replica" && event.reason === "hit"
       )).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
-      await Promise.all([owner.replication?.close(), onlineDelegate.replication?.close(), offline.replication?.close()]);
+      await Promise.all([owner.replication?.close(), onlineDelegate.replication?.close(), offline.replication?.close(), installedOffline.replication?.close()]);
+      await rm(profile.profileDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("developer mode on: a real sync cycle leaves first-segment paths only and no full key", async () => {
+    const profile = await guardedProfile("tc848-sync-log-");
+    const events: ReplicationEvent[] = [];
+    const node = new TinyCloudNode({
+      host,
+      tinycloudRegistryUrl: registry.url.origin,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      requestLog: true,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
+        mode: "foreground",
+        onEvent: (event) => events.push(event),
+      },
+    });
+    try {
+      await node.signIn();
+      await node.replication!.sync();
+      expect((await node.kv.put("notes/sync-log-seed", "sync-log-v0")).ok).toBe(true);
+      await node.replication!.sync();
+
+      const rows = node.requests!.snapshot();
+      for (const row of rows) {
+        // Replication-sourced rows carry no path or space.
+        if (row.service === "sync") {
+          expect(row.path).toBeNull();
+          expect(row.space).toBeNull();
+        }
+        // A path is at most its first segment ("notes/"), or redacted.
+        if (row.path !== null) expect(row.path).toMatch(/^([^/]+\/|\[redacted\])$/);
+      }
+      expect(JSON.stringify(rows)).not.toContain("sync-log-seed");
+    } finally {
+      await node.replication?.close();
+      await rm(profile.profileDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("developer mode off: a real sync cycle creates no request log", async () => {
+    const profile = await guardedProfile("tc848-sync-log-off-");
+    const node = new TinyCloudNode({
+      host,
+      tinycloudRegistryUrl: registry.url.origin,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
+        mode: "foreground",
+        onEvent: () => undefined,
+      },
+    });
+    try {
+      await node.signIn();
+      await node.replication!.sync();
+      expect(node.requests).toBeUndefined();
+    } finally {
+      await node.replication?.close();
+      await rm(profile.profileDir, { recursive: true, force: true });
     }
   }, 120_000);
 });

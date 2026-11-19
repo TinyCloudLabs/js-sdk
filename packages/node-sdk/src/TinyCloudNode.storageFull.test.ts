@@ -40,6 +40,7 @@ interface NodeInternals {
   _serviceGraph: { track(context: ServiceContext): ServiceContext };
   _serviceContext?: ServiceContext;
   storageFull: { isFull: boolean };
+  tc: { signIn(options?: unknown): Promise<unknown> };
   bootstrapStatus: unknown;
   registerPrimarySessionGrant(session: unknown): void;
   resolveBootstrapDecision(): Promise<{ action: "run"; mode: "repair" }>;
@@ -92,6 +93,8 @@ function makeWasm(recap: Array<{ service: string; space: string; path: string; a
 function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?: boolean; withoutRecap?: boolean } = {}) {
   const recap = [
     { service: "kv", space: SPACE_URI, path: "", actions: ["tinycloud.kv/get", "tinycloud.kv/put"] },
+    // Registry sync runs only for a session that can read the account index.
+    { service: "sql", space: `tinycloud:pkh:eip155:1:${ADDRESS}:account`, path: "account", actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
     ...(options.grantsSpaceInfo === false
       ? []
       : [{ service: "space", space: SPACE_URI, path: "", actions: [SPACE_INFO] }]),
@@ -133,17 +136,18 @@ function fullAccount(options: { grantsSpaceInfo?: boolean; grantsOtherSpaceInfo?
   internals.auth = { tinyCloudSession: session, lastActivationSkippedSpaceIds: [] };
   internals.registerPrimarySessionGrant(session);
 
-  const host = { full: true, writes: 0, reads: 0, statusReads: 0 };
+  const host = { full: true, statusFails: false, writes: 0, reads: 0, statusReads: 0 };
   const fetch: FetchFunction = async (_url, init) => {
     const action = (init?.headers as Record<string, string>)["x-action"];
     if (action === SPACE_INFO) {
+      if (host.statusFails) throw new TypeError("network down");
       host.statusReads += 1;
       return new Response(JSON.stringify({
         space: { usedBytes: 155744, limitBytes: host.full ? 0 : 50_000_000 },
         account: host.full
           ? { usedBytes: 389777359, limitBytes: 104857600, plan: "free" }
           : { usedBytes: 40_000_000, limitBytes: 104857600, plan: "free" },
-        manageUrl: "https://account.tinycloud.xyz/billing",
+        manageUrl: "https://account.tinycloud.xyz/storage",
       }), { status: 200 });
     }
     if (action === "tinycloud.kv/put") {
@@ -222,7 +226,7 @@ describe("TC-628: a full account", () => {
     });
   });
 
-  test("storage.status() reports the account, and re-arms the event once there is room", async () => {
+  test("storage.status() reports the account, but only a successful write re-arms the own-storage event", async () => {
     const { node, kv, events, host } = fullAccount();
     await kv.put("API_KEY", "v1");
 
@@ -235,20 +239,44 @@ describe("TC-628: a full account", () => {
         account: { usedBytes: 389777359, limitBytes: 104857600, plan: "free" },
         plan: "free",
         state: "full",
-        manageUrl: "https://account.tinycloud.xyz/billing",
+        manageUrl: "https://account.tinycloud.xyz/storage",
       },
     });
     // Still full: no second banner.
     await kv.put("API_KEY", "v2");
     expect(events).toHaveLength(1);
 
+    // Room reported by a status read does not end the episode.
     host.full = false;
     const roomy = await node.storage.status();
     expect(roomy.ok && roomy.data.state).toBe("ok");
-
     host.full = true;
     await kv.put("API_KEY", "v3");
+    expect(events).toHaveLength(1);
+
+    // A write that succeeds ends the episode; the next rejection announces itself.
+    host.full = false;
+    expect((await kv.put("API_KEY", "v4")).ok).toBe(true);
+    host.full = true;
+    await kv.put("API_KEY", "v5");
     expect(events).toHaveLength(2);
+  });
+
+  test("a status read that fails on the network neither ends nor re-arms the episode", async () => {
+    const { node, kv, events, host } = fullAccount();
+    await kv.put("API_KEY", "v1");
+    expect(events).toHaveLength(1);
+
+    host.statusFails = true;
+    const failed = await node.storage.status();
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    expect(failed.error.code).toBe("NETWORK_ERROR");
+
+    // Still full: the rejected write does not announce again and the episode stays set.
+    await kv.put("API_KEY", "v2");
+    expect(events).toHaveLength(1);
+    expect(node.storageEpisode.current()).toBeDefined();
   });
 
   test("storage.status() sends nothing when the session lacks tinycloud.space/info", async () => {
@@ -388,8 +416,8 @@ describe("TC-628: a full account", () => {
     expect(internals.ownStorageFull).toBe(true);
     expect(await internals.bootstrapAccountIfNeeded()).toBe(false);
     expect(runAccountBootstrap).not.toHaveBeenCalled();
-    // Still one episode: the banner was already shown for B.
-    expect(events).toHaveLength(1);
+    // B's banner was shown for B; the account's own storage is a separate episode and announces itself.
+    expect(events.map((e) => e.spaceId)).toEqual([OTHER_SPACE, SPACE_URI]);
   });
 
   test("room on the account's own space clears only the account; a full delegated space stays full", async () => {
@@ -511,5 +539,75 @@ describe("TC-628: restoring a session", () => {
 
     await restore(OTHER_SPACE);
     expect(internals.storageFull.isFull).toBe(false);
+  });
+
+  test("signing out ends the storage-full episode", async () => {
+    const wasm = new NodeWasmBindings();
+    const { full } = await signedSession(wasm);
+    const node = new TinyCloudNode({ host: "https://tinycloud.test", wasmBindings: wasm });
+    const internals = node as unknown as NodeInternals;
+
+    await node.restoreSession(full);
+    await rejectWriteOn(internals, full.spaceId);
+    expect(internals.storageFull.isFull).toBe(true);
+
+    await node.signOut();
+    expect(internals.storageFull.isFull).toBe(false);
+  });
+
+  test("signing in as a different account ends the storage-full episode", async () => {
+    let address = ADDRESS;
+    const node = new TinyCloudNode({
+      host: "https://tinycloud.test",
+      signer: { getAddress: async () => address, getChainId: async () => 1, signMessage: async () => "0xsig" },
+      wasmBindings: makeWasm([]),
+    });
+    const internals = node as unknown as NodeInternals;
+    internals._address = ADDRESS;
+    let fullWhenSigningIn: boolean | undefined;
+    internals.tc.signIn = async () => {
+      fullWhenSigningIn = internals.storageFull.isFull;
+      throw new Error("sign-in stopped after the account changed");
+    };
+    await rejectWriteOn(internals, SPACE_URI);
+    expect(internals.storageFull.isFull).toBe(true);
+
+    address = "0x00000000000000000000000000000000000000aa";
+    await expect(node.signIn()).rejects.toThrow("sign-in stopped after the account changed");
+    expect(fullWhenSigningIn).toBe(false);
+  });
+
+  test("restoring a different owner clears recorded requests; the same owner keeps them", async () => {
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const jwk = JSON.parse(manager.jwk("default")!);
+    const node = new TinyCloudNode({ host: "https://tinycloud.test", wasmBindings: wasm, requestLog: true });
+    const restore = (spaceId: string) => node.restoreSession({
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy-session",
+      spaceId,
+      jwk,
+      verificationMethod: manager.getDID("default"),
+      tinycloudHosts: ["https://tinycloud.test"],
+    });
+    const recorder = Reflect.get(node, "_requestLog") as { record(event: object): void };
+    const onClear = mock(() => {});
+
+    await restore(SPACE_URI);
+    node.requests!.onClear(onClear);
+    recorder.record({
+      v: 1, at: 0, service: "kv", op: "kv/get", path: "notes/a", space: "default",
+      host: null, bytes: 3, durationMs: 1, attempts: 1, ok: true, code: "ok", source: "network",
+    });
+    const recorded = node.requests!.snapshot().length;
+    expect(recorded).toBeGreaterThan(0);
+
+    await restore(SPACE_URI);
+    expect(node.requests!.snapshot()).toHaveLength(recorded);
+    expect(onClear).not.toHaveBeenCalled();
+
+    await restore(OTHER_SPACE);
+    expect(node.requests!.snapshot()).toEqual([]);
+    expect(onClear).toHaveBeenCalledTimes(1);
   });
 });

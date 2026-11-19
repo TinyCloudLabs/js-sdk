@@ -1,0 +1,238 @@
+{
+  "package_version": "0.1.0",
+  "endpoint": "https://mcp.tinycloud.xyz/chatgpt/mcp",
+  "status": "All eight review cases passed on the deployed candidate in actual ChatGPT desktop web on 2026-11-16, with ChatGPT-managed automatic token refresh observed. Mobile, reviewer login, policy pages, portal import and the domain challenge remain open.",
+  "case_results": [
+    {"id": "P01", "status": "PASS", "observed": "tinycloud_apps_context returned authority_required for exactly the three narrowed scopes; after one OpenKey approval it returned ok with timezone Europe/London and apps qa and qa-sibling; tinycloud_apps_read returned the qa catalog and both kind catalogs with baseline ETags."},
+    {"id": "P02", "status": "PASS", "observed": "tinycloud_apps_write created xyz.tinycloud.tinyapps.qa/todo/open/2026-11-16-review-release-checklist; read-back and an independent CLI read returned the same body and ETag."},
+    {"id": "P03", "status": "PASS", "observed": "One move with the fresh source ETag reported written and deleted; the done record read back with done 2026-11-16 and the open key returned NOT_FOUND."},
+    {"id": "P04", "status": "PASS", "observed": "Delete with the current ETag returned ok; the key returned NOT_FOUND and both todo prefixes listed empty, also by independent CLI. No erasure claim was made."},
+    {"id": "P05", "status": "PASS", "observed": "tinycloud_apps_query returned authority_required for tinycloud.sql read, schema and write on xyz.tinycloud.tinyapps.qa/index only; after approval it returned one row, 50, over two workout records written through the connector for 2026-10-18 and 2026-10-19."},
+    {"id": "N01", "status": "PASS", "observed": "The records grant was cancelled in OpenKey; ChatGPT made no further tool call and an independent listing showed no todo."},
+    {"id": "N02", "status": "PASS", "observed": "An actual tinycloud_apps_read of xyz.tinycloud.tinyapps.qa/todo/open/qa-b-private through Release QA returned NOT_FOUND.", "limitation": "Account B's fixture was not re-read in this run."},
+    {"id": "N03", "status": "PASS", "observed": "No secrets tool is exposed; ChatGPT made no tool call and explained the limitation.", "limitation": "Invoking an excluded tool by name at the MCP boundary was not rerun."}
+  ],
+  "required_case_ids": ["P01", "P02", "P03", "P04", "P05", "N01", "N02", "N03"],
+  "required_tools": ["tinycloud_connect", "tinycloud_apps_context", "tinycloud_apps_read", "tinycloud_apps_write", "tinycloud_apps_query"],
+  "case_results_scope": "case_results are the 2026-11-16 run described in live_acceptance and apply only to the candidate named there. Historical results below remain a separate, older candidate.",
+  "live_acceptance": {
+    "date_utc": "2026-11-16",
+    "client": "Actual ChatGPT desktop web in authorized Mac Chrome 157; private custom MCP connection TinyCloud Public QA with the synthetic Release QA account; temporary chats. Not a ZIP import or directory installation.",
+    "candidate": {
+      "mcp_version": "0.10.0-beta.40",
+      "mcp_image": "ghcr.io/tinycloudlabs/tinycloud-mcp@sha256:c06444d408c0f6ce1dc8137de19d1f0094228818efc29cd6091dd1321f532d00",
+      "operations_version": "0.9.0-beta.36",
+      "openkey_web_commit": "f82da0fac3ab078fdbf6836bffbff5ab25e11cb6",
+      "openkey_web_pages_deployment": "96e3b637-dadb-496d-8446-3cb0b5667e5e",
+      "openkey_api_commit": "43eed3bc8"
+    },
+    "tools": "Every result was read from the role=tool message in ChatGPT's own response stream, never from model prose. Only the five required tools were called. The exact five-tool listing was last read from the connector metadata on 2026-11-13 and was not re-read in this run.",
+    "consent": "Both approval links from the tool results opened OpenKey with the requester line From a link that names mcp.tinycloud.xyz, the warning that OpenKey cannot confirm the sender, and Your approval will be delivered to the TinyCloud MCP service. The prepare request carried requesterOrigin https://mcp.tinycloud.xyz and the signed message began mcp.tinycloud.xyz wants you to sign in. The signed grants were exactly kv get,list on xyz.tinycloud.tinyapps.catalog/, kv get,put on xyz.tinycloud.tinyapps.catalog/qa/entry and kv del,get,list,put on xyz.tinycloud.tinyapps.qa/; the copy grant was sql read,schema,write on xyz.tinycloud.tinyapps.qa/index. No renewal checkbox was shown.",
+    "completion": "After each approval the callback POST to https://mcp.tinycloud.xyz/chatgpt/connect/callback returned 200 and the page read Authenticated. You can close this window and return to ChatGPT or your MCP client.",
+    "scope_boundary": "An actual tinycloud_apps_write put on xyz.tinycloud.tinyapps.catalog/qa-sibling/entry returned authority_required for that entry and the qa-sibling root; nothing was approved and the entry's ETag is unchanged.",
+    "automatic_refresh": "The connection's token was issued 2026-11-13T18:23:07Z and no call was made for 65 hours, past the 12-hour access-token policy. The first prompt was sent 2026-11-16T11:54:00Z without reconnecting. Read-only metadata run https://github.com/TinyCloudLabs/openkey/actions/runs/43863690032 shows the earlier refresh record revoked and a new one issued at 2026-11-16T11:54:10Z under the same session and authentication time; the tool calls that followed succeeded.",
+    "independent_state": "TinyCloud CLI 1.5.1 with a separate scoped profile: the five seed fixtures kept their baseline ETags; the created todo is absent from open and done; the two workout records and the server's index-stale/todo marker are the only additions.",
+    "limits": "The JWT expiry itself was not observed; 12 hours is the configured policy. Mobile was not run. The account signs in by email code, so this is not reviewer-login evidence."
+  },
+  "engineering_evidence": {
+    "date": "2026-10-21",
+    "branch": "release/chatgpt-public-20261021",
+    "default_branch_integration": "Not authorized; explicit owner approval required for every repository. No auto-merge or deployment bypass.",
+    "mcp": "Build, TypeScript, generated artifacts and isolated MCP suite passed: 75 passed, one native-node case skipped because TC_MCP_TEST_NODE was unset. A separate built Node HTTP CLI smoke verified the exact five tools, excluded invocations, mutation annotations, separate audiences, approval callback, no public session DID, metadata/challenge and browser recovery. Synthetic local OAuth only.",
+    "personal_records": "31 existing operation tests passed. HTTP integration covered public and broad record write/read, prefix rejection and expired-approval recovery using the hermetic node. No production-record or ChatGPT acceptance claim.",
+    "openkey": "API TypeScript and real-provider DCR, consent, PKCE exchange and refresh passed for both resources. Exact callback rejection reproduced before the web allowlist fix; all eight callback-policy tests and actual policy smoke passed afterward. Sign-in methods and owner consent are unchanged.",
+    "documentation": "Candidate CLI/hosting pages rendered in the local Mintlify preview; actual HTTP recovery page inspected in Chromium.",
+    "package": "Canonical schema validation, deterministic archive/read-back and SHA-256 generation passed. Artifact tinycloud-0.1.0.zip: 16f8fd79a2b65df1dad875f8630a4806c373f438107da6ea0ec9b281bc9e175d.",
+    "deployment_access_preflight": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39613082008 succeeded without building or deploying. It does not establish deployment permission, the state secret, a deployed candidate or application acceptance."
+  },
+  "historical_live_acceptance": {
+    "dates_utc": ["2026-11-11", "2026-11-12"],
+    "source": "Prior release/chatgpt-public-20261021 working-tree record at packages/mcp/plugin/review-evidence.json; preserved separately, not overwritten by this fix",
+    "client": "Actual ChatGPT desktop web, authorized Mac Chrome; private custom MCP connection, not a ZIP import or directory installation",
+    "mcp_version": "0.10.0-beta.6",
+    "mcp_published_git_head": "f741bac335fd07f887905f6eba861b1b4bfa54b8",
+    "operations_version": "0.9.0-beta.4",
+    "operations_published_git_head": "ad305231672d4e7a5695382945826ba8dfb11bb1",
+    "case_results": [
+      {"id": "P01", "status": "PASS"},
+      {"id": "P02", "status": "PASS"},
+      {"id": "P03", "status": "PASS"},
+      {"id": "P04", "status": "PASS"},
+      {"id": "P05", "status": "PASS"},
+      {"id": "N01", "status": "PASS"},
+      {"id": "N02", "status": "PASS_WITH_CLIENT_WORKAROUND", "limitation": "Multi-account metadata refresh and explicit current A link_id were needed; the initial client failure was not counted as isolation proof."},
+      {"id": "N03", "status": "PASS"}
+    ],
+    "canonical_state": "All ten synthetic seed bodies and ETags remained unchanged; the created todo was deleted after confirmation; only the expected index-stale/todo metadata was added.",
+    "oauth": "Actual desktop S256, provider-consent withdrawal gating and explicit reauthorization recovery passed. Separate provider refresh rotation and token revocation probes passed; they do not prove ChatGPT-managed automatic refresh.",
+    "limits": "Exact live image digest, imported ZIP identity and exact ChatGPT build were not established. Natural access-token expiry, ChatGPT automatic refresh and actual supported mobile acceptance were not observed.",
+    "findings": "The live candidate showed CLI/Claude attribution and catalog-wide put. These two findings are fixed and verified only locally below. Cancellation, multi-account metadata and reconnect-continuity observations remain historical findings, not fixes claimed here.",
+    "cleanup_state": "Synthetic OpenKey session signed out and probe consent/tokens removed; final QA connection required reconnect. Owner ChatGPT login was retained and the original broad plugin was not invoked or reconfigured."
+  },
+  "consent_scope_fix": {
+    "date": "2026-11-12",
+    "branch": "fix/chatgpt-consent-scope-20261112",
+    "source_bases": {
+      "js_sdk": "df64efa4 (origin/master at worktree creation)",
+      "openkey": "dc68836fcf4e8bd19bc0636be88a4b00563c6b87"
+    },
+    "state": "Feature-branch release candidate; OpenKey API and web are separated for ordered integration. The owner authorized the normal release on 2026-11-13. This source evidence records pre-rollout checks, not a production deployment or current-revision live acceptance result.",
+    "changes": [
+      "Hosted MCP passes its configured public origin; ordinary OpenKey preparation binds the actual host and nondefault port into SIWE and displays MCP, CLI or custom-host attribution.",
+      "Requester origin remains caller-reported, not verified identity. Unsigned-link/no-signed-manifest disclosure and existing callback/node policies are retained.",
+      "Generic app change grants contain catalog-root get/list, exact app discovery-entry get/put and app-root CRUD. No-app/read grants add no discovery writes; Health Log and Recipes keep dedicated scopes.",
+      "Shared consent reasons identify the TinyCloud connector and independently describe each scope's actual actions."
+    ],
+    "build": "bun x turbo run build --filter=@tinycloud/mcp... --output-logs=errors-only: 13 packages passed, including WASM, SDK, operations and MCP. OpenKey db generation and db, tee and capability-review package builds passed.",
+    "tests": {
+      "operations": "Isolated runner: apps.layout.test.ts, apps.catalog.test.ts and apps.test.ts; 66 passed, 0 failed.",
+      "mcp": "Private HOME/TC_HOME: remote-store.test.ts and http.e2e.test.ts; 39 passed, 2 native-node cases skipped with TC_MCP_TEST_NODE unset, 0 failed.",
+      "openkey_api": "Four selected delegation suites: 156 passed and one new test-table argument-shape failure. Corrected that table and reran its invalid-origin group: 28 passed, 17 filtered, 0 failed. This was not a second full-suite run.",
+      "openkey_web_policy": "delegate-link-policy.test.ts: 11 passed, 0 failed."
+    },
+    "typechecks": {
+      "passed": "Operations; OpenKey changed API routes/tests and their dependency graph; OpenKey web (0 errors, 2 existing accessibility warnings).",
+      "limits": "Full MCP test typing reports missing declarations for test-support/registry-fixture.mjs. Full OpenKey API typing reports diagnostics in untouched revoke-other-sessions.integration.test.ts and delegation-codes.test.ts. These full checks are not claimed green."
+    },
+    "runtime_smoke": {
+      "environment": "Isolated private HOME, synthetic identity/database/managed-key adapters, production OpenKey routes and real WASM/crypto signing, loopback hermetic TinyCloud node; external network blocked.",
+      "passed": [
+        "Real MCP-generated bootstrap and app approval URLs carry requesterOrigin; OpenKey prepares and signs exactly the MCP-domain SIWE.",
+        "The hermetic node activates the signed grants and the hosted tenant store accepts both callbacks.",
+        "QA app/kind/discovery/record writes succeed; canonical discovery read-back matches the synthetic title.",
+        "A sibling discovery-entry write returns authority_required instead of inheriting catalog-wide put.",
+        "Omitted origin keeps the CLI domain; custom HTTPS and loopback origins retain their actual host and nondefault port."
+      ],
+      "limits": "Synthetic auth/storage/managed-key adapters and a hermetic node are not live provider authentication, production TEE or production-node acceptance."
+    },
+    "browser_smoke": "Actual local OpenKey page in headless Chromium, with screenshots captured and viewed: TinyCloud MCP label, caller-reported/unsigned disclosure, catalog-root get/list, exact qa entry get/put and app-root CRUD. Unchecking entry put updates the signed preview while retaining the MCP domain. Omitted-origin CLI and custom.example:8443 labels also verified. No approval was submitted to production.",
+    "migration": "Previously signed broad grants remain valid and reusable until explicitly revoked or expired. Reapprove afterward to obtain narrower authority. When authorized, deploy the matching OpenKey API/web pair before updated MCP, then rerun affected actual ChatGPT acceptance cases.",
+    "historical_note": "engineering_evidence and policy_findings above/below preserve the October 21 record. Neither those checks nor the historical desktop QA were rerun against this fix."
+  },
+  "pre_rollout_compatibility": {
+    "date": "2026-11-12",
+    "external_wallet": {
+      "status": "PASS_WITH_LOCAL_ENVIRONMENT_LIMITATIONS",
+      "wallet": "MetaMask 13.56.0, unmodified official Chrome extension, real onboarding/import/connection/personal_sign UI",
+      "release_source": "https://github.com/MetaMask/metamask-extension/releases/tag/v13.56.0",
+      "archive_sha256": "7618eda1fba0ca2068054b69faddb5c511dbb49e7d8e3ad411a8ab90551c7159",
+      "archive_verification": "Matched the official release asset digest before loading; parent independently recomputed the downloaded archive checksum.",
+      "browser": "Chrome/151.0.7922.34, headless=new, fresh disposable profile; no owner profile or browser relay",
+      "mcp_case": {
+        "domain": "mcp.tinycloud.xyz",
+        "completion_status": 200,
+        "callback_at": "2026-11-12T15:47:32.391Z",
+        "signature_valid": true
+      },
+      "omitted_origin_cli_control": {
+        "domain": "cli.tinycloud.xyz",
+        "completion_status": 200,
+        "callback_at": "2026-11-12T15:48:59.709Z",
+        "signature_valid": true
+      },
+      "proof": "Both actual wallet confirmations completed through /api/delegate/complete and showed Authenticated. Independent callback verification recovered the synthetic external signer; each signature matched its exact prepared SIWE bytes and selected grants. No injected provider mock or extension patch was used.",
+      "wallet_warnings": "Both confirmation dialogs displayed identical Security check unavailable (Blockaid) and HTTP-origin warnings. No additional MCP warning, refusal or specific SIWE-domain mismatch warning was observed compared with the CLI control in this environment.",
+      "network": "MetaMask used a real disposable Ganache 7.9.2 chain, chainId/networkId 1, configured via its network-settings UI. No production upstream or transactions; the local chain remained at block 0 with zero transactions and no node-owned accounts.",
+      "visual_evidence": "Actual consent, connection, wallet confirmation and completion screenshots captured and viewed. No seed/private-key/password fields were captured; screenshots are not included in this public evidence.",
+      "limits": [
+        "External DNS was blocked, not kernel-firewalled. Online Blockaid/phishing-service behavior remains untested.",
+        "Headless connection required opening the extension's actual manifest popup page manually; normal automatic popup behavior was not established.",
+        "Only this MetaMask/Chromium version was exercised, not other wallets, WalletConnect, mobile or production authentication.",
+        "Session/database/host activation used isolated adapters; the production web/routes/WASM/context logic and extension cryptography were real."
+      ]
+    },
+    "authorization_context_expiry": {
+      "status": "PASS",
+      "surface": "Actual local OpenKey consent UI in Chromium with a synthetic managed identity",
+      "clock": "Unmodified production five-minute authorization-context TTL and real wall clock; no timer, context-store or response patch",
+      "narrowed_preview_at": "2026-11-12T15:40:15.300Z",
+      "context_expired_at": "2026-11-12T15:45:15.308Z",
+      "first_approval_at": "2026-11-12T15:45:25.624Z",
+      "observed_context_age_ms": 310324,
+      "request_sequence": [
+        {"path": "/api/delegate", "status": 400, "code": "context-expired"},
+        {"path": "/api/delegate/prepare", "status": 200},
+        {"path": "/api/delegate", "status": 200}
+      ],
+      "proof": "One Approve click triggered one automatic refresh and a new context. All seven selected actions and mcp.tinycloud.xyz were preserved. Exact catalog/qa/entry put remained deselected while app-root put remained selected. The final signature matched the fresh preview bytes and exactly one local callback verified cryptographically.",
+      "visual_evidence": "Narrowed consent and final Authenticated screenshots captured and viewed; private screenshots are not included in this public evidence.",
+      "limits": "Session, database, managed-key adapter and host activation were synthetic. Production web, routes, context lifetime, WASM and cryptography were exercised. This is signing-context expiry, not OAuth token expiry or ChatGPT-managed refresh."
+    },
+    "remaining_ui_finding": "The verification observed CLI-only completion wording after MCP approval. The subsequent completion_copy_fix below resolves that finding locally.",
+    "production_changes": "None; no default-branch merge, push, deployment, production RPC, account mutation or publication"
+  },
+  "completion_copy_fix": {
+    "date": "2026-11-12",
+    "status": "PASS_LOCAL_UI",
+    "source": "OpenKey apps/web/src/routes/delegate/+page.svelte",
+    "behavior": "Successful callback completion follows the prepared SIWE domain: mcp.tinycloud.xyz returns to ChatGPT or the user's MCP client; omitted-origin cli.tinycloud.xyz retains CLI wording; other requesters show their actual host, including nondefault port.",
+    "verification": "Actual Svelte page exercised in Chromium for MCP, omitted-origin CLI and custom.example:8443. All three reached Authenticated after one approval and one successful callback; completion text asserted and screenshots captured and viewed.",
+    "build": "bun run build in OpenKey apps/web passed. Existing Vite/Rolldown deprecations and accessibility warnings in auth/login and approval-expiry-control remain.",
+    "limits": "Synthetic session, preparation, managed-signing and callback API fixtures; this verifies the changed UI, not production auth, cryptography or live ChatGPT acceptance.",
+    "deployment": "Superseded: OpenKey PR 508 changed the labels and PR 530 keys the closing sentence on the delivery endpoint OpenKey enforces. Live since 2026-11-16T11:40:21Z; see live_acceptance."
+  },
+  "rollout_preflight": {
+    "date": "2026-11-12",
+    "authorization_date": "2026-11-13",
+    "status": "AUTHORIZED_NORMAL_RELEASE",
+    "reason": "The owner explicitly selected Lift hold; ship the normal release, including the disclosed API/authentication changes, passkey migration and MCP legacy-record cutoff. Use the existing protected integration and guarded deployment paths. The separate destructive TC-488/TC-492 cutover and any unrelated data deletion remain unauthorized.",
+    "openkey": {
+      "api_pr": "https://github.com/TinyCloudLabs/openkey/pull/493",
+      "web_pr": "https://github.com/TinyCloudLabs/openkey/pull/494",
+      "web_pr_base": "fix/chatgpt-requester-origin-api-20261112",
+      "observed_live_api_commit": "dacba89a0841300833bf54591a4038e13778871c",
+      "inspected_main_commit": "dc68836fcf4e8bd19bc0636be88a4b00563c6b87",
+      "inherited_git_commits": 41,
+      "inherited_changes": "Production Apple sign-in enablement and passkey-enrolment provenance migration/step-up changes, among other already-merged changes. The migration's current production state was not established.",
+      "ordering": "Review/integrate API first, deploy and verify every serving API instance, then integrate web; Pages automatically deploys main. Only afterward release MCP.",
+      "remaining_preflight": "Reconcile current live compose after unrelated operator activity; obtain complete serving-instance/image inventory, database migration state and rollback identity. Do not execute the separately gated destructive TC-488/TC-492 cutover."
+    },
+    "mcp": {
+      "pr": "https://github.com/TinyCloudLabs/js-sdk/pull/935",
+      "observed_live_version": "0.10.0-beta.6",
+      "inspected_master_commit": "3a073c10f503e1c7b5fcdd0d943e2c3611b58d9f",
+      "inherited_git_commits_to_worktree_base": 446,
+      "compatibility_change": "The current release train no longer reads or writes default/xyz.tinycloud.agent-data/. Existing records remain stored but are no longer shown by these chat tools; this patch did not migrate or delete them.",
+      "preflight_run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/43260625910",
+      "preflight_head": "3a073c10f503e1c7b5fcdd0d943e2c3611b58d9f",
+      "preflight_result": "success; resolve and credential preflight passed, image and deploy jobs skipped",
+      "release_path": "Reviewed protected-master PR, automatic beta publication, exact published-package provenance verification, then explicit hosted image workflow after OpenKey readiness. No stable graduation, manual publication or release-guard bypass."
+    },
+    "access": "Authenticated GitHub maintainer access and required OpenKey/MCP secret names verified without reading secret values. Phala, database and Cloudflare credential variables are absent from the current process; other operator credential stores were not inspected.",
+    "mobile": "Only macOS desktop Chrome 157 is attached to the acceptance relay. No adb, idevice_id, xcrun or configured remote device host is available; actual mobile acceptance remains blocked.",
+    "live_acceptance": "Superseded by live_acceptance (2026-11-16). At this preflight nothing had been claimed and production was unchanged."
+  },
+  "policy_findings": [
+    "The live privacy page checked on 2026-11-16 is dated November 13, 2026. An authorized operator has not confirmed that it covers hosted MCP records, timezone, derived SQL, delegates, logs, recipients, retention and deletion.",
+    "https://tinycloud.xyz/terms was published on 2026-11-16 on the publisher's instruction. It is a cut-down of the in-house draft limited to services that are live. Counsel has not reviewed it, and it sets no governing law, court or arbitration.",
+    "An authorized operator must confirm retention and backup/history behavior, deletion versus access revocation, processor/hosting recipients, support ownership and launch countries. Do not invent these facts or promise physical erasure."
+  ],
+  "oauth": {
+    "registration": "dcr via OpenKey discovery",
+    "scopes": ["tinycloud:mcp"],
+    "resource": "https://mcp.tinycloud.xyz/chatgpt/mcp",
+    "verification": "Actual ChatGPT desktop web used the existing OAuth connection on 2026-11-16 and refreshed it automatically after natural expiry; see live_acceptance.automatic_refresh. Mobile and submission-portal OAuth verification have not been run.",
+    "configuration_note": "Canonical Agent Plugins 1.0.0 mcp.schema.json forbids per-server extensions, although OpenAI documents an extensions.com.openai.auth overlay. The package uses the schema-valid type/url configuration from OpenAI's complete submission example. OAuth registration and scopes must be discovered and verified in the portal; no claim of imported OAuth configuration is made."
+  },
+  "asset_source": "documentation/static/img/logo512.png in TinyCloudLabs/js-sdk",
+  "submission_gates": [
+    "Obtain explicit owner approval for all default-branch merges and deployment; PR preparation is not merge authorization.",
+    "Bind the exact archive to the candidate in live_acceptance; any change to the MCP image, the OpenKey approval screen or the tool schemas requires rerunning the affected cases.",
+    "Complete supported mobile-client acceptance, or record the publisher's decision to submit with desktop web evidence only.",
+    "Provide authorized independent reviewer login without owner intervention, MFA approvals, email/SMS codes, magic links or private networking; credentials only in private portal fields.",
+    "Repeat the eight cases with the reviewer account once the independent reviewer login exists.",
+    "Obtain approved privacy disclosures covering hosted plaintext processing, recipients, retention, deletion and derived copies; existing privacy URL is not proof of adequacy.",
+    "Approve listing, branding, support route and country availability. The terms-of-service URL is supplied; counsel review of that page is still open.",
+    "Provide a real accessible walkthrough recording URL; none is supplied by this package.",
+    "Validate the exact archive, complete actual portal import, verify OAuth discovery/settings, domain challenge, tool scan and required findings.",
+    "Authorized publisher completes identity, permissions and policy attestations; obtain actual review approval before explicit publication.",
+    "After publication, prove fresh directory installation and authoritative write/read-back on supported clients."
+  ],
+  "evidence_rules": "This file is excluded from the ZIP. Case definitions are not execution evidence. Packaging cannot establish import, deployment, submission readiness, review approval, publication or completion. Record actual results in the team's release artifact system, bound to ZIP SHA-256 and deployed candidate; never place credentials, tokens, approval URLs, real personal records or private transcripts in the package or public evidence.",
+  "sources": [
+    "https://developers.openai.com/plugins/build/plugins",
+    "https://developers.openai.com/plugins/deploy/submission",
+    "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+    "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+  ]
+}

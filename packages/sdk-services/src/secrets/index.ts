@@ -1,5 +1,12 @@
 export { SecretsService } from "./SecretsService";
 export {
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
+} from "./secretTypes";
+export type { SecretType } from "./secretTypes";
+export {
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -13,6 +20,7 @@ export {
 export type {
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
   SecretsError,
 } from "./ISecretsService";

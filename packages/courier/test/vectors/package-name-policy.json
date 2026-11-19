@@ -1,0 +1,356 @@
+[
+ {
+  "name": "@tinycloud/courier",
+  "command": "npm publish",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "npm publish",
+    "verb": "publish",
+    "target": "npm:@tinycloud/courier@1.2.3",
+    "key": "publish|npm:@tinycloud/courier@1.2.3",
+    "display": "publish npm:@tinycloud/courier@1.2.3"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish npm:@tinycloud/courier@1.2.3 is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target npm:@tinycloud/courier@1.2.3 --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "bun publish",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "bun publish",
+    "verb": "publish",
+    "target": "npm:@tinycloud/courier@1.2.3",
+    "key": "publish|npm:@tinycloud/courier@1.2.3",
+    "display": "publish npm:@tinycloud/courier@1.2.3"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish npm:@tinycloud/courier@1.2.3 is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target npm:@tinycloud/courier@1.2.3 --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "npm run deploy:prod",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "npm script deploy:prod: cannot name the target (script:@tinycloud/courier:deploy:prod)"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: npm script deploy:prod: cannot name the target (script:@tinycloud/courier:deploy:prod). The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "npm run release",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "npm script release",
+    "verb": "publish",
+    "target": "script:@tinycloud/courier:release",
+    "key": "publish|script:@tinycloud/courier:release",
+    "display": "publish script:@tinycloud/courier:release"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish script:@tinycloud/courier:release is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target script:@tinycloud/courier:release --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "npm run lint",
+  "findings": [],
+  "decision": {
+   "kind": "pass"
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "npx @tinycloud/courier pause 01M5C9EDF03QMRZS2DJXGN5A4C",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "bunx @tinycloud/courier deploy",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/courier",
+  "command": "npm exec --package @tinycloud/courier -- courier resume 01M5C9EDF03QMRZS2DJXGN5A4C",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "expansion syntax with a gated tool name (a command prefix (env, command, builtin, exec, sudo, nohup, timeout, …); \"npm\"). The guard refuses a command that can be built at run time and mentions a gated tool; write it out with plain words"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: expansion syntax with a gated tool name (a command prefix (env, command, builtin, exec, sudo, nohup, timeout, …); \"npm\"). The guard refuses a command that can be built at run time and mentions a gated tool; write it out with plain words. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "npm publish",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "npm publish",
+    "verb": "publish",
+    "target": "npm:courier@1.2.3",
+    "key": "publish|npm:courier@1.2.3",
+    "display": "publish npm:courier@1.2.3"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish npm:courier@1.2.3 is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target npm:courier@1.2.3 --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "bun publish",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "bun publish",
+    "verb": "publish",
+    "target": "npm:courier@1.2.3",
+    "key": "publish|npm:courier@1.2.3",
+    "display": "publish npm:courier@1.2.3"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish npm:courier@1.2.3 is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target npm:courier@1.2.3 --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "npm run deploy:prod",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "npm script deploy:prod: cannot name the target (script:courier:deploy:prod)"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: npm script deploy:prod: cannot name the target (script:courier:deploy:prod). The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "npm run release",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "npm script release",
+    "verb": "publish",
+    "target": "script:courier:release",
+    "key": "publish|script:courier:release",
+    "display": "publish script:courier:release"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish script:courier:release is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target script:courier:release --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "npm run lint",
+  "findings": [],
+  "decision": {
+   "kind": "pass"
+  }
+ },
+ {
+  "name": "courier",
+  "command": "npx courier pause 01M5C9EDF03QMRZS2DJXGN5A4C",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "bunx courier deploy",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "courier",
+  "command": "npm exec --package courier -- courier resume 01M5C9EDF03QMRZS2DJXGN5A4C",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "expansion syntax with a gated tool name (a command prefix (env, command, builtin, exec, sudo, nohup, timeout, …); \"npm\"). The guard refuses a command that can be built at run time and mentions a gated tool; write it out with plain words"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: expansion syntax with a gated tool name (a command prefix (env, command, builtin, exec, sudo, nohup, timeout, …); \"npm\"). The guard refuses a command that can be built at run time and mentions a gated tool; write it out with plain words. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "npm publish",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "npm publish",
+    "verb": "publish",
+    "target": "npm:@tinycloud/other@1.2.3",
+    "key": "publish|npm:@tinycloud/other@1.2.3",
+    "display": "publish npm:@tinycloud/other@1.2.3"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish npm:@tinycloud/other@1.2.3 is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target npm:@tinycloud/other@1.2.3 --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "bun publish",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "bun publish",
+    "verb": "publish",
+    "target": "npm:@tinycloud/other@1.2.3",
+    "key": "publish|npm:@tinycloud/other@1.2.3",
+    "display": "publish npm:@tinycloud/other@1.2.3"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish npm:@tinycloud/other@1.2.3 is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target npm:@tinycloud/other@1.2.3 --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "npm run deploy:prod",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "npm script deploy:prod: cannot name the target (script:@tinycloud/other:deploy:prod)"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: npm script deploy:prod: cannot name the target (script:@tinycloud/other:deploy:prod). The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "npm run release",
+  "findings": [
+   {
+    "kind": "gated",
+    "label": "npm script release",
+    "verb": "publish",
+    "target": "script:@tinycloud/other:release",
+    "key": "publish|script:@tinycloud/other:release",
+    "display": "publish script:@tinycloud/other:release"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: publish script:@tinycloud/other:release is a gated action and a woken agent never runs it directly. Agents do not run this action in v0: ask your owner with courier request <threadId> --peer <peer> --task <taskId> --verb publish --target script:@tinycloud/other:release --summary \"…\"; your owner runs it."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "npm run lint",
+  "findings": [],
+  "decision": {
+   "kind": "pass"
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "npx @tinycloud/other pause 01M5C9EDF03QMRZS2DJXGN5A4C",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "bunx @tinycloud/other deploy",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "package-launched executable has no verified inode; run an installed tool directly"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: package-launched executable has no verified inode; run an installed tool directly. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ },
+ {
+  "name": "@tinycloud/other",
+  "command": "npm exec --package @tinycloud/other -- courier resume 01M5C9EDF03QMRZS2DJXGN5A4C",
+  "findings": [
+   {
+    "kind": "unresolved",
+    "label": "expansion syntax with a gated tool name (a command prefix (env, command, builtin, exec, sudo, nohup, timeout, …); \"npm\"). The guard refuses a command that can be built at run time and mentions a gated tool; write it out with plain words"
+   }
+  ],
+  "decision": {
+   "kind": "deny",
+   "reason": "Blocked: expansion syntax with a gated tool name (a command prefix (env, command, builtin, exec, sudo, nohup, timeout, …); \"npm\"). The guard refuses a command that can be built at run time and mentions a gated tool; write it out with plain words. The Courier guard cannot tell this command apart from a gated one (merge, deploy, publish, push to main, secrets). Write the command out with plain words, one action per call."
+  }
+ }
+]

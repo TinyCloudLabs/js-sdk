@@ -6,6 +6,7 @@ import { readdir, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { profileLockPath } from "../state.js";
+import { PROFILE_LOCK_HELPER_ENV } from "./profile-lock-protocol.js";
 
 const holdFixture = new URL("../../test-support/hold-profile-lock.ts", import.meta.url).pathname;
 const cycleFixture = new URL("../../test-support/cycle-profile-lock.ts", import.meta.url).pathname;
@@ -18,9 +19,9 @@ const LOCK_TEST_ENVIRONMENT = [
   "TC_TEST_LOCK_PROTOCOL",
 ];
 
-/** Environment for a lock child process: this test's TC_HOME, no inherited barriers or protocol. */
+/** Environment for a lock child process: this test's TC_HOME, no inherited barriers or protocol, a helper deadline. */
 export function lockChildEnv(home: string, extra: Record<string, string> = {}): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
+  const env: Record<string, string | undefined> = { ...process.env, ...PROFILE_LOCK_HELPER_ENV, TC_HOME: home, HOME: homedir(), NODE_ENV: "test" };
   for (const name of LOCK_TEST_ENVIRONMENT) delete env[name];
   return { ...env, ...extra };
 }

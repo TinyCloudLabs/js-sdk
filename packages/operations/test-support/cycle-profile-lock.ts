@@ -1,8 +1,13 @@
+import "./test-bootstrap.mjs";
 // Takes one profile lock `iterations` times, recording overlapping holders.
 // The lock is the release TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts).
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withFixtureLock } from "./lock-protocol.js";
+import { PROFILE_LOCK_HELPER_DEADLINE_MS } from "../src/test-support/profile-lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
 
 const [profile, holdersDir, iterations, staleAfterMs] = process.argv.slice(2);
 if (!profile || !holdersDir || !iterations || !staleAfterMs) {

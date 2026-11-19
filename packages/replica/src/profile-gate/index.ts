@@ -1,0 +1,20 @@
+export {
+  advanceInactiveGate,
+  assertGateAccess,
+  clearGateIntent,
+  denyGate,
+  deferredGateToken,
+  establishSessionStamp,
+  identityHashOf,
+  grantInstallHashOf,
+  principalHashOf,
+  readFirstInstall,
+  resumeDeferredGate,
+  readGateSnapshot,
+  readLogoutGate,
+  REPLICA_DENY_FLOOR_FILE,
+  recordFirstInstall,
+  recordGrantInstall,
+  restoreSessionStamp,
+} from "./gateFile.js";
+export type { DeferredEraseToken } from "./gateFile.js";

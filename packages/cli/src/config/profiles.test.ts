@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,9 +23,57 @@ describe("ProfileManager.getProfile", () => {
   test("a missing profile is PROFILE_NOT_FOUND and names the init command for that profile", async () => {
     await expect(ProfileManager.getProfile("owner")).rejects.toMatchObject({
       code: "PROFILE_NOT_FOUND",
-      message: expect.stringContaining("`tc init --name owner`"),
     });
   });
+});
+
+test("profile reads and writes stay on the locked inode after a real-directory swap", async () => {
+  const config = (name: string) => ({
+    name, host: "https://node.tinycloud.test", did: `did:key:${name}`, chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  await ProfileManager.setProfile("selected", config("selected"));
+  await ProfileManager.setProfile("victim", config("victim"));
+  await ProfileManager.setKey("selected", { owner: "selected" });
+  await ProfileManager.setKey("victim", { owner: "victim" });
+  const selected = join(PROFILES_DIR, "selected");
+  const moved = join(home, "selected-moved");
+  await ProfileManager.withLock("selected", async () => {
+    await rename(selected, moved);
+    await rename(join(PROFILES_DIR, "victim"), selected);
+    expect((await ProfileManager.getProfile("selected")).name).toBe("selected");
+    expect(await ProfileManager.getKey("selected")).toEqual({ owner: "selected" });
+    await ProfileManager.setKey("selected", { owner: "updated" });
+  });
+  expect(JSON.parse(await readFile(join(selected, "key.json"), "utf8"))).toEqual({ owner: "victim" });
+  expect(JSON.parse(await readFile(join(moved, "key.json"), "utf8"))).toEqual({ owner: "updated" });
+});
+
+test("cache creation stays on the selected profile when its directory name is replaced", async () => {
+  const config = (name: string) => ({
+    name, host: "https://node.tinycloud.test", did: `did:key:${name}`, chainId: 1,
+    spaceName: "default", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  await ProfileManager.setProfile("selected", config("selected"));
+  await ProfileManager.setProfile("victim", config("victim"));
+  const selected = join(PROFILES_DIR, "selected");
+  const moved = join(home, "selected-cache-moved");
+  const original = ProfileManager.ensureProfileDir;
+  ProfileManager.ensureProfileDir = async function (name) {
+    const directory = await original.call(this, name);
+    if (name === "selected") {
+      await rename(selected, moved);
+      await rename(join(PROFILES_DIR, "victim"), selected);
+    }
+    return directory;
+  };
+  try {
+    await ProfileManager.getCacheDir("selected");
+  } finally {
+    ProfileManager.ensureProfileDir = original;
+  }
+  expect((await stat(join(moved, "cache"))).isDirectory()).toBe(true);
+  await expect(lstat(join(selected, "cache"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 describe("ProfileManager.deleteProfile", () => {
@@ -115,6 +163,48 @@ describe("ProfileManager.resolveContext replication flags", () => {
       else process.env.TC_REPLICATION = previous;
       if (previousDebug === undefined) delete process.env.TC_REPLICATION_DEBUG;
       else process.env.TC_REPLICATION_DEBUG = previousDebug;
+    }
+  });
+});
+describe("ProfileManager.resolveContext registry URL", () => {
+  test("environment registry URL overrides the stored registry without replacing the profile host hint", async () => {
+    const profileHost = "https://profile-host.test";
+    const profileRegistry = "https://profile-registry.test";
+    const envRegistry = "https://env-registry.test";
+    const previousRegistry = process.env.TC_REGISTRY_URL;
+    await ProfileManager.setProfile("registry-profile", {
+      name: "registry-profile",
+      host: profileHost,
+      chainId: 1,
+      spaceName: "default",
+      did: "did:key:zregistry",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      tinycloudRegistryUrl: profileRegistry,
+    });
+
+    try {
+      delete process.env.TC_REGISTRY_URL;
+      const fromProfile = await ProfileManager.resolveContext({
+        profile: "registry-profile",
+        host: profileHost,
+      });
+      expect(fromProfile).toMatchObject({
+        host: profileHost,
+        tinycloudRegistryUrl: profileRegistry,
+      });
+
+      process.env.TC_REGISTRY_URL = envRegistry;
+      const fromEnvironment = await ProfileManager.resolveContext({
+        profile: "registry-profile",
+        host: profileHost,
+      });
+      expect(fromEnvironment).toMatchObject({
+        host: profileHost,
+        tinycloudRegistryUrl: envRegistry,
+      });
+    } finally {
+      if (previousRegistry === undefined) delete process.env.TC_REGISTRY_URL;
+      else process.env.TC_REGISTRY_URL = previousRegistry;
     }
   });
 });

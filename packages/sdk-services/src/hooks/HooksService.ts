@@ -1,5 +1,6 @@
 import { BaseService } from "../base/BaseService";
 import type { RequestSignal } from "../base/types";
+import { abortableSleep } from "../sleep";
 import type {
   FetchResponse,
   InvokeAnyEntry,
@@ -28,6 +29,8 @@ interface HookSubscriber {
   /** `subscriptionSignature` of each requested entry, fixed at subscribe time. */
   signatures: string[];
   ttlSeconds?: number;
+  onReady?: () => void;
+  readyGeneration?: number;
   queue: AsyncQueue<HookEvent>;
 }
 
@@ -150,6 +153,8 @@ export class HooksService extends BaseService implements IHooksService {
   private _phase?: { key: string; interrupt: AbortController };
   /** Bumped on every session change; part of the plan key. */
   private _sessionGeneration = 0;
+  private _streamGeneration = 0;
+  private _readyStream?: { key: string; generation: number };
 
   private _lastContextSignal?: AbortSignal;
   constructor(config: HooksServiceConfig = {}) {
@@ -181,6 +186,7 @@ export class HooksService extends BaseService implements IHooksService {
       requested,
       signatures: requested.map(subscriptionSignature),
       ttlSeconds: options.ttlSeconds,
+      onReady: options.onReady,
       queue: new AsyncQueue<HookEvent>(),
     };
     const leave = (): void => {
@@ -195,6 +201,7 @@ export class HooksService extends BaseService implements IHooksService {
     signal?.addEventListener("abort", leave, { once: true });
     this._subscribers.add(subscriber);
     this.wake();
+    if (this._readyStream) this.notifyReady(subscriber, this._readyStream);
 
     try {
       for await (const event of subscriber.queue) {
@@ -225,26 +232,25 @@ export class HooksService extends BaseService implements IHooksService {
     }
 
     try {
-      const response = await this.context.fetch(`${this.host}/hooks/webhooks`, {
-        method: "POST",
-        headers: {
-          ...serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/register",
-              buildScopePath(webhook.service, webhook.pathPrefix),
-            ),
+      const response = await this.invokeWithRetry(
+        `${this.host}/hooks/webhooks`,
+        () =>
+          this.createHookHeaders(
+            "tinycloud.hooks/register",
+            buildScopePath(webhook.service, webhook.pathPrefix),
           ),
-          "content-type": "application/json",
+        {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            space: webhook.space,
+            service: webhook.service,
+            pathPrefix: normalizePathPrefix(webhook.pathPrefix),
+            abilities: webhook.abilities ?? [],
+            callbackUrl: webhook.callbackUrl,
+            secret: webhook.secret,
+          }),
         },
-        body: JSON.stringify({
-          space: webhook.space,
-          service: webhook.service,
-          pathPrefix: normalizePathPrefix(webhook.pathPrefix),
-          abilities: webhook.abilities ?? [],
-          callbackUrl: webhook.callbackUrl,
-          secret: webhook.secret,
-        }),
-      });
+      );
 
       if (!response.ok) {
         return err(
@@ -290,19 +296,16 @@ export class HooksService extends BaseService implements IHooksService {
         }
       }
 
-      const response = await this.context.fetch(
+      const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks${query.size > 0 ? `?${query.toString()}` : ""}`,
-        {
-          method: "GET",
-          headers: serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/list",
-              options.service
-                ? buildScopePath(options.service, options.pathPrefix)
-                : "webhooks",
-            ),
+        () =>
+          this.createHookHeaders(
+            "tinycloud.hooks/list",
+            options.service
+              ? buildScopePath(options.service, options.pathPrefix)
+              : "webhooks",
           ),
-        },
+        { method: "GET" },
       );
 
       if (!response.ok) {
@@ -337,22 +340,19 @@ export class HooksService extends BaseService implements IHooksService {
     }
 
     try {
-      const response = await this.context.fetch(
+      const response = await this.invokeWithRetry(
         `${this.host}/hooks/webhooks/${encodeURIComponent(id)}`,
-        {
-          method: "DELETE",
-          headers: serviceHeadersToRecord(
-            this.createHookHeaders(
-              "tinycloud.hooks/unregister",
-              options.target
-                ? buildScopePath(
-                    options.target.service,
-                    options.target.pathPrefix,
-                  )
-                : `webhooks/${id}`,
-            ),
+        () =>
+          this.createHookHeaders(
+            "tinycloud.hooks/unregister",
+            options.target
+              ? buildScopePath(
+                  options.target.service,
+                  options.target.pathPrefix,
+                )
+              : `webhooks/${id}`,
           ),
-        },
+        { method: "DELETE" },
       );
 
       if (!response.ok) {
@@ -481,6 +481,7 @@ export class HooksService extends BaseService implements IHooksService {
   ): Promise<AttemptOutcome> {
     let phase: StreamPhase = "mint";
     let request: RequestSignal | undefined;
+    const generation = ++this._streamGeneration;
     const owns = (): boolean =>
       !signal.aborted && !request?.signal.aborted && this.plan()?.key === plan.key;
     try {
@@ -548,6 +549,14 @@ export class HooksService extends BaseService implements IHooksService {
           if (next.done) break;
           const message = next.value;
           if (!message.data) continue;
+          if (message.event === "ready") {
+            const marker: unknown = JSON.parse(message.data);
+            if (marker !== null && typeof marker === "object" && "type" in marker && marker.type === "ready") {
+              this._readyStream = { key: plan.key, generation };
+              for (const subscriber of this._subscribers) this.notifyReady(subscriber, this._readyStream);
+            }
+            continue;
+          }
           const event = parseHookEvent(message);
           if (!owns()) return { kind: "stopped" };
           this.dispatch(event);
@@ -562,6 +571,8 @@ export class HooksService extends BaseService implements IHooksService {
       return request?.signal.aborted || thrown === SUPERSEDED
         ? { kind: "stopped" }
         : { kind: "failed", error: hookStreamFailure(phase, thrown) };
+    } finally {
+      if (this._readyStream?.generation === generation) this._readyStream = undefined;
     }
   }
 
@@ -622,6 +633,17 @@ export class HooksService extends BaseService implements IHooksService {
       subscriptions: signatures.map((signature) => merged.get(signature)!),
       ttlSeconds,
     };
+  }
+
+  private notifyReady(subscriber: HookSubscriber, ready: { key: string; generation: number }): void {
+    if (!this._subscribers.has(subscriber) || subscriber.readyGeneration === ready.generation ||
+      this.plan()?.key !== ready.key || this._phase?.interrupt.signal.aborted) return;
+    subscriber.readyGeneration = ready.generation;
+    try {
+      subscriber.onReady?.();
+    } catch {
+      this.report(serviceError(ErrorCodes.INVALID_INPUT, "Hook readiness callback failed", "hooks"));
+    }
   }
 
   private dispatch(event: HookEvent): void {
@@ -891,24 +913,9 @@ function readProperty(value: unknown, key: string): unknown {
   }
 }
 
-/** The default retry clock: abortable and unref'd, so a parked backoff never keeps the process alive. */
-function sleep(delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", stop);
-      resolve();
-    };
-    const timer = setTimeout(finish, delayMs);
-    timer.unref?.();
-    const stop = (): void => finish();
-    if (signal.aborted) {
-      finish();
-    } else {
-      signal.addEventListener("abort", stop, { once: true });
-    }
-  });
-}
+/** The default retry clock. */
+const sleep = (delayMs: number, _attempt: number, signal: AbortSignal): Promise<void> =>
+  abortableSleep(delayMs, signal, true);
 
 function abortPromise(signal: AbortSignal): {
   promise: Promise<void>;
@@ -935,7 +942,9 @@ function normalizeSubscription(
 ): HookSubscription {
   return {
     ...subscription,
-    pathPrefix: normalizePathPrefix(subscription.pathPrefix),
+    pathPrefix: subscription.service === "kv"
+      ? normalizePathPrefix(subscription.pathPrefix)
+      : subscription.pathPrefix?.replace(/^\/+/, "") || undefined,
     abilities: subscription.abilities ? [...subscription.abilities] : [],
   };
 }
@@ -968,7 +977,12 @@ function matchesSubscription(
   if (event.service !== subscription.service) {
     return false;
   }
-  if (subscription.pathPrefix) {
+  if (event.service === "sql" || event.service === "duckdb") {
+    const scope = subscription.pathPrefix;
+    const database = event.databasePath ?? event.path;
+    if (scope && scope !== "/" && (!database ||
+      (scope.endsWith("/") ? !database.startsWith(scope) : database !== scope))) return false;
+  } else if (subscription.pathPrefix) {
     const prefix = subscription.pathPrefix.endsWith("/")
       ? subscription.pathPrefix
       : `${subscription.pathPrefix}/`;
@@ -1174,6 +1188,7 @@ function parseHookEvent(message: HookStreamEvent): HookEvent {
     service: parsed.service ?? "",
     ability: parsed.ability ?? "",
     path: parsed.path,
+    databasePath: typeof parsed.databasePath === "string" ? parsed.databasePath : undefined,
     actor: parsed.actor ?? "",
     epoch: parsed.epoch ?? "",
     eventIndex: parsed.eventIndex ?? 0,

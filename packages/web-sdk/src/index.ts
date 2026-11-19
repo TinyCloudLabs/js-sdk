@@ -1,11 +1,15 @@
+export { SessionAccountMismatchError } from "./modules/restoreAccount";
+export { sharePlacementCore as __sharePlacementCore } from "./share-placement-core";
 // Main class and config
 export {
   TinyCloudWeb,
   type Config,
+  type RuntimePermissionSigner,
   type ShareReceiveResult,
   type SessionRestoreResult,
   type SessionRestoreStatus,
 } from "./modules/tcw";
+export type { TinyCloudUI, UiConfig, UiPosition } from "./ui";
 export {
   establishOpenKeySession,
   type EstablishOpenKeySessionOptions,
@@ -13,12 +17,17 @@ export {
   type EstablishOpenKeySessionStatus,
 } from "./openkey-session";
 export {
+  OpenKeySigningKeyError,
+  type OpenKeySigningKeyErrorCode,
+} from "./openkey-signing-key";
+export {
   establishManageKeySession,
   type EstablishManageKeySessionOptions,
   type EstablishManageKeySessionResult,
 } from "./manage-key-session";
 export * from "./credentials";
 export * from "./share";
+export { isAppKeyHostBound } from "@tinycloud/node-sdk/core";
 export type {
   SecretReadInput,
   SecretReadResult,
@@ -37,6 +46,22 @@ export type {
   RegisterOwnerSharePolicyParams,
   OwnerSharePolicyRegistrationReceipt,
 } from "@tinycloud/sdk-core";
+
+// Replica wiring: registration and the shared-core exports the optional replica
+// bundle reads from this root. All of it lives in ./modules/replica-wiring.
+export {
+  registerBrowserReplica,
+  type BrowserReplicaPlugin,
+  __replicaActionContains,
+  __replicaKV,
+  __replicaCanonicalizeRecapCaveats,
+  __replicaIsCapabilitySubset,
+  __replicaParsePkhDid,
+  __replicaParseSpaceUri,
+  __replicaPkhDid,
+  __replicaPrincipalDid,
+  __replicaSiweMessage,
+} from "./modules/replica-wiring";
 
 // Browser Adapters
 export {
@@ -229,6 +254,8 @@ export {
   // SharingService
   SharingService,
   createSharingService,
+  inspectShareToken,
+  type InspectedShareToken,
   type ISharingService,
   type SharingServiceConfig,
   type EncodedShareData,
@@ -326,7 +353,9 @@ export {
   type VaultError,
   type ISecretsService,
   type SecretCatalogEntry,
+  type SecretEntry,
   type SecretPayload,
+  type SecretType,
   type SecretsError,
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,
@@ -423,10 +452,11 @@ export { createKVService } from "./modules/Storage/tinycloud/KVServiceAdapter";
 // Delegation Transport Types (re-exported from node-sdk for compatibility)
 export {
   DelegatedAccess,
+  MissingSpacesError,
   serializeDelegation,
   deserializeDelegation,
 } from "@tinycloud/node-sdk/core";
-export type { PortableDelegation } from "@tinycloud/node-sdk/core";
+export type { DelegatedSecretReadInput, PortableDelegation, SpaceHosting } from "@tinycloud/node-sdk/core";
 
 // TinyCloudNode re-export (for advanced usage)
 export {

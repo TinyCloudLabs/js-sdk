@@ -17,6 +17,8 @@ export interface RestorableSessionData {
    * before this field existed; in that case the node re-resolves lazily.
    */
   tinycloudHosts?: string[];
+  /** Replica gate stamp from sign-in; `node.restoreSession` validates it against the gate. */
+  replicaStamp?: PersistedSessionData["replicaStamp"];
 }
 
 export function clientSessionFromPersisted(
@@ -63,5 +65,6 @@ export function restoreDataFromPersisted(
     signature: data.signature,
     expiresAt: data.expiresAt,
     tinycloudHosts: data.tinycloudHosts,
+    replicaStamp: data.replicaStamp,
   };
 }

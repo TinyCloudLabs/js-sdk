@@ -815,12 +815,10 @@ export class CliClientImpl implements CliClient {
     const syncs = result.events.filter((item) => item.attribution === "op" && item.opSeq === result.opSeq).map((item) => item.event).filter((event) => event.type === "replication.sync");
     return { ...result, ok: result.exit === 0 && syncs.length > 0 && syncs.every((event) => event.outcome === "ok"), syncs: syncs as SyncResult["syncs"] };
   }
-  async status(options?: CliCallOptions): Promise<StatusEntry[]> { const result = await this.op(["replica", "report", "--json"], options); return ((result.json as { replicas?: StatusEntry[] } | undefined)?.replicas ?? []); }
+  async status(_options?: CliCallOptions): Promise<StatusEntry[]> { return unsupportedOption("live replica status in the read-only report (TC-1309)"); }
   async purge(options?: CliCallOptions): Promise<PurgeResult> { const result = await this.op(["auth", "logout"], options); return { ...result, ok: result.exit === 0, purged: [], failed: [] }; }
-  async clearPending(options?: { keys?: string[] } & CliCallOptions): Promise<{ opSeq: number; startedMono: number; durationMs: number; events: EventEnvelope[]; ok: boolean; cleared: number }> {
-    if (options?.keys !== undefined) unsupportedOption("clearPending keys");
-    const result = await this.op(["replica", "report", "--clear-pending", "--json"], options);
-    return { ...result, ok: result.exit === 0, cleared: Number((result.json as { cleared?: number } | undefined)?.cleared ?? 0) };
+  async clearPending(_options?: { keys?: string[] } & CliCallOptions): Promise<{ opSeq: number; startedMono: number; durationMs: number; events: EventEnvelope[]; ok: boolean; cleared: number }> {
+    return unsupportedOption("clearPending in the read-only report (TC-1309)");
   }
   async authority(): Promise<{ posture: "owner" | "delegate-session"; sessionExpiresAt: number | null; grantExpiresAt: number | null }> {
     const profilePath = join(this.homePath, ".tinycloud", "profiles", this.profileName);

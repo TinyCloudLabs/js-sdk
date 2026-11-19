@@ -102,6 +102,11 @@ The `Major release guard` check fails a PR that adds a `major` changeset or rais
 without that sign-off. The Release workflow applies the same rule before publishing betas and before
 graduating them to stable (TC-615).
 
+Every changeset a PR adds or modifies needs a line that starts `Details: TC-<number>` (several
+tickets: `Details: TC-1, TC-2`); the `Changeset details` check fails the PR otherwise. It becomes
+the ticket line in the package CHANGELOG. `.changeset/README.md`, `config.json` and `pre.json` are
+exempt, as are the `dependabot-*.md` changesets that `dependabot-changeset.yml` generates.
+
 Release runs queue and never cancel each other. Each run pushes its version commit to `master` and
 then publishes from that commit; if `master` moved first, the run fails without publishing and the
 next run releases the changesets. Before publishing, it fails if npm's copy of any current version
@@ -110,6 +115,29 @@ package, so the next run bumps past the stale version. A beta run also refuses t
 `master` has stable versions npm lacks (a stable release that did not finish publishing). A
 maintainer then re-dispatches the Stable Release, which publishes exactly those versions from their
 release commit and graduates nothing else in that run.
+npm can accept a publish and show it only much later (`@tinycloud/web-sdk`: 17 min to 2 h 25 min,
+TC-1457). The beta publish step records the versions npm accepted as `tinycloud-npm-accepted:` lines in the
+run's log. After the 30-minute budget, `Confirm npm has every current version` treats an accepted version
+that is still not visible as a warning and a pending marker, not a failure. The next run's pre-publish
+reads earlier Release runs' logs (read-only, `actions: read`) and stops, rather than publish the same
+version number from newer code, when a version is missing from npm but an earlier run accepted it. It
+names that run; wait until `npm view <name>@<version>` answers, then push to `master` again, or bump the
+package with a changeset. A version no run accepted is published from HEAD as before.
+The warning holds only while no current version requires the pending one. `npm publish` moves each
+package's dist-tag at once, so a published package that requires a pending (or missing) internal version
+fails `Confirm npm` red: installing it by tag fails with ETARGET (`@tinycloud/web-sdk@beta` →
+`web-sdk-wasm@1.7.7-beta.0`, 2026-10-20). The failure prints a "tag back" `npm dist-tag add` command
+(to the version pre-publish recorded) and a "roll forward" one; a maintainer runs them by hand. CI never
+moves dist-tags.
+
+Runbook: **`Confirm npm has every current version` warns "pending" for web-sdk → wait; never re-run;
+never use the `release` dispatch (that's STABLE).** If it fails for web-sdk only, the version was not
+recorded as accepted: check the publish step log and `npm view`, still never re-run or dispatch `release`.
+If it fails because a package requires a version npm does not show, hold merges; wait for the dependency
+or run the printed tag-back command, then roll forward once `npm view <dependency> version` answers.
+A beta run's pre-publish check runs before it pushes, so a stop there leaves `master` and the pending
+changesets untouched; push to `master` again once npm shows the version.
+
 Stable-release installs use the committed lockfile before selecting a release and during recovery.
 Only a newly versioned release may refresh it: an unfrozen recovery install can rewrite workspace
 version metadata and make the immutable release checkout fail the clean-tree publishing guard.
@@ -138,10 +166,100 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
+- Share publishing never creates the share key and never requests
+  `tinycloud.encryption/key.create`: it encrypts to the deterministic
+  `share/<id>` key's public key (unauthenticated GET), and the node records the
+  key when the share policy is registered. The `<network>/share/` manifest
+  prefix accepts `decrypt` only; `key.create` remains for `apps/` keys via
+  `manifest.keys`.
+- The public ChatGPT candidate is `/chatgpt/mcp`, not the broad `/mcp` service.
+  Tool bindings are public opt-in; keep recovery-tool mapping restricted to the
+  selected surface. Public approvals/state are separate and require matching
+  OpenKey audience and exact web callback registrations. Context/query mutate
+  timezone/derived data and are not read-only. Query responses remain bounded;
+  canonical write outcomes must not be truncated. Package/review state lives
+  under `packages/mcp/plugin`. Default-branch merges and deployment require
+  explicit owner approval; never enable auto-merge or bypass that gate.
+- `/claude/mcp`, `/grok/mcp` and `/muse/mcp` are the same restricted surface as
+  `/chatgpt/mcp`, one address per assistant directory (`RESTRICTED_ADDRESS_PREFIXES`
+  in `packages/mcp/src/http.ts`). Each is its own OAuth audience with its own
+  approval route and tenant state. A new prefix needs the matching OpenKey
+  audience and exact callback, and the connector's token-status client
+  registered for the new resource, before it can serve a request. A change one
+  directory's review asks for goes on that address only: `/claude/mcp` repeats
+  each tool's title as `annotations.title` (`ANNOTATION_TITLE_PREFIXES`), and
+  the other addresses' `tools/list` must stay byte-identical.
+- TC-2393's hosted-client requirements and source/live evidence are in
+  `packages/mcp/plugin/client-compatibility.md`. Keep custom connection support
+  separate from official-directory acceptance; metadata is not authenticated QA.
 - Hosted personal apps live in `packages/operations/src/operations/apps.ts` and
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
+- Personal apps retain their existing layout (`src/tc-apps/layout.ts`). New apps
+  use space `applications`, keys `xyz.tinycloud.tinyapps.<app>/`, discovery entry
+  `xyz.tinycloud.tinyapps.catalog/<app>/entry`, and SQL copy `<root>index`.
+  Existing legacy apps remain readable and writable in space `default` under
+  `xyz.tinycloud.agent-data/`; context reuses their existing grants without
+  requiring new-space approval. This restores access after the TC-2416 cutoff;
+  never silently migrate records or create a new-layout replacement for a known
+  legacy app. A readable new discovery entry selects that layout over its legacy
+  namesake. Query accepts `layout: "legacy"` for the shared
+  `xyz.tinycloud.agent-data.index` copy; omission still selects the new layout.
+  Legacy SQL keys are full KV keys and `entries` includes `app`; new copies use
+  app-relative keys. The migration tool stays removed. New-layout approvals
+  retain their per-app boundaries in `applications`; legacy permissions retain
+  the original legacy-root scope.
+- The rules generator adapts the CLI examples to MCP write inputs: keep the
+  vendored CLI attribution intact. MCP put/move values omit top-level `by`,
+  including edits of read-back records and catalogs. Keep this restriction
+  expressible in the generated JSON Schema; stored/read-back records retain `by`.
+- Personal-app context can bundle one app's folder and the app list via `app`
+  and `access` (`change` by default, or `read`). A generic change bundle grants
+  catalog-root get/list, get/put only on `xyz.tinycloud.tinyapps.catalog/<app>/entry`,
+  and CRUD on that app's folder. Never grant catalog-root put. Omitting `app`
+  retains per-call approvals; read access never adds discovery-entry writes.
+  Reads reuse an existing read-only folder grant.
+  Catalog slugs are handled before generic app-id validation: Health Log bundles
+  app-list read and its exact database read/write; Recipes bundles app-list and
+  knowledge reads and learns its database from the notes. Both support read-only
+  access; Recipes never requests writes. Catalog grants stay in applications.
+  Previously signed catalog-wide grants remain valid and reusable until revoked
+  or expired; narrower requests do not retroactively narrow them.
+- Hosted MCP passes its configured public origin as ordinary OpenKey
+  `requesterOrigin`; the prepared SIWE domain and consent label use that host.
+  This is caller-reported attribution, not verified app identity or a signed
+  manifest. Deploy matching OpenKey API/web support before the MCP change,
+  only with owner authorization. Approval reasons say TinyCloud connector,
+  describe each scope's actual actions, and do not change vendored CLI skills.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
-  including a partial move or failed derived-copy upkeep.
+  including a failed derived-copy upkeep.
+- Generic retrieval lives in `packages/operations/src/operations/read.ts` and
+  `read-scope.ts`. Explicit subtree/database consent uses the existing
+  request-bound approval kernel; GET/HEAD must never broaden implicitly.
+  `tinycloud.read` reacquires bounded KV/SQL data for each digest-bound page.
+  Continuations bind host, source owner, canonical locator/query, hash and
+  length, never sender credentials. Recipient authority remains independent.
+  Preserve byte-exact KV vs derived SQL provenance and fail closed on changes.
+  Keep these private tools out of the public ChatGPT binding set; native read
+  exposure must remain inside the existing signed grant ceiling.
+- Meals, food, calories, body weight and recipes are not generic personal
+  records: the rules route them to Health Log and Recipes through the generic
+  knowledge and SQL tools. The routing table is extracted from the vendored
+  `TINY-APPS.md`; the statements in `src/tc-apps/preamble.ts` (`HEALTHLOG_*`)
+  mirror the pinned Health Log schema (`packages/cli/src/lib/apps-install.healthlog.schema.sql`)
+  and are checked against the generic SQL tools' input schemas in
+  `apps.catalog.test.ts`. "Not installed" is detected from the first query: a missing
+  database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
+  (operations/src/operations/sql.ts). Drop that step when onboarding grants
+  the schema for catalog apps (TC-2430).
+- A surface that does not register the catalog apps' tools (`CATALOG_APP_TOOLS`
+  in `packages/mcp/src/tools.ts`; today the restricted addresses) neither offers
+  nor accepts a catalog slug: `tinycloud_apps_context`'s `app` description omits
+  them, and `app: "healthlog"` or `"recipes"` is answered before the kernel with
+  `INPUT_INVALID`, `details.reason: "catalog_app_unavailable"` and the tiny-app
+  link, so no approval is planned. `/mcp` and `operations.json` are unaffected.
+  Keep the catalog section in the rules those addresses return: it is what makes
+  an assistant give the app link for a new meal or body-weight request instead
+  of creating a generic app for it.

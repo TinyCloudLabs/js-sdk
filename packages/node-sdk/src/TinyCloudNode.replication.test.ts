@@ -25,9 +25,14 @@ import {
   type ReplicationAuthority,
 } from "@tinycloud/sdk-core";
 import "./replication/node-loader";
+import { NodeWasmBindings } from "./NodeWasmBindings";
+import { signedRestorableSession } from "./test-support/signed-restorable-session";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.replication-unit.test";
 
 // ---------------------------------------------------------------------------
 // Fixtures (mirrors TinyCloudNode.delegateTo.test.ts)
@@ -432,14 +437,29 @@ describe("replicationAuthority (§4.2)", () => {
     expect(authority.plan("notes/")).toEqual({ refused: "SESSION_EXPIRING" });
   });
 
-  test("plan routes through planDelegation with one get+sync folder entry", async () => {
+  const planResult = () => ({
+    path: "runtime" as const,
+    parentCid: "bafyP",
+    expiresAt: 1_700_000_000_000,
+    effectiveExpiration: new Date(1_700_000_000_000),
+  });
+
+  test("an unverified owner session cannot plan and never reaches planDelegation", async () => {
     const node = sessionOnlyNode(makeFakeWasmBindings(), fakeSession());
-    const planDelegationSpy = mock(() => ({
-      path: "runtime" as const,
-      parentCid: "bafyP",
-      expiresAt: 1_700_000_000_000,
-      effectiveExpiration: new Date(1_700_000_000_000),
-    }));
+    const planDelegationSpy = mock(planResult);
+    Reflect.set(node, "planDelegation", planDelegationSpy);
+    const authority = await replicationAuthorityForTest(node);
+    expect(authority.plan("notes/")).toEqual({ refused: "NOT_COVERED" });
+    expect(planDelegationSpy).not.toHaveBeenCalled();
+  });
+
+  test("a verified signed owner plan routes through planDelegation with one get+sync folder entry", async () => {
+    const proof = await signedRestorableSession({
+      abilities: { kv: { "": ["tinycloud.kv/get", "tinycloud.kv/sync"] } },
+    });
+    const node = new TinyCloudNode({ host: "http://127.0.0.1:1", wasmBindings: new NodeWasmBindings() });
+    await node.restoreSession(proof);
+    const planDelegationSpy = mock(planResult);
     Reflect.set(node, "planDelegation", planDelegationSpy);
     const authority = await replicationAuthorityForTest(node);
     expect(authority.plan("notes/")).toEqual({
@@ -449,7 +469,7 @@ describe("replicationAuthority (§4.2)", () => {
     });
     const entries = planDelegationSpy.mock.calls[0]![0] as PermissionEntry[];
     expect(entries).toEqual([
-      { service: "tinycloud.kv", space: SPACE_ID, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: proof.spaceId, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
     ]);
   });
 });
@@ -459,7 +479,9 @@ describe("replicationAuthority (§4.2)", () => {
 // ---------------------------------------------------------------------------
 
 function signInFetch() {
-  return (async (input: unknown, init?: RequestInit) => {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) {
       return new Response(
@@ -524,6 +546,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
     });
     globalThis.fetch = signInFetch();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: makeSigner(),
       tinycloudHosts: ["https://tinycloud.test"],
@@ -576,6 +599,7 @@ describe("replicationSignInEntries (§4.1, §4.6)", () => {
       includePublicSpace: false,
     };
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: makeSigner(),
       tinycloudHosts: ["https://tinycloud.test"],

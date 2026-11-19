@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "@noble/hashes/sha256";
-import type { InvokeFunction, ServiceSession } from "@tinycloud/sdk-services";
+import type { FetchFunction, InvokeFunction, ServiceSession } from "@tinycloud/sdk-services";
 import {
   createShareArtifact,
   encodeInlineShareUrl,
@@ -18,6 +18,7 @@ import {
 } from "./share-envelope";
 import { ShareRecipientClient } from "./ShareRecipientClient";
 import { MemoryShareCache } from "./ShareCache";
+import type { ShareRecipientClientOptions } from "./recipient-types";
 import nodeVectors from "./fixtures/share-email-v2-vectors.json";
 
 const ORIGIN = "https://node.example.test";
@@ -204,6 +205,37 @@ describe("ShareRecipientClient", () => {
     expect(putCalls).toBe(1);
     await expect(access.save("other/a.md", Uint8Array.from([2]), { etag: "etag-1" })).rejects.toMatchObject({ code: "SHARE_OUT_OF_SCOPE" });
     expect(putCalls).toBe(1);
+  });
+
+  test("reports the node's retry signals as offline or a failed write, never an invalid share", async () => {
+    const created = createShareArtifact({
+      origin: ORIGIN,
+      spaceId: SPACE,
+      resource: { kind: "prefix", path: "docs/" },
+      actions: ["read", "list", "edit"],
+      mimeType: "text/markdown",
+      bytes: new TextEncoder().encode("# folder"),
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      signerDid: "did:key:z6MkSigner",
+      signerPrivateKey: PRIVATE_KEY,
+    });
+    for (const [code, expected] of [
+      ["NODE_BUSY", "SHARE_OFFLINE"],
+      ["REQUEST_TIMEOUT", "SHARE_OFFLINE"],
+      ["OUTCOME_UNKNOWN", "SHARE_WRITE_FAILED"],
+    ] as const) {
+      const failure = { ok: false, error: { code, message: "node", service: "kv" } };
+      const kv = { get: async () => failure, list: async () => failure, put: async () => failure };
+      const access = await new ShareRecipientClient({
+        trustedOrigins: [ORIGIN],
+        fetch: mock(async () => new Response(created.bytes)) as never,
+        invoke: (() => ({})) as never,
+        bearerSession: { delegationHeader: { Authorization: "Bearer test" }, delegationCid: "cid", spaceId: SPACE, verificationMethod: "did:key:z6Mk", jwk: {} },
+        createKVService: (() => kv) as never,
+      }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid }));
+      await expect(access.get("docs/a.md")).rejects.toMatchObject({ code: expected });
+      await expect(access.save("docs/a.md", Uint8Array.from([2]), { etag: "etag-1" })).rejects.toMatchObject({ code: expected });
+    }
   });
 
   test("routes addressed get/list/put through the native Node media type", async () => {
@@ -512,13 +544,20 @@ describe("ShareRecipientClient", () => {
       encryptionKey: PRIVATE_KEY,
     });
     let invocationAuthorization = "";
-    const access = await new ShareRecipientClient({
+    const urls: string[] = [];
+    const recipientFetch: FetchFunction = async (url) => {
+      urls.push(url);
+      return url.endsWith("/delegate") ? Response.json({ activated: [vector.s0.cid] }) : new Response(created.bytes);
+    };
+    const config: ShareRecipientClientOptions = {
       trustedOrigins: [ORIGIN],
       now: () => new Date((s0.payload.nbf + 1) * 1000),
       policySessionPrivateKey: new Uint8Array(32).fill(9),
-      fetch: (async (url: string) => url.endsWith("/delegate")
-        ? Response.json({ activated: [vector.s0.cid] })
-        : new Response(created.bytes)) as never,
+      fetch: recipientFetch,
+      resourceTransport: async (_resources, send) => send({
+        url: ORIGIN, nodeDid: NODE_DID, nodeInfo: { nodeId: NODE_DID }, fetch: recipientFetch,
+        bindAudience: async (authorization) => authorization,
+      }),
       establishPolicySession: async () => ({
         sessionId: vector.s0.cid,
         holderDid: vector.principals.recipientDid,
@@ -545,7 +584,13 @@ describe("ShareRecipientClient", () => {
           return { ok: true, data: { data: new TextEncoder().encode("ordinary"), headers: { etag: "etag-1", contentType: "text/plain" } } };
         },
       })) as never,
-    }).open(encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key }));
+    };
+    const unrouted = { ...config };
+    delete unrouted.resourceTransport;
+    const link = encodeShareUrl({ origin: ORIGIN, cid: created.cid, key: created.key });
+    await expect(new ShareRecipientClient(unrouted).open(link)).rejects.toMatchObject({ code: "SHARE_SESSION_ROUTING_REQUIRED" });
+    expect(urls.filter((url) => url.endsWith("/delegate"))).toEqual([]);
+    const access = await new ShareRecipientClient(config).open(link);
     await access.get(path);
     expect(invocationAuthorization).not.toBe(vector.s0.authorization);
     const invocation = parseCompactUcanAuthorization(invocationAuthorization);

@@ -33,7 +33,8 @@ export function isCanonicalRawCid(cidString: string): boolean {
     cid.version === 1 &&
     cid.code === raw.code &&
     cid.multihash.code === SHA256_CODE &&
-    cid.toString() === cidString
+    // `toString` of a parsed CID gives back the string it was parsed from; a fresh CID is encoded again.
+    CID.createV1(cid.code, cid.multihash).toString() === cidString
   );
 }
 

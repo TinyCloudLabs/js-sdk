@@ -246,6 +246,8 @@ export const RetryPolicySchema = z.object({
   maxDelayMs: z.number().nonnegative(),
   /** Error codes that should trigger a retry */
   retryableErrors: z.array(z.string()),
+  /** Total time budget for all attempts and waits, in milliseconds */
+  maxTotalMs: z.number().positive().optional(),
 });
 
 export type RetryPolicyType = z.infer<typeof RetryPolicySchema>;

@@ -17,3 +17,14 @@ export {
 } from './profile.js';
 export type { Profile, StoredPeer, AgentKey, OwnerGrant } from './profile.js';
 export type { DelegateRequest, GrantPayload } from './grant.js';
+export * from './watch.js';
+export * from './wake.js';
+export * from './service.js';
+export * from './canonical.js';
+export * from './approval.js';
+export * from './notify.js';
+export * from './pause.js';
+export { cmdStart, discoverSessions, INVITATION_MODES } from './guided.js';
+export type { CourierSession, InvitationMode } from './guided.js';
+export { cmdInvite, cmdJoin, parseInvitation } from './invitation.js';
+export type { CourierInvitation } from './invitation.js';

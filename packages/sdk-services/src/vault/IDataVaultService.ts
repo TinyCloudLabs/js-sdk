@@ -92,7 +92,7 @@ export interface IDataVaultService extends IService {
     options?: VaultGetOptions<T>
   ): Promise<Result<VaultEntry<T>, VaultError>>;
 
-  /** Read a network-encrypted value with safe, phase-classified failures. */
+  /** Read with safe failure phases; typed routing failures reject instead of losing their code. */
   readNetworkEncrypted<T = unknown>(
     key: string,
     options?: VaultGetOptions<T>,

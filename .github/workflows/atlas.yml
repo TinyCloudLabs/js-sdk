@@ -35,6 +35,11 @@ jobs:
         with:
           fetch-depth: 0          # rebuild.mjs reads `git rev-parse HEAD`
 
+      # Astro 7 requires Node >=22.22.0; pin it rather than rely on the runner default.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.0

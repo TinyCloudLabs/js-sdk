@@ -227,6 +227,34 @@ describe("SQLite read operations", () => {
     });
   });
 
+  test("maps request-side SQL 413 to the short request-size message for queries and writes", async () => {
+    const tooLarge = { ok: false, error: { code: "SQL_REQUEST_TOO_LARGE" } };
+    const message = "SQL request too large.";
+    const query = definition("tinycloud.sql.query");
+    const queryInput = query.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "SELECT value FROM notes",
+    });
+    expect(await query.execute(context(sqlNode(async () => tooLarge)), queryInput)).toMatchObject({
+      status: "error",
+      error: { code: "INPUT_INVALID", message },
+    });
+
+    const execute = definition("tinycloud.sql.execute");
+    const executeInput = execute.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "INSERT INTO notes (body) VALUES (?)",
+      params: ["hello"],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    expect(await execute.execute(context(sqlWriteNode(async () => tooLarge)), executeInput)).toMatchObject({
+      status: "error",
+      error: { code: "INPUT_INVALID", message },
+    });
+  });
+
   test("classifies real SQL service HTTP refusals separately from retryable node errors", async () => {
     for (const [id, raw] of [
       ["tinycloud.sql.query", { space: "applications", database: "notes", sql: "SELECT value FROM notes" }],
@@ -297,7 +325,7 @@ describe("SQLite DML operation", () => {
       space: OWNER_APPLICATIONS,
       path: "com.example.notes/data.sqlite",
       actions: ["tinycloud.sql/write"],
-      description: expect.stringContaining("full read/write/schema mutation authority"),
+      description: expect.stringMatching(/any row[^]*schema split/),
     }]);
     expect(await operation.execute(context(node), input)).toEqual({
       status: "ok",
@@ -307,7 +335,7 @@ describe("SQLite DML operation", () => {
         statementType: "insert",
         changes: 1,
         lastInsertRowId: 42,
-        authorityNotice: expect.stringContaining("full read/write/schema mutation authority"),
+        authorityNotice: expect.stringMatching(/any row[^]*schema split/),
       },
     });
     expect(calls).toEqual([[

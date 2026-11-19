@@ -1,5 +1,249 @@
 # @tinycloud/share-envelope
 
+## 1.6.0
+
+### Minor Changes
+
+- e3cd63b: Add strict optional owner-renewal intent and chosen renewal metadata to OpenKey approval request/result binding. Recognize explicit task/standing purpose, with missing purpose treated as task without rewriting legacy signed bytes. Consumers must still verify the signed original grant and renewal lease before installing access.
+
+  Details: TC-2904
+
+- e3e4bd7: Internal changes to Courier and `@tinycloud/share-envelope`. Commands and behavior are unchanged. `@tinycloud/share-envelope/links` adds `buildShareInvitationApprovalSpec`, the `ShareInvitationApprovalContext` type, and an optional `context` field on the approval request.
+
+  Details: TC-2234
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
+## 1.6.0-beta.1
+
+### Minor Changes
+
+- e3cd63b: Add strict optional owner-renewal intent and chosen renewal metadata to OpenKey approval request/result binding. Recognize explicit task/standing purpose, with missing purpose treated as task without rewriting legacy signed bytes. Consumers must still verify the signed original grant and renewal lease before installing access.
+
+  Details: TC-2904
+
+## 1.6.0-beta.0
+
+### Minor Changes
+
+- e3e4bd7: `courier invite --mode email` asks the owner for one approval per invitation. The approval request carries the recipient, session name and dates; OpenKey chooses the Share key and returns a grant for that one key (`key.create` and `decrypt`), valid until the invitation expires (at most 24 hours). Courier writes the pending invitation before asking, sends nothing until the approval is verified, and uses the approved grant only for that invitation's key; the main Courier grant is not changed. Run the same command again to continue a pending invitation. `@tinycloud/share-envelope/links` adds an optional strict `context` to the approval request (with no permissions) and `buildShareInvitationApprovalSpec`.
+
+  Details: TC-2234
+
+- 273491d: `@tinycloud/share-envelope` exports `POLICY_ROOT_MAX_LIFETIME_SECONDS` (31 days, in seconds), the longest a proofless policy root may last and so the longest an addressed share can stay readable. `@tinycloud/sdk-core` and `@tinycloud/share-sdk` now import this one definition instead of each holding the same value; the signer's bound and its error message are unchanged.
+
+  Details: TC-2234
+
+## 1.5.0
+
+### Minor Changes
+
+- 1d688b3: Courier uses the same short-link approval flow as `tinycloud onboard`, so the owner has no code to copy back.
+  - `courier init --request` creates an OpenKey approval request for the agent key (the `agents` space grant, 30 days), saves it in `$COURIER_HOME/approval-pending.json` (owner-only, fsynced) before printing, and prints the same JSON as before with `openkeyUrl` now a short `https://openkey.so/a/<id>#…` link. Asking again reuses the saved request while it is open and unchanged.
+  - New `courier init --wait [--timeout <duration, at most 9m>]` polls OpenKey with a proof signed by the agent key, decrypts and checks the result (request id, digest, requester, target, owner, expiry, exact permissions), installs the grant, and only then acknowledges it. The default timeout is 60 s; at the deadline it exits 8 (not a failure: the approval is still pending) with `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next run resumes the same request, with no second approval. A request that already holds an approval is never replaced by a run with other flags, a renewal approved by a different owner than the one holding the grant is refused (`--rotate-key` binds a new owner), and the granted lifetime may not exceed the requested one. The approved result is saved encrypted before any install work, so a process that is killed at any point resumes from disk. An expired request (`approval-expired`) or an approved result that passed OpenKey's 10-minute retention (`approval-result-expired`) installs nothing and says to run `init --request` again.
+  - Courier's grant, profile and pending-request files are now written with fsync before anything acknowledges them.
+  - `--grant-file`, `--paste` (old `XXXX-XXXX` codes) and plain `init` are unchanged.
+  - `@tinycloud/share-envelope/links` exports the requester side of an approval request as a pure client: `approvalSessionProof`, `discoverApprovalResult`, `fetchApprovalResult`, `ackApprovalResult`, `collectApprovalResult`, `generateRelayKey`, `openRelayResult` and `checkApprovalResultBinding`.
+
+  Details: TC-2300
+
+## 1.5.0-beta.0
+
+### Minor Changes
+
+- 1d688b3: Courier uses the same short-link approval flow as `tinycloud onboard`, so the owner has no code to copy back.
+  - `courier init --request` creates an OpenKey approval request for the agent key (the `agents` space grant, 30 days), saves it in `$COURIER_HOME/approval-pending.json` (owner-only, fsynced) before printing, and prints the same JSON as before with `openkeyUrl` now a short `https://openkey.so/a/<id>#…` link. Asking again reuses the saved request while it is open and unchanged.
+  - New `courier init --wait [--timeout <duration, at most 9m>]` polls OpenKey with a proof signed by the agent key, decrypts and checks the result (request id, digest, requester, target, owner, expiry, exact permissions), installs the grant, and only then acknowledges it. The default timeout is 60 s; at the deadline it exits 8 (not a failure: the approval is still pending) with `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next run resumes the same request, with no second approval. A request that already holds an approval is never replaced by a run with other flags, a renewal approved by a different owner than the one holding the grant is refused (`--rotate-key` binds a new owner), and the granted lifetime may not exceed the requested one. The approved result is saved encrypted before any install work, so a process that is killed at any point resumes from disk. An expired request (`approval-expired`) or an approved result that passed OpenKey's 10-minute retention (`approval-result-expired`) installs nothing and says to run `init --request` again.
+  - Courier's grant, profile and pending-request files are now written with fsync before anything acknowledges them.
+  - `--grant-file`, `--paste` (old `XXXX-XXXX` codes) and plain `init` are unchanged.
+  - `@tinycloud/share-envelope/links` exports the requester side of an approval request as a pure client: `approvalSessionProof`, `discoverApprovalResult`, `fetchApprovalResult`, `ackApprovalResult`, `collectApprovalResult`, `generateRelayKey`, `openRelayResult` and `checkApprovalResultBinding`.
+
+  Details: TC-2300
+
+## 1.4.1
+
+### Patch Changes
+
+- 5e47629: `require("@tinycloud/share-envelope/links")` now loads from CommonJS. `dist/links.cjs` bundles `multiformats`, whose subpath exports have no `require` condition, as `dist/index.cjs` already does; the ESM build is unchanged. This also fixes `require("@tinycloud/share-sdk/share-index")`, which requires it.
+
+  Details: TC-1739
+
+- b0da170: The signed approval request may carry an optional `suggestedLifetimeSeconds`: a whole number above 0 and no more than `grantLifetimeSeconds`. When it is absent, the maximum applies. The field is optional and additive. No client sends it yet: OpenKey must accept it first. Requests without it parse and canonicalize byte-identically.
+
+  Details: TC-2272
+
+## 1.4.1-beta.1
+
+### Patch Changes
+
+- b0da170: The signed approval request may carry an optional `suggestedLifetimeSeconds`: a whole number above 0 and no more than `grantLifetimeSeconds`. When it is absent, the maximum applies. The field is optional and additive. No client sends it yet: OpenKey must accept it first. Requests without it parse and canonicalize byte-identically.
+
+  Details: TC-2272
+
+## 1.4.1-beta.0
+
+### Patch Changes
+
+- 5e47629: `require("@tinycloud/share-envelope/links")` now loads from CommonJS. `dist/links.cjs` bundles `multiformats`, whose subpath exports have no `require` condition, as `dist/index.cjs` already does; the ESM build is unchanged. This also fixes `require("@tinycloud/share-sdk/share-index")`, which requires it.
+
+  Details: TC-1739
+
+## 1.4.0
+
+### Minor Changes
+
+- 19048ec: Add immutable, signed OpenKey approval-request links using the shared `/a/<id>#v=4&k=<key>&c=<sealedBodyCid>` grammar. Requests default to one hour, are capped at 24 hours, and use repeatable non-consuming reads. Validate the sealed issuer, target Ed25519 key, and P-256 result encryption key without changing existing login, share, or courier links.
+
+  Use these short requests for browser approval in the CLI and onboarding. Recover the encrypted result through repeatable requester-authenticated fetches, verify the signed authority, and durably save the profile and stable ACK intent before acknowledgement. Explicit manual paste remains available with the existing return-code contract.
+
+  Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
+
+  Keep the existing seven-day default for normal OpenKey requests and explicit 30-day onboarding. Complete saved approvals after delivery retention ends, clear pending request credentials on logout, and document the automatic wait-and-resume flow.
+
+  Details: TC-2212
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- 7b22f61: `prepareLinkRecord` and `createLink` set the link header `expiresAt` to whole seconds, truncated toward the past, so it never runs later than the caller's `expiresAt`.
+
+  Details: TC-1737
+
+## 1.4.0-beta.2
+
+### Minor Changes
+
+- 19048ec: Add immutable, signed OpenKey approval-request links using the shared `/a/<id>#v=4&k=<key>&c=<sealedBodyCid>` grammar. Requests default to one hour, are capped at 24 hours, and use repeatable non-consuming reads. Validate the sealed issuer, target Ed25519 key, and P-256 result encryption key without changing existing login, share, or courier links.
+
+  Use these short requests for browser approval in the CLI and onboarding. Recover the encrypted result through repeatable requester-authenticated fetches, verify the signed authority, and durably save the profile and stable ACK intent before acknowledgement. Explicit manual paste remains available with the existing return-code contract.
+
+  Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
+
+  Keep the existing seven-day default for normal OpenKey requests and explicit 30-day onboarding. Complete saved approvals after delivery retention ends, clear pending request credentials on logout, and document the automatic wait-and-resume flow.
+
+  Details: TC-2212
+
+## 1.3.1-beta.1
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+## 1.3.1-beta.0
+
+### Patch Changes
+
+- 7b22f61: `prepareLinkRecord` and `createLink` set the link header `expiresAt` to whole seconds, truncated toward the past, so it never runs later than the caller's `expiresAt`.
+
+  Details: TC-1737
+
+## 1.3.0
+
+### Minor Changes
+
+- 60b79d0: Add the `@tinycloud/share-envelope/links` subpath: typed, issuer-signed link records and the `#v=4` link grammar. It runs in browsers and in Node, using WebCrypto (`globalThis.crypto`) and `fetch` only.
+  - Records: a strict signed header (type, issuer, audience, issuedAt, expiresAt, size, bodyCid, nonce), an Ed25519 signature over `SHA-256(domain ‖ JCS(header))`, and a sealed body. One body limit, `MAX_LINK_BODY_BYTES` (65,536 bytes), applies to every type; a body over it has neither a short nor a full link.
+  - Signers: `createLink`, `deleteLink`, `prepareLinkRecord`, `signHeader` and `signDelete` take a `LinkSigner` (`{ did, sign(digest) }`), so the caller keeps its private key. `signerFromSeed` and `signerFromJwk` build one for tests and simple callers.
+  - Links: `buildShortLink`, `buildFullLink`, `parseLink` (strict grammar, both forms) and `resolveLink` (the full reader pipeline, an optional `validateBody` hook, and one `LinkError` class with a `code` per refusal).
+  - Delivery helpers: `shortShareLinkCid(href, { trustedOrigins })` gives the `c` of a short share link on one of the required `trustedOrigins` and `undefined` for any other string, including an id that is not lowercase; `DEFAULT_SHARE_ORIGINS` is the production share origin; `redactLink(text, href)` replaces a link and the key in its `k=` parameter in a text; `assertDidKeySignature(did, message, signature)` throws unless the signature, in its one canonical base64url spelling, verifies under the strict rule.
+  - Verification: `verifyEd25519Strict` applies one Ed25519 rule everywhere (`S < ℓ`, canonical and prime-order `A` and `R`).
+  - Strictness: a stored record, header or signature with an own key outside its field set (`__proto__` included) is refused before any copy is made, also on the short-link path; a `now` or date that is not a real time is refused with the `timestamp_format` `LinkError`; `isCanonicalRawCid`, exported by the package root and used by the links module, compares the string with a fresh encoding of the CID, so a trailing `=` is refused.
+  - The `X-Link-Record` value of a short link must be the JCS text of its parsed value (`record_not_canonical`): a repeated key, white space, another key order or a key besides `header` and `signature` is refused.
+  - The links vectors from the TC-1737 contract (`packages/share-envelope/test/links-api-vectors.json`, SHA-256 pinned in a test) drive the tests.
+  - Packaging: the reader is its own file, `dist/links.js` (`dist/links.cjs`), built apart from `dist/index.js`. Its dependencies (`zod`, `@noble/curves`, `@noble/hashes`, `multiformats`) are package imports, so a bundler that already holds them adds no second copy.
+
+  Removed:
+  - The `@tinycloud/share-envelope/short-link` subpath and the `#v=3` codec (`SHORT_LINK_ID_PATTERN`, `parseShortShareUrl`, `splitInlineToShort`, `rebuildInlineFromShort`).
+  - The inline `#v=2&p=` link codec (`encodeSealedInlineShareUrl`, `parseSealedInlineShareUrl` and their types).
+  - The delete-token handling.
+  - `test/shortlink-vectors.json`.
+
+  The compact `/s/<cid>#k=` link (`encodeShareUrl`, `parseShareUrl`) is unchanged.
+
+  Do not release before the deploy window for the links API, witness, node, Share web and CLI.
+
+  Details: TC-1737
+
+## 1.3.0-beta.0
+
+### Minor Changes
+
+- 60b79d0: Add the `@tinycloud/share-envelope/links` subpath: typed, issuer-signed link records and the `#v=4` link grammar. It runs in browsers and in Node, using WebCrypto (`globalThis.crypto`) and `fetch` only.
+  - Records: a strict signed header (type, issuer, audience, issuedAt, expiresAt, size, bodyCid, nonce), an Ed25519 signature over `SHA-256(domain ‖ JCS(header))`, and a sealed body. One body limit, `MAX_LINK_BODY_BYTES` (65,536 bytes), applies to every type; a body over it has neither a short nor a full link.
+  - Signers: `createLink`, `deleteLink`, `prepareLinkRecord`, `signHeader` and `signDelete` take a `LinkSigner` (`{ did, sign(digest) }`), so the caller keeps its private key. `signerFromSeed` and `signerFromJwk` build one for tests and simple callers.
+  - Links: `buildShortLink`, `buildFullLink`, `parseLink` (strict grammar, both forms) and `resolveLink` (the full reader pipeline, an optional `validateBody` hook, and one `LinkError` class with a `code` per refusal).
+  - Delivery helpers: `shortShareLinkCid(href, { trustedOrigins })` gives the `c` of a short share link on one of the required `trustedOrigins` and `undefined` for any other string, including an id that is not lowercase; `DEFAULT_SHARE_ORIGINS` is the production share origin; `redactLink(text, href)` replaces a link and the key in its `k=` parameter in a text; `assertDidKeySignature(did, message, signature)` throws unless the signature, in its one canonical base64url spelling, verifies under the strict rule.
+  - Verification: `verifyEd25519Strict` applies one Ed25519 rule everywhere (`S < ℓ`, canonical and prime-order `A` and `R`).
+  - Strictness: a stored record, header or signature with an own key outside its field set (`__proto__` included) is refused before any copy is made, also on the short-link path; a `now` or date that is not a real time is refused with the `timestamp_format` `LinkError`; `isCanonicalRawCid`, exported by the package root and used by the links module, compares the string with a fresh encoding of the CID, so a trailing `=` is refused.
+  - The `X-Link-Record` value of a short link must be the JCS text of its parsed value (`record_not_canonical`): a repeated key, white space, another key order or a key besides `header` and `signature` is refused.
+  - The links vectors from the TC-1737 contract (`packages/share-envelope/test/links-api-vectors.json`, SHA-256 pinned in a test) drive the tests.
+  - Packaging: the reader is its own file, `dist/links.js` (`dist/links.cjs`), built apart from `dist/index.js`. Its dependencies (`zod`, `@noble/curves`, `@noble/hashes`, `multiformats`) are package imports, so a bundler that already holds them adds no second copy.
+
+  Removed:
+  - The `@tinycloud/share-envelope/short-link` subpath and the `#v=3` codec (`SHORT_LINK_ID_PATTERN`, `parseShortShareUrl`, `splitInlineToShort`, `rebuildInlineFromShort`).
+  - The inline `#v=2&p=` link codec (`encodeSealedInlineShareUrl`, `parseSealedInlineShareUrl` and their types).
+  - The delete-token handling.
+  - `test/shortlink-vectors.json`.
+
+  The compact `/s/<cid>#k=` link (`encodeShareUrl`, `parseShareUrl`) is unchanged.
+
+  Do not release before the deploy window for the links API, witness, node, Share web and CLI.
+
+  Details: TC-1737
+
+## 1.2.1
+
+### Patch Changes
+
+- f8c2967: `tc share publish` prints addressed shares as a short link, `https://share.tinycloud.xyz/s/<id>#v=3&k=<key>&c=<cid>`, instead of a link of about 17,000 characters. Share's short-link service stores only the sealed envelope bytes. The read key and the CID of those bytes stay in the link's fragment: the service never receives the key, and `share receive`/`share inspect` refuse bytes that do not hash to the link's CID.
+  - `--long-link` prints the long self-contained link instead.
+  - If the short-link service is unavailable, publishing still succeeds. The CLI prints the long link and warns that it is long, and `--json` adds `shortLinkError`.
+  - That includes refused connections, timeouts (10 seconds per request) and broken answers.
+  - When the Share host itself can't be reached, publishing stops before anything is shared with `SHARE_SERVICE_UNAVAILABLE` (exit 4), instead of a message blaming the TinyCloud node.
+  - `share show <id> --reveal-link` prints the same short link.
+  - `share revoke` deletes the stored envelope after the node confirms the revocation. A failed delete only warns; the envelope expires with the share.
+  - Sender history and the `--notify` invitation still carry the long link. Bearer links are unchanged.
+
+  `@tinycloud/share-envelope` adds a `@tinycloud/share-envelope/short-link` subpath export with `parseShortShareUrl`, `splitInlineToShort` and `rebuildInlineFromShort`, tested against the vectors Share's own codec uses. They are not in the package root, so bundles that import the root (such as `@tinycloud/web-sdk`) do not grow. Details: TC-1737
+
+## 1.2.1-beta.0
+
+### Patch Changes
+
+- f8c2967: `tc share publish` prints addressed shares as a short link, `https://share.tinycloud.xyz/s/<id>#v=3&k=<key>&c=<cid>`, instead of a link of about 17,000 characters. Share's short-link service stores only the sealed envelope bytes. The read key and the CID of those bytes stay in the link's fragment: the service never receives the key, and `share receive`/`share inspect` refuse bytes that do not hash to the link's CID.
+  - `--long-link` prints the long self-contained link instead.
+  - If the short-link service is unavailable, publishing still succeeds. The CLI prints the long link and warns that it is long, and `--json` adds `shortLinkError`.
+  - That includes refused connections, timeouts (10 seconds per request) and broken answers.
+  - When the Share host itself can't be reached, publishing stops before anything is shared with `SHARE_SERVICE_UNAVAILABLE` (exit 4), instead of a message blaming the TinyCloud node.
+  - `share show <id> --reveal-link` prints the same short link.
+  - `share revoke` deletes the stored envelope after the node confirms the revocation. A failed delete only warns; the envelope expires with the share.
+  - Sender history and the `--notify` invitation still carry the long link. Bearer links are unchanged.
+
+  `@tinycloud/share-envelope` adds a `@tinycloud/share-envelope/short-link` subpath export with `parseShortShareUrl`, `splitInlineToShort` and `rebuildInlineFromShort`, tested against the vectors Share's own codec uses. They are not in the package root, so bundles that import the root (such as `@tinycloud/web-sdk`) do not grow. Details: TC-1737
+
+## 1.2.0
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
+## 1.2.0-beta.0
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
 ## 1.1.0
 
 ### Minor Changes

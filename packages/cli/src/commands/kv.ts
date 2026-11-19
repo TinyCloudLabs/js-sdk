@@ -70,6 +70,11 @@ async function kvHandle(
   return { kv, spaceUri };
 }
 
+/** `attempts` and `backoffMs` for `--json`, so latency can be split from retry backoff. */
+function retryFields(retry?: { attempts: number; backoffMs: number }) {
+  return retry ? { attempts: retry.attempts, backoffMs: retry.backoffMs } : {};
+}
+
 export function registerKvCommand(program: Command): void {
   const kv = program.command("kv").description("Key-value store operations");
 
@@ -130,6 +135,7 @@ export function registerKvCommand(program: Command): void {
             key,
             data,
             metadata,
+            ...retryFields(result.data.retry),
           });
         } else {
           // Just output the raw value for get - useful for piping
@@ -147,10 +153,14 @@ export function registerKvCommand(program: Command): void {
     .description("Set a value")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
+    .option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite")
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, value: string | undefined, options, cmd) => {
       try {
         assertAddressableKey(key);
+        if (options.ifNoneMatch !== undefined && options.ifNoneMatch !== "*") {
+          throw new CLIError("USAGE_ERROR", "`--if-none-match` only accepts `'*'`.", ExitCode.USAGE_ERROR);
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const node = await ensureAuthenticated(ctx);
@@ -180,13 +190,17 @@ export function registerKvCommand(program: Command): void {
         }
 
         const { kv, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-        const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue)) as any;
+        const result = await withSpinner(`Writing ${key}...`, () => kv.put(key, putValue,
+          options.ifNoneMatch === "*" ? { ifNoneMatch: "*" } : undefined)) as any;
 
         if (!result.ok) {
+          if (options.ifNoneMatch === "*" && result.error.code === "KV_PRECONDITION_FAILED") {
+            throw new CLIError("KV_ALREADY_EXISTS", `Key "${key}" already exists, so nothing was written.`, ExitCode.PERMISSION_DENIED);
+          }
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
-        outputJson({ key, written: true });
+        outputJson({ key, written: true, ...retryFields(result.data?.retry) });
       } catch (error) {
         return handleError(error);
       }
@@ -211,7 +225,7 @@ export function registerKvCommand(program: Command): void {
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
 
-        outputJson({ key, deleted: true });
+        outputJson({ key, deleted: true, ...retryFields(result.data?.retry) });
       } catch (error) {
         return handleError(error);
       }

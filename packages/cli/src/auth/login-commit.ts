@@ -1,9 +1,13 @@
-import type { PermissionEntry } from "@tinycloud/node-sdk";
+import { lstat } from "node:fs/promises";
+import { withVerifiedNamedKeys } from "../lib/named-keys.js";
+import { join } from "node:path";
+import { REPLICA_LOGOUT_PENDING_FILE, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError, profilePath } from "@tinycloud/operations/state";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
+import { syncAuthCredentialFiles } from "../config/storage.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
@@ -106,7 +110,7 @@ export function assertSessionReplaceable(
   throw new CLIError(
     "SESSION_IN_USE",
     `Profile "${profileName}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. ` +
-      `Keep the user's existing profiles: use a new profile name (\`${CLI_NAME} init --name publisher --key-only\`, then \`${CLI_NAME} --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
+      `Keep the user's existing profiles: use a new profile name (\`${CLI_NAME} init --name publisher --key-only\`, then \`${CLI_NAME} --profile publisher auth login --manifest ...\`), or pass --replace-session to replace this session.`,
     ExitCode.USAGE_ERROR,
   );
 }
@@ -115,6 +119,8 @@ export interface LoginCommit {
   readonly key: object;
   readonly session: Record<string, unknown>;
   readonly profile: ProfileConfig;
+  /** The signed browser callback is acknowledged only after all three files and the profile directory are synced. */
+  readonly durable?: boolean;
   /**
    * For scoped logins: the verified approved scope and its owner, checked
    * against the live session unless `replaceSession` is set.
@@ -127,11 +133,20 @@ export interface LoginCommit {
  * write is attempted even if an earlier one fails; returns the failures.
  */
 async function restore(profileName: string, state: ProfileSnapshot): Promise<unknown[]> {
-  const writes = [
-    () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
-    () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session),
-    () => state.profile === null ? ProfileManager.removeProfileConfig(profileName) : ProfileManager.setProfile(profileName, state.profile),
-  ];
+  const restoreProfile = () => state.profile === null
+    ? ProfileManager.removeProfileConfig(profileName)
+    : state.profile.authSignedOut === true
+      ? ProfileManager.setProfileDurable(profileName, state.profile)
+      : ProfileManager.setProfile(profileName, state.profile);
+  const writes = state.profile?.authSignedOut === true
+    ? [restoreProfile,
+      () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
+      () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session)]
+    : [
+      () => state.key === null ? ProfileManager.removeKey(profileName) : ProfileManager.setKey(profileName, state.key),
+      () => state.session === null ? ProfileManager.clearSession(profileName) : ProfileManager.setSession(profileName, state.session),
+      restoreProfile,
+    ];
   const failures: unknown[] = [];
   for (const write of writes) {
     try {
@@ -171,14 +186,29 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
         ExitCode.ERROR,
       );
     }
+    try {
+      await lstat(join(profilePath(profileName), REPLICA_LOGOUT_PENDING_FILE));
+      throw new CLIError("REPLICA_GATED",
+        "A durable logout started while sign-in was awaiting approval; no session or key was saved. Finish logout and start a fresh sign-in.",
+        ExitCode.AUTH_REQUIRED);
+    } catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) throw error;
+    }
     if (commit.approved && !commit.approved.replaceSession) {
       const newExpiresAt = sessionExpiresAt(commit.session) ?? undefined;
       assertSessionReplaceable(profileName, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
     }
     try {
+      // A key folder stays on the profile only when this session's signed ReCap carries it.
+      const profile = withVerifiedNamedKeys(commit.profile, commit.session);
       await ProfileManager.setKey(profileName, commit.key);
       await ProfileManager.setSession(profileName, commit.session);
-      await ProfileManager.setProfile(profileName, commit.profile);
+      if (current.profile?.authSignedOut === true || commit.durable === true) {
+        await syncAuthCredentialFiles(profilePath(profileName));
+        await ProfileManager.setProfileDurable(profileName, { ...profile, authSignedOut: false });
+      } else {
+        await ProfileManager.setProfile(profileName, profile);
+      }
     } catch (error) {
       const failures = await restore(profileName, current);
       if (failures.length === 0) throw error;

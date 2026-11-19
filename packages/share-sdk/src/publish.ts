@@ -1,4 +1,5 @@
-export const SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+/** The node's upload body cap (95 MiB, 99,614,720 bytes) applies to the bytes uploaded; a public share uploads the file unchanged. */
+export const SHARE_CONTENT_LIMIT = 95 * 1024 * 1024;
 export const SHARE_PUBLISH_RESULT_VERSION = 1 as const;
 export const DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -17,6 +18,8 @@ export interface SharePublishOptions {
   readonly target?: SharePublishTarget;
   readonly expiresAt?: Date;
   readonly expiryWasExplicit?: boolean;
+  /** The relative expiry the caller asked for, in milliseconds, when it gave a duration (not a date). */
+  readonly expiresInMs?: number;
   readonly origin: string;
   readonly maxBytes?: number;
   readonly now?: () => number;
@@ -43,6 +46,8 @@ export interface PublishedShareMetadata {
   readonly enforcerDid?: string;
   readonly envelopeCid?: string;
   readonly shareCid?: string;
+  /** Set when the content is a numbered artifact version (TC-1428). Pinned: the share can only ever read this version. */
+  readonly artifact?: { readonly id: string; readonly version: number; readonly mode: "pinned" };
 }
 
 /** Sender-only Policy/v3 material retained in encrypted history for delivery retries. */

@@ -1,51 +1,53 @@
 # @tinycloud/cli
 
-Self-sovereign storage from the terminal. `tc` is the command-line interface for [TinyCloud](https://tinycloud.xyz) — manage data, delegations, spaces, and nodes without leaving your shell.
+Self-sovereign storage from the terminal. `tinycloud` is the command-line interface for [TinyCloud](https://tinycloud.xyz) — manage data, delegations, spaces, and nodes without leaving your shell.
 
 ## Install
 
 ```bash
-npm install -g @tinycloud/cli
+npm install -g @tinycloud/cli@1.5.0-beta.20
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 20; TinyCloud's agent guides use Node.js 22.20 or later.
+Agents: start at https://agents.tinycloud.xyz/onboarding.
 
-The package installs two identical commands: `tc` and `tinycloud`. On Linux,
-iproute2 installs `/usr/sbin/tc` (traffic control), which can shadow `tc` on
-PATH; `tinycloud` avoids that clash and accepts the same arguments. If the npm global prefix is root-owned, run
-`npm config set prefix ~/.local` before installing: Ubuntu's default PATH puts
-`~/.local/bin` before `/usr/sbin`, but `~/.profile` adds it only if the
-directory existed at login, so start a new login shell after the first
-install. Run `hash -r` if `tc` already ran in the same shell. Verify with
-`command -v tc`, or call `"$(npm prefix --global)/bin/tc"` when in doubt.
+The package exposes `tinycloud` as its preferred command and keeps `tc` as a
+deprecated compatibility alias at the same entry. Both names accept the same
+commands and flags, with identical exit codes and stdout. A POSIX `tc` executable
+link emits one deprecation notice on stderr, never stdout. On Linux,
+`/usr/sbin/tc` is iproute2's traffic-control tool. Verify the pinned install
+with `tinycloud --version`.
 
 ## Agent skills
 
-The package ships the general `tc-cli` skill and its references in
-`skills/tc-cli`, and the `courier` skill for `tc courier` in `skills/courier`.
-See [skill installation](skills/tc-cli/INSTALL.md) for a
-pinned, cross-agent installation with OpenCode, Codex and Claude Code, and
-[authentication](skills/tc-cli/AUTH.md) for device login and relaying the
+The package ships the general `tinycloud-cli` skill and its references in
+`skills/tinycloud-cli`, and the `courier` skill for `tinycloud courier` in `skills/courier`.
+See [skill installation](skills/tinycloud-cli/INSTALL.md) for a
+pinned, cross-agent installation for any agent, and
+[authentication](skills/tinycloud-cli/AUTH.md) for device login and relaying the
 approval code to the owner.
 
 ## Courier
 
-`tc courier …` runs [Courier](https://github.com/TinyCloudLabs/js-sdk/tree/master/packages/courier#readme), agent-to-agent threads
+`tinycloud courier …` runs [Courier](https://github.com/TinyCloudLabs/js-sdk/tree/master/packages/courier#readme), agent-to-agent threads
 over TinyCloud, bundled from `@tinycloud/courier` (beta). It takes the same
 arguments as the standalone `courier` bin and keeps its own agent identity in
-`$COURIER_HOME` (default `~/.courier`), not in a tc profile, so put every flag
+`$COURIER_HOME` (default `~/.courier`), not in a tinycloud profile, so put every flag
 after `courier`:
 
 ```bash
-tc courier init --paste --handle alice   # the owner approves in OpenKey; paste the XXXX-XXXX code
-tc courier inbox
-tc courier --help
+tinycloud courier init --request --handle alice   # send the printed openkeyUrl to the owner, who approves in OpenKey
+tinycloud courier init --wait                     # collects the approval (exit 8 + {"pending":…} at --timeout, default 60s; re-run to resume)
+tinycloud courier inbox
+tinycloud courier --help
 ```
+
+`init --wait` stops after `--timeout` (default 60 s, at most 9m) with exit 8 and `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout. Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`.
 
 ## Operations coverage
 
-The migrated `tc secrets get` path is owned by `@tinycloud/operations` and
-uses delegated authority by default. `tc auth import` is partially migrated:
+The migrated `tinycloud secrets get` path is owned by `@tinycloud/operations` and
+uses delegated authority by default. `tinycloud auth import` is partially migrated:
 the request-bound active-session v1 path is canonical, while legacy delegation
 and permission input forms remain Commander-owned. The complete registration
 ledger is checked in `../operations/coverage.json` and checked against the
@@ -57,96 +59,542 @@ value when explicitly requested; MCP hosts control their own transcript
 retention. Owner authority is an explicit posture choice, not an automatic
 fallback for delegated execution.
 
+## Inspect saved storage settings
+
+```bash
+tinycloud --profile agent registry show
+tinycloud --profile agent registry show did:pkh:eip155:1:0x...
+tinycloud --json --profile agent registry show
+```
+
+`registry show [account-id]` checks the storage settings saved on this computer and shows the account, version, age, spaces, servers, read-write/read-only modes and decryption service. Without an account ID it uses the selected profile's account, not its agent/session key. It works offline without sign-in or changing the profile. The argument accepts the same account identifiers as before; only its help label changed. Machine-readable JSON field names remain unchanged.
+
+Human output puts Account and Version first, then `Saved: … ago`: seconds below one minute, minutes through exactly two hours, and hours above two hours. Space labels and identifier values stay intact; server rows label “read and write” or “read only” and the server ID. The decryption service shows its URL and ID, or `none`. These display changes do not alter routing-cache age limits.
+
+The independently readable plain file is `~/.tinycloud/profiles/<profile>/registry-cache.json` (`0600`, directory `0700`). Each entry contains untouched signed response text plus separate fetch/owner/sequence metadata. CLI and canonical Operations runtimes share the profile lock and atomic writer. Every cached read reverifies the response; only a strictly higher sequence replaces it.
+
+Every routing decision awaits a bounded registry refresh; concurrent checks coalesce. If that check fails with a transport error, timeout, or HTTP502/503/504, a verified cache younger than one hour may supply the signed route. Older caches, HTTP500 and other warm HTTP failures, invalid responses, rollback, and wrong-role placement fail closed. An authoritative HTTP4xx or fresh owner/route removal immediately denies access and deletes the cached response while retaining the independent sequence highwater; a later outage cannot resurrect that route or select a default node.
+
+With no saved storage settings, an unreachable registry refuses secrets routing before any default/hosted data request. The error code stays `REGISTRY_UNAVAILABLE`; the explanation says that no settings are saved on this computer and the operation did not run. Reachable genuine no-entry responses still permit first-time onboarding. Warm fallback warnings remain on stderr, never secret/raw stdout, using code `REGISTRY_UNAVAILABLE` and reason `using_cached_settings`. Repeated decisions emit that selected warning once per command, including when a later output step fails. SDK callbacks retain the human explanation as argument one and the semantic reason as optional argument two. This client policy does not change node-side online admission.
+
+Details: TC-2481
+
+## Publish storage settings explicitly
+
+Sign-in does not publish a signed v2 storage-settings record. A newly signed-in account with no registry entry has no verified settings to reuse during an outage. To opt in, use a profile signed in with `--method local` and explicitly list the spaces and server:
+
+```bash
+tinycloud --profile owner registry publish default secrets --server https://your-storage-server.example
+tinycloud --profile owner --json registry publish applications --server https://your-storage-server.example --yes
+tinycloud --profile owner registry show
+```
+
+The preview lists the complete resulting account, server identities, spaces and decryption service, including existing entries that will be kept. A `*` marks an added or changed space. Existing memberships and the decryption service are preserved unless explicitly changed; `--read-only` selects read-only membership for the named server, and `--decryption-server <url>` explicitly selects the decryption service.
+
+**Published settings are public:** anyone who knows the account ID can look up its server addresses and plaintext space names. Review the preview before approving. The confirmation names both explicitly. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
+
+The confirmation includes the public-lookup warning once. The marker legend appears only when a space is marked. If the selected settings are already published, the command says nothing changed and JSON returns `published: true, changed: false`; it sends no additional PUT. A real update returns `changed: true`. Both modes still save the verified local copy, and no-change output keeps the disclosure.
+
+A space absent from a registered account's published settings refuses instead of falling back to another server. Include every space this account needs; existing published spaces not named in this command remain intact. Publication does not create a space, host data, grant permission, or move existing data.
+
+The command checks both public server identity surfaces, merges only the selected memberships, signs with the account's own key, and advances the existing sequence. An agent/session key cannot substitute for the owner's key. Malformed/absent known records, rollback, invalid signatures and conflicting updates refuse without an automatic write retry. After a conflict, run the command again without `--yes` to review fresh settings; `registry show` only reads the saved local copy.
+
+Registration history distinguishes a legacy-only observation from an accepted signed record. Explicit legacy-only history can publish its first signed record, including sequence zero. Accepting a signed record durably promotes that history; it never becomes legacy-only again. Existing untyped history remains unknown rather than being cleared or relabelled, so publication refuses if that history cannot establish whether a signed record was already accepted. Recovery for ambiguous older profiles is not part of this command. Legacy records still do not authorize routing.
+
+Durably confirmed signed history can be reused in memory after a profile commit. A failed history write preserves its numeric bound but never counts as durable confirmation.
+
+After a successful verified publication the CLI saves its signed copy for offline inspection and the bounded outage policy above. If remote publication succeeds but local persistence fails, the error explicitly says the settings were published; it does not pretend that no remote change occurred. Import the SDK's `publishLocationRecordV2` from `@tinycloud/sdk-core/registry-publication`; it is an opt-in entry point, not an eager Web-root export. It returns the verified record and leaves persistence to its caller. Its `onPrepared` callback receives the complete proposed payload and current verified record before signing; returning false cancels without a write.
+
+Details: TC-2657
+
+
 ## Quick Start
 
 ```bash
 # Set up a profile and generate keys
-tc init
+tinycloud init
 
 # Authenticate via browser
-tc auth login
+tinycloud auth login
 
-# Authenticate on a remote/headless machine: the owner approves an explicit
-# manifest on their phone (URL + code printed to stderr). Use a new profile
-# name if it already exists; keep the user's existing profiles.
-tc init --name publisher --key-only
-tc --profile publisher auth login --device --manifest builtin:share-publishing
+# Authenticate on a remote/headless machine: the CLI prints one OpenKey
+# approval link to stderr; the owner opens it on any device and approves, with
+# no code to paste back. A manifest login lasts 1 hour (Share publishing: 7 days,
+# so its links keep their 7-day life) unless --expiry is given.
+# Use a new profile name if it already exists; keep the user's existing profiles.
+tinycloud init --name publisher --key-only
+tinycloud --profile publisher auth login --manifest builtin:share-publishing --no-popup
 
-# Same Share publishing scope, as a shortcut (on the dedicated profile)
-tc --profile publisher enable share
+# Device code on the owner's phone, only when asked for
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
 
 # Selected profile, owner, host and space (JSON; does not test access)
-tc context
+tinycloud context
 
 # Store and retrieve data
-tc kv put greeting "Hello, world"
-tc kv get greeting
-tc kv list
+tinycloud kv put greeting "Hello, world"
+tinycloud kv get greeting
+tinycloud kv list
 
 # Manage network-encrypted secrets on the default network
-tc secrets network init
-printf '%s' "$ANTHROPIC_API_KEY" | tc secrets put ANTHROPIC_API_KEY --stdin
-tc secrets get ANTHROPIC_API_KEY
+tinycloud secrets network init
+printf '%s' "$ANTHROPIC_API_KEY" | tinycloud secrets put ANTHROPIC_API_KEY --stdin
+tinycloud secrets get ANTHROPIC_API_KEY
+tinycloud secrets run ANTHROPIC_API_KEY -- python train.py   # the value only in the command's environment
 
 # Ask the owner for a secret an agent needs, then wait for it
-# (call TinyCloud's CLI by absolute path: a bare `tc` can be iproute2's /usr/sbin/tc)
-TC_BIN="$(npm prefix --global)/bin/tc"
-"$TC_BIN" --profile agent secrets request OPENAI_API_KEY --json   # offline; prints the owner's link
-"$TC_BIN" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 pending
+# (call TinyCloud's CLI by absolute path when using tc: a bare tc can be iproute2's /usr/sbin/tc)
+tinycloud --profile agent secrets request OPENAI_API_KEY --json   # offline; prints the owner's link
+tinycloud --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 pending
 
 # Manage spaces
-tc space list
-tc space create
+tinycloud space list
+tinycloud space create
 
 # Grant access to another user
-tc delegation create --to did:pkh:eip155:1:0x...
+tinycloud delegation create --to did:pkh:eip155:1:0x...
 ```
+
+## Home feed
+
+`tinycloud feed` uses separate owner-provisioned SQLite databases for each agent's
+cards/handling and the owner's append-only responses. Owner registry and view
+state live separately. SDK consumers use the same contract from
+`@tinycloud/sdk-services/feed` with existing SQL database handles; see the
+[canonical types](../sdk-services/src/feed/types.ts).
+
+Use an authenticated **owner-openkey or local-owner-key** profile for `connect`.
+That owner needs SQL read/write/schema authority for
+`xyz.tinycloud.tinychat/home_feed` and the `xyz.tinycloud.tinychat/feed/`
+namespace, plus authority to delegate the exact agent grants below. The trailing
+slash denotes a database namespace, not an individual database.
+
+Create a separate agent profile and set `AGENT_DID` to its printed DID. Use the
+same node as the owner:
+
+```bash
+tinycloud profile create feed-agent --posture delegate-session --operator agent
+tinycloud --profile owner feed connect --agent writer --to "$AGENT_DID" --label Writer \
+  --space applications > feed-grant.json
+tinycloud --profile feed-agent auth import feed-grant.json
+```
+
+`connect` reserves a stable token/DID/resource binding, provisions both schemas,
+and activates one bundled delegation through the existing SDK. It registers
+actual grant provenance only after activation; a failed activation may be
+retried with the same DID and resources. The agent receives read/write on
+`xyz.tinycloud.tinychat/feed/feed_output_writer`, read on
+`xyz.tinycloud.tinychat/feed/feed_responses_writer`, and hook subscription on
+`sql/xyz.tinycloud.tinychat/feed/feed_responses_writer`. Agents do not receive
+response-write or schema authority. Display labels and tokens select resources;
+the signed grants determine access.
+
+To take an agent off the feed, run `tinycloud --profile owner feed disconnect --agent writer`
+with the profile that ran `connect`. It reads the grant's ID from the owner registry, revokes the
+grant with that profile's own key (no OpenKey approval and no `delegation revoke <cid>` lookup),
+and only then removes the registry row, so a failed revoke can be retried. If the node answers `404 Space not found`
+(it has no such delegation: never activated, or pruned), there is nothing left to revoke: the row
+is removed and the result says `"revoked": false, "nodeHadNoGrant": true`. Any other 404 (a proxy, an older node)
+is a failure and leaves the row. The token stays reserved for the same agent DID.
+
+Publish `card.json` from the agent profile:
+
+```json
+{"cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"decision","needsResponse":true,"title":"Create draft?","body":"Create a reversible draft only.","choices":[{"id":"create","label":"Create draft"}],"urgency":1,"createdAt":"2026-10-29T00:00:00Z"}
+```
+
+```bash
+tinycloud --profile feed-agent feed publish --agent writer --file card.json
+tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runtime \
+  --runner '["node","agent-handler.js"]'
+```
+
+Run `watch` in the agent terminal, then save `response.json` from the owner
+profile in another terminal, or answer the card through Home.
+
+Without `--runner`, `watch` prints each new response as one JSON line on stdout.
+With `--once`, it exits after the first batch of new responses, which wakes an
+agent whose tools report a background command only when it ends. A restart
+delivers only responses that `--recipient` has not had. Those lines carry the
+owner's words (`text`, `choiceId`): treat stdout as you would the runner's stdin,
+and never pipe it into shared logs.
+
+The owner's `response.json`:
+
+```json
+{"responseId":"response-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"answer","choiceId":"create","createdAt":"2026-10-29T00:01:00Z"}
+```
+
+```bash
+tinycloud --profile owner feed respond --agent writer --file response.json
+tinycloud --profile feed-agent feed responses --agent writer --after 0
+tinycloud --profile feed-agent feed handling --agent writer --file handling.json
+tinycloud --profile owner feed show card-draft-01 --agent writer
+```
+
+For an explicit outbound note to that agent, save a separate `message.json`:
+
+```json
+{"responseId":"message-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"message","text":"Please explain the draft before I answer.","createdAt":"2026-10-29T00:02:00Z"}
+```
+
+```bash
+tinycloud --profile owner feed message --agent writer --file message.json
+```
+
+Messages also work on information cards with `needsResponse: false`. They do not
+answer a card, clear Needs action, or replace its current answer or handling.
+`choiceId` and `supersedesResponseId` are refused on messages. Agent response pages
+and watch include messages, with acknowledgements/outcomes tied to their own full
+response IDs. Private owner notes, task ticks, and seen state remain owner-only
+registry data; they are not outbound messages.
+
+For a new response with private structured data, `payload.json` is a versioned
+JSON envelope, for example:
+
+```json
+{"type":"example.private-action","version":1,"data":{"code":"SYNTHETIC-ONLY"}}
+```
+
+Include it on the **first** save, instead of the plain `respond` command above:
+
+```bash
+tinycloud --profile owner feed respond --agent writer --file response.json --payload-file payload.json
+tinycloud --profile feed-agent feed payload --agent writer --response response-draft-01 \
+  --card card-draft-01 --revision 1 --issuance issuance-draft-01
+```
+
+The header and payload commit atomically in the same owner-response database.
+Retries of the same response ID must include the same header and payload; a
+changed, omitted, or later-added payload is refused. `feed payload` verifies the
+full response/card/revision/issuance identity, returning its envelope, or `null`
+for a known response without a payload. Unknown or mismatched identities fail.
+Keep approval codes in `payload.data`, never the normal response text.
+
+Default `list`, `show`, `responses`, and `watch` output contains only response
+headers and optional `payloadType`/`payloadVersion` metadata, not payload data.
+The SDK equivalents are the optional fourth `appendFeedResponse` or
+`appendFeedMessage` argument and the explicit `readFeedResponsePayload` method.
+`feed message` accepts the same `--payload-file` option on its first save.
+Owner schema initialization adds `feed_response_payloads`; existing response-read
+authority also authorizes an explicit payload read. “Private” here means excluded
+from notification copies, not a new authorization boundary against an agent already
+granted database read.
+
+`readFeedResponseHandling(output, identity)` reads acknowledgement and outcome for
+one full response/card/revision/issuance identity, including historical answers or
+messages after later arrivals. Unknown or mismatched handling returns `NOT_FOUND`,
+not a synthetic empty receipt. Known acknowledgement-only or outcome-only history
+retains the other slot as `null`. `getFeedCardState` selects only the current
+answer/follow-up; a saved answer without handling still has `null` receipt slots.
+
+Retain the full response ID on a retry. Reusing it with different content is
+refused. Responses bind the full card ID, revision, and issuance; corrections
+are new follow-up records, optionally naming `supersedesResponseId`. Short card
+references work only when unambiguous. Handling records carry their own
+`handlingId`, the response/card identities, `createdAt`, and `phase`:
+`acknowledged`, `succeeded`, or `failed`, with optional structured `detail`.
+Acknowledgement history and the terminal outcome are retained independently.
+
+**Saved, delivered, acknowledged, and completed are different states.**
+The runner receives allowlisted response-header JSON and optional payload
+type/version metadata on stdin through an argv array, never shell interpolation.
+Exit zero must mean durable acceptance of that response ID, not completion of
+its action. The agent publishes acknowledgement and outcome through `handling`.
+
+`watch` requires **Bun or Node.js 22.13+** for its durable local SQLite ledger;
+other commands keep the CLI's Node.js 20 requirement. By default the ledger is
+stored under the selected profile; `--handoff` selects another durable file.
+The listener subscribes before draining and reconciles on readiness, writes,
+reconnects, and five-minute renewal, without a rapid idle query loop.
+
+Before attempting a send, the ledger records `unconfirmed`. A crash, uncertain
+runtime result, or interruption leaves that identity unconfirmed rather than
+automatically sending again. A `prepared` record can resume only before an
+attempt began. Ctrl-C/SIGTERM stops the watcher and forcibly terminates its
+current runner; an already-started action may still have happened. Keep response
+IDs as downstream idempotency keys where supported. Exactly-once external
+execution is not promised.
+
+### Prepared FORMAT1 owner import
+
+`feed import` accepts an already-resolved FORMAT1 JSON bundle, not the raw snapshot
+written by `feed export`. Supply the full target space explicitly:
+
+```bash
+tinycloud --profile owner feed import \
+  --space tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:applications \
+  --file ./prepared-owner-bundle.json
+```
+
+The authenticated owner needs SQL read/write/schema authority for
+`xyz.tinycloud.tinychat/home_feed` and the registered per-agent database pairs.
+The command initializes the owner archive and uses the canonical SDK to initialize
+the current pair schemas. Agent response-read grants are insufficient. Import neither
+registers agents nor broadens their grants.
+
+Before writing, the importer validates versions, raw base64/SHA-256 proofs, full
+source references and card/response identities. Publisher agent IDs, DIDs, and
+resource pairs must match actual `feed_agents` rows and the canonical feed resource
+convention, with distinct database basenames. Labels and stored provenance do not
+replace signed node authority. The importer does not classify legacy data, choose
+current answers, resolve recipient names, or recalculate expiry.
+
+The complete prepared JSON value stays in owner-only
+`home_feed.feed_owner_imports`, immutable under
+`(source_space_id, namespace, snapshot_id)`. A declared `previousSnapshotId` must
+already exist in that same scope. Reusing a snapshot ID with changed content is
+refused. Raw source rows, original receipts, owner-only state and other archival
+metadata are not copied to agent databases; deletion records are data, not SQL
+deletes. Only envelopes declared `restoreTarget: "agent-response"` are restored
+remotely, using their supplied complete canonical cards and optional private
+response payloads.
+
+Remote delivery recipients come only from explicit `runtimeTarget.agentId`
+mappings. Configure `feed watch --recipient` with that same runtime ID, not a
+logical recipient key, legacy name, or label. Partial mappings retain unresolved
+names in the owner archive. Multiple logical keys for one runtime retain all
+evidence, including conflicts; the default-deny delivery policy below still applies.
+Private payloads retain the response-read boundary described above.
+
+The archive and per-agent databases do not share a transaction. An identical
+snapshot replay can finish partial progress without replacing existing content.
+Replay is not exactly-once external delivery; runtime durable acceptance,
+deduplication, and deadline checks remain necessary. Import does not pause source
+writers, install a write fence, or establish a live-source cutover.
+
+### Owner SDK restore and delivery policy
+
+The generic restore API is exported from `@tinycloud/sdk-services/feed`; the
+prepared importer above uses it. Call `initializeFeedDatabases({ output, responses })`
+with owner-authorized SQL handles to initialize the current pair's tables before
+restoring or listening. Agents retain read-only access to responses and cannot
+initialize or restore that database. Missing import/policy tables fail closed.
+
+`restoreFeedRecords({ output, responses }, preparedRecords, { signal })` accepts
+complete `FeedCard` records and response headers with optional private payloads,
+source references, and minimal delivery evidence. It does not interpret legacy
+records, choose current answers, or resolve recipients. Historical responses
+bypass live-submission eligibility only; they still require the full published
+card/revision/issuance identity. Existing live response IDs cannot be reclassified
+as imported. Replays must preserve header/payload content and source bindings.
+Valid literal JSON payload keys are preserved; unknown card-envelope fields are
+still refused. Completed query or batch failures retain their classification if
+caller cancellation races completion or later readback. Without cancellation, an
+identical concurrent restore can still recover through complete content and policy readback.
+
+Cards are stored first. Each imported response atomically stores its content-bound
+claim, header, optional private payload, origins, and delivery policies in the
+response database. There is no transaction across the two databases; a repeated
+prepared restore can complete partial progress without replacing existing content.
+
+Every import origin has a default `*` deny policy. Dispatch requires each origin
+to have consistent evidence for the exact recipient: `state: "pending"`,
+`dispatch: "resolved-pending"`, `resolvedOwnerMapping: true`, and a required
+`dispatchBefore` containing a valid future timestamp or explicit `null` for no
+absolute cutoff. Held, delivered, unconfirmed, refused, unknown, or conflicting
+evidence does not dispatch. Missing or malformed metadata fails the page rather
+than treating it as live data. Policy fields record owner decisions, not grants.
+Keep raw receipts and complete legacy ledgers in owner-only storage; remote policy
+rows contain only source references, state, mapping evidence, and the cutoff.
+
+`listFeedResponseDeliveries(responses, { recipient, afterSequence, limit, signal })`
+reads dispatch-eligible headers; `listFeedResponses` alone is history access, not
+dispatch authority. `listenFeedResponses` applies the policy before local handoff.
+Safe notification JSON carries the validated cutoff but no private payload data.
+The SDK checks the cutoff before handoff and again before invoking the runner.
+A queued runtime must check it immediately before acting. Expiry after a durable
+claim leaves the handoff unconfirmed, without automatic resend. Runtime durable
+acceptance and deduplication are still required; exactly-once external execution
+is not guaranteed.
+
+### Card issuance history
+
+`listFeedCardHistory(output, { afterIdentity, limit, signal })` from
+`@tinycloud/sdk-services/feed` reads full stored card issuances and their payloads,
+including earlier revisions and distinct issuances of the same revision.
+Validation preserves literal JSON payload keys, including an own `"__proto__"` key;
+it does not substitute a reconstructed payload or change its prototype.
+Pages use the full `(cardId, revision, issuanceId)` cursor in SQLite BINARY order
+for IDs and numeric order for revision, with default limit 100 and maximum 1000.
+The result is `{ cards, nextIdentity, hasMore }`; `nextIdentity` is the last
+returned full tuple, or `null` for an empty page.
+
+This snapshot cursor is not a durable publication tail: new IDs can sort before
+an existing cursor. Start each full reconciliation without `afterIdentity`.
+`listFeedCards` still returns only the latest published issuance per card.
+History reads use the existing output read capability and perform no DDL or writes.
+
+### Raw owner-only source export
+
+`feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.
+Supply the full approved source space, a space-relative namespace ending in `/`,
+and an unused output path. There is no installed-legacy or production default:
+
+```bash
+tinycloud --profile owner feed export \
+  --source-space tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications \
+  --prefix example/legacy/ --out ./raw-owner-snapshot.json \
+  --sidecars ./raw-sidecars.json
+```
+
+The selected profile must already hold source `tinycloud.kv/get` and explicit
+`tinycloud.kv/sync` authority on that namespace. Normal per-agent SQL feed grants
+do not authorize this export. The command does not broaden grants or fall back
+to LIST when sync is denied.
+
+`--sidecars` is optional. Its JSON array explicitly names every local file to
+include; relative paths resolve beside that configuration file:
+
+```json
+[
+  {"sourceKey":"owner/watch/hold-actions","sourceArea":"watch-state","path":"hold-actions.json"},
+  {"sourceKey":"owner/watch/thread","sourceArea":"thread-watch-state","path":"thread-state.json"},
+  {"sourceKey":"owner/expiry","sourceArea":"expiry-state","path":"expiry-state.json"}
+]
+```
+
+Sidecar files are read as exact bytes, including malformed JSON or binary data.
+No watcher is discovered or executed. Duplicate or conflicting full source keys
+are refused rather than overwritten.
+
+The owner-only versioned snapshot retains full KV keys, base64 bytes, SHA-256,
+strong ETags, change metadata, tombstones, opaque cursors, and node source/authority
+attestations. It bootstraps every change-feed page and verifies each binary network
+read against its ETag. One empty final tail at the end cursor is required before
+`completePrefixSnapshot: true` can be published. Source changes, cursor gaps,
+scope drift, or mismatches fail the capture. The exporter does not restart a changed
+capture or create a write fence; SDK requests retain their own transport behavior.
+
+The complete file is fsynced and published exclusively with mode `0600`; an existing
+path is never silently replaced. Keep this archive private: it can contain answers
+or codes. Normal command output is only the snapshot ID, output path, and counts.
+The output directory must belong to the effective user and forbid group/world
+writes. Ancestors must belong to that user or root; writable shared ancestors
+require sticky-bit protection of the next trusted-owned child. Unverifiable paths
+are refused. Mode `0600` protects contents, not the staging pathname's identity:
+the directory precondition prevents another UID from replacing that entry.
+The same UID and root remain trusted OS principals, not isolated adversaries.
+Validation includes every intermediate directory-alias target, not only the spelled
+path and its final resolved destination.
+Export does not classify records, choose current answers, resolve recipients,
+evaluate legacy expiry, restore state, or dispatch pending responses.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `tc init` | Set up a profile and generate keys |
-| `tc auth login` | Authenticate via browser |
-| `tc auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) |
-| `tc auth login --manifest <file>` | Browser OpenKey login scoped to a manifest |
-| `tc enable share` | Device login with the built-in Share publishing manifest (use a dedicated profile) |
-| `tc context` | Show the selected profile, owner, host, space and session state |
-| `tc auth status` | Show authentication status |
-| `tc auth whoami` | Show current identity |
-| `tc kv get <key>` | Retrieve a value |
-| `tc kv put <key> <value>` | Store a value |
-| `tc kv list` | List all keys |
-| `tc sql query <sql>` | Run a SQLite SELECT query |
-| `tc sql execute <sql>` | Run a SQLite write or schema statement |
-| `tc sql export` | Export a SQLite database file |
-| `tc space list` | List your spaces |
-| `tc space create` | Create a new space |
-| `tc delegation create` | Grant access to another user |
-| `tc delegation list` | List delegations |
-| `tc share` | Share data with another user |
-| `tc node` | Manage TinyCloud nodes |
-| `tc profile list` | List profiles |
-| `tc profile show` | Show profile details |
-| `tc profile create` | Create a new profile |
-| `tc vault` | Manage encrypted KV vaults |
-| `tc secrets` | Manage network-encrypted secrets |
-| `tc secrets network show` | Show a secrets decryption network |
-| `tc secrets network init` | Create or fetch the default secrets network |
-| `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
-| `tc secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
-| `tc secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
-| `tc secrets manage` | Print or open the Secret Manager page, `{url, opened}` |
-| `tc vars` | Manage environment variables |
-| `tc doctor` | Run diagnostic checks |
-| `tc completion` | Generate shell completions |
-| `tc courier` | Agent-to-agent threads over TinyCloud (beta; see [Courier](#courier)) |
+| `tinycloud init` | Set up a profile and generate keys |
+| `tinycloud auth login` | Authenticate via browser |
+| `tinycloud auth login --manifest <file>` | OpenKey approval link scoped to a manifest; 1 hour (7 days for `builtin:share-publishing`) unless `--expiry` is given |
+| `tinycloud auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) with a device code |
+| `tinycloud enable share` | Device login with the built-in Share publishing manifest (use a dedicated profile) |
+| `tinycloud context` | Show the selected profile, owner, host, space and session state |
+| `tinycloud auth status` | Show authentication status |
+| `tinycloud auth whoami` | Show current identity |
+| `tinycloud auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and add, change or delete its table rows. For the Health Log app's catalog database, it can also create, change and drop tables (nodes before 1.21.6 do not enforce that split). It cannot change the app's code, manifest or install record |
+| `tinycloud knowledge list` | List the installed apps that have a knowledge bundle |
+| `tinycloud knowledge read <app_id> [concept]` | Read an app's knowledge index, or one concept with its frontmatter parsed |
+| `tinycloud apps install <app_id>` | Install a pinned catalog app into the applications space of the profile it runs under (the owner's, for a delegate profile, through its grant): each file is verified against its pinned digest, the pinned DDL runs only if every statement is allowed, and knowledge notes are created create-only. Notes you have edited are left as they are and reported (exit 0) |
+| `tinycloud kv get <key>` | Retrieve a value |
+| `tinycloud kv put <key> <value>` | Store a value |
+| `tinycloud kv list` | List all keys |
+| `tinycloud sql query <sql>` | Run a SQLite SELECT query |
+| `tinycloud sql execute <sql>` | Run a SQLite write or schema statement |
+| `tinycloud sql export` | Export a SQLite database file |
+| `tinycloud feed` | Connect an agent, publish cards, save responses, record handling, and watch for runtime handoff; see [Home feed](#home-feed) |
+| `tinycloud space list` | List your spaces |
+| `tinycloud space create` | Create a new space |
+| `tinycloud delegation create` | Grant access to another user |
+| `tinycloud delegation list` | List delegations |
+| `tinycloud delegation revoke <cid>` | Revoke a delegation. From a delegate profile, revoke one its own key issued. |
+| `tinycloud share` | Share data with another user |
+| `tinycloud node` | Manage TinyCloud nodes |
+| `tinycloud profile list` | List profiles |
+| `tinycloud profile show` | Show profile details |
+| `tinycloud profile create` | Create a new profile |
+| `tinycloud vault` | Manage encrypted KV vaults |
+| `tinycloud secrets` | Manage network-encrypted secrets |
+| `tinycloud secrets network show` | Show a secrets decryption network |
+| `tinycloud secrets network init` | Create or fetch the default secrets network |
+| `tinycloud secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tinycloud secrets run` | Run a command with secrets in its environment |
+| `tinycloud secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
+| `tinycloud secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
+| `tinycloud secrets manage` | Print or open the Secret Manager page, `{url, opened}` |
+| `tinycloud vars` | Manage environment variables |
+| `tinycloud doctor` | Run diagnostic checks |
+| `tinycloud completion` | Generate shell completions |
+| `tinycloud courier` | Agent-to-agent threads over TinyCloud (beta; see [Courier](#courier)) |
 
 Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
-`tc secrets network show` accepts either a short network name or a full
-`urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tc secrets
+`tinycloud secrets network show` accepts either a short network name or a full
+`urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tinycloud secrets
 network grant` takes the short name, resolves the network, and grants
 `tinycloud.encryption/decrypt`.
+
+`tinycloud apps install` re-creates the pinned views on every run (reported as
+`viewsRecreated`). Knowledge notes whose bytes differ from the pinned version
+are left as you edited them and listed under `conflicts` (JSON); the command
+still exits 0 and installs the rest. If the schema fails after notes were
+written, it says "notes saved; tables not set up: run again"; running it again
+is safe.
+
+### Running a command with secrets
+
+```bash
+tinycloud secrets run NAME... [--map NAME=ENV_VAR]... [--scope S] [--space S] [--delegation SOURCE] [--private-key HEX] -- <command> [args...]
+
+tinycloud secrets run ANTHROPIC_API_KEY OPENAI_API_KEY -- python train.py
+tinycloud secrets run --map ANTHROPIC_KEY=ANTHROPIC_API_KEY -- node server.js
+```
+
+`tinycloud secrets run` reads every named secret as `tinycloud secrets get` does, then
+starts `<command>` directly, without a shell, with each value in its
+environment: under the secret's name, or under `ENV_VAR` for `--map
+NAME=ENV_VAR`. A value replaces an inherited variable of the same name.
+tinycloud doesn't pass its own `TC_PRIVATE_KEY` to the command. To give the command
+a key from a secret, use `--map NAME=TC_PRIVATE_KEY`.
+Everything after the first `--`, including any further `--`, goes to the
+command unchanged. The command uses tinycloud's stdin, stdout and stderr; tinycloud itself
+writes nothing to stdout, and its own messages go to stderr.
+
+Name at least one secret, as an argument or with `--map`. `ENV_VAR` must
+match `[A-Za-z_][A-Za-z0-9_]*`, and two secrets cannot be mapped to the same
+variable (exit 2). If any secret cannot be read, the command does not start
+and tinycloud exits with the code and error `tinycloud secrets get` gives for that secret.
+Otherwise tinycloud exits with the command's exit code. If the command was ended by
+SIGINT, SIGTERM, SIGHUP, SIGKILL, SIGALRM or SIGUSR2, tinycloud ends by the same
+signal (or exits with 128 plus the signal number if that signal doesn't end
+tinycloud). If any other signal ended it, such as SIGQUIT or SIGSEGV, tinycloud exits with
+128 plus the signal number instead, so tinycloud does not cause a core dump
+(SIGUSR1 and SIGPIPE are left out too: Node uses SIGUSR1 for its inspector
+and ignores SIGPIPE).
+
+SIGINT, SIGTERM, SIGHUP and SIGQUIT sent to tinycloud go to the command. When tinycloud
+runs in the foreground of a terminal, it doesn't pass on SIGINT, SIGQUIT or
+SIGHUP: the terminal already sends them (Ctrl-C, Ctrl-\, hangup) to the
+command, so the command normally gets each one once. tinycloud checks whether it's
+in the foreground using `/proc`, or `ps` where `/proc` isn't available. If
+neither works, it passes the signals on. When tinycloud runs in the background, it
+passes them on, so a signal sent to the whole job (for example `kill -INT
+%1`) can reach the command twice.
+
+From a script, stop the command by sending SIGTERM to tinycloud's process ID. tinycloud
+passes it on, waits for the command to exit, then exits the way the command
+did (the command's own exit code if it handles SIGTERM itself). If the
+command ignores SIGTERM, tinycloud keeps waiting.
+
+A command that does not exist exits 127; one that cannot be executed, or
+cannot be started for another reason, exits 126. These cases print one plain
+line on stderr, even with `--json`: `tinycloud secrets run: <command>: command not
+found`, `…: permission denied` or `…: cannot run (<error code>)`.
+
+Limits: `tinycloud secrets run` keeps values out of the command line, your shell
+history and tinycloud's own output. It doesn't hide them from the command: the
+command, and anything it starts, receives the values and can print, log or
+pass them on. Other programs running as the same user can often read a
+process's environment too.
 
 ## Global Options
 
@@ -165,26 +613,145 @@ network grant` takes the short name, resolves the network, and grants
 Replication is off by default. `--replication` enables it for one invocation;
 `--no-replication` overrides `TC_REPLICATION=1`, and `--replication-debug`
 writes diagnostics to stderr. Save explicit login prefixes with
-`tc auth login --replication-prefix notes/`; saved prefixes are reapplied on
+`tinycloud auth login --replication-prefix notes/`; saved prefixes are reapplied on
 later logins and rotation. Prefixes are folders (`notes/`) or `/` for the
 whole space. Whole-space replication requires `kv-sync-root` support and
 `--replication-allow-secrets`, because it includes `vault/`. Replication needs
 unrestricted `get` and explicit `sync` on that folder or broader; an exact-key
 grant never qualifies. Bare replica prefixes are rejected; use `notes/`.
-Use `tc replica report` for event aggregates and pinned keys; `--clear-pending`
-prints a warning because later commits can be read as stale until a subsequent
-sync. `auth logout` removes both legacy replicas and the flag-owned
-`replication/` root; `auth logout --keep-replicas` keeps both. B-int release
-acceptance must verify the OpenKey `tc auth request --grant` fallback against
-a real OpenKey using a test account and no production writes: approve the
-request, confirm the grant is stored, start a fresh process, and verify the
-saved prefixes are replayed and the covered read is served locally. If OpenKey
-rejects explicit `kv/get` plus `sync`, stop before release and resolve the
-protocol contract.
+
+An explicit local-owner sign-in saves the verified replica lifecycle stamp with
+its session; later CLI processes validate that stamp before local reads. Without
+it, network sign-in and KV reads still work, but local replica reads stay gated
+until a new verified sign-in. A gated root prefix does not imply `kv-sync-root`
+support.
+
+Replica-enabled OpenKey login uses the SDK-prepared SIWE approval URL, not the
+older browser-created session. Specify `--owner did:pkh:eip155:CHAIN:ADDRESS`
+unless this profile already has a verified owner session. The CLI verifies the
+signed result before saving its new key, session and replica stamp. Safari, and
+Chromium browsers that enforce Local Network Access without granting it (headless
+Chromium cannot show the prompt), may block the HTTPS page's plain-HTTP loopback
+callback: use an interactive CLI terminal and paste the same one-line code shown
+by OpenKey, or start with
+`tinycloud auth login --method openkey --replication-prefix notes/ --owner DID --paste`
+for a headless terminal. Non-TTY `--no-popup` cannot accept a paste; if that
+callback fails, it exits nonzero at the five-minute expiry with a `--paste`
+retry hint and discards the candidate key. Restarting requires a new approval
+and cannot reuse the old signed code. Ctrl-C, SIGINT or SIGTERM before approval
+arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`
+without saving a key or session.
+
+Normal OpenKey login prints a short approval link on stderr and waits. Relay it
+to the owner from a headless or remote CLI; no localhost callback or pasted code
+is needed. `--no-popup` skips opening a local browser, not automatic result
+retrieval. The CLI verifies the encrypted result, durably saves it, then
+acknowledges delivery. Re-run the same command after an interruption to resume.
+The one-hour request expiry is independent of the requested grant lifetime and
+result retention. A manifest login without `--expiry` requests one hour (seven
+days for `builtin:share-publishing`), a login without a manifest keeps its
+seven-day default, and onboarding requests
+30 days explicitly. `--paste` remains an explicit manual fallback with a
+five-minute, single-use return code, not the automatic short-link transport.
+
+`tinycloud onboard --timeout 60s` and `tinycloud auth grant REQUEST.json --timeout 60s` bound the wait for the owner's OpenKey approval (more than 0, at most 9m; longer values, 0 and garbage are usage errors, exit 2 `INVALID_TIMEOUT`). Use `60s` where a command may not run past 2 minutes. **Exit 8 WITH a `pending` object is not a failure:** `{"pending":{"step":N,"of":M,"approvalUrl":"<link>","expiresAt":"<ISO time>"}}` on stdout means send the owner the `approvalUrl` (only the owner, privately: the link lets anyone who has it view the request), ask them to approve, and re-run the same command with the same `--timeout`; when the link changes at step 2 of 2, send the NEW link. It is printed once as soon as a new link has been created (so it can be sent at once), and again when the wait ends with a resumed link still unanswered. `auth grant req.json --timeout 60s > grant.json` writes that object into `grant.json` on exit 8; check the exit code before using the file. stderr keeps its human text. A pending link is reused, never replaced, and a second approval is never requested. `onboard` has 2 steps; `auth grant` is step 1 of 1 (an agent grant covers exactly one space). On a profile that does not sign in through OpenKey, `auth grant --timeout` is accepted and has nothing to bound. `onboard` refuses `--timeout` together with `--code` (exit 2): running it again would send the same code to the next step. Exit 0 prints the normal result. Exit 3 `APPROVAL_REQUEST_EXPIRED` means the link expired: run the command again. The usual end is one OpenKey call: its HTTP 400 `invalid_request` answer to a status check after the link's own expiry is exit 3 and the saved request is dropped, so the next run makes a new request with a new link (exit 3 can appear twice before that, once when the link expires while the wait is on and once for the 400). A request approved just before its expiry is still collected: OpenKey serves an approved result until its own retention ends (production `APPROVAL_RESULT_RETENTION_SECONDS=600`, `docker-compose.prod.yml:28` in the OpenKey repo). Only a saved request that expired more than 11 minutes ago (10 min retention + 1 min clock skew) and holds no result is dropped without asking OpenKey. Exit 8 WITHOUT a `pending` object (`APPROVAL_REQUEST_UNAVAILABLE`, `APPROVAL_RESULT_UNAVAILABLE`, `APPROVAL_ACK_PENDING`, `APPROVAL_RESULT_ACKNOWLEDGED`) means OpenKey could not be reached or could not confirm in time; run the same command again, the saved state resumes. An HTTP 400 `APPROVAL_REQUEST_UNAVAILABLE` before the link's own `expiresAt` is not an expiry and could be a real fault: if it repeats, ask for help (do not delete anything). A network failure while waiting for a link that is still valid is reported as `pending` too, so check its `expiresAt`. Once the owner has approved, the command never reports that approval as pending: it collects, verifies, saves and acknowledges the result even past the timeout, for up to 30 s more (an acknowledgement whose reply was lost is re-sent on the next run with the same id). The total is at most the timeout plus 30 s plus up to 3 s plus local and node work; an `onboard` that moves on to step 2 also creates that link, one request of up to 10 s, so `--timeout 60s` ends in about 105 s at the most for an existing account. A new account's storage can take a moment: after step 1 the call also waits for OpenKey to host the space, for the time left of the timeout plus the 30 s grace (at least 15 s, instead of the 150 s an unbounded `onboard` waits); on a new account that is about 90 s for `--timeout 60s`, at worst a little under 2 minutes. If the space isn't ready by then, the call ends with exit 1 `SPACE_SETUP_PENDING`. A re-run checks the space first and waits for it (up to the same bound), then continues with step 2. A storage command that says `Space not found` right after setup can succeed a minute later. OpenKey keeps an approved result for 10 minutes, so run the command again right after sending the link. A stale `.lock` left by a killed run is reclaimed after 30 s: wait 30 s and run it again (exit 1 `PROFILE_LOCK_TIMEOUT`). Without `--timeout` the command waits until the approval is answered.
+
+A resumed approval completes at least one status check of OpenKey whatever the `--timeout`, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that check it exits 6 instead of reporting the approval as pending.
+
+Without `--timeout`, a saved approval request that has no result and expired more than 11 minutes ago (past OpenKey's result retention) is checked once with OpenKey, and if OpenKey confirms it expired unapproved it is replaced in the same run: the command drops it and prints a new link, never the dead one, then waits as usual. If OpenKey cannot be asked, or answers anything else (an approved result, still open), the saved request is used as before. A request that expired more recently still gets one OpenKey check (it may have been approved just before the expiry) and then exits 3 as above. The printed link now says when it stops being valid (`The link is valid until <ISO time>.`, on the line after the link). With `--timeout`, nothing changes: exit 3, and the next run makes the new request.
+
+`tinycloud auth request ... --grant --timeout 60s` is the same bounded wait for a scoped grant, for an agent whose commands end with its wake-up. It prints the approval link and exits 8 with the `pending` object above; run the same command again (same flags, same profile, same `--timeout`) and it resumes that saved request: the same link, no new request, and the approval is collected once the owner has given it. A grant over several spaces asks once per space (`step` N of M), and nothing is activated until the last one is approved. `--timeout` needs `--grant` and cannot be combined with `--paste` or `--device` (usage error, exit 2): a pasted code and a device authorization are not saved requests. Without `--timeout` the command waits as before.
+
+A saved request that is already past its own expiry never has its link printed again, inside OpenKey's 10-minute result retention as well as after it. The command asks OpenKey first (stderr says `Checking the saved request with OpenKey...`, with no link): an approval given before the expiry is collected (no link shown), an expired request ends as exit 3 (the next run makes a new link), and the old link is shown only if OpenKey still reports the request open (a local clock that runs ahead). If `--timeout` ends before OpenKey could be asked, the exit is 3 with no `pending` object, never a pending link.
+
+`tinycloud auth request ... --grant --fresh` asks the owner for a new approval even when the current grants already cover the request (without it, a covered request answers `changed: false` and asks nothing). Use it to replace a grant that is close to its end without removing it first: the old grant is kept (not removed, not revoked) and keeps working until its own expiry; the new grant is added beside it. The JSON lists the new CIDs in `delegationCids` and, in `existingDelegationCids`, the grants this profile has stored that are unexpired and whose recorded scope covers the request (read from local storage; not checked with the node). Revocation is by CID only (`tinycloud delegation revoke <cid>`, or `tinycloud auth grants remove <cid> --revoke`): revoking the new grant leaves the old one live and the other way round, so to end access now, revoke every CID in both lists. Each completed `--fresh` run asks once, so run it again only for another new grant; if it was stopped before the owner approved, run the same command again to resume. `--fresh` needs `--grant` and an OpenKey owner profile (usage error, exit 2, otherwise), and works with `--timeout`. It is the same ordinary approval as any other `--grant`: nothing is renewed automatically and nothing is extended without the owner's tap.
+
+For chat approvals, use CLI 1.5.0 or later and send the complete `/a/...#...`
+URL on its own line. For a scoped grant, run
+`tinycloud auth request ... --grant --no-popup` with the intended scope flags
+and profile; after interruption, rerun that same command and profile to resume.
+Do not add `--paste` for this path: that explicit manual fallback still generates
+the longer `/delegate?...` URL and requires the owner's return code.
+The short URL carries only a request reference and fragment key, not the
+permission payload or a session private key. Keep the complete fragment intact;
+never substitute a URL shortener or remove text after `#`. A chat preview does
+not approve or consume the request. If the in-app browser blocks site storage,
+open the original complete message link in Safari or Chrome. An expired or
+incomplete link requires a fresh request from the originating app or command.
+
+Use `tinycloud replica report` for read-only aggregates of persisted replication events
+and identity partitions. Live replica status is unavailable there. Report
+`--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
+`tinycloud replica reset --replica <name> --purge` is a partial alternative for a
+named local replica only. Flag-owned purge and pending clearing have no
+equivalent yet (TC-1309). On macOS and Windows, `replica reset --purge` and
+`auth logout` with a legacy `replicas/` tree refuse local removal rather than
+delete through an unpinned path; leave that tree intact and retry on a supported
+platform.
+
+`auth logout` durably fences replica reads, removes both legacy replicas and the
+flag-owned `replication/` root, and shreds `session.json` and `key.json`. If
+erasure fails, the marker keeps reads denied and startup retries cleanup. An
+explicit logout also blocks implicit sign-in with the stored profile owner key;
+use `auth login` to establish a fresh session. Unknown legacy or flag-owned
+paths, an unverified legacy SQLite schema, or an unreadable gate refuse logout
+before a marker, credential deletion, or node revocation. Sync local writes or
+pass `--discard-local-changes` to approve the displayed paths, types and file
+identities; newly added or changed paths require fresh approval. With `auth
+logout --revoke --discard-local-changes`, physical files and credentials remain
+through partial or failed node revocation. Only after every exact-CID receipt
+does local cleanup begin. After a failed revoke, plain `auth logout` first
+compares the original approved inventory. If it changed, even
+`--discard-local-changes` refuses without deleting credentials or files and
+prints the changed identities and a 32-character approval token. Run a separate
+`auth logout --discard-local-changes --approve-inventory <token>` to approve
+that exact inventory; a new change invalidates the token. After successful
+remote revocation, a cleanup mismatch retains the marker and remaining files
+while the profile stays signed out; `auth logout --discard-local-changes`
+reapproves cleanup without repeating node revocations. OpenKey owner revocation
+fails closed with `REVOCATION_AUTHORITY_UNAVAILABLE`, retaining credentials and
+denied replica files until signed owner revoke authority is supported.
+`--keep-replicas` is available only for legacy-only profiles with no gate,
+flag-owned partition or pending purge; it retains those legacy files but still
+shreds credentials and blocks implicit reauthentication.
+When the profile's replica gate belongs to a different account than the
+signed-in session, `auth logout` signs that session out and removes the
+profile's legacy `replicas/` tree, but leaves the other account's gate and
+flag-owned replicas untouched; startup finishes the legacy removal if it is
+interrupted. If an earlier sign-out was interrupted, logout reports it and a
+second `auth logout` completes it. A gate that no longer matches its logout
+record (for example, restored from an older copy) refuses logout; switch the
+default profile if needed, then run `tinycloud profile delete <name>` and sign in
+again.
+
+`auth logout`, `auth rotate`, and replica-enabled `auth login` that replaces the
+profile's share-history key check the sender share history first. If it records
+unexpired shares, or cannot be read, the command refuses with exit 5
+(`SHARE_HISTORY_UNEXPIRED` or `SHARE_HISTORY_UNAVAILABLE`) and changes nothing.
+Pass `--force` to proceed anyway; `auth logout --revoke` also skips the check. A
+plain re-login that keeps the key is not checked, and local-owner profiles are not
+checked. `tinycloud share history recover` moves an unreadable history file aside to
+`share-history-v2.json.unreadable-<UTC timestamp>` and reports the new path. It
+never deletes or overwrites a file. If the file exists but cannot be read,
+recover exits 1 with `SHARE_HISTORY_RECOVER_FAILED` and moves nothing.
+
+`tinycloud auth grants list` labels the signed-in delegation CID `(current session)`.
+`tinycloud delegation revoke <cid>` still accepts any eligible exact CID, but when
+`<cid>` is the current session it requires `--yes` or an interactive confirmation
+before contacting the node. An exact-CID success then runs the same durable
+local sign-out and key shred as `auth logout`; revoking another CID leaves the
+session intact.
+
+B-int release acceptance must
+verify the OpenKey `tinycloud auth request --grant` fallback against a real OpenKey
+using a test account and no production writes: approve the request, confirm the
+grant is stored, start a fresh process, and verify the saved prefixes are
+replayed and the covered read is served locally. If OpenKey rejects explicit
+`kv/get` plus `sync`, stop before release and resolve the protocol contract.
 
 ## Output Modes
 
-`tc` auto-detects your terminal:
+`tinycloud` auto-detects your terminal:
 
 - **Interactive (TTY)** — human-friendly output with colors, tables, and status icons
 - **Piped / redirected** — structured JSON for scripting
@@ -192,29 +759,29 @@ protocol contract.
 
 ```bash
 # Human-friendly table
-tc kv list
+tinycloud kv list
 
 # JSON for scripting
-tc kv list --json
-tc kv list | jq '.[]'
+tinycloud kv list --json
+tinycloud kv list | jq '.[]'
 ```
 
 ## Diagnostics
 
 ```bash
-tc doctor
+tinycloud doctor
 ```
 
 Checks Node.js version, profile configuration, keys, session status, node connectivity (with latency), and space availability. Outputs actionable guidance for any failing checks.
 
 ## Profiles
 
-`tc` supports multiple profiles for different environments:
+`tinycloud` supports multiple profiles for different environments:
 
 ```bash
-tc profile create staging --host https://staging.tinycloud.xyz
-tc profile list
-tc kv list --profile staging
+tinycloud profile create staging --host https://staging.tinycloud.xyz
+tinycloud profile list
+tinycloud kv list --profile staging
 ```
 
 ### Pointing a profile at a self-hosted OpenKey
@@ -232,7 +799,7 @@ profile JSON directly:
 }
 ```
 
-`tc auth login --method openkey` and `tc auth request` honor this for the
+`tinycloud auth login --method openkey` and `tinycloud auth request` honor this for the
 profile. Set `TC_OPENKEY_HOST` to override per invocation without editing the
 file.
 

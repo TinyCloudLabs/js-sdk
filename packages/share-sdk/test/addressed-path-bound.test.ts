@@ -1,0 +1,375 @@
+/*
+ * TC-2242. Every addressed share is encrypted under its own named key `share/<shareId>` and registers that key's raw-byte
+ * wrapped-key digest; the node refuses a new registration without both, and the recipient opens exactly that one key.
+ * These tests drive the REAL `NamedKeyClient` (sdk-services) against a stub node, then the real helpers and the real
+ * `publishAddressedShare`, so the shape contract between them is pinned.
+ */
+import { createHash, randomUUID } from "node:crypto";
+import { describe, expect, it } from "bun:test";
+import { sha256 } from "@noble/hashes/sha256";
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
+import { NamedKeyClient, type NamedKeyClientConfig } from "@tinycloud/sdk-services/encryption/named-keys";
+import * as shareSdk from "../src/index.js";
+import type { AddressedPolicyRegistrationInput, AddressedSharePublishOptions, PathBoundContentSource } from "../src/index.js";
+// Read through the namespace so that, against a source without these exports, each test fails on its own instead of the file failing to load.
+const {
+  AddressedContentSourceError,
+  addressedCredentialRequirement,
+  addressedShareBodyUpperBound,
+  bindPathBoundContentSource,
+  defaultEncryptionNetworkForOwner,
+  encryptAddressedShareContent,
+  pathBoundKeyPath,
+  pathBoundStoredBytes,
+  planPathBoundShare,
+  publishAddressedShare,
+  wrappedKeyDigestHex,
+} = shareSdk;
+
+const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerSeed)]))}`;
+const nodeSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 33);
+const nodeDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(nodeSeed)]))}`;
+const OWNER_PKH = "did:pkh:eip155:1:0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+const NETWORK = `urn:tinycloud:encryption:${OWNER_PKH}:default`;
+const SPACE = "tinycloud:test-space";
+const HOST = "https://node.test";
+const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
+
+function xor(key: Uint8Array, data: Uint8Array): Uint8Array {
+  return data.map((byte, index) => byte ^ key[index % key.length]!);
+}
+let counter = 7;
+const crypto: NamedKeyClientConfig["crypto"] = {
+  sha256,
+  randomBytes: (length) => Uint8Array.from({ length }, () => (counter = (Math.imul(counter, 1664525) + 1013904223) >>> 0) & 0xff),
+  x25519FromSeed: (seed) => ({ publicKey: seed, privateKey: seed }),
+  x25519Dh: (a, b) => xor(a, b),
+  authEncrypt: (key, plaintext) => Uint8Array.from([...new Uint8Array(28).fill(1), ...xor(key, plaintext)]),
+  authDecrypt: (key, ciphertext) => xor(key, ciphertext),
+  sealToNetworkKey: (pub, symmetric) => Uint8Array.from([...xor(pub, symmetric), 1, 2, 3]),
+  openWithReceiverKey: (priv, wrapped) => xor(priv, wrapped),
+  verifyNodeSignature: () => true,
+};
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+
+/** A real `NamedKeyClient` against a stub node that answers /info and the key's public key (unauthenticated GET). Nothing else is served. */
+function realKeys() {
+  const requests: { method: string; url: string; body?: string }[] = [];
+  const descriptor = (keyPath: string) => ({
+    networkId: NETWORK, keyPath, alg: "x25519-aes256gcm/v1", keyVersion: 3, publicEncryptionKey: Buffer.from(new Uint8Array(32).fill(9)).toString("base64"),
+    state: "active", kind: "deterministic", createdAt: "t0", updatedAt: "t0",
+  });
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ method: (init?.method ?? "GET").toUpperCase(), url, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+    if (url === `${HOST}/info`) return json({ nodeId: nodeDid, features: ["encryption-named-keys-v1"] });
+    const keyPath = decodeURIComponent(url.split("/keys/")[1] ?? (typeof init?.body === "string" ? (JSON.parse(init.body).keyPath as string) : ""));
+    if ((init?.method ?? "GET") !== "GET") return new Response("not served", { status: 405 });
+    return json(descriptor(keyPath));
+  }) as typeof fetch;
+  const config: NamedKeyClientConfig = {
+    host: HOST, crypto, fetch: fetchImpl, defaultNetworkId: () => NETWORK,
+    signInvocation: async (input) => ({ authorization: `Bearer test:${input.action}`, invocationCid: "cid" }),
+    decryptRoot: async () => { throw new Error("unused"); },
+  };
+  return { keys: new NamedKeyClient(config), requests };
+}
+
+const TARGETS = [
+  { kind: "recipientDid", target: { kind: "recipientDid" as const, did: "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav" } },
+  { kind: "email", target: { kind: "email" as const, address: "alice@example.com" } },
+  { kind: "emailDomain", target: { kind: "emailDomain" as const, domain: "example.com" } },
+] as const;
+
+function authority() {
+  const seen = { roots: [] as Parameters<AddressedSharePublishOptions["authority"]["createOwnerRoot"]>[0][], signs: 0, registrations: [] as AddressedPolicyRegistrationInput[] };
+  const value: AddressedSharePublishOptions["authority"] = {
+    ownerDid,
+    async createOwnerRoot(input) {
+      seen.roots.push(input);
+      return { cid: input.role === "policy-authority" ? "bafy-policy-root" : "bafy-enforcement-root", delegationHeader: { Authorization: input.role === "policy-authority" ? "a.b.c" : "d.e.f" } };
+    },
+    async sign(bytes) { seen.signs++; return ed25519.sign(bytes, ownerSeed); },
+    async registerPolicy(input) {
+      seen.registrations.push(input);
+      return {
+        policyCid: input.policyCid, policyRootCid: input.policyRoot.cid, enforcementRootCid: input.enforcementRoot.cid,
+        attestedEnforcerBinding: {
+          schema: "xyz.tinycloud.policy/attested-enforcer/v2", enforcerDid: nodeDid, nodeAudience: nodeDid,
+          attestationBindingDigestHex: "3".repeat(64), issuedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2030-01-01T00:00:00.000Z",
+          signature: { suite: "Ed25519", signerDid: nodeDid, value: "AQ" },
+        },
+      };
+    },
+  };
+  return { value, seen };
+}
+
+const SHARE_ID = "pathboundshare00000001";
+const PATH = `shares/${SHARE_ID}/note.txt`;
+
+function publishOptions(target: AddressedSharePublishOptions["target"], contentSource: AddressedSharePublishOptions["contentSource"], auth: AddressedSharePublishOptions["authority"], shareId = SHARE_ID): AddressedSharePublishOptions {
+  return {
+    shareId, shareOrigin: "https://share.tinycloud.xyz", nodeOrigin: "https://node.example", nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId: SPACE,
+    target, resource: { kind: "exact", path: PATH }, actions: ["read"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+    contentSource,
+    ...(target.kind === "recipientDid" ? {} : { credentialRequirement: addressedCredentialRequirement(target) }),
+    filename: "note.txt", mediaType: "text/plain", byteLength: 5, expiresAt: new Date("2030-01-01T00:00:00.000Z"), authority: auth,
+  };
+}
+
+/** plan -> encrypt (real named-key client) -> upload -> bind: what a consumer runs. */
+async function encryptAndBind(shareId = SHARE_ID) {
+  const { keys, requests } = realKeys();
+  const plan = planPathBoundShare({ shareId, encryptionNetwork: NETWORK });
+  const encrypted = await encryptAddressedShareContent({ plan, keys, plaintext: new TextEncoder().encode("hello"), metadata: { contentType: "text/plain" } });
+  const contentSource = bindPathBoundContentSource({ plan, envelope: encrypted.envelope, storedBytes: encrypted.storedBytes, kvResource: `${SPACE}/kv/shares/${shareId}/note.txt`, selector: "exact" });
+  return { plan, encrypted, contentSource, requests };
+}
+
+const bad = (overrides: Record<string, unknown>, drop: string[] = []) => async () => {
+  const { contentSource } = await encryptAndBind();
+  const mutated: Record<string, unknown> = { ...contentSource, ...overrides };
+  for (const key of drop) delete mutated[key];
+  return mutated as unknown as PathBoundContentSource;
+};
+
+describe("every addressed target kind publishes a path-bound source (real named-key envelope, real publisher)", () => {
+  for (const { kind, target } of TARGETS) {
+    it(`${kind}: the content is encrypted to share/<shareId>'s public key, the source carries the path and the raw-byte digest, and the only decrypt grant is that one key`, async () => {
+      const { plan, encrypted, contentSource, requests } = await encryptAndBind();
+      const auth = authority();
+      const published = await publishAddressedShare(publishOptions(target, contentSource, auth.value));
+
+      // The content is encrypted to the share key's public key, read with one GET; the key is never created by the client.
+      expect(requests.filter((request) => request.url !== `${HOST}/info`).map((request) => request.method)).toEqual(["GET"]);
+      expect(encrypted.envelope).toMatchObject({ v: 2, networkId: NETWORK, keyPath: `share/${SHARE_ID}`, keyVersion: 3 });
+      // The digest is the SHA-256 of the DECODED wrapped-key bytes, not the canonical hash of the base64 string.
+      const rawDigest = createHash("sha256").update(Buffer.from(encrypted.envelope.encryptedSymmetricKey, "base64")).digest("hex");
+      expect(contentSource.encryptedSymmetricKeyDigestHex).toBe(rawDigest);
+      expect(contentSource.encryptedSymmetricKeyDigestHex).not.toBe(encrypted.envelope.encryptedSymmetricKeyHash);
+      expect(wrappedKeyDigestHex(encrypted.envelope.encryptedSymmetricKey)).toBe(rawDigest);
+      expect(contentSource.initialCiphertextDigestHex).toBe(createHash("sha256").update(encrypted.storedBytes).digest("hex"));
+      expect(JSON.parse(new TextDecoder().decode(encrypted.storedBytes))).toEqual(JSON.parse(JSON.stringify(encrypted.envelope)));
+
+      // What is registered and signed names the path, and the only encryption capability is the one key, never the network.
+      const registered = auth.seen.registrations[0]!.policy as unknown as { contentSource: PathBoundContentSource; capabilityCeiling: { kind: string; resource: string }[] };
+      expect(registered.contentSource).toMatchObject({ encryptionKeyPath: `share/${SHARE_ID}`, encryptedSymmetricKeyDigestHex: rawDigest });
+      const encryptionResources = (list: readonly { kind: string; resource: string }[]) => list.filter((capability) => capability.kind === "encryption").map((capability) => capability.resource);
+      expect(encryptionResources(registered.capabilityCeiling)).toEqual([`${NETWORK}/share/${SHARE_ID}`]);
+      for (const root of auth.seen.roots) expect(encryptionResources(root.capabilities)).toEqual([`${NETWORK}/share/${SHARE_ID}`]);
+      expect(plan.keyResource).toBe(`${NETWORK}/share/${SHARE_ID}`);
+      expect(published.deliveryMaterial?.envelope.contentSource).toMatchObject({ encryptionKeyPath: `share/${SHARE_ID}`, encryptedSymmetricKeyDigestHex: rawDigest });
+      expect((published.deliveryMaterial?.envelope.policy as unknown as { capabilityCeiling: { kind: string; resource: string }[] }).capabilityCeiling.filter((capability) => capability.kind === "encryption").map((capability) => capability.resource)).toEqual([`${NETWORK}/share/${SHARE_ID}`]);
+    });
+  }
+});
+
+describe("the publisher refuses anything not path-bound before it signs, registers or writes", () => {
+  const cases: [string, () => Promise<PathBoundContentSource>, string][] = [
+    ["no key path (a network-wide source)", bad({}, ["encryptionKeyPath"]), "key-path-required"],
+    ["another share's key path", bad({ encryptionKeyPath: "share/someothershare0000001" }), "key-path-mismatch"],
+    ["the path without its share prefix", bad({ encryptionKeyPath: SHARE_ID }), "key-path-mismatch"],
+    ["a nested path", bad({ encryptionKeyPath: `share/${SHARE_ID}/extra` }), "key-path-mismatch"],
+    ["no wrapped-key digest", bad({}, ["encryptedSymmetricKeyDigestHex"]), "digest-invalid"],
+    ["a short digest", bad({ encryptedSymmetricKeyDigestHex: "ab".repeat(16) }), "digest-invalid"],
+    ["an upper-case digest", bad({ encryptedSymmetricKeyDigestHex: "AB".repeat(32) }), "digest-invalid"],
+    ["a network that is not a default network", bad({ encryptionNetwork: NETWORK.replace(":default", ":other") }), "network-invalid"],
+    ["a bare key resource as the network", bad({ encryptionNetwork: `${NETWORK}/share/${SHARE_ID}` }), "network-invalid"],
+    ["a lower-cased owner address in the network", bad({ encryptionNetwork: NETWORK.toLowerCase() }), "network-not-checksummed"],
+    ["a wrong mixed-case (not EIP-55) owner address", bad({ encryptionNetwork: NETWORK.replace("0x5aAeb", "0x5AAeb") }), "network-not-checksummed"],
+    ["an extra :default segment", bad({ encryptionNetwork: `${NETWORK}:default` }), "network-invalid"],
+    ["a 0X-prefixed address", bad({ encryptionNetwork: NETWORK.replace(":0x", ":0X") }), "network-invalid"],
+    ["a chain id with a leading zero", bad({ encryptionNetwork: NETWORK.replace("eip155:1:", "eip155:01:") }), "network-invalid"],
+    ["a did:key owner with extra segments", bad({ encryptionNetwork: "urn:tinycloud:encryption:did:key:z6Mk:extra:default" }), "network-invalid"],
+    ["a did:web owner", bad({ encryptionNetwork: "urn:tinycloud:encryption:did:web:example.com:default" }), "network-invalid"],
+  ];
+  for (const [name, make, code] of cases) {
+    for (const { kind, target } of TARGETS) {
+      it(`${kind}: ${name} is refused as ${code} with no signature, owner root or registration`, async () => {
+        const auth = authority();
+        const source = await make();
+        const failure = await publishAddressedShare(publishOptions(target, source, auth.value)).then(() => undefined, (error: unknown) => error);
+        expect(failure).toMatchObject({ name: "AddressedContentSourceError", code });
+        expect(auth.seen.signs).toBe(0);
+        expect(auth.seen.roots).toEqual([]);
+        expect(auth.seen.registrations).toEqual([]);
+      });
+    }
+  }
+
+  it("a path that names another share is refused even when it is the source's own consistent value", async () => {
+    const { contentSource } = await encryptAndBind("someothershare0000001");
+    const auth = authority();
+    await expect(publishAddressedShare(publishOptions(TARGETS[1].target, { ...contentSource, shareId: SHARE_ID }, auth.value))).rejects.toMatchObject({ code: "key-path-mismatch" });
+    expect(auth.seen.signs).toBe(0);
+  });
+});
+
+describe("the size bound sees the path", () => {
+  const request = { ...TARGETS[1], shareId: SHARE_ID, ownerDid, nodeOrigin: "https://node.example", nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId: SPACE };
+  const input = (extra: Record<string, unknown> = {}) => ({
+    target: request.target, actions: ["read"] as const, policyActions: ["tinycloud.kv/get"] as const, filename: "note.txt",
+    shareId: SHARE_ID, ownerDid, nodeOrigin: "https://node.example", nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId: SPACE,
+    resource: { kind: "exact" as const }, storage: { path: PATH }, encryptionNetwork: NETWORK, mediaType: "text/plain", byteLength: 5,
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"), ...extra,
+  });
+
+  it("covers a real path-bound envelope without being given the key path", async () => {
+    const { contentSource } = await encryptAndBind();
+    const published = await publishAddressedShare(publishOptions(request.target, contentSource, authority().value));
+    const bound = await addressedShareBodyUpperBound(input() as never);
+    expect(bound).toBeGreaterThanOrEqual(Math.floor(published.deliveryMaterial!.sealedEnvelope.length * 3 / 4));
+  });
+
+  it("measures the same bytes whether or not the caller passes the (redundant) key path", async () => {
+    expect(await addressedShareBodyUpperBound(input() as never)).toBe(await addressedShareBodyUpperBound(input({ encryptionKeyPath: `share/${SHARE_ID}` }) as never));
+  });
+
+  it("refuses a network the publisher would refuse (so assertAddressedShareFits is a real gate)", async () => {
+    for (const [encryptionNetwork, code] of [[NETWORK.toLowerCase(), "network-not-checksummed"], [NETWORK.replace(":default", ":other"), "network-invalid"], ["not-a-urn", "network-invalid"], [`${NETWORK}:default`, "network-invalid"]] as const) {
+      await expect(addressedShareBodyUpperBound(input({ encryptionNetwork }) as never)).rejects.toMatchObject({ code });
+    }
+  });
+
+  it("refuses a share id the publisher would refuse, before anything is created", async () => {
+    await expect(addressedShareBodyUpperBound(input({ shareId: "dot.share.0000000001" }) as never)).rejects.toMatchObject({ code: "share-id-invalid" });
+  });
+
+  it("refuses a key path that is not this share's", async () => {
+    await expect(addressedShareBodyUpperBound(input({ encryptionKeyPath: "share/someothershare0000001" }) as never)).rejects.toMatchObject({ code: "key-path-mismatch" });
+    await expect(addressedShareBodyUpperBound(input({ encryptionKeyPath: `share/${SHARE_ID}` }) as never)).resolves.toBeGreaterThan(0);
+  });
+});
+
+describe("plan: path, permissions and the checksummed network", () => {
+  it("derives share/<shareId> and the exact permission entries", () => {
+    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
+    expect(plan.keyPath).toBe(`share/${SHARE_ID}`);
+    expect(pathBoundKeyPath(SHARE_ID)).toBe(plan.keyPath);
+    expect(plan.registrationPermissions).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/`, actions: ["tinycloud.encryption/decrypt"] }]);
+    expect(plan.encryptOptions({ metadata: { contentType: "text/plain" } })).toEqual({ networkId: NETWORK, metadata: { contentType: "text/plain" } });
+  });
+
+  it("refuses a lower-cased owner network and offers the checksummed one", () => {
+    const lower = `urn:tinycloud:encryption:${OWNER_PKH.toLowerCase()}:default`;
+    expect(() => planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: lower })).toThrow(AddressedContentSourceError);
+    expect(() => planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: lower })).toThrow(/checksummed/);
+    expect(defaultEncryptionNetworkForOwner(OWNER_PKH.toLowerCase())).toBe(NETWORK);
+    expect(defaultEncryptionNetworkForOwner(OWNER_PKH)).toBe(NETWORK);
+    expect(planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: defaultEncryptionNetworkForOwner(OWNER_PKH.toLowerCase()) }).encryptionNetwork).toBe(NETWORK);
+  });
+
+  it("refuses a bad share id and a network that is not the owner's default", () => {
+    expect(() => planPathBoundShare({ shareId: "short", encryptionNetwork: NETWORK })).toThrow(expect.objectContaining({ code: "share-id-invalid" }));
+    expect(() => planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK.replace(":default", ":other") })).toThrow(expect.objectContaining({ code: "network-invalid" }));
+    expect(() => planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK.replace("urn:tinycloud:encryption:", "") })).toThrow(expect.objectContaining({ code: "network-invalid" }));
+  });
+});
+
+describe("one share-id grammar for the plan, the size bound and the publisher (no orphan keys)", () => {
+  const accepted = [randomUUID(), randomUUID().replaceAll("-", ""), "a".repeat(16), "a".repeat(64), "0123456789abcdef", "ab_cd-ef_gh-ij_kl"];
+  const refused = ["dot.share.0000000001", "a".repeat(15), "a".repeat(65), "..", "../../etc/passwd-xx", "a/b/c/d/e/f/g/h/i", "%61%61%61%61%61%61%61%61%61%61", "ünïcödé-share-id-0001", "UPPERCASE-SHARE-ID-0001", "-leading-dash-0000001", "_leading-underscore-01", "has space in the id 01", "tab\tin-the-id-00000001"];
+
+  it("accepts the ids the producers use (lowercase UUID with and without hyphens) and refuses everything outside [a-z0-9_-] (16..64, first char a letter or digit)", () => {
+    for (const id of accepted) expect(pathBoundKeyPath(id)).toBe(`share/${id}`);
+    for (const id of refused) expect(() => planPathBoundShare({ shareId: id, encryptionNetwork: NETWORK })).toThrow(expect.objectContaining({ code: "share-id-invalid" }));
+  });
+
+  it("the publisher refuses exactly what the plan refuses, with the same code and before it signs anything", async () => {
+    const { contentSource } = await encryptAndBind();
+    for (const id of refused) {
+      const auth = authority();
+      const failure = await publishAddressedShare(publishOptions(TARGETS[1].target, { ...contentSource, shareId: id, encryptionKeyPath: `share/${id}` }, auth.value, id)).then(() => undefined, (error: unknown) => error);
+      expect(failure).toMatchObject({ code: "share-id-invalid" });
+      expect(auth.seen.signs).toBe(0);
+      expect(auth.seen.registrations).toEqual([]);
+    }
+  });
+});
+
+describe("owner input, share ids and plaintext handling (composer review)", () => {
+  it("accepts the owner as a DID in any case, a bare address, or { address, chainId } and always returns the checksummed network", () => {
+    const address = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+    for (const owner of [OWNER_PKH, OWNER_PKH.toLowerCase(), address, address.toLowerCase(), { address: address.toLowerCase() }, { address, chainId: 1 }]) {
+      expect(defaultEncryptionNetworkForOwner(owner)).toBe(NETWORK);
+    }
+    expect(defaultEncryptionNetworkForOwner({ address: address.toLowerCase(), chainId: 137 })).toBe(NETWORK.replace("eip155:1:", "eip155:137:"));
+    for (const bad of ["0x1234", { address: "nope" }, { address, chainId: 0 }, ""]) {
+      expect(() => defaultEncryptionNetworkForOwner(bad as never)).toThrow(expect.objectContaining({ code: "network-invalid" }));
+    }
+  });
+
+  it("accepts a lowercase hyphenated UUID as a share id and refuses ids the node would refuse as a key path", () => {
+    const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    expect(pathBoundKeyPath(uuid)).toBe(`share/${uuid}`);
+    expect(planPathBoundShare({ shareId: uuid, encryptionNetwork: NETWORK }).keyResource).toBe(`${NETWORK}/share/${uuid}`);
+    for (const bad of [uuid.toUpperCase(), `-${uuid}`, `_${uuid}`, "a".repeat(65), "a".repeat(15), "a/b".padEnd(20, "x"), "aaaaaaaa aaaaaaaa"]) {
+      expect(() => pathBoundKeyPath(bad)).toThrow(expect.objectContaining({ code: "share-id-invalid" }));
+    }
+  });
+
+  it("does not retain or alter the plaintext buffer it is given: zeroing it afterwards changes nothing that was returned", async () => {
+    const { keys } = realKeys();
+    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
+    const plaintext = new TextEncoder().encode("secret plaintext");
+    const before = plaintext.slice();
+    const encrypted = await encryptAddressedShareContent({ plan, keys, plaintext });
+    expect(plaintext).toEqual(before);
+    const stored = encrypted.storedBytes.slice();
+    plaintext.fill(0);
+    expect(encrypted.byteLength).toBe(before.byteLength);
+    expect(encrypted.storedBytes).toEqual(stored);
+    expect(new TextDecoder().decode(encrypted.storedBytes)).not.toContain("secret plaintext");
+  });
+
+  it("encrypts with one unauthenticated public-key read of the share's key and never creates the key", async () => {
+    const { keys, requests } = realKeys();
+    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
+    await encryptAddressedShareContent({ plan, keys, plaintext: new Uint8Array(3) });
+    const keyRequests = requests.filter((request) => request.url !== `${HOST}/info`);
+    expect(keyRequests.map((request) => request.method)).toEqual(["GET"]);
+    expect(decodeURIComponent(keyRequests[0]!.url)).toContain(`share/${SHARE_ID}`);
+    expect(requests.some((request) => request.method === "POST")).toBe(false);
+  });
+});
+
+describe("bind and encrypt refuse what the recipient or node would", () => {
+  it("a v1 envelope (what encryptToNetwork with a keyPath returns) is refused: it is wrapped to the network, not the key", async () => {
+    const { plan, encrypted } = await encryptAndBind();
+    const v1 = { ...encrypted.envelope, v: 1 };
+    expect(() => bindPathBoundContentSource({ plan, envelope: v1, storedBytes: pathBoundStoredBytes(v1), kvResource: `${SPACE}/kv/${PATH}`, selector: "exact" })).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
+  });
+
+  it("an envelope for another key path or network, a wrong key hash and a non-base64 key are refused", async () => {
+    const { plan, encrypted } = await encryptAndBind();
+    const attempt = (envelope: typeof encrypted.envelope) => () => bindPathBoundContentSource({ plan, envelope, storedBytes: pathBoundStoredBytes(envelope), kvResource: `${SPACE}/kv/${PATH}`, selector: "exact" });
+    expect(attempt({ ...encrypted.envelope, keyPath: "share/someothershare0000001" })).toThrow(expect.objectContaining({ code: "key-path-mismatch" }));
+    expect(attempt({ ...encrypted.envelope, networkId: NETWORK.replace(":default", ":other") })).toThrow(expect.objectContaining({ code: "key-path-mismatch" }));
+    expect(attempt({ ...encrypted.envelope, encryptedSymmetricKeyHash: "0".repeat(64) })).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
+    expect(attempt({ ...encrypted.envelope, encryptedSymmetricKey: "not*base64" })).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
+  });
+
+  it("an envelope the RECIPIENT would refuse is refused at bind time: extra field, wrong alg, non-string ciphertext/aad/metadata, short or non-base64 ciphertext", async () => {
+    const { plan, encrypted } = await encryptAndBind();
+    const attempt = (changes: Record<string, unknown>) => () => {
+      const envelope = { ...encrypted.envelope, ...changes } as typeof encrypted.envelope;
+      return bindPathBoundContentSource({ plan, envelope, storedBytes: pathBoundStoredBytes(envelope), kvResource: `${SPACE}/kv/${PATH}`, selector: "exact" });
+    };
+    expect(attempt({})).not.toThrow();
+    for (const changes of [{ extraField: "x" }, { alg: "other/v9" }, { ciphertext: 12 }, { ciphertext: "AAAA" }, { ciphertext: "not*base64" }, { aad: 5 }, { aad: "not*base64" }, { metadata: { contentType: 1 } }, { metadata: ["x"] }, { metadata: null }]) {
+      expect(attempt(changes), JSON.stringify(changes)).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
+    }
+  });
+
+  it("bytes that are not the canonical envelope are refused: upload pathBoundStoredBytes(envelope), nothing else", async () => {
+    const { plan, encrypted } = await encryptAndBind();
+    const tampered = Uint8Array.from(encrypted.storedBytes);
+    tampered[tampered.length - 2] ^= 1;
+    expect(() => bindPathBoundContentSource({ plan, envelope: encrypted.envelope, storedBytes: tampered, kvResource: `${SPACE}/kv/${PATH}`, selector: "exact" })).toThrow(expect.objectContaining({ code: "stored-bytes-mismatch" }));
+  });
+
+});
+

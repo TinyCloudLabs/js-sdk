@@ -6,7 +6,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { check, failureMessage, gitRepo, unfinishedStableRelease } from "./check-npm-release-provenance.mjs";
+import {
+  acceptedByEarlierRun,
+  acceptedFromPublishLog,
+  acceptedFromRunLog,
+  check,
+  failureMessage,
+  gitRepo,
+  unfinishedBetaRelease,
+  unfinishedStableRelease,
+} from "./check-npm-release-provenance.mjs";
 
 // Real git in a temporary repository; npm is always the injected `view`.
 const script = fileURLToPath(new URL("./check-npm-release-provenance.mjs", import.meta.url));
@@ -83,7 +92,17 @@ const noSleep = () => {
   throw new Error("only post-publish waits");
 };
 const run = (r, mode, npm, options = {}) =>
-  check({ mode, repo: r.repo, view: npm.view, packageExists: npm.packageExists, sleep: noSleep, log: quiet, ...options });
+  check({
+    mode,
+    repo: r.repo,
+    view: npm.view,
+    packageExists: npm.packageExists,
+    sleep: noSleep,
+    log: quiet,
+    acceptedEarlier: async () => undefined,
+    tagsOf: () => assert.fail("unexpected dist-tag lookup"),
+    ...options,
+  });
 
 test("pre-publish: checks every public workspace package, publishes what npm lacks", async (t) => {
   const r = repository(t);
@@ -335,11 +354,23 @@ test("pre/post-publish: internal dependencies may be in this run's publish set, 
     ...npm.entries,
     "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] },
   });
-  const failures = await run(r, "post-publish", partial, { sleep: async () => {}, waitMs: 1, firstRetryMs: 1 });
+  const failures = await run(r, "post-publish", partial, {
+    sleep: async () => {},
+    waitMs: 1,
+    firstRetryMs: 1,
+    tagsOf: () => ({ beta: "1.0.1-beta.0" }),
+  });
   assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), [
     "@x/b: not on npm after publish",
     "@x/a: requires @x/b@2.0.1-beta.0, which is not on npm",
   ]);
+  assert.deepEqual(failures[1].commands, [
+    "tag back:     no earlier `beta` was recorded for @x/a; pick one from `npm view @x/a time`",
+    "roll forward: npm dist-tag add @x/a@1.0.1-beta.0 beta   (once `npm view @x/b@2.0.1-beta.0 version` answers)",
+  ]);
+  const message = failureMessage(failures, "post-publish");
+  assert.match(message, /CI does not move dist-tags/);
+  assert.match(message, /Check the publish log/);
 });
 
 test("unfinished-stable: a partial stable release is finished from its release commit before anything else", async (t) => {
@@ -450,10 +481,511 @@ test("post-publish: a version that never appears fails once the shared budget is
   assert.equal(failures[0].head, head);
 });
 
+const budget = { waitMs: 40, firstRetryMs: 10, maxRetryMs: 20 };
+
+test("post-publish: a version npm accepted in this run but still does not show is pending, not a failure", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released, "@x/b@2.0.1-beta.0": head });
+  const waits = [];
+  const pending = [];
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async (ms) => waits.push(ms),
+    accepted: new Set(["@x/a@1.0.1-beta.0", "@x/b@2.0.1-beta.0"]),
+    onPending: (pkg) => pending.push(`${pkg.name}@${pkg.version}`),
+  });
+  assert.deepEqual(failures, []);
+  assert.deepEqual(pending, ["@x/a@1.0.1-beta.0"]);
+  // It still gets the whole normal budget first.
+  assert.deepEqual(waits, [10, 20, 10]);
+});
+
+test("post-publish: a version npm never accepted still fails next to a pending one", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async () => {},
+    accepted: new Set(["@x/a@1.0.1-beta.0"]),
+  });
+  assert.deepEqual(failures.map(({ name, reason }) => `${name}: ${reason}`), ["@x/b: not on npm after publish"]);
+});
+
+test("post-publish: a package that requires a pending version fails red, with tag commands and no tag moves", async (t) => {
+  // 2026-10-20: web-sdk@3.3.0-beta.31 (now tagged beta) required web-sdk-wasm@1.7.7-beta.0, accepted but not shown.
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.1-beta.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] } });
+  const pending = [];
+  const tagLookups = [];
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async () => {},
+    accepted: new Set(["@x/a@1.0.1-beta.0", "@x/b@2.0.1-beta.0"]),
+    onPending: (pkg) => pending.push(`${pkg.name}@${pkg.version}`),
+    previousTags: { "@x/a": { latest: "1.0.0", beta: "1.0.0-beta.3" } },
+    tagsOf: (name) => (tagLookups.push(name), { latest: "1.0.0", beta: "1.0.1-beta.0" }),
+  });
+  // b itself is still only pending; a, which requires it, is the failure.
+  assert.deepEqual(pending, ["@x/b@2.0.1-beta.0"]);
+  assert.deepEqual(tagLookups, ["@x/a"]);
+  assert.deepEqual(
+    failures.map(({ name, version, kind, reason, commands }) => ({ name, version, kind, reason, commands })),
+    [
+      {
+        name: "@x/a",
+        version: "1.0.1-beta.0",
+        kind: "dependency-not-visible",
+        reason: "requires @x/b@2.0.1-beta.0, which npm accepted in this run but does not show yet, so installing @x/a@1.0.1-beta.0 fails until it does",
+        commands: [
+          "tag back:     npm dist-tag add @x/a@1.0.0-beta.3 beta",
+          "roll forward: npm dist-tag add @x/a@1.0.1-beta.0 beta   (once `npm view @x/b@2.0.1-beta.0 version` answers)",
+        ],
+      },
+    ],
+  );
+  const message = failureMessage(failures, "post-publish");
+  assert.match(message, /    tag back:     npm dist-tag add @x\/a@1\.0\.0-beta\.3 beta\n/);
+  assert.match(message, /CI does not move dist-tags\. Do not re-run\./);
+  assert.doesNotMatch(message, /Check the publish log/);
+});
+
+test("post-publish: a pending version nothing requires stays a warning (TC-1457)", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.0"]] }, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "post-publish", npm, {
+    ...budget,
+    sleep: async () => {},
+    accepted: new Set(["@x/a@1.0.1-beta.0", "@x/b@2.0.1-beta.0"]),
+    tagsOf: () => assert.fail("no failure, so no tag lookup"),
+  });
+  assert.deepEqual(failures, []);
+});
+
+test("post-publish: tag commands without a pre-publish record, without a moved tag, or without npm", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, { ...a("1.0.1-beta.0", { "@x/b": "2.0.1-beta.0" }), ...b("2.0.1-beta.0") });
+  const npm = registry({ "@x/a@1.0.1-beta.0": { gitHead: head, requires: [["@x/b", "2.0.1-beta.0"]] } });
+  const commands = async (options) =>
+    (await run(r, "post-publish", npm, { ...budget, sleep: async () => {}, accepted: new Set(["@x/b@2.0.1-beta.0"]), ...options }))
+      .flatMap((failure) => failure.commands);
+  assert.deepEqual(await commands({ tagsOf: () => ({ beta: "1.0.1-beta.0" }) }), [
+    "tag back:     no earlier `beta` was recorded for @x/a; pick one from `npm view @x/a time`",
+    "roll forward: npm dist-tag add @x/a@1.0.1-beta.0 beta   (once `npm view @x/b@2.0.1-beta.0 version` answers)",
+  ]);
+  assert.deepEqual(await commands({ tagsOf: () => ({ beta: "1.0.0-beta.3" }), previousTags: { "@x/a": { beta: "1.0.0-beta.3" } } }), [
+    "no dist-tag points at @x/a@1.0.1-beta.0 yet (before publishing: beta=1.0.0-beta.3); check `npm view @x/a dist-tags`",
+  ]);
+  assert.deepEqual(await commands({ tagsOf: () => { throw new Error("E500"); } }), [
+    "could not read npm's dist-tags for @x/a (E500); check `npm view @x/a dist-tags`",
+  ]);
+});
+
+test("pre-publish: a version an earlier run got npm to accept, but npm does not show, is a hard stop", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, { ...a("1.0.1-beta.0"), ...b("2.0.0") });
+  const npm = registry({ "@x/a@1.0.0": r.released, "@x/b@2.0.0": r.released });
+  const asked = [];
+  const failures = await run(r, "pre-publish", npm, {
+    acceptedEarlier: async (pkg) => {
+      asked.push(`${pkg.name}@${pkg.version}`);
+      return pkg.name === "@x/a" ? { id: 123, url: "https://example.test/runs/123" } : undefined;
+    },
+  });
+  // Only versions npm lacks are asked about.
+  assert.deepEqual(asked, ["@x/a@1.0.1-beta.0"]);
+  assert.deepEqual(failures.map(({ name, kind, reason }) => ({ name, kind, reason })), [
+    {
+      name: "@x/a",
+      kind: "accepted-not-visible",
+      reason: "accepted by Release run 123 (https://example.test/runs/123) but not yet visible on npm",
+    },
+  ]);
+  const message = failureMessage(failures, "pre-publish");
+  assert.match(message, /accepted by Release run 123/);
+  assert.match(message, /nothing was pushed either/);
+  assert.match(message, /Wait until/);
+  assert.match(message, /bump the package with a changeset/);
+  assert.doesNotMatch(message, /Add a changeset for each package so the next run bumps it past the stale version/);
+});
+
+test("pre-publish: a version no run accepted keeps today's behaviour (published from HEAD)", async (t) => {
+  const r = repository(t);
+  r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/b@2.0.0": r.released });
+  const logged = [];
+  assert.deepEqual(await run(r, "pre-publish", npm, { log: (line) => logged.push(line) }), []);
+  assert.ok(logged.includes("@x/a@1.0.1-beta.0: not on npm; will publish from HEAD."));
+});
+
+test("pre-publish: a version that is on npm is not looked up in earlier runs", async (t) => {
+  const r = repository(t);
+  const head = r.commit(BETA, a("1.0.1-beta.0"));
+  const npm = registry({ "@x/a@1.0.1-beta.0": head, "@x/b@2.0.0": r.released });
+  const failures = await run(r, "pre-publish", npm, {
+    acceptedEarlier: async () => {
+      throw new Error("must not be asked");
+    },
+  });
+  assert.deepEqual(failures, []);
+});
+
+test("accepted run lookup: finds the acceptance in an earlier run's log, ignoring this run and unfinished runs", (t) => {
+  const r = repository(t);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const pkg = { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a" };
+  const logs = {
+    1: "2026-10-18T15:43:51Z tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n",
+    2: "tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n",
+    3: "tinycloud-npm-accepted: @x/other@1.0.1-beta.0\n",
+    4: "echo tinycloud-npm-accepted: @x/a@1.0.1-beta.0 is mentioned mid-line\n",
+  };
+  const fetched = [];
+  const find = (runs, extra = {}) =>
+    acceptedByEarlierRun({
+      pkg,
+      repo: r.repo,
+      head: version,
+      currentRunId: "9",
+      // Pinned: the default reads GITHUB_RUN_ATTEMPT, so a re-run of this CI job would otherwise read run 9's earlier attempt.
+      currentAttempt: 1,
+      listRuns: () => runs,
+      runLog: (id, attempt) => (fetched.push(id), attempt === 1 ? logs[id] ?? "" : ""),
+      ...extra,
+    });
+  const created = new Date(Date.now() + 60_000).toISOString();
+  const long = new Date(Date.now() - 365 * 864e5).toISOString();
+
+  // Runs that are the current run, unfinished, older than the version's base commit, or log other versions are no evidence.
+  assert.equal(
+    find([
+      { databaseId: 9, createdAt: created, status: "completed", url: "u9" },
+      { databaseId: 2, createdAt: created, status: "in_progress", url: "u2" },
+      { databaseId: 1, createdAt: long, status: "completed", url: "u1" },
+      { databaseId: 3, createdAt: created, status: "completed", url: "u3" },
+      { databaseId: 4, createdAt: created, status: "completed", url: "u4" },
+    ]),
+    undefined,
+  );
+  assert.deepEqual(fetched, [3, 4]);
+  assert.deepEqual(find([{ databaseId: 1, createdAt: created, status: "completed", url: "u1" }]), { id: 1, attempt: 1, url: "u1" });
+  // A failed run counts: that is exactly the red run this exists for.
+  assert.deepEqual(find([{ databaseId: 2, createdAt: created, status: "completed", url: "u2" }]), { id: 2, attempt: 1, url: "u2" });
+  // A re-run replaces a run's log: the acceptance is found in an earlier attempt, and in this run's own earlier attempts.
+  const attempts = { "5:1": logs[1], "5:2": "", "5:3": "" };
+  const reruns = (runs, extra) => find(runs, { runLog: (id, attempt) => attempts[`${id}:${attempt}`] ?? "", ...extra });
+  assert.deepEqual(reruns([{ databaseId: 5, createdAt: created, status: "completed", url: "u5", attempt: 3 }]), { id: 5, attempt: 1, url: "u5" });
+  assert.equal(reruns([{ databaseId: 6, createdAt: created, status: "completed", url: "u6", attempt: 3 }]), undefined);
+  assert.deepEqual(
+    reruns([{ databaseId: 5, createdAt: created, status: "in_progress", url: "u5", attempt: 2 }], { currentRunId: "5", currentAttempt: 2 }),
+    { id: 5, attempt: 1, url: "u5" },
+  );
+  assert.equal(
+    reruns([{ databaseId: 5, createdAt: created, status: "in_progress", url: "u5", attempt: 1 }], { currentRunId: "5", currentAttempt: 1 }),
+    undefined,
+  );
+  // If the listing cannot reach back far enough, it fails rather than guess.
+  const full = Array.from({ length: 100 }, (_, i) => ({ databaseId: 100 + i, createdAt: created, status: "queued", url: "" }));
+  assert.throws(() => find(full), /cannot tell whether @x\/a@1\.0\.1-beta\.0 was accepted/);
+});
+
+// The job and step data of Release run 42535198919 attempt 1 (cancelled by hand before it pushed or
+// published; `gh run view --attempt 1 --log` answered "log not found: 128899407010"), as the
+// jobs-for-attempt endpoint returns it.
+const REAL_BETA_STEPS = [
+  [1, "Set up job", "success"],
+  [2, "Run actions/checkout@v4", "success"],
+  [3, "Run oven-sh/setup-bun@v1", "success"],
+  [4, "Run dtolnay/rust-toolchain@stable", "success"],
+  [5, "Install wasm-pack", "success"],
+  [6, "Run bun install --frozen-lockfile", "success"],
+  [7, "Check for pending changesets", "success"],
+  [8, "Install release deploy key", "success"],
+  [9, "Require sign-off for major bumps", "success"],
+  [10, "List pending changesets", "success"],
+  [11, "Refuse to run while a stable release is unfinished", "success"],
+  [12, "Version and build", "success"],
+  [13, "Verify node release pin", "success"],
+  [14, "Check internal dependency pins", "success"],
+  [15, "Commit beta version bumps", "success"],
+  [16, "Setup Node for npm publish", "cancelled"],
+  [17, "Check npm before publishing", "skipped"],
+  [18, "Push beta version bumps", "skipped"],
+  [19, "Publish beta to npm", "skipped"],
+  [20, "Record whether this run published versions", "success"],
+  [21, "Keep the publish log for beta-github-releases", "skipped"],
+  [22, "Confirm npm has every current version", "skipped"],
+  [23, "Remove release deploy key", "success"],
+  [44, "Post Setup Node for npm publish", "skipped"],
+  [45, "Post Run oven-sh/setup-bun@v1", "skipped"],
+  [46, "Post Run actions/checkout@v4", "success"],
+  [47, "Complete job", "success"],
+];
+const jobStep = ([number, name, conclusion]) => ({
+  number,
+  name,
+  status: conclusion === undefined ? "in_progress" : "completed",
+  conclusion: conclusion ?? null,
+  started_at: "2026-11-08T23:33:00Z",
+  completed_at: "2026-11-08T23:33:00Z",
+});
+const betaJob = (steps = REAL_BETA_STEPS) => ({ name: "Beta Release", status: "completed", conclusion: "cancelled", steps: steps.map(jobStep) });
+const attemptJobs = (beta = betaJob(), extra = {}) => {
+  const jobs = [
+    beta,
+    { name: "Stable Release", status: "completed", conclusion: "skipped", steps: [] },
+    { name: "Beta GitHub Releases", status: "completed", conclusion: "cancelled", steps: [] },
+  ];
+  return { total_count: jobs.length, jobs, ...extra };
+};
+// REAL_BETA_STEPS with the named steps' conclusions replaced.
+const withConclusions = (changes) =>
+  betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => [number, name, name in changes ? changes[name] : conclusion]));
+
+test("accepted run lookup: an attempt whose publish and push steps never ran, with no readable log, did not publish (TC-1457)", (t) => {
+  const r = repository(t);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const pkg = { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a" };
+  const created = new Date(Date.now() + 60_000).toISOString();
+  const cancelled = { databaseId: 42535198919, createdAt: created, status: "completed", url: "u", attempt: 1 };
+  const asked = [];
+  const find = (jobs, { runs = [cancelled], ...extra } = {}) =>
+    acceptedByEarlierRun({
+      pkg,
+      repo: r.repo,
+      head: version,
+      currentRunId: "9",
+      listRuns: () => runs,
+      runLog: () => {
+        throw new Error("gh run view 42535198919 --attempt 1 --log failed: log not found: 128899407010");
+      },
+      attemptJobs: (id, attempt) => {
+        asked.push(`${id}:${attempt}`);
+        if (jobs instanceof Error) throw jobs;
+        return jobs;
+      },
+      ...extra,
+    });
+
+  // Cancelled before the push and publish steps: not an acceptance, and the run is not an obstacle.
+  assert.equal(find(attemptJobs()), undefined);
+  assert.deepEqual(asked, ["42535198919:1"]);
+  // The same for this run's own earlier attempt (the re-run that hit the wedge).
+  assert.equal(find(attemptJobs(), { runs: [{ ...cancelled, status: "in_progress", attempt: 2 }], currentRunId: "42535198919", currentAttempt: 2 }), undefined);
+  // Steps are found by name, not position; a step that never started is also not a publish.
+  const reordered = betaJob([...REAL_BETA_STEPS].reverse().map(([, name, conclusion], i) => [i + 1, name, conclusion]));
+  assert.equal(find(attemptJobs(reordered)), undefined);
+  const queued = betaJob(REAL_BETA_STEPS);
+  for (const step of queued.steps) if (/^(Push beta|Publish beta)/.test(step.name)) Object.assign(step, { status: "pending", conclusion: null, started_at: null, completed_at: null });
+  assert.equal(find(attemptJobs(queued)), undefined);
+  // A job that never started (no steps) is not a publisher.
+  assert.equal(find(attemptJobs(betaJob([]))), undefined);
+
+  // A run whose log is readable is judged by its log, never by job data.
+  const logged = acceptedByEarlierRun({
+    pkg,
+    repo: r.repo,
+    head: version,
+    currentRunId: "9",
+    listRuns: () => [cancelled],
+    runLog: () => "tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n",
+    attemptJobs: () => {
+      throw new Error("must not be asked");
+    },
+  });
+  assert.deepEqual(logged, { id: 42535198919, attempt: 1, url: "u" });
+});
+
+test("accepted run lookup: no readable log fails closed unless the job and step data prove nothing was published (TC-1457)", (t) => {
+  const r = repository(t);
+  const version = r.commit(BETA, a("1.0.1-beta.0"));
+  const pkg = { name: "@x/a", version: "1.0.1-beta.0", dir: "packages/a" };
+  const created = new Date(Date.now() + 60_000).toISOString();
+  const find = (jobs) =>
+    acceptedByEarlierRun({
+      pkg,
+      repo: r.repo,
+      head: version,
+      currentRunId: "9",
+      listRuns: () => [{ databaseId: 7, createdAt: created, status: "completed", url: "u", attempt: 1 }],
+      runLog: () => {
+        throw new Error("log not found: 128899407010");
+      },
+      attemptJobs: () => {
+        if (jobs instanceof Error) throw jobs;
+        return jobs;
+      },
+    });
+  const refused = /log not found: 128899407010.*cannot tell that Release run 7 \(attempt 1\) did not publish/s;
+
+  // The publish step ran: succeeded, failed, was cancelled while running, or is still running.
+  for (const conclusion of ["success", "failure", "cancelled", undefined]) {
+    assert.throws(() => find(attemptJobs(withConclusions({ "Publish beta to npm": conclusion }))), refused, String(conclusion));
+  }
+  // The push step ran (so the publish might have): same.
+  for (const conclusion of ["success", "failure", "cancelled"]) {
+    assert.throws(() => find(attemptJobs(withConclusions({ "Push beta version bumps": conclusion }))), refused, String(conclusion));
+  }
+  assert.throws(() => find(attemptJobs(withConclusions({ "Push beta version bumps": "success", "Publish beta to npm": "success" }))), refused);
+  // A stable publish that ran.
+  const stable = {
+    name: "Stable Release",
+    status: "completed",
+    conclusion: "success",
+    steps: [
+      [1, "Set up job", "success"],
+      [2, "Commit and push stable release", "skipped"],
+      [3, "Publish stable to npm", "success"],
+    ].map(jobStep),
+  };
+  const base = attemptJobs();
+  assert.throws(() => find({ ...base, jobs: [base.jobs[0], stable, base.jobs[2]] }), refused);
+
+  // Step or job data that is missing, unknown or unreadable.
+  const withoutStep = (name) => betaJob(REAL_BETA_STEPS.filter(([, step]) => step !== name));
+  const unknown = betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => [number, name, name === "Publish beta to npm" ? "stale" : conclusion]));
+  const twice = betaJob([...REAL_BETA_STEPS, [48, "Publish beta to npm", "success"]]);
+  const unreadable = [
+    new Error("gh api failed: HTTP 403"),
+    undefined,
+    null,
+    {},
+    { total_count: 0, jobs: [] },
+    { jobs: "nope", total_count: 1 },
+    attemptJobs(betaJob(), { total_count: 4 }),
+    attemptJobs(withoutStep("Publish beta to npm")),
+    attemptJobs(withoutStep("Push beta version bumps")),
+    attemptJobs(unknown),
+    attemptJobs(twice),
+    attemptJobs({ ...betaJob(), steps: undefined }),
+    attemptJobs({ ...betaJob(), name: "Beta Release (renamed)" }),
+    attemptJobs({ ...betaJob(), status: "in_progress" }),
+    { ...base, jobs: [base.jobs[0], base.jobs[2]], total_count: 2 },
+    { ...base, jobs: [...base.jobs, { name: "Brand New Job", status: "completed", conclusion: "success", steps: [jobStep([1, "Set up job", "success"])] }], total_count: 4 },
+    // Sol's cases: only a recognised, complete attempt shape counts.
+    // (1) a successful step under another name, beside or instead of the skipped known publish steps;
+    attemptJobs(betaJob([...REAL_BETA_STEPS, [48, "Publish packages with a new step name", "success"]])),
+    attemptJobs(betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => (name === "Publish beta to npm" ? [number, "Publish packages with a new step name", "success"] : [number, name, conclusion])))),
+    attemptJobs(betaJob([...REAL_BETA_STEPS, [48, "Publish packages with a new step name", "skipped"]])),
+    // (2) anything inside "Beta GitHub Releases", two of them, or a started "Stable Release";
+    { ...base, jobs: [base.jobs[0], base.jobs[1], { name: "Beta GitHub Releases", status: "completed", conclusion: "success", steps: [[1, "Set up job", "success"], [2, "Create GitHub Releases for published versions", "success"]].map(jobStep) }] },
+    { ...base, jobs: [base.jobs[0], base.jobs[1], { ...base.jobs[2], steps: [jobStep([1, "Set up job", "success"])] }] },
+    { ...base, jobs: [...base.jobs, base.jobs[2]], total_count: 4 },
+    { ...base, jobs: [base.jobs[0], base.jobs[2], base.jobs[2]] },
+    { ...base, jobs: [base.jobs[0], { ...base.jobs[1], conclusion: "success" }, base.jobs[2]] },
+    { ...base, jobs: [base.jobs[0], { ...base.jobs[1], steps: [jobStep([1, "Set up job", "skipped"])] }, base.jobs[2]] },
+    //     duplicate non-target step names (same count, one known step missing), and a second beta job;
+    attemptJobs(betaJob(REAL_BETA_STEPS.map(([number, name, conclusion]) => [number, name === "Version and build" ? "Install wasm-pack" : name, conclusion]))),
+    attemptJobs(betaJob([...REAL_BETA_STEPS, [48, "Install wasm-pack", "success"]])),
+    { ...base, jobs: [base.jobs[0], base.jobs[0], base.jobs[2]] },
+    // (3) a pending or null-conclusion step that has started, or a skipped one that is not complete;
+    ...["Publish beta to npm", "Push beta version bumps"].flatMap((name) =>
+      [{ status: "pending" }, { status: "queued" }, { status: "in_progress" }, { status: "completed", conclusion: null }, { status: "pending", conclusion: "skipped" }, { status: "in_progress", conclusion: "skipped" }].map((fields) => {
+        const job = betaJob();
+        const step = job.steps.find((s) => s.name === name);
+        // Every case keeps started_at (as GitHub reports for a step that ran); pending needs it null to count as never started.
+        Object.assign(step, { conclusion: null, ...fields });
+        return attemptJobs(job);
+      }),
+    ),
+    // the steps that only run after a publish, and a non-publishing step in an impossible state.
+    attemptJobs(withConclusions({ "Confirm npm has every current version": "success" })),
+    attemptJobs(withConclusions({ "Keep the publish log for beta-github-releases": "success" })),
+    attemptJobs(withConclusions({ "Version and build": undefined })),
+    attemptJobs(withConclusions({ "Version and build": "stale" })),
+  ];
+  for (const [i, jobs] of unreadable.entries()) assert.throws(() => find(jobs), refused, `case ${i}`);
+});
+
+test("changesets publish output: lists exactly what npm accepted", () => {
+  const log = [
+    "2026-10-18T15:40:00Z 🦋  info @x/c is not being published because version 1.0.0 is already published on npm",
+    "2026-10-18T15:43:50Z 🦋  success packages published successfully:",
+    "2026-10-18T15:43:51Z 🦋  @x/a@1.0.1-beta.0",
+    "2026-10-18T15:43:51Z 🦋  @tinycloud/web-sdk@3.3.0-beta.8",
+    "2026-10-18T15:43:52Z 🦋  Creating git tag...",
+    "2026-10-18T15:43:52Z 🦋  New tag:  @x/a@1.0.1-beta.0",
+    "2026-10-18T15:43:52Z 🦋  @x/not-listed@9.9.9",
+  ].join("\n");
+  assert.deepEqual([...acceptedFromPublishLog(log)].sort(), ["@tinycloud/web-sdk@3.3.0-beta.8", "@x/a@1.0.1-beta.0"]);
+  assert.deepEqual([...acceptedFromPublishLog("🦋  error packages failed to publish:\n🦋  @x/a@1.0.1-beta.0\n")], []);
+  assert.deepEqual([...acceptedFromRunLog("t tinycloud-npm-accepted: @tinycloud/web-sdk@3.3.0-beta.8\n")], ["@tinycloud/web-sdk@3.3.0-beta.8"]);
+});
+
+test("record-accepted: prints a marker per accepted version", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "publish-log-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "publish.log"), "🦋  success packages published successfully:\n🦋  @x/a@1.0.1-beta.0\n");
+  const result = spawnSync(process.execPath, [script, "record-accepted", join(dir, "publish.log")], { env, encoding: "utf8" });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "tinycloud-npm-accepted: @x/a@1.0.1-beta.0\n");
+  assert.deepEqual([...acceptedFromRunLog(result.stdout)], ["@x/a@1.0.1-beta.0"]);
+});
+
 test("cli: rejects an unknown mode or extra arguments", () => {
-  for (const args of [[], ["publish"], ["pre-publish", "HEAD"], ["unfinished-stable", "out", "extra"]]) {
+  for (const args of [[], ["publish"], ["pre-publish", "HEAD"], ["unfinished-stable", "out", "extra"], ["record-accepted"], ["post-publish", "log", "extra"]]) {
     const result = spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8" });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /usage: check-npm-release-provenance\.mjs unpublished-stable\|unfinished-stable\|pre-publish\|post-publish/);
   }
+});
+
+// `resume: beta`: finish a beta publish that stopped after its version commit was pushed.
+const PRE = (changesets) => `${JSON.stringify({ mode: "pre", tag: "beta", initialVersions: {}, changesets }, null, 2)}\n`;
+const betaCommit = (r, versions, changesets = ["one"]) => r.commit(BETA, {
+  ".changeset/pre.json": PRE(changesets),
+  ...a(versions.a, { "@x/b": versions.b }),
+  ...b(versions.b),
+});
+
+test("unfinished-beta: the newest beta version commit whose versions npm lacks is the one to resume", (t) => {
+  const r = repository(t);
+  const version = betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" });
+  r.commit("later merge on master", { "README.md": "docs\n" });
+  const npm = registry({ "@x/a@1.0.0": null, "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, version);
+  assert.deepEqual(result.problems, []);
+  assert.deepEqual(result.missing.map((pkg) => `${pkg.name}@${pkg.version}`), ["@x/a@1.1.0-beta.1"]);
+});
+
+test("unfinished-beta: nothing to resume once npm shows every version of the commit (re-running is idempotent)", (t) => {
+  const r = repository(t);
+  betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" });
+  const npm = registry({ "@x/a@1.1.0-beta.1": null, "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.problems, []);
+});
+
+test("unfinished-beta: a stable release newer than the beta version commit supersedes it and is never resumed", (t) => {
+  const r = repository(t);
+  betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" });
+  r.git("rm", "--quiet", ".changeset/pre.json");
+  r.commit(STABLE, { ...a("1.1.0", { "@x/b": "2.0.0" }) });
+  const npm = registry({ "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, undefined);
+  assert.match(result.problems.join(" "), /not a beta version commit/);
+});
+
+test("unfinished-beta: no beta version commit at all is reported, not guessed", (t) => {
+  const r = repository(t);
+  const npm = registry({});
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, undefined);
+  assert.match(result.problems.join(" "), /no beta version commit/);
+});
+
+test("unfinished-beta: a newer beta version commit replaces an older unfinished one", (t) => {
+  const r = repository(t);
+  betaCommit(r, { a: "1.1.0-beta.1", b: "2.0.0" }, ["one"]);
+  const newer = betaCommit(r, { a: "1.1.0-beta.2", b: "2.0.0" }, ["one", "two"]);
+  const npm = registry({ "@x/b@2.0.0": null });
+  const result = unfinishedBetaRelease({ repo: r.repo, view: npm.view });
+  assert.equal(result.releaseCommit, newer);
+  assert.deepEqual(result.missing.map((pkg) => `${pkg.name}@${pkg.version}`), ["@x/a@1.1.0-beta.2"]);
 });

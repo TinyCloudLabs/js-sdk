@@ -1,0 +1,141 @@
+import { CourierError } from './errors.js';
+import { decodeTime, ulid } from 'ulid';
+import { ULID } from './request.js';
+import { k, PREFIX, stateKeys } from './keys.js';
+import { buildMessage } from './a2a.js';
+import { del, getJson, listAll, putCreate, putMatch } from './store.js';
+import type { KV } from './inbox.js';
+import type { ParsedArgs } from './args.js';
+import { cmd } from './program.js';
+import { courierNode, peerKv } from './node.js';
+import { getPeer, loadProfile, type Profile } from './profile.js';
+import { recordOwnerSpaceWrite } from './thread.js';
+
+const SAFE = /^[0-9A-Za-z_-]{1,64}$/;
+
+/** `me/state/agents/<agent>/paused/<peer>/<thread>.json`. The watcher is the only writer of watch.json; markers are how humans and the CLI talk to it. */
+export interface PauseMarker {
+  v: 1;
+  peer: string;
+  threadId: string;
+  by: 'budget' | 'human';
+  at: string;
+  reason: string;
+  informId?: string;
+  informSent?: boolean;
+  resumeInformId?: string;
+}
+
+/** Separate CLI processes must still emit strictly increasing notice ids on this thread. */
+export async function nextNoticeId(kv: KV, peer: string, threadId: string, now = Date.now()): Promise<string> {
+  const prefix = k.msgPrefix(peer, threadId);
+  const ids = (await listAll(kv, prefix)).map(key => key.slice(prefix.length).replace(/\.json$/, '')).filter(id => ULID.test(id)).sort();
+  const latest = ids.at(-1);
+  return ulid(Math.max(now, latest ? decodeTime(latest) + 1 : 0));
+}
+
+/** Posts the machine-readable "thread paused" `inform` to the peer (it never wakes anyone; its watcher notifies its human). */
+export async function postPausedInform(kv: KV, profile: Profile, peerHandle: string, threadId: string, text: string, messageId?: string, resumed = false): Promise<string> {
+  const pauseId = messageId ?? await nextNoticeId(kv, peerHandle, threadId);
+  if (!ULID.test(pauseId)) throw new CourierError('usage', 'Invalid pause inform id.');
+  const message = buildMessage({
+    threadId, text, role: 'ROLE_AGENT', intent: 'inform', notice: resumed ? 'thread-resumed' : 'thread-paused',
+    from: { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label },
+  });
+  message.messageId = pauseId;
+  const key = k.msg(peerHandle, threadId, message.messageId);
+  try { await putCreate(kv, key, message); } catch (error) {
+    if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
+  }
+  recordOwnerSpaceWrite(profile.courierDid, profile.spaceId, threadId, key);
+  return message.messageId;
+}
+
+/** Creates the marker (at `key`, by default the shared pre-TC-2917 location); false if the thread was already paused. */
+export async function writePauseMarker(kv: KV, marker: PauseMarker, key = k.paused(marker.peer, marker.threadId)): Promise<boolean> {
+  try {
+    await putCreate(kv, key, marker);
+    return true;
+  } catch (error) {
+    if (error instanceof CourierError && error.code === 'conflict') return false;
+    throw error;
+  }
+}
+
+/**
+ * A pause from before TC-2917 is at the shared `me/state/paused/` key. `pause` and `resume` copy it (create-only, so a
+ * repeat is harmless) to this agent's key before reading that, so a thread paused before the upgrade stays paused
+ * until a human resumes it. The watcher copies them on its first start. Returns the shared key if it holds a marker.
+ */
+async function adoptLegacyPause(kv: KV, peer: string, threadId: string, markerKey: string): Promise<string | undefined> {
+  const legacyKey = k.paused(peer, threadId);
+  const legacy = await getJson<PauseMarker>(kv, legacyKey);
+  if (!legacy) return undefined;
+  await writePauseMarker(kv, legacy.value, markerKey);
+  return legacyKey;
+}
+function target(args: ParsedArgs, usage: string): { peer: string; threadId: string } {
+  const [peer, threadId] = args.positional;
+  if (!peer || !threadId) throw new CourierError('usage', usage);
+  if (!SAFE.test(peer) || !SAFE.test(threadId)) throw new CourierError('usage', `Invalid peer or thread id. ${usage}`);
+  return { peer, threadId };
+}
+
+const pauseUsage = () => `Usage: ${cmd('pause <peer> <threadId> [--reason "…"]')}`;
+const resumeUsage = () => `Usage: ${cmd('resume <peer> <threadId>')}`;
+
+/** Humans only: stop waking this side's agent for a thread and tell the peer with an `inform`. */
+export async function cmdPause(args: ParsedArgs, deps: { profile?: typeof loadProfile; node?: typeof courierNode } = {}): Promise<void> {
+  const { peer, threadId } = target(args, pauseUsage());
+  const profile = (deps.profile ?? loadProfile)();
+  const paired = getPeer(profile, peer);
+  const node = await (deps.node ?? courierNode)(profile);
+  const markerKey = stateKeys(profile.courierDid).paused(peer, threadId);
+  let exists = await getJson(node.kv, k.threadMeta(peer, threadId)) ?? await getJson(node.kv, k.mirrorMeta(peer, threadId));
+  if (!exists && paired.inbound && paired.theirHandleForMe) exists = await getJson(await peerKv(node, profile, paired), `${PREFIX}/to/${paired.theirHandleForMe}/threads/${threadId}/meta.json`);
+  if (!exists) throw new CourierError('not-found', `Thread ${threadId} with ${peer} does not exist.`);
+  await adoptLegacyPause(node.kv, peer, threadId, markerKey);
+  const reason = args.has('reason') && args.get('reason') !== 'true' ? args.get('reason')! : 'paused by its owner';
+  const marker: PauseMarker = { v: 1, peer, threadId, by: 'human', at: new Date().toISOString(), reason, informId: await nextNoticeId(node.kv, peer, threadId), informSent: false };
+  const wrote = await writePauseMarker(node.kv, marker, markerKey);
+  const stored = await getJson<PauseMarker>(node.kv, markerKey);
+  if (!stored) throw new CourierError('not-found', 'The pause marker disappeared; try again.');
+  if (!wrote && (stored.value.by !== 'human' || stored.value.informSent)) {
+    console.log(`Thread ${threadId} with ${peer} is already paused.`);
+    return;
+  }
+  const saved = stored.value;
+  if (!saved.informId) {
+    saved.informId = await nextNoticeId(node.kv, peer, threadId);
+    await putMatch(node.kv, markerKey, saved, stored.etag!);
+  }
+  // A failed inform can be retried with the same message id, without duplicate messages or marker creation.
+  await postPausedInform(node.kv, profile, peer, threadId,
+    'Thread paused by its owner. Its agent waits until its owner resumes it.', saved.informId);
+  const fresh = await getJson<PauseMarker>(node.kv, markerKey);
+  if (fresh) await putMatch(node.kv, markerKey, { ...fresh.value, informSent: true }, fresh.etag!);
+  console.log(`Paused thread ${threadId} with ${peer}; told ${peer}. Resume: ${cmd(`resume ${peer} ${threadId}`)}`);
+}
+
+/** Humans only: wake this side's agent for the thread again; the wake budget starts over. */
+export async function cmdResume(args: ParsedArgs, deps: { profile?: typeof loadProfile; node?: typeof courierNode } = {}): Promise<void> {
+  const { peer, threadId } = target(args, resumeUsage());
+  const profile = (deps.profile ?? loadProfile)();
+  getPeer(profile, peer);
+  const node = await (deps.node ?? courierNode)(profile);
+  const markerKey = stateKeys(profile.courierDid).paused(peer, threadId);
+  const legacyKey = await adoptLegacyPause(node.kv, peer, threadId, markerKey);
+  const stored = await getJson<PauseMarker>(node.kv, markerKey);
+  if (!stored) {
+    console.log(`Thread ${threadId} with ${peer} is not paused.`);
+    return;
+  }
+  const resumeInformId = stored.value.resumeInformId ?? await nextNoticeId(node.kv, peer, threadId);
+  if (!stored.value.resumeInformId) await putMatch(node.kv, markerKey, { ...stored.value, resumeInformId }, stored.etag!);
+  // Persist the id before posting: a retry cannot produce another resume transition.
+  await postPausedInform(node.kv, profile, peer, threadId, 'Thread resumed by its owner.', resumeInformId, true);
+  // The shared copy goes first: a retry after a crash here still finds this agent's marker and its resume inform id.
+  if (legacyKey) await del(node.kv, legacyKey);
+  await del(node.kv, markerKey);
+  console.log(`Resumed thread ${threadId} with ${peer}. A running watcher picks this up with the next message it sees.`);
+}

@@ -198,6 +198,38 @@ export function grantCovers(grant: Pick<ParsedUcanGrant, "att">, space: string, 
   return false;
 }
 
+/**
+ * Whether a signed caveat branch set imposes nothing: absent, `{}`, `[]`, or
+ * exactly one empty branch — the SDK's canonical empty-caveat forms. Any
+ * other shape counts as constrained (fail closed).
+ */
+function caveatsUnconstrained(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  const branches = Array.isArray(value) ? value : [value];
+  if (branches.length > 1) return false;
+  const branch: unknown = branches[0];
+  return (
+    branch === undefined ||
+    (typeof branch === "object" && branch !== null && !Array.isArray(branch) && Object.getPrototypeOf(branch) === Object.prototype && Object.keys(branch).length === 0)
+  );
+}
+
+/**
+ * True when the grant covers both `tinycloud.kv/get` and `tinycloud.kv/sync`
+ * on the prefix through caveat-free abilities (`ReplicaGrantInfo.unconstrained`).
+ * A replica never serves under a caveated get or sync: it cannot apply the caveat locally.
+ */
+export function grantUnconstrained(grant: Pick<ParsedUcanGrant, "att">, space: string, prefix: string): boolean {
+  return ["tinycloud.kv/get", "tinycloud.kv/sync"].every((ability) =>
+    Object.entries(grant.att).some(([resource, abilities]) => {
+      const path = kvPathIn(resource, space);
+      if (path === undefined || !authorityPathCovers(path, prefix)) return false;
+      const names = ability === "tinycloud.kv/sync" ? [ability] : [ability, "tinycloud.kv/*"];
+      return names.some((name) => name in abilities && caveatsUnconstrained(abilities[name]));
+    }),
+  );
+}
+
 /** The space ids (native form) for which the grant carries `tinycloud.kv/sync`. */
 export function syncGrantSpaces(grant: Pick<ParsedUcanGrant, "att">): string[] {
   const spaces = new Set<string>();

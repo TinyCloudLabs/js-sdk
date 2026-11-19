@@ -49,18 +49,20 @@ export function announceFirstOwner(profileName: string, expectedOwner: string | 
 }
 
 /**
- * The request a plain `tc auth login --owner <did>` sends to OpenKey: the
- * abilities OpenKey signs for a login without a request (kv, sql and
- * capabilities read on the `default` space root), on `owner`'s space URI.
- * OpenKey infers the expected signer from owner-qualified spaces, so it
- * preselects that owner's key; the signed owner is still checked after
- * approval.
+ * The request a plain `tc auth login` sends to OpenKey: the abilities OpenKey
+ * signs for a login without a request (kv, sql and capabilities read on the
+ * `default` space root), plus `tinycloud.delegation/list` on `default`, which
+ * `tc delegation list`, `info` and the read-back in `create` need. With an
+ * `owner` the space is that owner's space URI, so OpenKey infers the expected
+ * signer from it and preselects that owner's key (the signed owner is still
+ * checked after approval); without one it is the plain space name `default`.
  */
-export function ownerLoginPermissions(owner: string): PermissionEntry[] {
-  const space = ownerSpaceId("default", owner);
+export function ownerLoginPermissions(owner?: string): PermissionEntry[] {
+  const space = owner === undefined ? "default" : ownerSpaceId("default", owner);
   return [
     { service: "tinycloud.kv", space, path: "", actions: ["tinycloud.kv/put", "tinycloud.kv/get", "tinycloud.kv/del", "tinycloud.kv/list", "tinycloud.kv/metadata"] },
     { service: "tinycloud.sql", space, path: "", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/admin"] },
     { service: "tinycloud.capabilities", space, path: "", actions: ["tinycloud.capabilities/read"] },
+    { service: "tinycloud.delegation", space, path: "", actions: ["tinycloud.delegation/list"] },
   ];
 }

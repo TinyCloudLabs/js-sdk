@@ -4,7 +4,7 @@ import {
   type LocalNodeIdentityStore,
 } from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
-import { ExitCode } from "../config/constants.js";
+import { ExitCode, OPENKEY_SPACE_SETUP_RETRY_HINT } from "../config/constants.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { resolveSpaceUri } from "./space.js";
@@ -184,6 +184,17 @@ export async function isRootAuthority(
   return selfAddr !== null && selfAddr === ownerAddr;
 }
 
+/**
+ * The space an operation with no `--space` targets: the stored session's own
+ * space (the node's primary space), else the profile's recorded one.
+ */
+async function primarySpaceUri(profileName: string): Promise<string | undefined> {
+  const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
+  if (typeof session?.spaceId === "string" && session.spaceId !== "") return session.spaceId;
+  const profile = await ProfileManager.getProfile(profileName);
+  return typeof profile.spaceId === "string" && profile.spaceId !== "" ? profile.spaceId : undefined;
+}
+
 /** Last `:`-delimited segment of a space URI is its short name. */
 export function spaceNameFromUri(spaceUri: string): string {
   return spaceUri.slice(spaceUri.lastIndexOf(":") + 1);
@@ -202,20 +213,27 @@ export function spaceNameFromUri(spaceUri: string): string {
  */
 export async function unhostedSpaceError(
   error: ServiceErrorLike,
-  spaceUri: string | undefined,
+  requestedSpaceUri: string | undefined,
   profileName: string,
 ): Promise<CLIError | null> {
-  // Without a resolved space URI the op targeted the primary space, which is
-  // auto-hosted at sign-in — this branch can't be an unhosted-space problem.
-  if (!spaceUri) return null;
-
   const status = error.meta?.status;
   const isUnhosted = status === 404 && /space not found/i.test(error.message);
   if (!isUnhosted) return null;
 
+  // No resolved space URI: the operation targeted the primary space. OpenKey
+  // hosts it in the background after approval, so it can be unhosted right
+  // after the first sign-in (TC-1608).
+  const spaceUri = requestedSpaceUri ?? await primarySpaceUri(profileName);
+  if (!spaceUri) return null;
+
   const spaceName = spaceNameFromUri(spaceUri);
   const owner = await isRootAuthority(spaceUri, profileName);
-  const hint = owner
+  // `tc space host` signs a host delegation, which an OpenKey session cannot
+  // (TinyCloudNode.hostOwnedSpace needs a signer). OpenKey hosts the space itself.
+  const openKeyOwner = owner && resolveProfilePosture(await ProfileManager.getProfile(profileName)) === "owner-openkey";
+  const hint = openKeyOwner
+    ? `OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`
+    : owner
     ? [
         "You are the owner. Host it once:",
         `  ${CLI_NAME} space host ${spaceName}`,

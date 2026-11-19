@@ -1,4 +1,5 @@
 import { defineConfig } from "tsup";
+import { fileURLToPath } from "node:url";
 
 /**
  * wasm-bindgen's CJS helper (inside @tinycloud/web-sdk-wasm) has dead
@@ -17,11 +18,11 @@ const nodeBuiltinsExternal = {
 
 export default defineConfig([
   {
-    entry: { index: "src/index.ts", sqlite: "src/sqlite/index.ts" },
+    entry: { index: "src/index.ts", sqlite: "src/sqlite/index.ts", "profile-gate": "src/profile-gate/index.ts" },
     format: ["esm", "cjs"],
     target: "es2022",
     dts: true,
-    clean: true,
+    clean: false,
     sourcemap: true,
     noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
     splitting: false,
@@ -44,7 +45,7 @@ export default defineConfig([
     // The dedicated worker (TC-19). Self-contained ESM: sdk-services and the
     // web-sdk-wasm bundle (WASM inlined) are compiled in so the worker never
     // fetches a module or a .wasm at runtime.
-    entry: { "replica.worker": "src/worker.ts" },
+    entry: { "replica.worker": "src/worker.ts", "kv-storage.worker": "src/kv-storage/worker.ts" },
     format: ["esm"],
     platform: "browser",
     target: "es2022",
@@ -54,5 +55,29 @@ export default defineConfig([
     splitting: false,
     noExternal: [/.*/],
     esbuildPlugins: [nodeBuiltinsExternal],
+  },
+  {
+    // The read-through `KVReplicaStorage` (TC-858 Phase 2) and its test-only
+    // fault seams. ESM only, like `browser`: after tsup, hash-worker.ts
+    // replaces the literal worker URL with its SHA-256 filename.
+    entry: { "kv-storage": "src/kv-storage/index.ts", "kv-storage-testing": "src/kv-storage/testing.ts" },
+    format: ["esm"],
+    platform: "browser",
+    target: "es2022",
+    dts: true,
+    clean: false,
+    sourcemap: true,
+    noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
+    splitting: false,
+    // The client uses only identity helpers. Resolve their canonical source
+    // before the services barrel flattens controller/error modules into one file.
+    esbuildPlugins: [{
+      name: "storage-service-helpers",
+      setup(build) {
+        build.onResolve({ filter: /^@tinycloud\/sdk-services\/kv\/replication$/ }, () => ({
+          path: fileURLToPath(new URL("../sdk-services/src/kv/replication/index.ts", import.meta.url)),
+        }));
+      },
+    }],
   },
 ]);

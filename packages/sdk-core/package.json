@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "3.2.6-beta.2",
+  "version": "3.13.0-beta.9",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -13,6 +13,11 @@
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./share-placement": {
+      "types": "./dist/share-placement.d.ts",
+      "import": "./dist/share-placement.js",
+      "require": "./dist/share-placement.cjs"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
@@ -37,6 +42,41 @@
       "types": "./dist/delegations/index.d.ts",
       "import": "./dist/delegations/index.js",
       "require": "./dist/delegations/index.cjs"
+    },
+    "./delegations/issued": {
+      "types": "./dist/delegations/issued.d.ts",
+      "import": "./dist/delegations/issued.js",
+      "require": "./dist/delegations/issued.cjs"
+    },
+    "./delegations/renewal": {
+      "types": "./dist/delegations/renewal.d.ts",
+      "import": "./dist/delegations/renewal.js",
+      "require": "./dist/delegations/renewal.cjs"
+    },
+    "./delegations/renewal-receipt": {
+      "types": "./dist/delegations/renewal-receipt.d.ts",
+      "import": "./dist/delegations/renewal-receipt.js",
+      "require": "./dist/delegations/renewal-receipt.cjs"
+    },
+    "./held-credentials": {
+      "types": "./dist/held-credentials/index.d.ts",
+      "import": "./dist/held-credentials/index.js",
+      "require": "./dist/held-credentials/index.cjs"
+    },
+    "./registry-publication": {
+      "types": "./dist/registry-publication.d.ts",
+      "import": "./dist/registry-publication.js",
+      "require": "./dist/registry-publication.cjs"
+    },
+    "./registry-verdict-cache": {
+      "types": "./dist/registry-verdict-cache.d.ts",
+      "import": "./dist/registry-verdict-cache.js",
+      "require": "./dist/registry-verdict-cache.cjs"
+    },
+    "./kv-list-matching": {
+      "types": "./dist/kv-list-matching/index.d.ts",
+      "import": "./dist/kv-list-matching/index.js",
+      "require": "./dist/kv-list-matching/index.cjs"
     }
   },
   "files": [
@@ -53,16 +93,16 @@
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
-    "@tinycloud/share-envelope": "1.1.0",
-    "@tinycloud/share-sdk": "1.1.1",
-    "@tinycloud/bootstrap": "2.8.0",
-    "@tinycloud/sdk-services": "3.2.6-beta.2",
+    "@tinycloud/share-envelope": "1.6.0",
+    "@tinycloud/share-sdk": "1.6.0-beta.1",
+    "@tinycloud/bootstrap": "2.9.0",
+    "@tinycloud/sdk-services": "3.13.0-beta.8",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",
     "siwe": "^3.0.0",
     "viem": "^2.21.53",
     "zod": "^3.22.0",
-    "zod-to-json-schema": "^3.22.0"
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/ms": "^0.7.34",

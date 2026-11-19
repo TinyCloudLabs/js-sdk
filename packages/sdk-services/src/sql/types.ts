@@ -42,6 +42,9 @@ export interface QueryOptions {
 
   /** Maximum serialized result bytes the node may return. */
   maxBytes?: number;
+
+  /** Redact query failure details before return and ordinary service-error events. */
+  redactErrors?: boolean;
 }
 
 /**
@@ -58,6 +61,9 @@ export interface ExecuteOptions {
    * Custom abort signal for this operation.
    */
   signal?: AbortSignal;
+
+  /** Redact execute failure details before return and ordinary service-error events. */
+  redactErrors?: boolean;
 }
 
 /**
@@ -68,6 +74,9 @@ export interface BatchOptions {
    * Custom abort signal for this operation.
    */
   signal?: AbortSignal;
+
+  /** Redact batch failure details before return and ordinary service-error events. */
+  redactErrors?: boolean;
 }
 
 /**

@@ -37,8 +37,6 @@ export class BrowserWalletSigner implements ISigner {
   }
 
   async getConnectedAddress(): Promise<string | undefined> {
-    if (this.cachedAddress) return this.cachedAddress;
-
     const accounts = await this.provider.request({
       method: "eth_accounts",
       params: [],
@@ -48,6 +46,7 @@ export class BrowserWalletSigner implements ISigner {
       this.cachedAddress = address;
       return address;
     }
+    this.cachedAddress = undefined;
     return undefined;
   }
 

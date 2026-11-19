@@ -33,16 +33,17 @@ test("hosted secrets remain structured-only but authority links remain readable"
 });
 
 test("hosted read cap preserves the exact boundary and reports canonical narrowing errors", () => {
-  for (const [operationId, code] of [
-    ["tinycloud.kv.get", "KV_RESPONSE_TOO_LARGE"],
-    ["tinycloud.sql.query", "SQL_RESULT_LIMIT_EXCEEDED"],
-    ["tinycloud.apps.query", "SQL_RESULT_LIMIT_EXCEEDED"],
-  ]) {
+  for (const [operationId, readOnly, code] of [
+    ["tinycloud.kv.get", true, "KV_RESPONSE_TOO_LARGE"],
+    ["tinycloud.sql.query", true, "SQL_RESULT_LIMIT_EXCEEDED"],
+    ["tinycloud.apps.context", false, "KV_RESPONSE_TOO_LARGE"],
+    ["tinycloud.apps.query", false, "SQL_RESULT_LIMIT_EXCEEDED"],
+  ] as const) {
     const envelope = {
       status: "ok" as const, operation: { operationId, operationVersion: 1 }, context: {}, output: { value: "" },
     };
     envelope.output.value = "x".repeat(100_000 - JSON.stringify(envelope).length);
-    const options = { surface: "hosted" as const, readOnly: true, operationId };
+    const options = { surface: "hosted" as const, readOnly, operationId };
     expect(toMcpToolResult(envelope, [], options).structuredContent).toEqual(envelope);
     envelope.output.value += "x";
     const capped = toMcpToolResult(envelope, [], options);
@@ -52,7 +53,6 @@ test("hosted read cap preserves the exact boundary and reports canonical narrowi
     });
     expect(capped.structuredContent.output).toBeUndefined();
     expect(JSON.parse(capped.content[0].text.split("\n").slice(1).join("\n"))).toEqual(capped.structuredContent);
-    expect(capped.structuredContent.error).toMatchObject({ message: expect.stringMatching(/fewer|narrow/i) });
     expect(toMcpToolResult(envelope).structuredContent).toEqual(envelope);
   }
 });

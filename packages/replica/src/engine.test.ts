@@ -381,3 +381,65 @@ describe("writer fencing", () => {
     expect((await a.get("notes/a"))?.deleted).toBe(false);
   });
 });
+
+describe("sync completion and cancellation", () => {
+  test("finish runs under the live lease after the last page, repairs and GC", async () => {
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    node.put("notes/b", "two");
+    const store = await newStore();
+    const order: string[] = [];
+    const replica = new Replica({ store, transport: node, onCommit: () => order.push("commit") });
+    // b's content is missing on the first fetch, so a repair batch follows the last page.
+    node.tamper.set("notes/b", { missing: true });
+    node.onFetch = () => {
+      // Both feed pages have committed: this fetch is the repair batch.
+      if (order.length === 2) node.tamper.clear();
+    };
+    await replica.sync({
+      limit: 1,
+      finish: async (lease) => {
+        order.push("finish");
+        // The lease is still live: a fenced write succeeds.
+        await store.renewLease(lease, 60_000);
+      },
+    });
+    expect(order).toEqual(["commit", "commit", "commit", "finish"]);
+  });
+
+  test("a failure after the last page never reaches finish", async () => {
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    const store = await newStore();
+    node.tamper.set("notes/a", { missing: true });
+    let pages = 0;
+    const replica = new Replica({ store, transport: node, onCommit: () => (pages += 1) });
+    node.onFetch = () => {
+      // The page's own fetch returns missing; the repair fetch fails.
+      if (pages > 0) node.failNextFetch = new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, "offline mid-repair");
+    };
+    let finished = false;
+    await rejectsWith(replica.sync({ finish: async () => void (finished = true) }), ReplicaErrorCode.NETWORK_ERROR);
+    expect(pages).toBe(1);
+    expect(finished).toBe(false);
+  });
+
+  test("an abort after a page's content arrives commits nothing from that page", async () => {
+    const node = new FakeNode();
+    node.put("notes/a", "one");
+    node.put("notes/b", "two");
+    const store = await newStore();
+    const abort = new AbortController();
+    let pages = 0;
+    const replica = new Replica({ store, transport: node, onCommit: () => (pages += 1) });
+    node.onFetch = () => {
+      // The second page's content has arrived; the caller aborts before it commits.
+      if (pages === 1) abort.abort();
+    };
+    let finished = false;
+    await expect(replica.sync({ limit: 1, signal: abort.signal, finish: async () => void (finished = true) })).rejects.toBeDefined();
+    expect(pages).toBe(1);
+    expect(finished).toBe(false);
+    expect(await store.get("notes/b")).toBeUndefined();
+  });
+});

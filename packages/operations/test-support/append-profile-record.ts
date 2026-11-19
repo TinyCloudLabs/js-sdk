@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Appends one auth-request record under the profile lock of the release
 // TC_TEST_LOCK_PROTOCOL names (see lock-protocol.ts): through
 // upsertProfileRecord for this release, as an older release's store writer
@@ -10,6 +11,10 @@ import {
   writeJsonAtomic,
 } from "../src/state.js";
 import { withFixtureLock } from "./lock-protocol.js";
+import { PROFILE_LOCK_HELPER_DEADLINE_MS } from "../src/test-support/profile-lock-protocol.js";
+import { exitWithParent } from "../src/test-support/parent-watch.mjs";
+
+exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
 
 const [profile, key, encodedRecord, timeoutMs] = process.argv.slice(2);
 if (!profile || !key || !encodedRecord) {

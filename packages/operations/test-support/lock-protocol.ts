@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Which release's profile lock a lock fixture takes, from TC_TEST_LOCK_PROTOCOL:
 // "current" (default, this source tree), "tc540" (TC-540/TC-548 releases) or
 // "pre-tc540" (releases before TC-540, holding the lock from mkdir).

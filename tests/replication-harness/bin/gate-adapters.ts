@@ -157,7 +157,7 @@ async function buildResolveOptions(args: { options: Record<string, string | true
     tiers, backends, cliVersion: dispatchString(dispatch, "cli_version", "cliVersion"), nodeSdkVersion: dispatchString(dispatch, "node_sdk_version", "nodeSdkVersion"),
     mode, workspaceRoot: dispatchString(dispatch, "sut_root", "workspaceRoot") ?? defaultWorkspaceRoot(), harnessSha: gitSha(), junit,
     outDir: requiredOption(args.options, "out"), sutResolver: services.sutResolver, imageResolver: services.imageResolver,
-    registry: (sut, image, selection) => ({ scenarios: scenarioRegistry, context: { ...selection, sut, image, ciPinImage: "ghcr.io/tinycloudlabs/tinycloud-node:d7f511f" } }),
+    registry: (sut, image, selection) => ({ scenarios: scenarioRegistry, context: { ...selection, sut, image, ciPinImage: "ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f" } }),
     exportSutArtifacts: services.exportSutArtifacts, ...(services.fetchInfo ? { fetchInfo: services.fetchInfo } : {}),
   };
 }
@@ -174,7 +174,7 @@ async function readInputs(path: string): Promise<RunInputs> {
   return RunInputsSchema.parse(await jsonFile<unknown>(path)) as RunInputs;
 }
 function contextFor(inputs: RunInputs, tiers = inputs.tiers, backends = inputs.backends): ManifestRegistry["context"] {
-  return { tiers, backends, sut: inputs.sut, image: inputs.image, ciPinImage: "ghcr.io/tinycloudlabs/tinycloud-node:d7f511f" };
+  return { tiers, backends, sut: inputs.sut, image: inputs.image, ciPinImage: "ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f" };
 }
 function registryFor(inputs: RunInputs, tiers = inputs.tiers, backends = inputs.backends): ManifestRegistry {
   validateRegistry(scenarioRegistry);

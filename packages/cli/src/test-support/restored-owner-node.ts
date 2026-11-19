@@ -14,28 +14,43 @@ export async function restoredOwnerNode(params: {
   host: string;
   /** Signed abilities on `spaceId`; defaults to capabilities read only. */
   abilities?: Record<string, Record<string, string[]>>;
+  /** Signed raw encryption-network abilities (network URN → actions), outside any space. */
+  rawAbilities?: Record<string, string[]>;
 }): Promise<TinyCloudNode> {
   const address = await params.signer.getAddress();
   const now = Date.now();
   const prepared = params.wasm.prepareSession({
     abilities: params.abilities ?? { capabilities: { "": ["tinycloud.capabilities/read"] } },
+    ...(params.rawAbilities === undefined ? {} : { rawAbilities: params.rawAbilities }),
     address, chainId: 1, domain: "cli.example.test", spaceId: params.spaceId, jwk: params.sessionKey,
     issuedAt: new Date(now - 60_000).toISOString(),
     expirationTime: new Date(now + 3_600_000).toISOString(),
   });
   const signature = await params.signer.signMessage(prepared.siwe);
   const session = params.wasm.completeSessionSetup({ ...prepared, signature });
-  const node = new TinyCloudNode({ host: params.host, wasmBindings: params.wasm });
-  await node.restoreSession({
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    spaceId: params.spaceId,
-    jwk: params.sessionKey,
-    verificationMethod: params.sessionDid,
-    address,
-    chainId: 1,
-    siwe: prepared.siwe,
-    signature,
-  });
-  return node;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === params.host && /^\/v[12]\/locations\//.test(url.pathname)) {
+      return Response.json({ error: "location record not found" }, { status: 404 });
+    }
+    throw new Error(`Unexpected restored-owner fixture request: ${url.origin}${url.pathname}`);
+  }, { preconnect: originalFetch.preconnect });
+  const node = new TinyCloudNode({ host: params.host, tinycloudRegistryUrl: params.host, wasmBindings: params.wasm });
+  try {
+    await node.restoreSession({
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      spaceId: params.spaceId,
+      jwk: params.sessionKey,
+      verificationMethod: params.sessionDid,
+      address,
+      chainId: 1,
+      siwe: prepared.siwe,
+      signature,
+    });
+    return node;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }

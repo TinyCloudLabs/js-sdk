@@ -18,6 +18,9 @@ import {
   extractRecapAttenuations,
   parseCanonicalRecapResource,
 } from "@tinycloud/sdk-core";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.openkey-result.test";
 
 /**
  * Derive selectedActionKeys entries in the CANONICAL four-part OpenKey ID
@@ -106,6 +109,8 @@ let originalFetch: typeof globalThis.fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: any, init?: any) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) {
       return new Response(
@@ -139,6 +144,7 @@ async function buildAuthWithPreparedSession() {
   const wasm = new NodeWasmBindings();
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -391,6 +397,7 @@ test("signInWithOpenKeyResult rejects when signedMessage broadens capabilities",
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -465,6 +472,7 @@ test("signInWithOpenKeyResult accepts a narrowed SIWE with ReCap-derived stateme
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -592,6 +600,7 @@ test("signInWithOpenKeyResult accepts when signedMessage narrows capabilities", 
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -903,6 +912,7 @@ test("signInWithOpenKeyResult accepts a NARROWED finalize body in the Hono /auth
   const address = await signer.getAddress();
   const chainId = await signer.getChainId();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },

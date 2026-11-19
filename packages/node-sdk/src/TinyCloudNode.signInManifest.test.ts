@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 /**
  * Unit tests for manifest-driven `signIn`.
  *
@@ -19,20 +20,45 @@
  * `abilities` argument directly without standing up a real session.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
+  REGISTRY_NOT_FOUND_BODY,
   type IWasmBindings,
   type ISessionManager,
   type Manifest,
 } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { NodeWasmBindings } from "./NodeWasmBindings";
+import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 
 // ---------------------------------------------------------------------------
 // Test fixtures (subset of delegateTo.test.ts; intentionally duplicated to
 // keep this file self-contained and easy to read in isolation)
 // ---------------------------------------------------------------------------
+const registryServer = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(request) {
+    const url = new URL(request.url);
+    if (request.method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname) || request.headers.has("authorization")) {
+      throw new Error(`Unexpected registry fixture request: ${request.method} ${url.pathname}`);
+    }
+    return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+  },
+});
+const REGISTRY_URL = registryServer.url.origin;
+afterAll(async () => { await registryServer.stop(); });
+
+function registryResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const url = new URL(input instanceof Request ? input.url : input);
+  const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+  if (url.origin !== REGISTRY_URL || method !== "GET" || !/^\/v[12]\/locations\/[^/]+$/.test(url.pathname)) return;
+  expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("authorization")).toBe(false);
+  return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404, headers: { "Content-Type": "application/json" } });
+}
+
 
 function makeFakeSessionManager(): ISessionManager {
   // Pre-seed with "default" since that's the key name the
@@ -170,6 +196,7 @@ function makeNodeWithSigner(
     wasmBindings: wasm,
     signer: fakeSigner as any,
     host: "https://tinycloud.test",
+    tinycloudRegistryUrl: REGISTRY_URL,
     ...config,
   });
   if (!opts.realRegistrySync) {
@@ -183,7 +210,7 @@ function makeNodeWithSigner(
  * calls this test actually expects.
  *
  * Every signIn / ensureOwnedSpaceHostedById flow in this file makes at most
- * two kinds of request, always in this order: an unauthenticated
+ * two kinds of business request, always in this order: an unauthenticated
  * `GET .../info` (checkNodeInfo) and an authenticated `POST .../delegate`
  * (activateSessionWithHost). Two queued responses means [info, activate];
  * one means [activate] alone — every call site below uses one of those two
@@ -244,7 +271,10 @@ async function withFetchResponses(
     return response;
   });
 
-  globalThis.fetch = fetchMock as any;
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => registryResponse(input, init) ?? fetchMock(input, init),
+    { preconnect: originalFetch.preconnect },
+  );
   try {
     await fn(fetchMock);
   } finally {
@@ -274,7 +304,10 @@ async function withActivationResponses(
     return response;
   });
 
-  globalThis.fetch = fetchMock as any;
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => registryResponse(input, init) ?? fetchMock(input, init),
+    { preconnect: originalFetch.preconnect },
+  );
   try {
     await fn(fetchMock);
   } finally {
@@ -312,6 +345,150 @@ function stubAuthNetworkCalls(node: TinyCloudNode): void {
 // ---------------------------------------------------------------------------
 
 describe("TinyCloudNode.signIn — manifest-driven recap", () => {
+  test("sign-in ensures only declared creatable key paths when named keys are available", async () => {
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      domain: "healthlog.tinycloud.xyz",
+      manifest: {
+        app_id: "billing", keys_app_id: "xyz.tinycloud.healthlog", name: "Healthlog",
+        defaults: false, includePublicSpace: false,
+        keys: [
+          { path: "apps/xyz.tinycloud.healthlog/token", abilities: ["key.create", "decrypt"] },
+          { path: "apps/xyz.tinycloud.healthlog/read-only", abilities: ["decrypt"] },
+          { prefix: "apps/xyz.tinycloud.healthlog/", abilities: ["key.create", "decrypt"] },
+        ],
+      },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureKey = mock(async () => ({}));
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey }) });
+
+    await node.signIn();
+
+    expect(ensureKey).toHaveBeenCalledTimes(1);
+    expect(ensureKey).toHaveBeenCalledWith("apps/xyz.tinycloud.healthlog/token");
+  });
+
+  test("sign-in keeps key declarations inactive when named keys are unavailable", async () => {
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      manifest: { app_id: "billing", name: "Billing", defaults: false, includePublicSpace: false,
+        keys: [{ path: "apps/billing/token", abilities: ["key.create", "decrypt"] }] },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = []; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureKey = mock(async () => ({}));
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey }) });
+
+    await node.signIn();
+
+    expect(ensureKey).not.toHaveBeenCalled();
+    expect(node.keysUnavailable).toEqual(["apps/billing/token"]);
+  });
+
+  test("key-path encryption permissions are refused before sign-in", async () => {
+    const wasm = makeFakeWasmBindings();
+    const owner = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+    const node = makeNodeWithSigner(wasm, {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "billing", name: "Billing", defaults: false, includePublicSpace: false,
+        permissions: [{ service: "tinycloud.encryption",
+          path: `urn:tinycloud:encryption:${owner}:default/apps/billing/token`, actions: ["decrypt"] }],
+      },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureNetwork = mock(async () => ({}));
+    (node as any).ensureEncryptionNetwork = ensureNetwork;
+
+    await expect(node.signIn()).rejects.toThrow("named keys go in manifest.keys");
+    expect(ensureNetwork).not.toHaveBeenCalled();
+  });
+
+  test("failed key setup keeps the signed-in session and reports the path", async () => {
+    const warnings: string[] = [];
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      domain: "billing.tinycloud.xyz",
+      manifest: { app_id: "xyz.tinycloud.billing", name: "Billing", defaults: false,
+        keys: [{ path: "apps/xyz.tinycloud.billing/token", abilities: ["key.create"] }] },
+      notificationHandler: { success: () => {}, error: () => {}, warning: (message) => { warnings.push(message); } },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
+    auth.ensureSpaceExists = async () => {};
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey: async () => {
+      throw Object.assign(new Error("key unavailable"), { code: "KEY_UNAVAILABLE" });
+    } }) });
+
+    await node.signIn();
+
+    expect(node.session).toBeDefined();
+    expect(node.keysUnavailable).toEqual(["apps/xyz.tinycloud.billing/token"]);
+    expect(warnings.some((message) => message.includes("apps/xyz.tinycloud.billing/token"))).toBe(true);
+    expect(warnings.some((message) => message.includes("(KEY_UNAVAILABLE)"))).toBe(true);
+  });
+
+  test("localhost omits manifest keys and completes sign-in", async () => {
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      domain: "localhost",
+      manifest: { app_id: "xyz.tinycloud.billing", name: "Billing", defaults: false,
+        keys: [{ path: "apps/xyz.tinycloud.billing/token", abilities: ["key.create"] }] },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureKey = mock(async () => ({}));
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey }) });
+
+    await node.signIn();
+
+    expect(node.session).toBeDefined();
+    expect(node.keysUnavailable).toEqual(["apps/xyz.tinycloud.billing/token"]);
+    expect(ensureKey).not.toHaveBeenCalled();
+  });
+
+  test("network sign-in without replication does not inspect absent replica SIWE metadata", async () => {
+    const wasm = makeFakeWasmBindings({
+      prepareSession: mock((params: Record<string, unknown>) => ({
+        jwk: params.jwk,
+        spaceId: params.spaceId,
+        verificationMethod: "did:key:z6MkTestSession",
+      })) as never,
+    });
+    const node = makeNodeWithSigner(wasm, {
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "xyz.tinycloud.feed.host",
+        name: "Feed Host",
+        defaults: false,
+        permissions: [],
+      },
+    });
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({ protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => { await node.signIn(); },
+      expectedActivationAuthorizationFor(wasm),
+    );
+    expect(node.address).toBe("0x0000000000000000000000000000000000000001");
+    expect(node.replication).toBeUndefined();
+  });
+
   test("sessionDid follows the active key across repeated signIn calls", async () => {
     const wasm = makeFakeWasmBindings();
     const node = makeNodeWithSigner(wasm, {
@@ -408,6 +585,8 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       skipped: [],
     }), { status: 200, headers: { "Content-Type": "application/json" } });
     globalThis.fetch = mock((url: string, init?: RequestInit) => {
+      const metadata = registryResponse(url, init);
+      if (metadata) return Promise.resolve(metadata);
       if (url.includes("/encryption/networks/")) {
         if (discoveryRequested) return Promise.resolve(new Response(null, { status: 404 }));
         discoveryRequested = true;
@@ -433,8 +612,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
       await node.signIn();
 
       const captured = node.encryption;
+      const networkId = "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:network";
       const inFlight = captured.discoverNetwork(
-        "urn:tinycloud:encryption:did:key:zTest:network",
+        networkId,
       );
       await discoveryStarted;
 
@@ -444,7 +624,7 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
 
       await expect(inFlight).rejects.toThrow("Service graph has been retired");
       await expect(captured.discoverNetwork(
-        "urn:tinycloud:encryption:did:key:zTest:network",
+        networkId,
       )).rejects.toThrow("Service graph has been retired");
     } finally {
       globalThis.fetch = originalFetch;
@@ -895,11 +1075,60 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     });
   });
 
+  test("paste sign-in preserves share key-prefix decrypt without requesting network creation", async () => {
+    const networkId =
+      "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+    const keyPrefix = `${networkId}/share/`;
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "com.tinycloud.share-publishing",
+        name: "Share publishing",
+        defaults: false,
+        permissions: [
+          { service: "tinycloud.encryption", path: keyPrefix, actions: ["decrypt"] },
+        ],
+      },
+    });
+    const ensureEncryptionNetwork = mock(async () => {
+      throw new Error("path-scoped grant must not create a network");
+    });
+    (node as any).ensureEncryptionNetwork = ensureEncryptionNetwork;
+
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({
+          protocol: 1,
+          version: "test",
+          features: ["encryption"],
+          nodeId: "did:key:z6MkNode",
+        }), { status: 200, headers: { "Content-Type": "application/json" } }),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+      expectedActivationAuthorizationFor(wasm),
+    );
+
+    expect(ensureEncryptionNetwork).not.toHaveBeenCalled();
+    expect((wasm.prepareSession as any).mock.calls[0][0].rawAbilities).toEqual({
+      [keyPrefix]: ["tinycloud.encryption/decrypt"],
+    });
+  });
+
   test("manifest registry write does not re-host existing account space", async () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;
     auth._tinyCloudSession = {
       delegationHeader: { Authorization: "Bearer fake" },
+      address: "0x0000000000000000000000000000000000000001",
+      chainId: 1,
+      spaceId: "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account",
     };
     auth.hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
 
@@ -931,6 +1160,9 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const auth = (node as any).auth;
     auth._tinyCloudSession = {
       delegationHeader: { Authorization: "Bearer manifest-activation-fixture" },
+      address: "0x0000000000000000000000000000000000000001",
+      chainId: 1,
+      spaceId: accountSpaceId,
     };
     auth.hostOwnedSpaceResult = mock(async () => ({ success: true, status: 200 }));
 
@@ -969,17 +1201,25 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         },
       ],
     };
-    const wasm = makeFakeWasmBindings();
+    const wasm = new NodeWasmBindings();
+    const signer = new PrivateKeySigner("11".repeat(32));
+    const nodeKeys = wasm.createSessionManager();
+    nodeKeys.createSessionKey("manifest-node");
+    const nodeDid = nodeKeys.getDID("manifest-node");
     // This is the one test in the file that asserts on the account-registry
     // sync's own effects, so it opts back into the real (non-stubbed)
     // scheduleAccountRegistrySync — see makeNodeWithSigner.
-    const node = makeNodeWithSigner(wasm, { manifest }, { realRegistrySync: true });
-    const accountSpaceId =
-      "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:account";
+    const node = makeNodeWithSigner(wasm, {
+      manifest,
+      signer,
+      autoBootstrapAccount: true,
+    }, { realRegistrySync: true });
+    Reflect.set(node, "bootstrapAccountIfNeeded", async () => false);
+    const accountSpaceId = wasm.makeSpaceId(await signer.getAddress(), await signer.getChainId(), "account");
     const ensureOwnedSpaceHostedById = mock(async () => {});
     const kvPaths: string[] = [];
-    const originalInvoke = wasm.invoke;
-    wasm.invoke = async (session, service, path, action, facts) => {
+    const originalInvoke = wasm.invoke.bind(wasm);
+    wasm.invoke = (session, service, path, action, facts) => {
       if (service === "kv") kvPaths.push(path);
       return originalInvoke(session, service, path, action, facts);
     };
@@ -988,18 +1228,20 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const metadata = registryResponse(input, init);
+      if (metadata) return metadata;
       if (url.endsWith("/info")) {
-        return Response.json({ protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" });
+        return Response.json({ protocol: 1, version: "test", features: [], nodeId: nodeDid });
       }
       if (url.endsWith("/delegate")) {
-        return Response.json({ activated: ["space://test"], skipped: [] });
+        return Response.json({ activated: [accountSpaceId], skipped: [] });
       }
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       if (typeof body.action === "string") sqlRequests.push(body);
       if (body.app_id === manifest.app_id) writes.push({ url, body });
       return Response.json({ columns: [], rows: [], rowCount: 0, changes: 1, results: [] });
     }) as unknown as typeof fetch;
-    (node as any).ensureOwnedSpaceHostedById = ensureOwnedSpaceHostedById;
+    Reflect.set(node, "ensureOwnedSpaceHostedById", ensureOwnedSpaceHostedById);
 
     try {
       await node.signIn();
@@ -1163,5 +1405,113 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         "com.demo.app/config": ["tinycloud.kv/get"],
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SIWE uri precedence (TC-1488)
+// ---------------------------------------------------------------------------
+
+describe("TinyCloudNode SIWE uri precedence (TC-1488)", () => {
+  const baseConfig = {
+    autoBootstrapAccount: false,
+    includeAccountRegistryPermissions: false,
+    manifest: {
+      app_id: "xyz.tinycloud.feed.host",
+      name: "Feed Host",
+      defaults: false,
+      permissions: [],
+    },
+  };
+
+  function makeCapturingWasm(captured: Record<string, unknown>[]): IWasmBindings {
+    return makeFakeWasmBindings({
+      prepareSession: mock((params: Record<string, unknown>) => {
+        captured.push(params);
+        return {
+          jwk: params.jwk,
+          spaceId: params.spaceId,
+          verificationMethod: "did:key:z6MkTestSession",
+        };
+      }) as never,
+    });
+  }
+
+  async function runSignIn(node: TinyCloudNode, wasm: IWasmBindings): Promise<void> {
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({ protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+      expectedActivationAuthorizationFor(wasm),
+    );
+  }
+
+  test("signIn sign-in SIWE uses the configured uri", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, { ...baseConfig, uri: "http://localhost:5173" });
+
+    await runSignIn(node, wasm);
+
+    expect(captured[0]?.uri).toBe("http://localhost:5173");
+  });
+
+  test("siweConfig.uri overrides the configured uri on signIn", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, {
+      ...baseConfig,
+      uri: "http://localhost:5173",
+      siweConfig: { uri: "https://custom.example" },
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runSignIn(node, wasm);
+      expect(captured[0]?.uri).toBe("https://custom.example");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("signIn falls back to https://<default domain> when no uri is configured", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, { ...baseConfig });
+
+    await runSignIn(node, wasm);
+
+    expect(captured[0]?.uri).toBe("https://app.tinycloud.xyz");
+  });
+
+  test("prepareSessionForSigning (delegation path) uses the configured uri", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, { ...baseConfig, uri: "http://localhost:5173" });
+
+    // `auth` is private; the delegation path has no public entry point.
+    // Read it reflectively and narrow at runtime rather than casting.
+    const auth: unknown = Reflect.get(node, "auth");
+    if (
+      !auth ||
+      typeof auth !== "object" ||
+      !("prepareSessionForSigning" in auth) ||
+      typeof auth.prepareSessionForSigning !== "function"
+    ) {
+      throw new Error("expected auth handler with prepareSessionForSigning");
+    }
+    await auth.prepareSessionForSigning();
+
+    expect(captured[0]?.uri).toBe("http://localhost:5173");
   });
 });

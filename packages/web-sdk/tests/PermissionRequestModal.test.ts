@@ -19,6 +19,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 // ---------------------------------------------------------------------------
 
 class FakeElement {
+  focus(): void {}
   private attrs = new Map<string, string>();
   private listeners = new Map<string, Array<(e: any) => void>>();
   public innerHTML = "";
