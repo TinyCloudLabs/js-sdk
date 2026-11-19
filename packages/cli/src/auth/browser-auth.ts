@@ -69,6 +69,12 @@ export interface AuthFlowOptions {
    * lease is verified and admitted at the node before the login saves it. No command sets this yet.
    */
   renewalLeaseSeconds?: number;
+  /**
+   * How long the one-tap approval link stays valid, in milliseconds (`--request-expires`). Undefined keeps the link
+   * service's 1 hour default. More than 1 hour needs `expectedOwner`, and the most is 12 hours; a resumed request keeps
+   * the window it was created with. Only the signed approval request has a link window: the paste flow ignores it.
+   */
+  requestExpiresMs?: number;
 }
 
 /** Default: durable remote approval and automatic result discovery. `--paste` remains explicit. */

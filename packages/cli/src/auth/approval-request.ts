@@ -6,6 +6,7 @@ import { tryOpenBrowser } from "../lib/browser.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
 import { buildShareInvitationApprovalSpec, checkApprovalResultBinding, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type ApprovalRenewal, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1, type ShareInvitationApprovalContext } from "@tinycloud/share-envelope/links";
+import { assertRequestWindow } from "./request-expires.js";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { admitOwnerRenewalLease, RENEWAL_LEASE_ORIGINAL_EXPIRED } from "@tinycloud/sdk-core/delegations/renewal";
@@ -617,8 +618,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     const relay = createECDH("prime256v1");
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
+    if (options.requestExpiresMs !== undefined) assertRequestWindow(options.requestExpiresMs, options.expectedOwner);
     const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin,
-      ...(context ? { expiresAt: new Date(context.acceptanceExpiresAt) } : {}) });
+      ...(context ? { expiresAt: new Date(context.acceptanceExpiresAt) }
+        : options.requestExpiresMs === undefined ? {} : { expiresAt: new Date(Date.now() + options.requestExpiresMs) }) });
     const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
     entry = { version: 1, request, requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link,
       requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,

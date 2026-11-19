@@ -91,6 +91,7 @@ import {
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
+import { parseRequestExpires } from "../auth/request-expires.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
 import { previousSignInNotice } from "../auth/previous-sign-in.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
@@ -640,6 +641,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
     .option("--expiry <duration>", `OpenKey session lifetime, e.g. 1h or 7d (with --manifest: default 1h, or 7d for ${SHARE_PUBLISHING_MANIFEST_REF} so Share links keep their 7-day life; device login: at most 30d, default 30d)`)
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
+    .option("--request-expires <duration>", "How long the one-tap OpenKey approval link stays valid, e.g. 30m or 4h (default 1h; at least 2m, at most 12h). More than 1h needs --owner, so only that account's approval is accepted. Not used by --paste, --device, --keys or replication logins")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
     .option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.")
@@ -664,6 +666,18 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (options.keys !== undefined && (options.device || options.manifest)) {
           throw new CLIError("INVALID_ARGUMENT", "`--keys` can't be used with `--device` or `--manifest`.", ExitCode.USAGE_ERROR);
         }
+        let requestExpiresMs: number | undefined;
+        if (options.requestExpires !== undefined) {
+          if (options.method === "local") {
+            throw new CLIError("INVALID_ARGUMENT", "--request-expires requires OpenKey login.", ExitCode.USAGE_ERROR);
+          }
+          const unusedBy = options.paste ? "`--paste`" : options.device ? "`--device`" : options.keys !== undefined ? "`--keys`"
+            : (options.replicationPrefix?.length ?? 0) > 0 ? "`--replication-prefix`" : undefined;
+          requestExpiresMs = parseRequestExpires(options.requestExpires, {
+            pinnedOwner: options.owner === undefined ? undefined : canonicalOwnerDid(options.owner),
+            ...(unusedBy === undefined ? {} : { unusedBy }),
+          });
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         await recoverPendingLogout(ctx.profile);
@@ -680,6 +694,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           ...(options.replicationAllowSecrets === true || profileConfig?.replication?.allowSecrets === true ? { allowSecrets: true } : {}),
           ...(owner === undefined ? {} : { ownerDid: owner }),
         };
+        if (requestExpiresMs !== undefined && replicationOptions.prefixes.length > 0) {
+          throw new CLIError("INVALID_ARGUMENT", "--request-expires sets the window of the one-tap approval link, which a login with replication does not use.", ExitCode.USAGE_ERROR);
+        }
         const loginPermissions = permissions === undefined
           ? undefined
           : buildReplicationLoginRequest(permissions, {
@@ -738,7 +755,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else if (options.keys !== undefined) {
           method = (profileConfig?.authMethod === "openkey" || options.paste || options.owner) ? "openkey" : "local";
         } else {
-          method = scoped ? "openkey" : await promptAuthMethod();
+          method = scoped || requestExpiresMs !== undefined ? "openkey" : await promptAuthMethod();
         }
         if (method === "openkey" && (options.keys !== undefined || replicationOptions.prefixes.length > 0) &&
           !options.paste && options.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
@@ -771,6 +788,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             replication: replicationOptions,
             expiry: parseExpiryOption(options.expiry) ?? (options.manifest === undefined ? undefined : defaultManifestLoginExpiry(options.manifest)),
             expectedOwner: owner,
+            ...(requestExpiresMs === undefined ? {} : { requestExpiresMs }),
             replaceSession: options.replaceSession === true,
             persistHost,
             force: options.force === true,
@@ -2725,6 +2743,8 @@ interface OpenKeyLoginOptions {
   replication?: ReplicationLoginOptions;
   expiry?: string | number;
   expectedOwner?: string;
+  /** `--request-expires`: how long the one-tap approval link stays valid, in milliseconds (checked at the command line and again where the link is created). */
+  requestExpiresMs?: number;
   /** Scoped login: replace a live session the approved scope would narrow. */
   replaceSession?: boolean;
   /** Record `host` as the profile host (an explicit `--host`). */
@@ -3111,6 +3131,7 @@ export async function refreshOpenKeySession(
   const delegationData = await acquireOpenKey(requestDid, {
     profileName,
     expectedOwner,
+    ...(options.requestExpiresMs === undefined ? {} : { requestExpiresMs: options.requestExpiresMs }),
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
