@@ -323,7 +323,7 @@ describe("signed portable OpenKey grants", () => {
       [{ ...requested[0]!, space: differentlyCasedName }, requested[1]!], host, verification))
       .toThrow(expect.objectContaining({
         code: "OPENKEY_SCOPE_MISMATCH",
-        message: expect.stringContaining("No grant was stored."),
+        message: expect.stringContaining("OpenKey approved a different space than the one requested, so no grant was stored."),
       }));
   });
 
