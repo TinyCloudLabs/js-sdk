@@ -27,7 +27,7 @@ describe("the other selections keep the account listing", () => {
     const apps = onboardingPlan("apps");
     expect(apps).toMatchObject({ expiry: "30d", asks: "Set up TinyCloud on this computer: use your apps and see your spaces, for 30 days." });
     for (const selector of ["apps,feed", "feed,apps"]) {
-      expect(onboardingPlan(selector)).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces and apps, for 7 days." });
+      expect(onboardingPlan(selector)).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 7 days." });
     }
     for (const selector of ["apps", "apps,feed", "feed,apps"]) {
       expect(onboardingPlan(selector).permissions.some(p => p.space === "account" && p.path === "spaces/")).toBe(true);
@@ -36,7 +36,7 @@ describe("the other selections keep the account listing", () => {
 
   test("--expiry changes the lifetime in the approval line for every selection, up to 30 days", () => {
     expect(onboardingPlan("apps", "7d")).toMatchObject({ expiry: "7d", asks: "Set up TinyCloud on this computer: use your apps and see your spaces, for 7 days." });
-    expect(onboardingPlan("apps,feed", "30d")).toMatchObject({ expiry: "30d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces and apps, for 30 days." });
+    expect(onboardingPlan("apps,feed", "30d")).toMatchObject({ expiry: "30d", asks: "Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for 30 days." });
   });
 });
 

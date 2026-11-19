@@ -58,7 +58,7 @@ export function onboardingPlan(selector = "apps", expiryOption?: unknown): { per
   const asks = feedOnly
     ? `Set up TinyCloud on this computer: use your Feed, for ${lifetime}.`
     : tasks.includes("feed")
-      ? `Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces and apps, for ${lifetime}.`
+      ? `Set up TinyCloud on this computer: use your apps and your Feed, and see your spaces, for ${lifetime}.`
       : `Set up TinyCloud on this computer: use your apps and see your spaces, for ${lifetime}.`;
   return {
     permissions: entries.sort((a, b) => `${a.space}\0${a.service}\0${a.path}`.localeCompare(`${b.space}\0${b.service}\0${b.path}`)),
