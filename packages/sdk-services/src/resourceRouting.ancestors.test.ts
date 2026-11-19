@@ -31,6 +31,9 @@ describe("requests and grants that reach vault data from above", () => {
     ["a parent segment into the vault", `${owner}:default/kv/notes/../vault/api-key`],
     ["an empty segment before the vault", `${owner}:default/kv//vault/api-key`],
     ["an escaped vault name", `${owner}:default/kv/%76ault/api-key`],
+    ["an upper-case scheme", `TINYCLOUD:pkh:eip155:1:0x0000000000000000000000000000000000000001:default/kv/vault/api-key`],
+    ["a mixed-case scheme on an ordinary path", `TinyCloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default/kv/notes`],
+    ["an upper-case urn", "URN:TINYCLOUD:ENCRYPTION:did:key:zOwner:default"],
   ])("%s is vault", (_label, uri) => {
     expect(isVaultResourceUri(uri)).toBe(true);
   });

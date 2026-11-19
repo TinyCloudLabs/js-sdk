@@ -32,9 +32,9 @@ afterEach(() => {
 
 type Attempt = { url: string; redirect: RequestRedirect | undefined; invocation?: string };
 
-async function fixture(options: { routedUrl?: string; teeDown?: boolean; invokeStatus?: number } = {}) {
+async function fixture(options: { routedUrl?: string; teeDown?: boolean; invokeStatus?: number; abilities?: typeof KV_ABILITIES | { kv: Record<string, string[]> } } = {}) {
   const routedUrl = options.routedUrl ?? PROXIED;
-  const proof = await signedRestorableSession({ abilities: KV_ABILITIES, ownedSpaceAbilities: { secrets: KV_ABILITIES } });
+  const proof = await signedRestorableSession({ abilities: options.abilities ?? KV_ABILITIES, ownedSpaceAbilities: { secrets: KV_ABILITIES } });
   const payload: LocationRecordV2Payload = {
     version: 2, subject: pkhDid(proof.address, 1), nodes: [{ did: NODE_DID, url: routedUrl }],
     spaces: [proof.spaceId, proof.spaces!.secrets!].map((space) => ({ space: space.toLowerCase(), nodes: [{ did: NODE_DID, mode: "read-write" as const }] })),
@@ -190,6 +190,22 @@ test("under a session that grants the whole key space, every vault invocation an
   expect(invocations(attempts).length).toBeGreaterThanOrEqual(4);
   expect(attempts.filter((attempt) => new URL(attempt.url).pathname === "/delegate").length).toBe(2);
   expect(origins(attempts)).toEqual(new Set([TEE]));
+});
+
+const walletGrantRecipient = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(new Uint8Array(32).fill(5))]))}`;
+const walletGrantActions = ["tinycloud.kv/get", "tinycloud.kv/list"];
+
+// A session limited to one prefix: a grant outside it falls back to the wallet-signed path.
+async function walletGrantOrigins(path: string): Promise<Set<string>> {
+  const { node, attempts } = await fixture({ abilities: { kv: { "mine/": walletGrantActions } } });
+  await node.createDelegation({ delegateDID: walletGrantRecipient, path, actions: walletGrantActions, includePublicSpace: false });
+  const posted = attempts.filter((attempt) => new URL(attempt.url).pathname === "/delegate");
+  expect(posted.length).toBeGreaterThan(0);
+  return origins(posted);
+}
+
+test("a wallet-signed grant of the whole key space to another DID goes only to the TEE origin", async () => {
+  expect(await walletGrantOrigins("")).toEqual(new Set([TEE]));
 });
 
 test("a self-hosted node keeps its own origin for vault traffic", async () => {

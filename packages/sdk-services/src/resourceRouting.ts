@@ -180,6 +180,8 @@ function abilityNamesOf(abilities: unknown): readonly string[] {
 
 function vaultReach(uri: string, abilities: unknown): "names" | "reaches" | undefined {
   if (uri.startsWith("urn:tinycloud:encryption:")) return undefined;
+  // The node reads only lowercase `tinycloud:` and `urn:tinycloud:`; the same text in another case is unreadable here, so assume the worst.
+  if (/^(?:tinycloud:|urn:tinycloud:)/i.test(uri) && !/^(?:tinycloud:|urn:tinycloud:)/.test(uri)) return "names";
   let resource: string;
   try {
     resource = routingResourceOf(uri);

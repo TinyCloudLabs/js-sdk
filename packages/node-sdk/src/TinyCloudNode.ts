@@ -1892,7 +1892,7 @@ export class TinyCloudNode {
         assertCurrent();
         const activationSignal = AbortSignal.any([signal, graph.signal]);
         if (primary && primary.delegationCid === session.delegationCid) {
-          return this.activateSignedSession(primary, primary.siwe, activationSignal);
+          return this.activateSignedSession(primary, primary.siwe, activationSignal, true);
         }
         return this.activateResourceSession(session.delegationHeader, [spaceId], activationSignal);
       },
@@ -7866,17 +7866,24 @@ export class TinyCloudNode {
     return this.activateResourceSession(delegation.delegationHeader, resources, signal);
   }
 
+  /**
+   * Activate a signed grant. Only this instance's own session passes
+   * `ownSession`: it is audienced to its session key and is classified by the
+   * vault names it carries. A grant to anyone else is classified by what it
+   * covers, ancestors included.
+   */
   private activateSignedSession(
     session: Pick<TinyCloudSession, "delegationHeader" | "spaceId">,
     siwe: string,
     signal?: AbortSignal,
+    ownSession = false,
   ): Promise<SpaceHostResult> {
     const resources = this.parseRecapWithCaveats(siwe).map((entry) =>
       this.isEncryptionNetworkOperation(this.invocationServiceName(entry.service), entry.path, entry.space) ? entry.path.split("/")[0]!
         : entry.space.startsWith("tinycloud:") ? entry.space : session.spaceId,
     );
     return this.activateResourceSession(session.delegationHeader,
-      resources.length > 0 ? resources : [session.spaceId], signal, siwe);
+      resources.length > 0 ? resources : [session.spaceId], signal, ownSession ? siwe : undefined);
   }
 
   /**
