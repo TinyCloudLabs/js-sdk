@@ -225,7 +225,7 @@ interface HooksLike {
 }
 
 export interface WatchDeps {
-  /** Local owner checks, before startup and every cycle; throws to stop the watcher. */
+  /** Local owner checks, before startup and every cycle; service mode retries a `profile-locked` timeout. */
   beforePoll?(): Promise<void>;
   /**
    * Renewal and authority checks against the node: one peer, or every peer when `handle` is omitted. Runs at startup,
@@ -1772,6 +1772,7 @@ export class Watcher {
    * watcher stops subscribing, waking and writing, and stands by. It reads watch.json once per window (5 minutes,
    * doubling to 30) and takes over, with one catch-up, only after a whole window in which the other writer wrote nothing.
    * The other watcher is the same agent's, so its messages stay watched meanwhile.
+   * A local profile-lock timeout is logged and retried at the normal polling cadence; it never ends the service.
    */
   async run(external: AbortSignal, options: { once?: boolean } = {}): Promise<void> {
     if (options.once) return this.session(external, options);
@@ -1782,6 +1783,14 @@ export class Watcher {
       try {
         return await this.session(external, options);
       } catch (error) {
+        if (error instanceof CourierError && error.code === 'profile-locked') {
+          if (external.aborted) return;
+          const retryInMs = Math.min(this.opts.pollMs, AUTHORITY_CHECK_MS);
+          log('poll-error', { ...errInfo(error), retryInMs });
+          await sleep(retryInMs, external);
+          if (external.aborted) return;
+          continue;
+        }
         if (!(error instanceof CourierError && error.code === 'state-conflict') || external.aborted) throw error;
       }
       if (this.now() - started >= CONFLICT_STANDBY_MAX_MS) windowMs = CONFLICT_STANDBY_MS;

@@ -3,7 +3,8 @@ import path from 'node:path';
 import type { LinkRecord, OpenKeyApprovalRequestV1 } from '@tinycloud/share-envelope/links';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
-import { profileDir, writeSecure } from './profile.js';
+import { profileDir, withProfileLock, writeSecure } from './profile.js';
+import { canonicalJson } from './canonical.js';
 
 /**
  * The one module that reads, writes and classifies the saved OpenKey approval request, `approval-pending.json`.
@@ -40,6 +41,15 @@ export interface PendingGrantRequest {
   resultEnvelope?: unknown;
   /** The grant and profile are saved; only the acknowledgement may remain. */
   committed?: true;
+}
+
+const pendingBaselines = new WeakMap<PendingGrantRequest, PendingGrantRequest>();
+const rememberPending = (pending: PendingGrantRequest): void => { pendingBaselines.set(pending, structuredClone(pending)); };
+const same = (a: unknown, b: unknown): boolean => canonicalJson(a ?? null) === canonicalJson(b ?? null);
+
+function pendingChanged(entry: ApprovalEntry): CourierError {
+  const holder = entry.kind === 'ok' ? ` ${JSON.stringify(entry.pending.requestId)}` : '';
+  return new CourierError('approval-changed', `The saved approval request${holder} changed while this command was running. It was kept; run the command again to resume it.`);
 }
 
 export type ApprovalEntry =
@@ -88,6 +98,7 @@ export function readApprovalEntry(): ApprovalEntry {
     || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string') {
     return { kind: 'corrupt', reason: 'unexpected contents' };
   }
+  rememberPending(pending);
   return { kind: 'ok', pending };
 }
 
@@ -166,14 +177,49 @@ export function loadPendingForWrite(): PendingGrantRequest | undefined {
   return undefined;
 }
 
-export function savePending(pending: PendingGrantRequest): void {
-  writeSecure(path.join(profileDir(), APPROVAL_FILE), pending);
+/** Merge progress for a loaded request; an explicit expected record (null for none) guards creation/replacement after network work. */
+export function savePending(pending: PendingGrantRequest, expected?: PendingGrantRequest | null): void {
+  withProfileLock(() => {
+    const base = expected === undefined ? pendingBaselines.get(pending) : expected;
+    const entry = readApprovalEntry();
+    let result = pending;
+    if (base === null) {
+      if (entry.kind !== 'none') throw pendingChanged(entry);
+    } else if (base !== undefined) {
+      if (entry.kind !== 'ok') throw pendingChanged(entry);
+      if (base.requestId !== pending.requestId) {
+        if (!same(entry.pending, base)) throw pendingChanged(entry);
+      } else {
+        if (entry.pending.requestId !== base.requestId || entry.pending.bodyCid !== base.bodyCid) throw pendingChanged(entry);
+        const merged: Record<string, unknown> = {};
+        for (const key of new Set([...Object.keys(base), ...Object.keys(pending), ...Object.keys(entry.pending)])) {
+          const b = (base as unknown as Record<string, unknown>)[key];
+          const m = (pending as unknown as Record<string, unknown>)[key];
+          const d = (entry.pending as unknown as Record<string, unknown>)[key];
+          if (!same(m, b) && !same(d, b) && !same(m, d)) throw pendingChanged(entry);
+          const value = same(m, b) ? d : m;
+          if (value !== undefined) merged[key] = value;
+        }
+        result = merged as unknown as PendingGrantRequest;
+      }
+    }
+    writeSecure(path.join(profileDir(), APPROVAL_FILE), result);
+    Object.assign(pending, result);
+    rememberPending(pending);
+  });
 }
 
-export function clearPending(): void {
-  try { fs.unlinkSync(path.join(profileDir(), APPROVAL_FILE)); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
+export function clearPending(expected?: PendingGrantRequest): void {
+  withProfileLock(() => {
+    if (expected) {
+      const entry = readApprovalEntry();
+      if (entry.kind === 'none') return;
+      if (entry.kind !== 'ok' || !same(entry.pending, pendingBaselines.get(expected) ?? expected)) throw pendingChanged(entry);
+    }
+    try { fs.unlinkSync(path.join(profileDir(), APPROVAL_FILE)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  });
 }
 
 // ---- the record's optional fields: only this module reads or sets them ----
