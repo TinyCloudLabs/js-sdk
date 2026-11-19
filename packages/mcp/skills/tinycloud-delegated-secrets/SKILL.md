@@ -1,3 +1,8 @@
+---
+name: tinycloud-delegated-secrets
+description: Use when a user wants an agent to explore their TinyCloud spaces, KV and SQL data, or read secrets they've shared, through the TinyCloud MCP tools. The owner approves access with an approval link in OpenKey.
+---
+
 # TinyCloud delegated exploration and secrets
 
 Use the TinyCloud MCP tools as a resumable authority workflow. Never ask for

@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 3.13.0-beta.4
+
+### Patch Changes
+
+- 1f961e4: A share link no longer carries `tinycloud.delegation` actions, so whoever holds a link can't revoke, create, list or renew delegations with it. `sharing.generate`, and `delegateReceivedShare` (or `receive` when it sub-delegates) for a received link, now refuse any `tinycloud.delegation/*` action with `INVALID_INPUT`, before anything is signed or sent. `sharing.preflightGenerate` reports such a link as `"not-covered"`, so it never says `"ok"` for a link `generate` refuses. Read, list and edit shares are unchanged.
+
+  Details: TC-3286
+
 ## 3.13.0-beta.3
 
 ### Minor Changes
