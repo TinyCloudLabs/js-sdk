@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE, PREFIX } from '../dist/keys.js';
-import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
+import { courierRegistryFixtureEnv, installCourierRegistryFixture } from './support/registry-fixture.mjs';
 import { peerKv, courierNode } from '../dist/node.js';
 import { loadProfile } from '../dist/profile.js';
 
@@ -33,6 +33,7 @@ const stub = http.createServer((req, res) => {
 });
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 const HOST = `http://127.0.0.1:${stub.address().port}`;
+installCourierRegistryFixture(HOST);
 test.after(() => stub.close());
 
 const root = path.join(process.env.COURIER_TEST_HOME, 'peer-reader-grant');
