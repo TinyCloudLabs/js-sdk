@@ -36,7 +36,7 @@ export interface PairArtifact {
   issuedAt: string;
 }
 
-export const PEER_DELEGATION_EXPIRY = '7d';
+export const PEER_DELEGATION_EXPIRY = '30d';
 export function validateArtifactIdentity(art: PairArtifact): void {
   if (!/^did:pkh:eip155:\d+:0x[a-fA-F0-9]{40}$/.test(art.from.owner)) {
     throw new CourierError('bad-artifact', 'Artifact owner must be a did:pkh identity.');

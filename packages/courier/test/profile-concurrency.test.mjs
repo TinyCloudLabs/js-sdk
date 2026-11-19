@@ -14,6 +14,7 @@ import { NodeWasmBindings, PrivateKeySigner } from '@tinycloud/node-sdk';
 import { AGENT_GRANT, COURIER_SPACE } from '../dist/keys.js';
 import { LOCAL } from './support/lock-identity.mjs';
 import { loadProfile, saveProfile, writeSecure } from '../dist/profile.js';
+import { courierRegistryFixtureEnv } from './support/registry-fixture.mjs';
 
 const HOME = process.env.COURIER_HOME;
 const PROFILE = path.join(HOME, 'profile.json');
@@ -173,10 +174,10 @@ await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
 test.after(() => stub.close());
 const HOST = `http://127.0.0.1:${stub.address().port}`;
 
-const run = async (home, args) => JSON.parse((await execFileAsync(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' })).stdout);
+const run = async (home, args) => JSON.parse((await execFileAsync(process.execPath, [CLI, ...args], { env: courierRegistryFixtureEnv(home, HOST), encoding: 'utf8' })).stdout);
 async function runFail(home, args) {
   try {
-    await execFileAsync(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' });
+    await execFileAsync(process.execPath, [CLI, ...args], { env: courierRegistryFixtureEnv(home, HOST), encoding: 'utf8' });
   } catch (e) {
     return { stderr: String(e.stderr) };
   }

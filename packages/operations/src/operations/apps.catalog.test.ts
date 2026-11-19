@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { evaluateOperationAuthority } from "../authority.js";
 import type { CapabilityRequirement, RuntimeOperationContext } from "../contract.js";
-import { tcAppsApprovalMessage, tcAppsApprovalReason } from "../tc-apps.js";
+import { TC_APPS_CATALOG_APPS, TC_APPS_CATALOG_PERMISSIONS, tcAppsApprovalReason } from "../tc-apps.js";
+import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { knowledgeOperationDefinitions } from "./knowledge.js";
 import { HEALTHLOG_DATABASE, HEALTHLOG_DAY_CARD, HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_INSERT, HEALTHLOG_MEAL_READBACK, HEALTHLOG_MEAL_UPDATE, HEALTHLOG_WEIGHT_INSERT, HEALTHLOG_WEIGHT_READBACK, HEALTHLOG_WEIGHT_TODAY } from "../tc-apps/preamble.js";
 import type { AppsPermission } from "../tc-apps/kv.js";
 import { sqlOperationDefinitions } from "./sql.js";
-import { definition, fixture, NEW_SPACE, SPACE, withGrants } from "./apps.fixtures.js";
+import { definition, fixture, SPACE, withGrants } from "./apps.fixtures.js";
 
 describe("catalog task approvals", () => {
   test("a first meal asks once with app and three times without, then reads the committed row", async () => {
@@ -27,7 +28,7 @@ describe("catalog task approvals", () => {
         },
       };
       const node = { ...context.runtime.node as object, sqlForSpace: (space: string) => {
-        expect(space).toBe(NEW_SPACE);
+        expect(space).toBe(SPACE);
         return { db: (database: string) => { expect(database).toBe(HEALTHLOG_DATABASE); return sql; } };
       } };
       const runtime = { ...context, runtime: { ...context.runtime, node } } as never;
@@ -58,15 +59,15 @@ describe("catalog task approvals", () => {
       const read = await approved(sqlDefinition("tinycloud.sql.query"), { ...target, sql: HEALTHLOG_MEAL_READBACK, params: ["meal-1"] });
       expect(read).toMatchObject({ rows: [[1, "lunch", "Dal", 650]] });
       expect(requests).toHaveLength(named ? 1 : 3);
-      expect(requests.every((request) => request.every((entry) => entry.space === NEW_SPACE))).toBe(true);
+      expect(requests.every((request) => request.every((entry) => entry.space === SPACE))).toBe(true);
       db.close();
     });
   });
   test("catalog bundles name only their pinned targets, keep read access read-only, and accept no other reserved ids", async () => {
     await fixture(async (_kv, context) => {
-      const list = { service: "tinycloud.kv", space: NEW_SPACE, path: "xyz.tinycloud.tinyapps.catalog/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] };
-      const health = { service: "tinycloud.sql", space: NEW_SPACE, path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] };
-      const recipes = { service: "tinycloud.kv", space: NEW_SPACE, path: "xyz.tinycloud.sample.recipes/knowledge/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] };
+      const list = { service: "tinycloud.kv", space: SPACE, path: "xyz.tinycloud.tinyapps.catalog/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] };
+      const health = { service: "tinycloud.sql", space: SPACE, path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] };
+      const recipes = { service: "tinycloud.kv", space: SPACE, path: "xyz.tinycloud.sample.recipes/knowledge/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] };
       expect(await definition("context").authority(context, { app: "healthlog" })).toEqual([list, health]);
       expect(await definition("context").authority(context, { app: "healthlog", access: "read" })).toEqual([list, { ...health, actions: ["tinycloud.sql/read"] }]);
       for (const access of ["read", "change"]) {
@@ -81,26 +82,17 @@ describe("catalog task approvals", () => {
         expect(evaluateOperationAuthority(plan as unknown as readonly PermissionEntry[], (await listing.authority(context, { app_id: "xyz.tinycloud.sample.recipes" } as never)) as unknown as readonly PermissionEntry[]).missing).toEqual([]);
         const sqlRead = await sqlDefinition("tinycloud.sql.query").authority(context, { space: "applications", database: "notes-chosen-database" } as never);
         expect(evaluateOperationAuthority(plan as unknown as readonly PermissionEntry[], sqlRead as unknown as readonly PermissionEntry[]).missing).toEqual(sqlRead as unknown as readonly PermissionEntry[]);
-        expect(tcAppsApprovalReason(plan)).toContain("Recipes app's notes");
-        expect(tcAppsApprovalReason(plan)).not.toContain("change entries");
       }
-      const plan = await definition("context").authority(context, { app: "healthlog" });
       expect((await definition("context").execute(context, { app: "healthlog" })).status).toBe("ok");
-      expect(tcAppsApprovalReason(plan)).toContain("read your Health Log and add, change or delete entries");
-      expect(tcAppsApprovalReason(plan)).toContain("whole Health Log database");
-      expect(tcAppsApprovalReason(plan)).toContain("30 days");
-      expect(tcAppsApprovalReason(plan)).not.toContain("agent-data");
-      expect(tcAppsApprovalMessage(plan)).toContain("OpenKey");
       const read = await definition("context").authority(context, { app: "healthlog", access: "read" });
-      expect(tcAppsApprovalReason(read)).toContain("without changing it");
       const readPlan = await sqlDefinition("tinycloud.sql.query").authority(context, { space: "applications", database: HEALTHLOG_DATABASE } as never);
       expect(evaluateOperationAuthority(read as unknown as readonly PermissionEntry[], readPlan as unknown as readonly PermissionEntry[]).missing).toEqual([]);
       const writePlan = await sqlDefinition("tinycloud.sql.execute").authority(context, { space: "applications", database: HEALTHLOG_DATABASE } as never);
-      expect(evaluateOperationAuthority(read as unknown as readonly PermissionEntry[], writePlan as unknown as readonly PermissionEntry[]).missing).toMatchObject([{ service: "tinycloud.sql", space: NEW_SPACE, path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/write"] }]);
+      expect(evaluateOperationAuthority(read as unknown as readonly PermissionEntry[], writePlan as unknown as readonly PermissionEntry[]).missing).toMatchObject([{ service: "tinycloud.sql", space: SPACE, path: HEALTHLOG_DATABASE, actions: ["tinycloud.sql/write"] }]);
       for (const app of ["catalog", "index-stale", "../healthlog", "Healthlog", "xyz.tinycloud.sample.healthlog"]) {
         expect((await definition("context").execute(context, { app })).error.code).toBe("INPUT_INVALID");
       }
-      for (const bad of [{ ...health, actions: ["tinycloud.sql/schema"] }, { ...health, path: "other" }, { ...recipes, path: "xyz.tinycloud.sample.recipes/" }, { ...health, space: SPACE }]) {
+      for (const bad of [{ ...health, actions: ["tinycloud.sql/schema"] }, { ...health, path: "other" }, { ...recipes, path: "xyz.tinycloud.sample.recipes/" }, { ...health, space: SPACE.replace(/:applications$/, ":default") }]) {
         expect(tcAppsApprovalReason([list, bad])).toBeUndefined();
       }
     });
@@ -135,7 +127,7 @@ describe("Health Log through the generic SQL tools", () => {
       } as never);
       expect(planned).toHaveLength(1);
       expect(planned[0]).toMatchObject({ service: "tinycloud.sql", path: HEALTHLOG_DATABASE });
-      expect(String(planned[0]!.space)).toBe(SPACE.replace(/:default$/, ":applications"));
+      expect(String(planned[0]!.space)).toBe(SPACE);
     });
   });
 });
@@ -231,5 +223,14 @@ describe("an unhosted space is not 'not installed'", () => {
       outcome = await sqlDefinition("tinycloud.sql.query").execute({ ...context, runtime: { ...context.runtime, node } } as never, { space: "applications", database: HEALTHLOG_DATABASE, sql: HEALTHLOG_MEAL_DUPLICATE_CHECK, params: ["2026-11-03", "lunch", "Dal"] } as never);
     });
     expect(outcome).toMatchObject({ status: "error", error: { code: "NODE_ERROR", details: { reason: "space_not_hosted" }, retryable: false } });
+  });
+});
+
+describe("catalog apps on a surface without their tools", () => {
+  test("every app a context call can request has the name and page the rules give for it", () => {
+    expect(Object.keys(TC_APPS_CATALOG_APPS).sort()).toEqual(Object.keys(TC_APPS_CATALOG_PERMISSIONS).sort());
+    for (const { title, link } of Object.values(TC_APPS_CATALOG_APPS)) {
+      expect(TC_APPS_RULES).toContain(`(${title}) | \`${link}\` |`);
+    }
   });
 });

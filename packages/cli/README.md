@@ -59,6 +59,55 @@ value when explicitly requested; MCP hosts control their own transcript
 retention. Owner authority is an explicit posture choice, not an automatic
 fallback for delegated execution.
 
+## Inspect saved storage settings
+
+```bash
+tinycloud --profile agent registry show
+tinycloud --profile agent registry show did:pkh:eip155:1:0x...
+tinycloud --json --profile agent registry show
+```
+
+`registry show [account-id]` checks the storage settings saved on this computer and shows the account, version, age, spaces, servers, read-write/read-only modes and decryption service. Without an account ID it uses the selected profile's account, not its agent/session key. It works offline without sign-in or changing the profile. The argument accepts the same account identifiers as before; only its help label changed. Machine-readable JSON field names remain unchanged.
+
+Human output puts Account and Version first, then `Saved: … ago`: seconds below one minute, minutes through exactly two hours, and hours above two hours. Space labels and identifier values stay intact; server rows label “read and write” or “read only” and the server ID. The decryption service shows its URL and ID, or `none`. These display changes do not alter routing-cache age limits.
+
+The independently readable plain file is `~/.tinycloud/profiles/<profile>/registry-cache.json` (`0600`, directory `0700`). Each entry contains untouched signed response text plus separate fetch/owner/sequence metadata. CLI and canonical Operations runtimes share the profile lock and atomic writer. Every cached read reverifies the response; only a strictly higher sequence replaces it.
+
+Every routing decision awaits a bounded registry refresh; concurrent checks coalesce. If that check fails with a transport error, timeout, or HTTP502/503/504, a verified cache younger than one hour may supply the signed route. Older caches, HTTP500 and other warm HTTP failures, invalid responses, rollback, and wrong-role placement fail closed. An authoritative HTTP4xx or fresh owner/route removal immediately denies access and deletes the cached response while retaining the independent sequence highwater; a later outage cannot resurrect that route or select a default node.
+
+With no saved storage settings, an unreachable registry refuses secrets routing before any default/hosted data request. The error code stays `REGISTRY_UNAVAILABLE`; the explanation says that no settings are saved on this computer and the operation did not run. Reachable genuine no-entry responses still permit first-time onboarding. Warm fallback warnings remain on stderr, never secret/raw stdout, using code `REGISTRY_UNAVAILABLE` and reason `using_cached_settings`. Repeated decisions emit that selected warning once per command, including when a later output step fails. SDK callbacks retain the human explanation as argument one and the semantic reason as optional argument two. This client policy does not change node-side online admission.
+
+Details: TC-2481
+
+## Publish storage settings explicitly
+
+Sign-in does not publish a signed v2 storage-settings record. A newly signed-in account with no registry entry has no verified settings to reuse during an outage. To opt in, use a profile signed in with `--method local` and explicitly list the spaces and server:
+
+```bash
+tinycloud --profile owner registry publish default secrets --server https://your-storage-server.example
+tinycloud --profile owner --json registry publish applications --server https://your-storage-server.example --yes
+tinycloud --profile owner registry show
+```
+
+The preview lists the complete resulting account, server identities, spaces and decryption service, including existing entries that will be kept. A `*` marks an added or changed space. Existing memberships and the decryption service are preserved unless explicitly changed; `--read-only` selects read-only membership for the named server, and `--decryption-server <url>` explicitly selects the decryption service.
+
+**Published settings are public:** anyone who knows the account ID can look up its server addresses and plaintext space names. Review the preview before approving. The confirmation names both explicitly. `--yes` skips the prompt, not the public-lookup disclosure. JSON output includes that disclosure and the resulting public record. Nothing is automatically published at sign-in.
+
+The confirmation includes the public-lookup warning once. The marker legend appears only when a space is marked. If the selected settings are already published, the command says nothing changed and JSON returns `published: true, changed: false`; it sends no additional PUT. A real update returns `changed: true`. Both modes still save the verified local copy, and no-change output keeps the disclosure.
+
+A space absent from a registered account's published settings refuses instead of falling back to another server. Include every space this account needs; existing published spaces not named in this command remain intact. Publication does not create a space, host data, grant permission, or move existing data.
+
+The command checks both public server identity surfaces, merges only the selected memberships, signs with the account's own key, and advances the existing sequence. An agent/session key cannot substitute for the owner's key. Malformed/absent known records, rollback, invalid signatures and conflicting updates refuse without an automatic write retry. After a conflict, run the command again without `--yes` to review fresh settings; `registry show` only reads the saved local copy.
+
+Registration history distinguishes a legacy-only observation from an accepted signed record. Explicit legacy-only history can publish its first signed record, including sequence zero. Accepting a signed record durably promotes that history; it never becomes legacy-only again. Existing untyped history remains unknown rather than being cleared or relabelled, so publication refuses if that history cannot establish whether a signed record was already accepted. Recovery for ambiguous older profiles is not part of this command. Legacy records still do not authorize routing.
+
+Durably confirmed signed history can be reused in memory after a profile commit. A failed history write preserves its numeric bound but never counts as durable confirmation.
+
+After a successful verified publication the CLI saves its signed copy for offline inspection and the bounded outage policy above. If remote publication succeeds but local persistence fails, the error explicitly says the settings were published; it does not pretend that no remote change occurred. Import the SDK's `publishLocationRecordV2` from `@tinycloud/sdk-core/registry-publication`; it is an opt-in entry point, not an eager Web-root export. It returns the verified record and leaves persistence to its caller. Its `onPrepared` callback receives the complete proposed payload and current verified record before signing; returning false cancels without a write.
+
+Details: TC-2657
+
+
 ## Quick Start
 
 ```bash
@@ -68,14 +117,16 @@ tinycloud init
 # Authenticate via browser
 tinycloud auth login
 
-# Authenticate on a remote/headless machine: the owner approves an explicit
-# manifest on their phone (URL + code printed to stderr). Use a new profile
-# name if it already exists; keep the user's existing profiles.
+# Authenticate on a remote/headless machine: the CLI prints one OpenKey
+# approval link to stderr; the owner opens it on any device and approves, with
+# no code to paste back. A manifest login lasts 1 hour (Share publishing: 7 days,
+# so its links keep their 7-day life) unless --expiry is given.
+# Use a new profile name if it already exists; keep the user's existing profiles.
 tinycloud init --name publisher --key-only
-tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
+tinycloud --profile publisher auth login --manifest builtin:share-publishing --no-popup
 
-# Same Share publishing scope, as a shortcut (on the dedicated profile)
-tinycloud --profile publisher enable share
+# Device code on the owner's phone, only when asked for
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
 
 # Selected profile, owner, host and space (JSON; does not test access)
 tinycloud context
@@ -151,7 +202,16 @@ tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runti
 ```
 
 Run `watch` in the agent terminal, then save `response.json` from the owner
-profile in another terminal, or answer the card through Home:
+profile in another terminal, or answer the card through Home.
+
+Without `--runner`, `watch` prints each new response as one JSON line on stdout.
+With `--once`, it exits after the first batch of new responses, which wakes an
+agent whose tools report a background command only when it ends. A restart
+delivers only responses that `--recipient` has not had. Those lines carry the
+owner's words (`text`, `choiceId`): treat stdout as you would the runner's stdin,
+and never pipe it into shared logs.
+
+The owner's `response.json`:
 
 ```json
 {"responseId":"response-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"answer","choiceId":"create","createdAt":"2026-10-29T00:01:00Z"}
@@ -418,8 +478,8 @@ evaluate legacy expiry, restore state, or dispatch pending responses.
 |---------|-------------|
 | `tinycloud init` | Set up a profile and generate keys |
 | `tinycloud auth login` | Authenticate via browser |
-| `tinycloud auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) |
-| `tinycloud auth login --manifest <file>` | Browser OpenKey login scoped to a manifest |
+| `tinycloud auth login --manifest <file>` | OpenKey approval link scoped to a manifest; 1 hour (7 days for `builtin:share-publishing`) unless `--expiry` is given |
+| `tinycloud auth login --device --manifest <file>` | Approve exactly a manifest's permissions on another device (phone) with a device code |
 | `tinycloud enable share` | Device login with the built-in Share publishing manifest (use a dedicated profile) |
 | `tinycloud context` | Show the selected profile, owner, host, space and session state |
 | `tinycloud auth status` | Show authentication status |
@@ -580,13 +640,23 @@ is needed. `--no-popup` skips opening a local browser, not automatic result
 retrieval. The CLI verifies the encrypted result, durably saves it, then
 acknowledges delivery. Re-run the same command after an interruption to resume.
 The one-hour request expiry is independent of the requested grant lifetime and
-result retention. Normal login keeps its seven-day default; onboarding requests
+result retention. A manifest login without `--expiry` requests one hour (seven
+days for `builtin:share-publishing`), a login without a manifest keeps its
+seven-day default, and onboarding requests
 30 days explicitly. `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 
 `tinycloud onboard --timeout 60s` and `tinycloud auth grant REQUEST.json --timeout 60s` bound the wait for the owner's OpenKey approval (more than 0, at most 9m; longer values, 0 and garbage are usage errors, exit 2 `INVALID_TIMEOUT`). Use `60s` where a command may not run past 2 minutes. **Exit 8 WITH a `pending` object is not a failure:** `{"pending":{"step":N,"of":M,"approvalUrl":"<link>","expiresAt":"<ISO time>"}}` on stdout means send the owner the `approvalUrl` (only the owner, privately: the link lets anyone who has it view the request), ask them to approve, and re-run the same command with the same `--timeout`; when the link changes at step 2 of 2, send the NEW link. It is printed once as soon as a new link has been created (so it can be sent at once), and again when the wait ends with a resumed link still unanswered. `auth grant req.json --timeout 60s > grant.json` writes that object into `grant.json` on exit 8; check the exit code before using the file. stderr keeps its human text. A pending link is reused, never replaced, and a second approval is never requested. `onboard` has 2 steps; `auth grant` is step 1 of 1 (an agent grant covers exactly one space). On a profile that does not sign in through OpenKey, `auth grant --timeout` is accepted and has nothing to bound. `onboard` refuses `--timeout` together with `--code` (exit 2): running it again would send the same code to the next step. Exit 0 prints the normal result. Exit 3 `APPROVAL_REQUEST_EXPIRED` means the link expired: run the command again. The usual end is one OpenKey call: its HTTP 400 `invalid_request` answer to a status check after the link's own expiry is exit 3 and the saved request is dropped, so the next run makes a new request with a new link (exit 3 can appear twice before that, once when the link expires while the wait is on and once for the 400). A request approved just before its expiry is still collected: OpenKey serves an approved result until its own retention ends (production `APPROVAL_RESULT_RETENTION_SECONDS=600`, `docker-compose.prod.yml:28` in the OpenKey repo). Only a saved request that expired more than 11 minutes ago (10 min retention + 1 min clock skew) and holds no result is dropped without asking OpenKey. Exit 8 WITHOUT a `pending` object (`APPROVAL_REQUEST_UNAVAILABLE`, `APPROVAL_RESULT_UNAVAILABLE`, `APPROVAL_ACK_PENDING`, `APPROVAL_RESULT_ACKNOWLEDGED`) means OpenKey could not be reached or could not confirm in time; run the same command again, the saved state resumes. An HTTP 400 `APPROVAL_REQUEST_UNAVAILABLE` before the link's own `expiresAt` is not an expiry and could be a real fault: if it repeats, ask for help (do not delete anything). A network failure while waiting for a link that is still valid is reported as `pending` too, so check its `expiresAt`. Once the owner has approved, the command never reports that approval as pending: it collects, verifies, saves and acknowledges the result even past the timeout, for up to 30 s more (an acknowledgement whose reply was lost is re-sent on the next run with the same id). The total is at most the timeout plus 30 s plus up to 3 s plus local and node work; an `onboard` that moves on to step 2 also creates that link, one request of up to 10 s, so `--timeout 60s` ends in about 105 s at the most for an existing account. A new account's storage can take a moment: after step 1 the call also waits for OpenKey to host the space, for the time left of the timeout plus the 30 s grace (at least 15 s, instead of the 150 s an unbounded `onboard` waits); on a new account that is about 90 s for `--timeout 60s`, at worst a little under 2 minutes. If the space is not ready by then the call ends with exit 1 `SPACE_SETUP_PENDING`: wait a minute and run it again; the re-run continues with step 2 (it does not check the space again), and if a storage command later says `Space not found`, wait and retry. OpenKey keeps an approved result for 10 minutes, so run the command again right after sending the link. A stale `.lock` left by a killed run is reclaimed after 30 s: wait 30 s and run it again (exit 1 `PROFILE_LOCK_TIMEOUT`). Without `--timeout` the command waits until the approval is answered.
 
 A resumed approval completes at least one status check of OpenKey whatever the `--timeout`, even a very short one (a new link exits 8 at once, with no check): the command can take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that check it exits 6 instead of reporting the approval as pending.
+
+Without `--timeout`, a saved approval request that has no result and expired more than 11 minutes ago (past OpenKey's result retention) is checked once with OpenKey, and if OpenKey confirms it expired unapproved it is replaced in the same run: the command drops it and prints a new link, never the dead one, then waits as usual. If OpenKey cannot be asked, or answers anything else (an approved result, still open), the saved request is used as before. A request that expired more recently still gets one OpenKey check (it may have been approved just before the expiry) and then exits 3 as above. The printed link now says when it stops being valid (`The link is valid until <ISO time>.`, on the line after the link). With `--timeout`, nothing changes: exit 3, and the next run makes the new request.
+
+`tinycloud auth request ... --grant --timeout 60s` is the same bounded wait for a scoped grant, for an agent whose commands end with its wake-up. It prints the approval link and exits 8 with the `pending` object above; run the same command again (same flags, same profile, same `--timeout`) and it resumes that saved request: the same link, no new request, and the approval is collected once the owner has given it. A grant over several spaces asks once per space (`step` N of M), and nothing is activated until the last one is approved. `--timeout` needs `--grant` and cannot be combined with `--paste` or `--device` (usage error, exit 2): a pasted code and a device authorization are not saved requests. Without `--timeout` the command waits as before.
+
+A saved request that is already past its own expiry never has its link printed again, inside OpenKey's 10-minute result retention as well as after it. The command asks OpenKey first (stderr says `Checking the saved request with OpenKey...`, with no link): an approval given before the expiry is collected (no link shown), an expired request ends as exit 3 (the next run makes a new link), and the old link is shown only if OpenKey still reports the request open (a local clock that runs ahead). If `--timeout` ends before OpenKey could be asked, the exit is 3 with no `pending` object, never a pending link.
+
+`tinycloud auth request ... --grant --fresh` asks the owner for a new approval even when the current grants already cover the request (without it, a covered request answers `changed: false` and asks nothing). Use it to replace a grant that is close to its end without removing it first: the old grant is kept (not removed, not revoked) and keeps working until its own expiry; the new grant is added beside it. The JSON lists the new CIDs in `delegationCids` and, in `existingDelegationCids`, the grants this profile has stored that are unexpired and whose recorded scope covers the request (read from local storage; not checked with the node). Revocation is by CID only (`tinycloud delegation revoke <cid>`, or `tinycloud auth grants remove <cid> --revoke`): revoking the new grant leaves the old one live and the other way round, so to end access now, revoke every CID in both lists. Each completed `--fresh` run asks once, so run it again only for another new grant; if it was stopped before the owner approved, run the same command again to resume. `--fresh` needs `--grant` and an OpenKey owner profile (usage error, exit 2, otherwise), and works with `--timeout`. It is the same ordinary approval as any other `--grant`: nothing is renewed automatically and nothing is extended without the owner's tap.
 
 For chat approvals, use CLI 1.5.0 or later and send the complete `/a/...#...`
 URL on its own line. For a scoped grant, run

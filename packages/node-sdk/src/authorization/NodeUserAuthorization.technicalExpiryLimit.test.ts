@@ -9,6 +9,9 @@ import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.auth-expiry-limit.test";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
@@ -33,6 +36,7 @@ function create(sessionExpirationMs: number) {
   const prepareSession = mock(wasmBindings.prepareSession.bind(wasmBindings));
   wasmBindings.prepareSession = prepareSession;
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings,
     signStrategy: { type: "auto-sign" },
@@ -89,7 +93,9 @@ describe("prepareSessionForSigning", () => {
 
 describe("signIn", () => {
   test("refuses a lifetime past 9999 before the wallet is asked to sign", async () => {
-    globalThis.fetch = mock(async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+      if (metadata) return metadata;
       throw new Error("no network in this test");
     }) as unknown as typeof fetch;
     const s = create(MAX_SIWE_EXPIRY_MS - Date.now() + 5_000);

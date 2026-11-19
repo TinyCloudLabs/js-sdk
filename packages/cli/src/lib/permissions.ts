@@ -40,7 +40,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
+import { deviceRefusal, deviceRefusalMessage, isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -490,55 +490,27 @@ export async function loadManifestPermissions(
   }
   // Checked on the manifest as written, before resolution rewrites its entries.
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
-  if (options.device && typeof manifest.app_id === "string" &&
-    (manifest.secrets !== undefined ||
-      manifest.space === "secrets" ||
-      (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")) ||
-      (Array.isArray(manifest.permissions) && manifest.permissions.some((entry: unknown) =>
-        entry !== null && typeof entry === "object" &&
-        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption")))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+  if (options.device && typeof manifest.app_id === "string") {
+    const refused = manifest.secrets !== undefined || manifest.space === "secrets" ||
+        (typeof manifest.space === "string" && manifest.space.endsWith(":secrets"))
+      ? "secrets"
+      : deviceRefusal(appManifestEntries(manifest));
+    if (refused !== undefined) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
+    }
   }
 
   if (typeof manifest.id === "string") {
     const resolved = resolveManifest(manifest as Parameters<typeof resolveManifest>[0]);
-    if (options.device && resolved.resources.some((entry) =>
-      entry.service === "tinycloud.encryption" ||
-      entry.space === "secrets" ||
-      entry.space?.endsWith(":secrets"))) {
-      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    const refused = options.device ? deviceRefusal(resolved.resources) : undefined;
+    if (refused !== undefined) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", deviceRefusalMessage(refused, "this manifest", DEVICE_MANIFEST_NEXT), ExitCode.USAGE_ERROR);
     }
     return resolvePermissionSpaces(resolved.resources, profile, options);
   }
 
   if (typeof manifest.app_id === "string") {
-    const permissions = ((manifest.permissions as unknown[]) ?? [])
-      .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object")
-      .map((entry) => {
-        const service = normalizeService(String(entry.service ?? ""));
-        const path = String(entry.path ?? "");
-        const actions = expandActionShortNames(
-          service,
-          Array.isArray(entry.actions)
-            ? entry.actions.map(String)
-            : [],
-        );
-        // A raw encryption network URN is owner-scoped, not a path in the
-        // manifest's space (sdk-core resolveManifest keeps it the same way).
-        if (isRawEncryptionPermission({ service, path })) {
-          return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
-        }
-        const resolvedPath = entry.skipPrefix === true
-          ? path
-          : prefixAppManifestPath(path, manifest.app_id as string);
-        return {
-          service,
-          space: String(manifest.space ?? "applications"),
-          path: resolvedPath,
-          actions,
-          ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
-        };
-      });
+    const permissions = appManifestEntries(manifest);
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
     return resolvePermissionSpaces(permissions, profile, options);
   }
@@ -548,6 +520,40 @@ export async function loadManifestPermissions(
     "Manifest must contain either SDK field \"id\" or app manifest field \"app_id\".",
     ExitCode.USAGE_ERROR,
   );
+}
+
+const DEVICE_MANIFEST_NEXT = "Use browser or --paste login for this manifest.";
+
+/** An app manifest's permissions, each as it will be requested (see `appManifestEntry`). */
+function appManifestEntries(manifest: Record<string, unknown>): PermissionEntry[] {
+  return ((manifest.permissions as unknown[]) ?? [])
+    .filter((entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object")
+    .map((entry) => appManifestEntry(entry, manifest));
+}
+
+/**
+ * One app-manifest permission as it will be requested. Paths get the app prefix unless `skipPrefix`. An encryption
+ * entry names a network, not a path in a space, so the prefix never applies (as in sdk-core resolveManifest), and its
+ * network is its own `space`, else the manifest's. The device check and the login resolve the same entry.
+ */
+function appManifestEntry(entry: Record<string, unknown>, manifest: Record<string, unknown>): PermissionEntry {
+  const service = normalizeService(String(entry.service ?? ""));
+  const path = String(entry.path ?? "");
+  const actions = expandActionShortNames(service, Array.isArray(entry.actions) ? entry.actions.map(String) : []);
+  // A raw encryption network URN is owner-scoped, not a path in the
+  // manifest's space (sdk-core resolveManifest keeps it the same way).
+  if (isRawEncryptionPermission({ service, path })) {
+    return { service, space: ENCRYPTION_MANIFEST_SPACE, path, actions };
+  }
+  const encryption = service === ENCRYPTION_PERMISSION_SERVICE;
+  const ownSpace = encryption && typeof entry.space === "string" ? entry.space : undefined;
+  return {
+    service,
+    space: ownSpace ?? String(manifest.space ?? "applications"),
+    path: encryption || entry.skipPrefix === true ? path : prefixAppManifestPath(path, manifest.app_id as string),
+    actions,
+    ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
+  };
 }
 
 async function secretPermissionsFromAppManifest(
@@ -664,7 +670,7 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
-  options: { allowLogicalSpaces?: boolean; ownerDid?: string } = {},
+  options: { allowLogicalSpaces?: boolean; ownerDid?: string; device?: boolean } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
   // First login (and delegates) may not know the owner's address yet. Keep
@@ -691,6 +697,11 @@ export async function resolvePermissionSpaces(
       continue;
     }
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
+      // OpenKey's device flow takes this entry as written and signs the approving owner's own network.
+      if (options.device) {
+        resolved.push({ service, space: "default", path: "", actions });
+        continue;
+      }
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }

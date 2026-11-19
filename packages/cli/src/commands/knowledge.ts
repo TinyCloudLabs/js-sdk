@@ -150,7 +150,7 @@ function missingGrantHint(profile: string, appId: string | undefined): string {
     ? [
       `  ${request} --preset ${APPS_AGENT_PRESET} --emit req.json   (read-only, all installed apps)`,
       `  ${request} --cap tinycloud.kv:${APPS_AGENT_SPACE}::get,list --emit req.json   (all files, no table access)`,
-      "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for up to 5).",
+      "To limit the grant to one app, add `--app` and that app's id to the first command (repeat `--app` for more apps).",
     ]
     : [
       `  ${request} --preset ${APPS_AGENT_PRESET} --app ${appId} --emit req.json   (read-only: files and tables of ${appId})`,

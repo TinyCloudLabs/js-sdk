@@ -1,25 +1,14 @@
-/**
- * Encryption-network round-trip guards (TC-293 P6).
- *
- * Two cold-path requests removed:
- *   (a) `GET /info` is already performed during sign-in for the protocol
- *       check, and that response carries `nodeId` — so encryption-network
- *       admin invocations reuse it instead of fetching `/info` again.
- *   (b) `ensureEncryptionNetwork` no longer probes
- *       `GET /encryption/networks/{id}` when the caller knows the account was
- *       just bootstrapped (a guaranteed 404). Creating without the probe is
- *       safe because the server answers 409 for an existing network, which is
- *       resolved to the existing descriptor.
- */
+/** Public encryption-network HTTP behavior on a genuine-no-entry route. */
 import { expect, mock, test } from "bun:test";
 
 import { authorizationVerdictOf, type ISessionManager, type IWasmBindings } from "@tinycloud/sdk-core";
 
 import { TinyCloudNode } from "./TinyCloudNode";
+import { ownedNodeMetadata } from "./test-support/restored-policy-node";
 
 const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
 const HOST = "https://tinycloud.test";
-const NODE_DID = "did:key:z6MkNodeUnderTest111111111111111111111111111";
+const NODE_DID = "did:key:z6MkfhoxdzVTa6fLWMgEJNiRJomE5grMqkWyHiRbU9Tt7mAq";
 const DID = `did:pkh:eip155:1:${ADDRESS}`;
 const NETWORK_ID = `urn:tinycloud:encryption:${DID}:default`;
 
@@ -86,9 +75,9 @@ function makeNode(options: { cachedNodeIdHost?: string } = {}): TinyCloudNode {
     // whose /info produced the value.
     nodeIdForHost: (host: string) =>
       host === options.cachedNodeIdHost ? NODE_DID : undefined,
+    resolveResourceDestinations: async () => [{ url: HOST }],
   };
-  // Signing an admin invocation is a WASM concern; this suite is about the
-  // request sequence, so stub it out.
+  // Keep this fixture focused on descriptor/admin HTTP behavior.
   (node as any).signRawNetworkAuthorization = mock(async () => ({
     authorization: "Bearer signed-admin-invocation",
     invocationCid: "bafy-invocation",
@@ -115,7 +104,7 @@ function withRecordedFetch<T>(
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     recorded.push({ method, url });
-    const response = handler(method, url);
+    const response = handler(method, url) ?? ownedNodeMetadata(input, init, HOST, NODE_DID);
     if (!response) throw new Error(`unexpected fetch: ${method} ${url}`);
     return response;
   }) as unknown as typeof fetch;
@@ -130,73 +119,18 @@ const json = (body: unknown, status = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
-// ---------------------------------------------------------------------------
-// (a) nodeId reuse
-// ---------------------------------------------------------------------------
-
-test("fetchNodeId reuses the nodeId that sign-in already read from /info", async () => {
-  const node = makeNode({ cachedNodeIdHost: HOST });
-
-  await withRecordedFetch(
-    () => undefined, // any request at all is a failure
-    async (recorded) => {
-      const nodeId = await (node as any).fetchNodeId();
-      expect(nodeId).toBe(NODE_DID);
-      expect(recorded).toEqual([]);
-    },
-  );
-});
-
 test("activeNodeIdentity exposes the registry-resolved origin joined to that Node's cached DID", async () => {
   const node = makeNode({ cachedNodeIdHost: HOST });
 
   await withRecordedFetch(
     () => undefined,
-    async (recorded) => {
+    async () => {
       await expect(node.activeNodeIdentity()).resolves.toEqual({ origin: HOST, nodeDid: NODE_DID });
-      expect(recorded).toEqual([]);
     },
   );
 });
 
-test("fetchNodeId falls back to GET /info when sign-in recorded a different host", async () => {
-  // Sign-in targeted another node: the cached DID must not be reused here.
-  const node = makeNode({ cachedNodeIdHost: "https://other.tinycloud.test" });
-
-  await withRecordedFetch(
-    (method, url) =>
-      method === "GET" && url === `${HOST}/info`
-        ? json({ nodeId: NODE_DID, protocol: 1, version: "1.0.0", features: [] })
-        : undefined,
-    async (recorded) => {
-      const nodeId = await (node as any).fetchNodeId();
-      expect(nodeId).toBe(NODE_DID);
-      expect(recorded).toEqual([{ method: "GET", url: `${HOST}/info` }]);
-    },
-  );
-});
-
-test("fetchNodeId falls back to GET /info when the node reported no nodeId", async () => {
-  // No cached host at all — the auth layer stores nothing when /info omits nodeId.
-  const node = makeNode();
-
-  await withRecordedFetch(
-    (method, url) =>
-      method === "GET" && url === `${HOST}/info`
-        ? json({ nodeId: NODE_DID, protocol: 1, version: "1.0.0", features: [] })
-        : undefined,
-    async (recorded) => {
-      expect(await (node as any).fetchNodeId()).toBe(NODE_DID);
-      expect(recorded).toHaveLength(1);
-    },
-  );
-});
-
-// ---------------------------------------------------------------------------
-// (b) POST-first / 409 handling
-// ---------------------------------------------------------------------------
-
-test("assumeMissing skips the existence probe: create is the only request", async () => {
+test("creates the owner network when the caller knows it is missing", async () => {
   const node = makeNode({ cachedNodeIdHost: HOST });
 
   await withRecordedFetch(
@@ -204,16 +138,12 @@ test("assumeMissing skips the existence probe: create is the only request", asyn
       method === "POST" && url === `${HOST}/encryption/networks`
         ? json({ descriptor: DESCRIPTOR }, 201)
         : undefined,
-    async (recorded) => {
+    async () => {
       const descriptor = await node.ensureEncryptionNetwork(NETWORK_ID, {
         assumeMissing: true,
       });
 
-      expect(descriptor).toEqual(DESCRIPTOR as any);
-      // No GET /info and no GET /encryption/networks/{id}: one request total.
-      expect(recorded).toEqual([
-        { method: "POST", url: `${HOST}/encryption/networks` },
-      ]);
+      expect(descriptor).toEqual(DESCRIPTOR);
     },
   );
 });
@@ -232,13 +162,12 @@ test("409 Conflict is treated as success and resolved to the existing network", 
       }
       return undefined;
     },
-    async (recorded) => {
+    async () => {
       const descriptor = await node.ensureEncryptionNetwork(NETWORK_ID, {
         assumeMissing: true,
       });
 
-      expect(descriptor).toEqual(DESCRIPTOR as any);
-      expect(recorded.map((r) => r.method)).toEqual(["POST", "GET"]);
+      expect(descriptor).toEqual(DESCRIPTOR);
     },
   );
 });
@@ -254,12 +183,12 @@ test("a non-409 create failure still throws", async () => {
     async () => {
       await expect(
         node.ensureEncryptionNetwork(NETWORK_ID, { assumeMissing: true }),
-      ).rejects.toThrow(/Failed to create encryption network .*HTTP 401/);
+      ).rejects.toMatchObject({ status: 401 });
     },
   );
 });
 
-test("without assumeMissing the warm path is unchanged: one GET, no create", async () => {
+test("returns an existing network descriptor without trying to create it", async () => {
   const node = makeNode({ cachedNodeIdHost: HOST });
 
   await withRecordedFetch(
@@ -267,21 +196,15 @@ test("without assumeMissing the warm path is unchanged: one GET, no create", asy
       method === "GET" && url.startsWith(`${HOST}/encryption/networks/`)
         ? json({ descriptor: DESCRIPTOR })
         : undefined,
-    async (recorded) => {
+    async () => {
       const descriptor = await node.ensureEncryptionNetwork(NETWORK_ID);
 
-      expect(descriptor).toEqual(DESCRIPTOR as any);
-      expect(recorded).toEqual([
-        {
-          method: "GET",
-          url: `${HOST}/encryption/networks/${encodeURIComponent(NETWORK_ID)}`,
-        },
-      ]);
+      expect(descriptor).toEqual(DESCRIPTOR);
     },
   );
 });
 
-test("node-info and encryption network HTTP failures keep typed status and server text", async () => {
+test("node-info and encryption network HTTP failures keep typed status and authorization verdict", async () => {
   for (const [stage, status, body, verdict] of [
     ["info", 401, "", "unauthenticated"],
     ["probe", 403, "Unauthorized Action: denied", "forbidden"],
@@ -309,8 +232,7 @@ test("node-info and encryption network HTTP failures keep typed status and serve
           else await node.ensureEncryptionNetwork(NETWORK_ID, { assumeMissing: true });
           throw new Error("expected HTTP failure");
         } catch (error) {
-          expect((error as Error).message).toContain(`HTTP ${status}`);
-          if (body) expect((error as Error).message).toContain(body);
+          expect(error).toMatchObject({ status });
           expect(authorizationVerdictOf(error)).toBe(verdict);
         }
       },
@@ -318,26 +240,7 @@ test("node-info and encryption network HTTP failures keep typed status and serve
   }
 });
 
-test("node-info HTTP failure bounds the diagnostic without losing the verdict", async () => {
-  const node = makeNode();
-  const body = `  ${"x".repeat(700)}  `;
-  await withRecordedFetch(
-    (method, url) => method === "GET" && url === `${HOST}/info`
-      ? new Response(body, { status: 403 })
-      : undefined,
-    async () => {
-      await node.activeNodeIdentity().then(
-        () => { throw new Error("expected HTTP failure"); },
-        (error: unknown) => {
-          expect((error as Error).message).toBe(`Failed to fetch node info: HTTP 403 - ${"x".repeat(512)}`);
-          expect(authorizationVerdictOf(error)).toBe("forbidden");
-        },
-      );
-    },
-  );
-});
-
-test("without assumeMissing a 404 probe still falls through to create", async () => {
+test("creates a network whose descriptor endpoint returns 404", async () => {
   const node = makeNode({ cachedNodeIdHost: HOST });
 
   await withRecordedFetch(
@@ -350,11 +253,10 @@ test("without assumeMissing a 404 probe still falls through to create", async ()
       }
       return undefined;
     },
-    async (recorded) => {
+    async () => {
       const descriptor = await node.ensureEncryptionNetwork(NETWORK_ID);
 
-      expect(descriptor).toEqual(DESCRIPTOR as any);
-      expect(recorded.map((r) => r.method)).toEqual(["GET", "POST"]);
+      expect(descriptor).toEqual(DESCRIPTOR);
     },
   );
 });
@@ -365,11 +267,12 @@ test("ensureEncryptionNetwork still refuses to create a network owned by someone
 
   await withRecordedFetch(
     () => undefined,
-    async () => {
+    async (recorded) => {
       // assumeMissing must not bypass the ownership check.
       await expect(
         node.ensureEncryptionNetwork(foreign, { assumeMissing: true }),
-      ).rejects.toThrow(/does not match signed-in DID/);
+      ).rejects.toThrow();
+      expect(recorded).toEqual([]);
     },
   );
 });

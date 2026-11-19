@@ -1,14 +1,16 @@
 import { afterAll, afterEach, beforeEach, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   NodeWasmBindings,
   PrivateKeySigner,
   siweRuntimeDelegation,
   type PortableDelegation,
   type RuntimeDelegationActivator,
+  type TinyCloudNode,
 } from "@tinycloud/node-sdk";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { signLocationRecordV2, type PermissionEntry } from "@tinycloud/sdk-core";
 import { z } from "zod";
 
 import { canonicalizeCapabilities } from "../authority.js";
@@ -23,6 +25,7 @@ import * as registry from "../registry.js";
 import {
   additionalDelegationsPath,
   authRequestsPath,
+  profileConfigPath,
   profileStoreMetadataPath,
   readJson,
   readAdditionalDelegations,
@@ -30,11 +33,14 @@ import {
   withProfileLock,
   writeJsonAtomic,
 } from "../state.js";
+import * as state from "../state.js";
 import {
   createAuthRuntimeFixture,
   type AuthRuntimeFixture,
   type StoredRuntimeDelegation,
 } from "../../test-support/auth-runtime.js";
+import { lockChildEnv } from "../test-support/lock-children.js";
+import { waitForProfileLockProtocol } from "../test-support/profile-lock-protocol.js";
 
 let definitions: readonly OperationDefinition<unknown, unknown>[] = [];
 
@@ -730,50 +736,93 @@ test("rechecks real on-disk session rotation before reporting import success", a
   }
 });
 
-test("does not hold the production profile lock during delayed activation and rejects rotated state", async () => {
+test("serializes an independently queued session writer after import and refuses the rotated replay", async () => {
   const fixture = await createAuthRuntimeFixture();
+  let releaseActivation!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseActivation = resolve; });
+  let importing: Promise<unknown> | undefined;
+  let writerFinished: Promise<[number, string, string]> | undefined;
   try {
     const runtime = await runtimeContext(fixture.profile);
     const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
-    const node = runtime.runtime.node as {
-      useRuntimeDelegation(delegation: unknown): Promise<void>;
-    };
+    const delegation = await fixture.hermetic.mintDelegation();
+    const node = runtime.runtime.node as TinyCloudNode;
     const activate = node.useRuntimeDelegation.bind(node);
     let activationStarted!: () => void;
-    let releaseActivation!: () => void;
     const started = new Promise<void>((resolve) => { activationStarted = resolve; });
-    const gate = new Promise<void>((resolve) => { releaseActivation = resolve; });
-    node.useRuntimeDelegation = async (delegation) => {
+    node.useRuntimeDelegation = async (...args: Parameters<TinyCloudNode["useRuntimeDelegation"]>) => {
       activationStarted();
       await gate;
-      await activate(delegation);
+      await activate(...args);
     };
-
-    const importPromise = importDefinition().execute(
-      runtime,
-      importArtifact(requestId, await fixture.hermetic.mintDelegation()),
-    );
+    importing = importDefinition().execute(runtime, importArtifact(requestId, delegation));
     await started;
 
-    let writerEntered = false;
-    const writer = withProfileLock(fixture.profile, async () => {
-      writerEntered = true;
-      await writeJsonAtomic(sessionPath(fixture.profile), {
-        ...fixture.hermetic.restorableSession,
-        verificationMethod: fixture.hermetic.unrelatedAudience,
-      });
+    const contended = join(home, "import-writer-contended");
+    const writer = Bun.spawn([
+      process.execPath,
+      "--preload", new URL("../../test-support/test-bootstrap.mjs", import.meta.url).pathname,
+      "--eval", `
+        import { exitWithParent } from ${JSON.stringify(new URL("../test-support/parent-watch.mjs", import.meta.url).href)};
+        import { PROFILE_LOCK_HELPER_DEADLINE_MS } from ${JSON.stringify(new URL("../test-support/profile-lock-protocol.ts", import.meta.url).href)};
+        import { withProfileLock, readAdditionalDelegations, sessionPath, writeJsonAtomic }
+          from ${JSON.stringify(new URL("../state.ts", import.meta.url).href)};
+        globalThis.fetch = () => { throw new Error("The local profile writer cannot use the network"); };
+        exitWithParent(PROFILE_LOCK_HELPER_DEADLINE_MS);
+        const profile = process.env.TC_TEST_WRITER_PROFILE;
+        await withProfileLock(profile, async () => {
+          const records = await readAdditionalDelegations(profile);
+          await writeJsonAtomic(sessionPath(profile), JSON.parse(process.env.TC_TEST_WRITER_SESSION));
+          process.stdout.write(JSON.stringify(records.map((record) => record.delegation.cid)) + "\\n");
+        });
+      `,
+    ], {
+      env: {
+        ...lockChildEnv(home),
+        HOME: home,
+        USERPROFILE: home,
+        TC_TEST_PROFILE_LOCK_CONTENTION_SIGNAL_PATH: contended,
+        TC_TEST_WRITER_PROFILE: fixture.profile,
+        TC_TEST_WRITER_SESSION: JSON.stringify({
+          ...fixture.hermetic.restorableSession,
+          verificationMethod: fixture.hermetic.unrelatedAudience,
+        }),
+      },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
-    await Promise.race([
-      writer,
-      new Promise((_, reject) => setTimeout(() => reject(new Error("profile writer blocked during activation")), 250)),
+    writerFinished = Promise.all([
+      writer.exited, new Response(writer.stdout).text(), new Response(writer.stderr).text(),
     ]);
-    expect(writerEntered).toBe(true);
-
+    const writerExited = new AbortController();
+    void writer.exited.then(() => writerExited.abort());
+    try {
+      await waitForProfileLockProtocol(
+        contended, "the independent session writer reaching the held import lock", undefined, writerExited.signal,
+      );
+    } catch (error) {
+      releaseActivation();
+      const [exit, stdout, stderr] = await writerFinished;
+      throw new Error(`Profile writer exited ${exit} before contention: ${stderr || stdout}`, { cause: error });
+    }
     releaseActivation();
-    const result = await importPromise;
-    expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_AUDIENCE_MISMATCH" } });
-    expect(await readAdditionalDelegations(fixture.profile)).toEqual([]);
+
+    expect(await importing).toMatchObject({
+      status: "ok", output: { cid: delegation.cid, activated: true },
+    });
+    const [exit, stdout, stderr] = await writerFinished;
+    expect(exit, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toContain(delegation.cid);
+    expect(node.getRuntimePermissionDelegations()).toContainEqual(expect.objectContaining({ cid: delegation.cid }));
+    const stored = await readAdditionalDelegations(fixture.profile);
+    const beforeReplay = fixture.hermetic.requests();
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "error", error: { code: "DELEGATION_AUDIENCE_MISMATCH" },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(stored);
+    expect(fixture.hermetic.requests()).toEqual(beforeReplay);
   } finally {
+    releaseActivation();
+    await Promise.allSettled([importing, writerFinished]);
     fixture.hermetic.stop();
   }
 });
@@ -992,3 +1041,216 @@ async function storeLegacyRequest(
   }]);
   return requestId;
 }
+
+test("a verified full-resource registry accepts a grant's current data host while preserving the original request/profile hint", async () => {
+  const fixture = await createAuthRuntimeFixture({ secretPayloadValue: "tc2481-host-cutover-dummy" });
+  let proxy: ReturnType<typeof Bun.serve> | undefined;
+  let registryServer: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    const { nodeId } = await (await fetch(`${fixture.hermetic.host}/info`)).json() as { nodeId: string };
+    proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/.well-known/tinycloud/node-keys") {
+        return Response.json({ nodeDid: nodeId, shareInvitationPublicKey: "A".repeat(43) });
+      }
+      return fetch(new Request(`${fixture.hermetic.host}${url.pathname}${url.search}`, request));
+    } });
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    let record = await signLocationRecordV2({
+      version: 2, subject: fixture.hermetic.ownerDid,
+      nodes: [{ did: nodeId, url: proxy.url.origin }],
+      spaces: [{ space: fixture.hermetic.restorableSession.spaceId, nodes: [{ did: nodeId, mode: "read-write" }] }],
+      encryptionNode: nodeId, updated_at: new Date().toISOString(), sequence: 0,
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    registryServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ record }) });
+    const profile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
+    await writeJsonAtomic(profileConfigPath(fixture.profile), {
+      ...profile, tinycloudRegistryUrl: registryServer.url.origin,
+    });
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = { ...await fixture.hermetic.mintDelegation(), host: proxy.url.origin };
+    const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+    expect(result).toMatchObject({ status: "ok", output: { cid: delegation.cid, activated: true } });
+    expect(await (runtime.runtime.node as TinyCloudNode).readSecret({ space: fixture.hermetic.restorableSession.spaceId, name: "HERMETIC_DELEGATION_CANARY" })).toMatchObject({
+      status: "ok", value: "tc2481-host-cutover-dummy",
+    });
+    expect((await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile)))?.host).toBe(fixture.hermetic.host);
+    expect((await readAuthRequestRecords(fixture.profile)).find((entry) => entry.requestId === requestId)?.host).toBe(fixture.hermetic.host);
+    // A registered owner/encryption node alone cannot substitute for data membership.
+    const stored = await readAdditionalDelegations(fixture.profile);
+    record = await signLocationRecordV2({
+      version: 2, subject: record.subject, nodes: record.nodes, spaces: [],
+      encryptionNode: record.encryptionNode, sequence: 1, updated_at: new Date().toISOString(),
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    expect(await importDefinition().execute(runtime, importArtifact(requestId, delegation))).toMatchObject({
+      status: "error", error: { code: "NODE_NOT_FOUND" },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(stored);
+  } finally {
+    registryServer?.stop(true);
+    proxy?.stop(true);
+    fixture.hermetic.stop();
+  }
+});
+
+test("a held-lock import uses its captured signed-login proof despite caller mutation during local reads", async () => {
+  const fixture = ownerAuthFixture(await createAuthRuntimeFixture());
+  let releaseRead!: () => void;
+  const released = new Promise<void>((resolve) => { releaseRead = resolve; });
+  let announceRead!: () => void;
+  const entered = new Promise<void>((resolve) => { announceRead = resolve; });
+  let readSession: { mockRestore(): void } | undefined;
+  let proxy: ReturnType<typeof Bun.serve> | undefined;
+  let registryServer: ReturnType<typeof Bun.serve> | undefined;
+  let importing: Promise<unknown> | undefined;
+  try {
+    const profile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
+    if (!profile) throw new Error("The signed-login session profile is missing");
+    delete profile.privateKey;
+    const { nodeId } = await (await fetch(`${fixture.hermetic.host}/info`)).json() as { nodeId: string };
+    proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/.well-known/tinycloud/node-keys") {
+        return Response.json({ nodeDid: nodeId, shareInvitationPublicKey: "A".repeat(43) });
+      }
+      return fetch(new Request(`${fixture.hermetic.host}${url.pathname}${url.search}`, request));
+    } });
+    const signer = new PrivateKeySigner(fixture.hermetic.ownerPrivateKey);
+    const ownerAddress = await signer.getAddress();
+    const record = await signLocationRecordV2({
+      version: 2, subject: fixture.hermetic.ownerDid,
+      nodes: [{ did: nodeId, url: proxy.url.origin }],
+      spaces: [{ space: fixture.hermetic.ownerRestorableSession.spaceId, nodes: [{ did: nodeId, mode: "read-write" }] }],
+      encryptionNode: nodeId, updated_at: new Date().toISOString(), sequence: 0,
+    }, { type: "did:pkh", signMessage: (message) => signer.signMessage(message) });
+    registryServer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ record }) });
+    await writeJsonAtomic(profileConfigPath(fixture.profile), {
+      ...profile, posture: "delegate-session", operatorType: "agent", authMethod: "openkey",
+      tinycloudRegistryUrl: registryServer.url.origin,
+    });
+    const runtime = await runtimeContext(fixture.profile);
+    const requested: PermissionEntry = {
+      service: "tinycloud.kv",
+      space: fixture.hermetic.ownerRestorableSession.spaceId,
+      path: "agents/demo/settings",
+      actions: ["tinycloud.kv/get"],
+    };
+    const requestId = await createBoundRequest(runtime, [requested]);
+    const delegation = await signedLoginDelegation(fixture, runtime);
+    const authorization = delegation.delegationHeader.Authorization;
+    const expiry = delegation.expiry.getTime();
+    const proof = { ...delegation.siweProof! };
+    const originalReadSession = state.readSession;
+    let paused = false;
+    readSession = spyOn(state, "readSession").mockImplementation(async <T extends object = Record<string, unknown>>(profile: string) => {
+      const session = await originalReadSession<T>(profile);
+      if (!paused) {
+        paused = true;
+        announceRead();
+        await released;
+      }
+      return session;
+    });
+    importing = withProfileLock(fixture.profile, async () => {
+      const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+      expect(await state.createProfileRegistryCacheStore(fixture.profile).get(ownerAddress)).toMatchObject({
+        ownerKey: ownerAddress, sequence: record.sequence,
+      });
+      return result;
+    });
+    await entered;
+    delegation.expiry.setTime(0);
+    delegation.delegationHeader.Authorization = "caller-mutated-authorization";
+    delegation.siweProof!.siwe = "caller-mutated-siwe";
+    delegation.siweProof!.signature = "0x00";
+    releaseRead();
+
+    expect(await importing).toMatchObject({
+      status: "ok",
+      output: { cid: delegation.cid, activated: true, expiry: new Date(expiry).toISOString() },
+    });
+    expect(await readAdditionalDelegations(fixture.profile)).toMatchObject([{
+      delegation: {
+        cid: delegation.cid,
+        delegationHeader: { Authorization: authorization },
+        siweProof: proof,
+        expiry: new Date(expiry).toISOString(),
+      },
+      permissions: [requested],
+    }]);
+    expect((runtime.runtime.node as TinyCloudNode).getRuntimePermissionDelegations()).toMatchObject([{
+      cid: delegation.cid,
+      delegationHeader: { Authorization: authorization },
+      expiry: new Date(expiry),
+    }]);
+  } finally {
+    releaseRead();
+    await Promise.allSettled([importing]);
+    readSession?.mockRestore();
+    registryServer?.stop(true);
+    proxy?.stop(true);
+    fixture.hermetic.stop();
+  }
+});
+
+test("a native activation refusal restores the prior same-CID binding and audit metadata", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const previous = [{
+      delegation: JSON.parse(JSON.stringify(delegation)),
+      permissions: fixture.hermetic.permissions,
+      authorityRequest: { requestId: "req_previous_binding", requested: fixture.hermetic.permissions },
+      audit: { source: "previous-import" },
+    }];
+    await writeJsonAtomic(additionalDelegationsPath(fixture.profile), previous);
+    const before = fixture.hermetic.requests().length;
+    fixture.hermetic.failDelegate(503);
+    const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+    expect(result).toMatchObject({
+      status: "error",
+      error: { code: "DELEGATION_REJECTED", details: { reason: "activation_unavailable" } },
+    });
+    expect(fixture.hermetic.requests().slice(before).some((request) =>
+      request.method === "POST" && request.path === "/delegate")).toBe(true);
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(previous);
+    expect((runtime.runtime.node as TinyCloudNode).getRuntimePermissionDelegations()).toEqual([]);
+  } finally {
+    fixture.hermetic.stop();
+  }
+});
+
+test("activation completion at signed expiry refuses success and restores the stored grant rows", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  let completion: { mockRestore(): void } | undefined;
+  try {
+    const runtime = await runtimeContext(fixture.profile);
+    const requestId = await createBoundRequest(runtime, fixture.hermetic.permissions);
+    const delegation = await fixture.hermetic.mintDelegation();
+    const node = runtime.runtime.node as TinyCloudNode;
+    const refresh = node.refreshRegistryForCapabilities.bind(node);
+    completion = spyOn(node, "refreshRegistryForCapabilities").mockImplementation((permissions) => {
+      expect(node.getRuntimePermissionDelegations()).toContainEqual(expect.objectContaining({
+        cid: delegation.cid,
+      }));
+      refresh(permissions);
+      setSystemTime(delegation.expiry);
+    });
+    const previous = await readAdditionalDelegations(fixture.profile);
+    const before = fixture.hermetic.requests().length;
+    const result = await importDefinition().execute(runtime, importArtifact(requestId, delegation));
+
+    expect(result).toMatchObject({ status: "error", error: { code: "DELEGATION_EXPIRED" } });
+    expect(await readAdditionalDelegations(fixture.profile)).toEqual(previous);
+    expect(fixture.hermetic.requests().slice(before).some((request) =>
+      request.method === "POST" && request.path === "/delegate")).toBe(true);
+    expect(node.getRuntimePermissionDelegations()).toEqual([]);
+  } finally {
+    completion?.mockRestore();
+    setSystemTime();
+    fixture.hermetic.stop();
+  }
+});

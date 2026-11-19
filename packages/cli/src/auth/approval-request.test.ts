@@ -53,6 +53,7 @@ let terminalAck: { requestId: string; bodyCid: string; ackId: string } | undefin
 let retainedResultExpiresAt: string | undefined;
 
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  if (/^\/v[12]\/locations\//.test(new URL(request.url).pathname)) return Response.json({ error: "location record not found" }, { status: 404 });
   if (new URL(request.url).pathname === "/v1/links") {
     const checked = await checkLinkRecord(await request.json(), Date.now());
     if (checked.header.issuer !== did || checked.header.audience !== "https://api.tinycloud.xyz") return new Response(null, { status: 401 });
@@ -145,7 +146,7 @@ beforeEach(async () => {
   Object.assign(process.env, fixtureEnvironment);
   acknowledgements = new Map(); dropAck = false; savedBeforeAck = false; terminalAckCode = undefined; terminalAck = undefined; retainedResultExpiresAt = undefined;
   await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
-  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
+  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, tinycloudRegistryUrl: server.url.origin, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
   await ProfileManager.clearSession("approval");
 });

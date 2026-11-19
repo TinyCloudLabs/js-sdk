@@ -52,7 +52,7 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: ./.github/actions/install-wasm-pack
 
       - name: Verify pinned Bun runtime
         run: test "$(bun --version)" = "1.2.0"

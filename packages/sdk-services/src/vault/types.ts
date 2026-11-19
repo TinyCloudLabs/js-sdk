@@ -9,6 +9,7 @@ import type {
   IEncryptionService,
 } from "../encryption";
 import type { PermissionHint, ServiceError } from "../types";
+import type { RoutingFailure } from "../resourceRouting";
 
 export interface VaultNetworkEncryptionConfig {
   /** Default encryption network used for inline vault envelopes. */
@@ -169,6 +170,7 @@ export type VaultNetworkReadResult<T> =
  * Input types for creating vault errors (service field added automatically).
  */
 export type VaultErrorInput =
+  | RoutingFailure
   | { code: "DECRYPTION_FAILED"; message?: string; cause?: Error }
   | { code: "KEY_NOT_FOUND"; key: string; message?: string }
   | { code: "INTEGRITY_ERROR"; message?: string; cause?: Error }

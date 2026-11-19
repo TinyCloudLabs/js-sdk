@@ -1,0 +1,39 @@
+name: Install wasm-pack
+description: >-
+  Install wasm-pack 0.13.1 from the locked crate and cache the binary, so
+  runs after the first make no request to the wasm-pack release downloads.
+
+inputs:
+  version:
+    description: wasm-pack version to install
+    required: false
+    default: 0.13.1
+
+runs:
+  using: composite
+  steps:
+    - name: Restore wasm-pack binary
+      id: cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cargo/bin/wasm-pack
+        key: wasm-pack-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Build wasm-pack from the locked crate
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install wasm-pack --version "${{ inputs.version }}" --locked
+
+    - name: Save wasm-pack binary
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cargo/bin/wasm-pack
+        key: wasm-pack-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Verify wasm-pack version
+      shell: bash
+      run: |
+        actual="$(wasm-pack --version)"
+        echo "$actual"
+        test "$actual" = "wasm-pack ${{ inputs.version }}"

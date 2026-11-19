@@ -1,4 +1,5 @@
 import { defineConfig } from "tsup";
+import { fileURLToPath } from "node:url";
 
 /**
  * wasm-bindgen's CJS helper (inside @tinycloud/web-sdk-wasm) has dead
@@ -68,5 +69,15 @@ export default defineConfig([
     sourcemap: true,
     noExternal: [/^@tinycloud\/sdk-services(?:\/|$)/],
     splitting: false,
+    // The client uses only identity helpers. Resolve their canonical source
+    // before the services barrel flattens controller/error modules into one file.
+    esbuildPlugins: [{
+      name: "storage-service-helpers",
+      setup(build) {
+        build.onResolve({ filter: /^@tinycloud\/sdk-services\/kv\/replication$/ }, () => ({
+          path: fileURLToPath(new URL("../sdk-services/src/kv/replication/index.ts", import.meta.url)),
+        }));
+      },
+    }],
   },
 ]);

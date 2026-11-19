@@ -121,7 +121,6 @@ export function registerOnboardCommand(program: Command): void {
             node: await ensureAuthenticated(ctx),
             requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
             expiryOption: ONBOARD_EXPIRY,
-            yes: true,
             exactApproval: true,
             openKeyAcquisition: acquire,
           });

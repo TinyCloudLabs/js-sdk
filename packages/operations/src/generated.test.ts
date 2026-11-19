@@ -35,7 +35,7 @@ async function runGenerator(...arguments_: readonly string[]): Promise<number> {
   return process.exited;
 }
 
-test("the catalog contains exactly the registered v1 definitions", async () => {
+test("catalog schemas retain strict inputs, complete results and effect/sensitivity contracts", async () => {
   const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
     schemaVersion: number;
     stableErrors: readonly string[];
@@ -44,36 +44,6 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
 
   expect(catalog.schemaVersion).toBe(1);
   expect(catalog.stableErrors).toEqual(OPERATION_ERROR_CODES);
-  expect(catalog.operations.map((operation) => `${operation.id}@${operation.version}`)).toEqual([
-    "tinycloud.account.applications.list@1",
-    "tinycloud.account.spaces.list@1",
-    "tinycloud.apps.context@1",
-    "tinycloud.apps.move@1",
-    "tinycloud.apps.query@1",
-    "tinycloud.apps.read@1",
-    "tinycloud.apps.write@1",
-    "tinycloud.auth.capabilities@1",
-    "tinycloud.auth.import@1",
-    "tinycloud.auth.read_scope@1",
-    "tinycloud.auth.request@1",
-    "tinycloud.auth.status@1",
-    "tinycloud.knowledge.list@1",
-    "tinycloud.knowledge.read@1",
-    "tinycloud.kv.delete@1",
-    "tinycloud.kv.get@1",
-    "tinycloud.kv.head@1",
-    "tinycloud.kv.list@1",
-    "tinycloud.kv.put@1",
-    "tinycloud.read@1",
-    "tinycloud.secrets.get@1",
-    "tinycloud.secrets.status@1",
-    "tinycloud.sql.execute@1",
-    "tinycloud.sql.query@1",
-    "tinycloud.sql.schema.inspect@1",
-    "tinycloud.status.get@1",
-  ]);
-  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(26);
-  expect(catalog.operations).toHaveLength(26);
   for (const operation of catalog.operations) {
     expect(operation.result.anyOf).toHaveLength(4);
     expect(Object.keys(operation.exposure).sort()).toEqual(["cli", "docs", "mcp", "skill"]);

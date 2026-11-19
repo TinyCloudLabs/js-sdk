@@ -19,6 +19,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../node-sdk/src/test-support/unregistered-location-registry";
 
 const NODE_BIN = process.env.TC_REPLICA_E2E_NODE_BIN ?? process.env.TC_NODE_BIN;
 const FIXTURE_DIST = resolve(import.meta.dir, "browser/fixture/dist");
@@ -67,6 +68,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
   let host: string;
   let node: ChildProcess | undefined;
   let server: Bun.Server<undefined> | undefined;
+  let registry: UnregisteredLocationRegistry;
   let origin = "";
   let browser: Browser;
   let context: BrowserContext;
@@ -224,6 +226,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
 
   beforeAll(async () => {
     dataDir = await mkdtemp(join(tmpdir(), "tc-replica-browser-node-"));
+    registry = startUnregisteredLocationRegistry();
     port = await freePort();
     host = `http://127.0.0.1:${port}`;
     await startNode();
@@ -267,7 +270,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     });
 
     // The owner session and fixture data.
-    owner = new TinyCloudNode({ privateKey: OWNER_KEY, host, autoCreateSpace: true });
+    owner = new TinyCloudNode({ privateKey: OWNER_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
     await owner.signIn();
     spaceId = owner.session!.spaceId;
     space = spaceId;
@@ -305,6 +308,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     server?.stop();
     await stopNode();
     await rm(dataDir, { recursive: true, force: true });
+    registry?.stop(true);
   });
 
   test("happy path: sync, blake3-equal reads, offline reload, reconverge", async () => {
@@ -503,6 +507,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     const revoker = new TinyCloudNode({
       privateKey: OWNER_KEY,
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       autoCreateSpace: true,
       manifest: {
         app_id: "tc-19-e2e-revoker",
@@ -608,7 +613,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect(first).toMatchObject({ status: "synced" });
 
     // Session 2: signIn() rotates the session key — G2's issuer differs.
-    const owner2 = new TinyCloudNode({ privateKey: OWNER_KEY, host, autoCreateSpace: true });
+    const owner2 = new TinyCloudNode({ privateKey: OWNER_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
     await owner2.signIn();
     expect(owner2.did).toBe(owner.did); // the pkh identity is stable
     // Explicit-only abilities never enter the SIWE recap: session 2 must

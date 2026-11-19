@@ -58,12 +58,20 @@ expiry. The permission check does not contact the node, so a session the node
 rejects (a 401 after a revocation or a reset, for example) is still restored.
 With OpenKey, `prepareSignIn()` makes the same check.
 
-Restoring a session makes one node read, capped at 5 seconds, to learn whether
-the session's primary space is hosted. It never prompts and never fails the
-restore. Read the answer from `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or
-`"unknown"`). At sign-in the answer comes from the node's activation of the new
-session. `signIn()` on a restored session whose space is `"not-hosted"` returns
-the restored session.
+`restoreSession()` resolves from stored state. It automatically starts a
+background hosting probe, capped at 5 seconds, and reactivates stored panel
+grants. Read `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or `"unknown"`) for
+the current display hint. A stored hint applies only to the same account,
+space and host. It can be one session stale until the probe corrects it at
+runtime, and updates in storage when the signed session is next persisted.
+Older records start at `"unknown"`. The hint never grants authority or skips
+permission checks. The probe never prompts or fails the restore.
+Panel permission requests wait up to 4 seconds for stored grants to reactivate
+before showing a permission prompt.
+`signIn()` waits for the probe when it restores a session. At fresh sign-in
+the hosting answer comes from the node's activation of the new session.
+`signIn()` on a restored session whose space is `"not-hosted"` returns the
+restored session.
 
 To force a fresh consent, sign out first. `signOut()` clears the stored session
 and blocks restoring until the next sign-in succeeds, so `signIn()` prompts:
@@ -75,6 +83,53 @@ await tc.signIn();
 
 There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
 restores a stored session without the manifest check.
+
+Sign-out reports session-storage failures. Replica cleanup has its own recovery markers; sign-out completion alone does not certify local-copy erase. Custom/native session adapters keep their existing storage contract, including the provider's durability and boot-handling responsibilities.
+With an asynchronous custom runtime-grant store, sign-out waits for in-flight
+load/save calls to settle.
+
+### Runtime permission grants with OpenKey
+
+`requestPermissions()` (and the panel's "allow" buttons) sign each runtime grant's SIWE as a byte-exact message through
+`config.openkey.client.signMessage`, with the `keyId` of the connected OpenKey account. The SDK never sends `signMessage`
+without a `keyId`. If the client is not connected (a restored session, or a sign-in through `authorizeTinyCloud`), the SDK
+connects it first with `client.connect()`, in the configured `mode`:
+
+- **`iframe` (and `redirect`)**: the grant connects and signs in one go, in one click.
+- **`popup` (the default)**: a browser lets a page open a popup only soon after the user's click, and the user needs longer
+  than that to sign in inside the connect popup, so a sign popup opened right after it would be blocked. The first click
+  therefore connects and rejects with `OpenKeySigningKeyError` code `OPENKEY_CONNECTED_RETRY`, signing nothing. The client
+  is now connected: show your Allow button again, and the second click signs with the connected key in one popup. Once the
+  client is connected, every later grant is one click.
+
+When no single key can be named, or the client was just connected in popup mode, `requestPermissions()` rejects with
+`OpenKeySigningKeyError` before any sign request:
+
+| `code`                    | Meaning                                                                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENKEY_CONNECTED_RETRY` | Popup mode only. The SDK connected the client. Nothing was signed; ask the user to click Allow again.                               |
+| `OPENKEY_KEY_MISSING`     | The client is not connected and has no `connect()`, or `connect()` answered without a `keyId`.                                      |
+| `OPENKEY_KEY_AMBIGUOUS`   | The connected key's address is not the signed-in account's, or it reports no address.                                               |
+
+`OPENKEY_KEY_MISSING` and `OPENKEY_KEY_AMBIGUOUS`: connect the configured client as the signed-in account
+(`await openkey.connect()`), or sign runtime grants with `tc.setRuntimePermissionSigner(...)`. Connecting it yourself in the
+click that starts sign-in avoids the extra click. A user closing the connect dialog rejects with `@openkey/sdk`'s own plain-object rejection `{ code: "USER_CANCELLED" }` (not an `Error`, and not an `OpenKeySigningKeyError`), so tell it apart from `OPENKEY_CONNECTED_RETRY`, which is an `OpenKeySigningKeyError`. A blocked popup rejects the same way with `{ code: "POPUP_BLOCKED" }`. If
+the session ends or changes (sign-out, another account) while a dialog is open, the grant is cancelled and nothing is
+signed. The two-click flow needs a client that keeps the connect result in `lastAuth`, as `@openkey/sdk` does.
+
+## Signed registry cache
+
+The browser client stores exact owner-signed v2 registry responses beside its identity pins, under `tinycloud.registryCache.v2:<ownerKey>`. Fetch time, invalidation revision and sequence metadata are outside the signed response. Every routing decision awaits a bounded, coalesced refresh and verifies cached responses again. Only a higher verified sequence replaces signed bytes; equal-sequence renewal requires identical canonical signed meaning, not identical HTTP formatting.
+
+Registry v2 and v1 fetches use `cache: "no-store"` to bypass the browser HTTP cache. The separate signed-response cache remains independently verified and subject to the outage fallback age limit below.
+
+Custom `RegistryCacheStore` adapters implement `get`, `getRevision`, atomic `update(ownerKey, (current, revision) => ...)`, and `delete(ownerKey, expectedRevision?, maximumSequence?)`. Forward both callback arguments and every deletion argument. The default persistent adapter uses the same per-entry Web Lock and storage key for updates and invalidation. Deletion atomically writes `{ ownerKey, revision: previousRevision + 1, invalidated: true }`, including when empty; `get` hides this metadata-only tombstone while `getRevision` preserves its history. Legacy live entries without revision are revision zero. Accepted writes retain the store's revision. Conditional deletion refuses without mutation if its revision differs or the current signed sequence exceeds the supplied maximum; malformed or overflowing revisions refuse.
+
+Revision capture before lookup, atomic commit checks and final fallback checks prevent older in-flight responses from repopulating invalidated settings. Positive persisted revisions remain known-owner evidence without a sequence adapter. The independent `tinycloud.registrySequences.v2` map keeps signed maxima under its storage-key Web Lock across owners. Storage absence uses memory; unreadable/corrupt state refuses. Browsers without Web Locks must supply transactional persistent cache and sequence adapters; a separate revision counter write is not atomic enough.
+
+Warm fallback requires a canonically reverified cache younger than one hour and a transport error, timeout or HTTP 502/503/504. HTTP 500, other statuses, invalid responses and invalid cached state refuse. Authoritative HTTP4xx responses and fresh signed records without the required route remove cached settings while retaining known-owner history. With no saved settings, cold HTTP5xx, transport errors and timeouts refuse live routing instead of selecting a configured/default host. Reachable genuine absence still permits onboarding. `onRegistryFallback(reason, code?)` receives `using_cached_settings` after selecting a verified cached route, once per owner/cache; without it the SDK logs a value-free warning. Non-replicating stored-session hydration is local-only; later live operations still refresh routing. Explicit replication retains preflight. Nodes performing online admission still require their registry connection.
+
+Details: TC-2481
 
 ## Optional local KV replication
 
@@ -459,7 +514,7 @@ const tcw = new TinyCloudWeb({ retryPolicy: { maxAttempts: 1 } });
 TinyCloud is built on these fundamental principles:
 
 - **Sovereignty** - Built so that each user controls their data outright. Requests to access or compute on that data must be explicitly permissioned.
-- **Privacy** - Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party.
+- **Privacy** - Access is scoped by the capabilities you approve. Ordinary data is not end-to-end encrypted: the node that hosts a space can read it in order to serve it. Use the data vault to encrypt values before they are stored. See [Security and trust](https://docs.tinycloud.xyz/concepts/security-and-trust).
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
 
@@ -504,3 +559,13 @@ Join the TinyCloud community:
 
 - [Twitter](https://twitter.com/TinyCloudLabs)
 - [Telegram](https://t.me/+pplkv1XbbU01MDVh)
+
+### Account setup and sign-in options
+
+The web SDK includes implicit account bootstrap permissions only at the approved first-party page origins. Other origins, including generic localhost and server-rendered contexts, request the application's manifest rows without implicit account or capabilities-read rows. Explicit manifest permissions are preserved.
+
+`autoBootstrapAccount: false` disables account bootstrap and its implicit sign-in permissions, including in the node SDK. `includeAccountRegistryPermissions: false` omits the implicit account registry bundle. Setting either option to `true` does not enable first-party bootstrap at another origin. The policy uses the actual page origin, independently of a configured SIWE domain.
+
+A third-party sign-in with no registered account route returns `ACCOUNT_SETUP_REQUIRED` with `setupUrl: "https://home.tinycloud.xyz/"` before signing. Complete setup there and retry. Registry availability errors retain their existing behavior. Setup status for accounts that already have a registry record is unchanged.
+
+Details: TC-2931

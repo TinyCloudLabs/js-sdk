@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 
 // builtin:share-publishing asks a paste sign-in for the owner's default/share/ decrypt prefix.
-// OpenKey's device sign-in refuses encryption grants, so --device and `enable share` request the same manifest without it.
+// OpenKey's device sign-in admits one encryption grant, decrypt on the owner's default network (space default, empty path),
+// so --device and `enable share` request the same manifest without the share-prefix decrypt.
 const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-device-decrypt-"));
 process.env.TC_HOME = home;
@@ -65,10 +66,20 @@ describe("share publishing and the default-key decrypt", () => {
     expect(sharePublishingPermissions().some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
   });
 
-  test("device sign-in still refuses every encryption entry before contacting OpenKey", async () => {
+  test("device sign-in sends OpenKey the default-network decrypt as OpenKey takes it", async () => {
     let contacted = 0;
     const fetchFn = (async () => { contacted += 1; return new Response(null, { status: 500 }); }) as unknown as typeof globalThis.fetch;
-    for (const entry of [wire, { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
+    await expect(acquireDeviceDelegation({
+      sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: "https://share.tinycloud.xyz",
+      permissions: [...sharePublishingPermissions(), wire], fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
+    })).rejects.not.toMatchObject({ code: "DEVICE_AUTH_UNSUPPORTED_SCOPE" });
+    expect(contacted).toBeGreaterThan(0);
+  });
+
+  test("device sign-in refuses every other encryption entry before contacting OpenKey", async () => {
+    let contacted = 0;
+    const fetchFn = (async () => { contacted += 1; return new Response(null, { status: 500 }); }) as unknown as typeof globalThis.fetch;
+    for (const entry of [{ service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
       { service: "tinycloud.encryption", space: "encryption", path: sharePrefix, actions: [DECRYPT] }] as PermissionEntry[]) {
       await expect(acquireDeviceDelegation({
         sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: "https://share.tinycloud.xyz",

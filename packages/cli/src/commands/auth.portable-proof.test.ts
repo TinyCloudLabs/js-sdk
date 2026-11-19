@@ -31,10 +31,6 @@ mock.module("../auth/browser-auth.js", () => ({
     openKeyReasons.push(options.reason);
     return acquire(did, options);
   },
-  publicJwkForDelegation: (jwk: Record<string, unknown>) => {
-    const { d: _privateKey, ...publicKey } = jwk;
-    return publicKey;
-  },
   validateDelegationCallbackPayload: () => null,
 }));
 mock.module("../output/errors.js", () => ({
@@ -167,7 +163,7 @@ async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryO
     ctx: { profile: profileName, host },
     profile: await ProfileManager.getProfile(profileName),
     node: node as never,
-    requested, expiryOption, reason: "Read named secret", yes: true, exactApproval,
+    requested, expiryOption, reason: "Read named secret", exactApproval,
     openKeyAcquisition: async () => callback,
   });
 }
@@ -263,7 +259,7 @@ describe("signed portable OpenKey grants", () => {
       profile: await ProfileManager.getProfile(profileName),
       node,
       requested: [...requested, otherSpace],
-      expiryOption: undefined, reason: "Read secret and application", yes: true,
+      expiryOption: undefined, reason: "Read secret and application",
       openKeyAcquisition: async () => callback,
     })).rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
@@ -420,7 +416,7 @@ describe("signed portable OpenKey grants", () => {
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
       node,
-      requested: missing, expiryOption: undefined, reason: "Read named secret", yes: true, force: true,
+      requested: missing, expiryOption: undefined, reason: "Read named secret", force: true,
       anchorSpace: "secrets",
       openKeyAcquisition: openKey.delegate,
     });
@@ -445,7 +441,7 @@ describe("signed portable OpenKey grants", () => {
       profile: { ...await ProfileManager.getProfile(profileName), spaceName: "default", spaceId: undefined },
       node,
       requested: [{ service: "tinycloud.encryption", path: network, actions: ["tinycloud.encryption/decrypt"] } as PermissionEntry],
-      expiryOption: undefined, reason: "Decrypt named secret", yes: true, force: true,
+      expiryOption: undefined, reason: "Decrypt named secret", force: true,
       anchorSpace: "secrets",
       openKeyAcquisition: openKey.delegate,
     });
@@ -489,7 +485,6 @@ describe("signed portable OpenKey grants", () => {
       requested,
       expiryOption: "5m",
       reason: "Revoke delegation",
-      yes: true,
       persist: false,
       openKeyAcquisition: async (_did, options) => {
         received = options?.permissions ?? [];
@@ -510,23 +505,23 @@ describe("signed portable OpenKey grants", () => {
     expect(await readGrantHistory(profileName)).toEqual([]);
   });
 
-  test("requires --yes before invoking OpenKey in noninteractive mode", async () => {
+  test("one-use OpenKey authority goes straight to the OpenKey approval without a terminal and without --yes", async () => {
     let called = false;
-    await expect(ensureDelegationAuthority({
+    const authority = await ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
       node,
       requested,
-      expiryOption: undefined,
+      expiryOption: "5m",
       reason: "Revoke delegation",
-      yes: false,
       persist: false,
       openKeyAcquisition: async () => {
         called = true;
-        return await signedProof();
+        return await signedProof({ capabilitiesRead: true, lifetimeSeconds: 300 });
       },
-    })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
-    expect(called).toBe(false);
+    });
+    expect(called).toBe(true);
+    expect(authority).toBeDefined();
   });
 
   test("one-use OpenKey authority without an expiry is refused before any approval", async () => {
@@ -538,7 +533,6 @@ describe("signed portable OpenKey grants", () => {
       requested,
       expiryOption: undefined,
       reason: "Revoke delegation",
-      yes: true,
       persist: false,
       openKeyAcquisition: async () => {
         called = true;
@@ -564,7 +558,6 @@ describe("signed portable OpenKey grants", () => {
       requested: [permission],
       expiryOption: "5m",
       reason: `Revoke delegation ${cid}`,
-      yes: true,
       persist: false,
       openKeyAcquisition: async () => {
         acquisitionCalls++;
@@ -594,7 +587,7 @@ describe("signed portable OpenKey grants", () => {
         expect(await ensureDelegationAuthority({
           ctx: { profile: profileName, host }, profile: await ProfileManager.getProfile(profileName),
           node, requested: [permission], expiryOption: undefined, reason: "Revoke delegation",
-          yes: false, persist: false,
+          persist: false,
           openKeyAcquisition: async () => { called = true; return await signedProof(); },
         })).toBeUndefined();
         expect(called).toBe(false);
@@ -605,7 +598,7 @@ describe("signed portable OpenKey grants", () => {
     expect(activated).toEqual([]);
   });
 
-  test("requires --yes for local-key authority acquisition in noninteractive mode", async () => {
+  test("local-key command authority is signed without a terminal and without --yes", async () => {
     const profile = await ProfileManager.getProfile(profileName);
     await ProfileManager.setProfile(profileName, { ...profile, authMethod: "local" });
     const permission: PermissionEntry = {
@@ -614,18 +607,26 @@ describe("signed portable OpenKey grants", () => {
       path: "",
       actions: ["tinycloud.delegation/revoke"],
     };
+    const signed = { cid: "bafy-local-revoke-authority" };
+    const signedRequests: PermissionEntry[][] = [];
+    const originalGrant = node.grantRuntimePermissions;
+    node.grantRuntimePermissions = (async (permissions: PermissionEntry[]) => {
+      signedRequests.push(permissions);
+      return [signed];
+    }) as never;
     try {
-      await expect(ensureDelegationAuthority({
+      expect(await ensureDelegationAuthority({
         ctx: { profile: profileName, host },
         profile: await ProfileManager.getProfile(profileName),
         node,
         requested: [permission],
         expiryOption: undefined,
         reason: "Revoke delegation bafy-revocation-target",
-        yes: false,
         persist: false,
-      })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
+      })).toBe(signed as never);
+      expect(signedRequests).toEqual([[permission]]);
     } finally {
+      node.grantRuntimePermissions = originalGrant;
       await ProfileManager.setProfile(profileName, profile);
     }
   });

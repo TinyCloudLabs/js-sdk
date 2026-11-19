@@ -89,11 +89,35 @@ fn verified_recap_from_siwe(siwe_string: &str) -> Result<Vec<VerifiedRecapEntry>
                 resource.service().to_string(),
                 resource.path().map(|path| path.as_str().to_string()).unwrap_or_default(),
             ),
-            Err(error) if resource_uri.as_str().starts_with("urn:tinycloud:encryption:") => (
+            Err(_) if resource_uri.as_str().starts_with("urn:tinycloud:encryption:") => (
                 RAW_ENCRYPTION.to_string(),
                 RAW_ENCRYPTION.to_string(),
                 resource_uri.to_string(),
             ),
+            Err(_) if resource_uri.as_str().starts_with("urn:cid:") => {
+                let cid_text = &resource_uri.as_str()["urn:cid:".len()..];
+                let cid = cid::Cid::try_from(cid_text).map_err(|_| {
+                    JsValue::from_str("delegation ReCap resource has an invalid CID")
+                })?;
+                if cid.to_string() != cid_text {
+                    return Err(JsValue::from_str(
+                        "delegation ReCap resource CID is not canonical",
+                    ));
+                }
+                if ability_map.is_empty()
+                    || ability_map.keys().any(|ability| {
+                        !matches!(
+                            ability.to_string().as_str(),
+                            "tinycloud.delegation/renew" | "tinycloud.delegation/revoke"
+                        )
+                    })
+                {
+                    return Err(JsValue::from_str(
+                        "raw delegation ReCap resource has an unsupported action",
+                    ));
+                }
+                (resource_uri.to_string(), "delegation".to_string(), String::new())
+            }
             Err(error) => {
                 return Err(JsValue::from_str(&format!(
                     "invalid ReCap resource URI {}: {error}",
@@ -148,6 +172,16 @@ pub fn initPanicHook() {
 pub fn validatePersistedSession(proof: JsValue) -> Result<JsValue, JsValue> {
     validate_signed_session(proof, SignedSessionUse::Session)
 }
+/// Verify a persisted signed session proof without treating its expiry as renewed authority.
+///
+/// This is only for a candidate that must be checked against an independently
+/// verified node-admitted renewal stamp before restoring usable session state.
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn validatePersistedSessionForRenewal(proof: JsValue) -> Result<JsValue, JsValue> {
+    validate_signed_session(proof, SignedSessionUse::RenewalCandidate)
+}
+
 
 /// Verify a wallet-signed session grant (a runtime permission CACAO) with the
 /// same signature, signer, audience, lifetime, ReCap and CID checks as
@@ -165,6 +199,7 @@ pub fn validateSessionGrant(proof: JsValue) -> Result<JsValue, JsValue> {
 enum SignedSessionUse {
     Session,
     Grant,
+    RenewalCandidate,
 }
 
 const RAW_ENCRYPTION: &str = "encryption";
@@ -226,10 +261,18 @@ fn validate_signed_session(proof: JsValue, usage: SignedSessionUse) -> Result<Js
     }
     let now = time::OffsetDateTime::from_unix_timestamp_nanos((now_millis as i128) * 1_000_000)
         .map_err(map_jserr)?;
-    if !signed.session.siwe.valid_at(&now) {
-        return Err(JsValue::from_str(
-            "persisted SIWE is expired or not yet valid",
-        ));
+    let time_valid = match usage {
+        SignedSessionUse::RenewalCandidate => signed
+            .session
+            .siwe
+            .not_before
+            .as_ref()
+            .map(|not_before| not_before < &now)
+            .unwrap_or(true),
+        SignedSessionUse::Session | SignedSessionUse::Grant => signed.session.siwe.valid_at(&now),
+    };
+    if !time_valid {
+        return Err(JsValue::from_str("persisted SIWE is expired or not yet valid"));
     }
     signed
         .session
@@ -385,6 +428,65 @@ pub fn invokeAny(session: JsValue, entries: JsValue, facts: JsValue) -> Result<J
         authz,
     ))?)
 }
+#[wasm_bindgen]
+#[allow(non_snake_case)]
+pub fn invokeDelegationStatus(
+    session: JsValue,
+    cid: String,
+    audience: String,
+) -> Result<JsValue, JsValue> {
+    let session: tinycloud_sdk_wasm::session::Session = serde_wasm_bindgen::from_value(session)?;
+    if cid != session.delegation_cid.to_string() {
+        return Err(JsValue::from_str(
+            "Delegation status invocation must target the session delegation",
+        ));
+    }
+    let resource: UriString = format!("urn:cid:{cid}").parse().map_err(map_jserr)?;
+    let action: Ability = "tinycloud.delegation/status".parse().map_err(map_jserr)?;
+    let mut capabilities = Capabilities::new();
+    capabilities.with_action(resource, action, vec![BTreeMap::new()]);
+
+    let now = chrono::Utc::now();
+    let now_seconds = now.timestamp() as f64;
+    let expiration = now_seconds + 60.0;
+    let verification_method = session.verification_method.clone();
+    let mut nonce_bytes = [0_u8; 16];
+    getrandom::getrandom(&mut nonce_bytes)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    nonce_bytes[6] = (nonce_bytes[6] & 0x0f) | 0x40;
+    nonce_bytes[8] = (nonce_bytes[8] & 0x3f) | 0x80;
+    let nonce = format!(
+        "urn:uuid:{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        nonce_bytes[0], nonce_bytes[1], nonce_bytes[2], nonce_bytes[3],
+        nonce_bytes[4], nonce_bytes[5], nonce_bytes[6], nonce_bytes[7],
+        nonce_bytes[8], nonce_bytes[9], nonce_bytes[10], nonce_bytes[11],
+        nonce_bytes[12], nonce_bytes[13], nonce_bytes[14], nonce_bytes[15],
+    );
+    let authorization = Payload {
+        issuer: DIDURLBuf::from_str(
+            verification_method
+                .split('#')
+                .next()
+                .unwrap_or(&verification_method),
+        )
+        .map_err(map_jserr)?,
+        audience: DIDBuf::from_str(&audience).map_err(map_jserr)?,
+        not_before: Some(NumericDate::try_from_seconds(now_seconds).map_err(map_jserr)?),
+        expiration: NumericDate::try_from_seconds(expiration).map_err(map_jserr)?,
+        nonce: Some(nonce),
+        facts: Some(vec![serde_json::json!({})]),
+        proof: Vec::new(),
+        attenuation: capabilities,
+    }
+    .sign(
+        session.jwk.get_algorithm().unwrap_or_default(),
+        &session.jwk,
+    )
+    .map_err(map_jserr)?;
+    Ok(serde_wasm_bindgen::to_value(&InvocationHeaders::new(
+        authorization,
+    ))?)
+}
 
 #[cfg(test)]
 mod tests {
@@ -426,4 +528,5 @@ mod tests {
         assert_eq!(recap[0].actions, vec!["tinycloud.kv/get"]);
         assert_eq!(recap[0].caveats, vec![caveat]);
     }
+
 }
