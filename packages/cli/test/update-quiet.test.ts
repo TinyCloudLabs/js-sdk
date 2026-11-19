@@ -36,3 +36,25 @@ test("--quiet hides the update notice that the same command prints without it", 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a failing command's stderr stays one JSON error with no update notice appended", () => {
+  const home = mkdtempSync(join(tmpdir(), "tc-update-failing-"));
+  const state = join(home, "state");
+  const config = join(state, ".tinycloud");
+  mkdirSync(config, { recursive: true, mode: 0o700 });
+  const newer = installed.replace(/\d+$/, (build) => String(Number(build) + 1));
+  const channel = /^[^-+]+-([0-9A-Za-z-]+)/.exec(installed)?.[1] ?? "latest";
+  writeFileSync(join(config, `update-check.json.${channel}`), JSON.stringify({ checkedAt: Date.now(), version: newer }), { mode: 0o600 });
+  const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;
+  try {
+    const result = spawnSync("node", [resolve(PACKAGE_DIR, bin.tinycloud), "--json", "kv", "list"], {
+      encoding: "utf-8",
+      env: { ...ambient, CI: "", TC_NO_AUTO_UPDATE: "", HOME: home, TC_HOME: state },
+    });
+    expect(result.status).not.toBe(0);
+    expect(JSON.parse(result.stderr).error.code).toBe("AUTH_REQUIRED");
+    expect(result.stderr).not.toContain(newer);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

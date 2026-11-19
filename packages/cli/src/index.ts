@@ -26,7 +26,9 @@ const updateCheck = isAutoUpdateEnabled(process.env)
   : Promise.resolve(null);
 
 registerUpdateNoticeFinalizer(async () => {
-  if (program.opts().quiet === true) return;
+  // Only a command that finished cleanly gets the notice: a failing command's stderr is a structured JSON error
+  // that callers parse, so nothing is appended to it.
+  if (program.opts().quiet === true || Number(process.exitCode ?? 0) !== 0) return;
   const available = await updateCheck;
   if (!available) return;
   await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
