@@ -1,4 +1,5 @@
-export const SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+/** The node's upload body cap (95 MiB, 99,614,720 bytes) applies to the bytes uploaded; a public share uploads the file unchanged. */
+export const SHARE_CONTENT_LIMIT = 95 * 1024 * 1024;
 export const SHARE_PUBLISH_RESULT_VERSION = 1 as const;
 export const DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
