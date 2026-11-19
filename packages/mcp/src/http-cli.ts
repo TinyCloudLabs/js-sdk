@@ -22,7 +22,7 @@ export async function main(): Promise<void> {
     publicUrl,
     stateDir,
     stateSecret,
-    nodeHost: process.env.TC_HOST ?? "https://node.tinycloud.xyz",
+    nodeHost: process.env.TC_HOST ?? "https://tee.node.tinycloud.xyz",
     openkeyHost,
     approvalTtlSeconds: positiveInteger(process.env.TC_MCP_APPROVAL_TTL_SECONDS, 300),
     delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",

@@ -275,7 +275,7 @@ export type {
 } from "@tinycloud/sdk-core";
 
 /** Default TinyCloud host */
-const DEFAULT_HOST = "https://node.tinycloud.xyz";
+const DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
 const DEFAULT_ENCRYPTION_NETWORK_NAME = "default";
 const NETWORK_CREATE_ACTION = ENCRYPTION.NETWORK_CREATE;
 const DECRYPT_ACTION = ENCRYPTION.DECRYPT;
@@ -920,7 +920,7 @@ export interface TinyCloudNodeConfig {
   tinycloudFallbackHosts?: string[] | null;
   /** Registry routing is always v2-first and fail-closed. */
   registryPolicy?: RegistryPolicy;
-  /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
+  /** `fail-closed` only: host for owners with no registry record. Default https://tee.node.tinycloud.xyz; `null` refuses them with `NodeNotFoundError`. */
   newUserHost?: string | null;
   /** Explicit wallet-owner signing for share-only placement; never a session key. */
   sharePlacementSigner?: (message: string) => Promise<string>;

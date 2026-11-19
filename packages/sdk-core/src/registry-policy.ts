@@ -48,6 +48,12 @@ export type RegistryPolicy = "fail-closed";
 export const DEFAULT_REGISTRY_OWNER_CHAIN_ID = 1;
 /** Host for `unregistered` owners under `fail-closed` when none is configured. */
 export const DEFAULT_NEW_USER_HOST = DEFAULT_TINYCLOUD_FALLBACK_HOST;
+/**
+ * The node a v1-only registration names when it names only the original
+ * default node. Such an owner keeps routing there (TC-3168); this is the host
+ * their own v1 record registered, not the default for new users.
+ */
+const LEGACY_V1_DEFAULT_NODE = "https://node.tinycloud.xyz";
 /** Budget for one registry lookup, covering the request and the body. */
 export const DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS = 3_000;
 /** Default key {@link createLocalStorageRegistrySequenceStore} stores its sequences under. */
@@ -300,7 +306,7 @@ function namesOnlyDefaultNode(hosts: readonly RegistryHost[]): boolean {
       }
     }
   }
-  return origins.size === 1 && origins.has(DEFAULT_TINYCLOUD_FALLBACK_HOST);
+  return origins.size === 1 && origins.has(LEGACY_V1_DEFAULT_NODE);
 }
 
 function cacheAuthority(cache: RegistryCacheStore, key: string) {
@@ -514,7 +520,7 @@ async function fetchOwnerRegistry(
         subject,
         source: "offchain",
         sequence: v1.sequence,
-        hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }],
+        hosts: [{ urls: [LEGACY_V1_DEFAULT_NODE], source: "offchain" }],
         legacy: "v1-default-node",
       };
       return { verdict, revision, invalidationAttempt };
@@ -876,7 +882,7 @@ export async function resolveRegistryResource(
   if (verdict.status === "unavailable") throw new RegistryUnavailableError(subject, verdict);
   // TC-3168: every resource of a v1-only owner on the default node goes there, and nowhere else.
   if (verdict.legacy === "v1-default-node") {
-    return { verdict, hosts: [{ urls: [DEFAULT_TINYCLOUD_FALLBACK_HOST], source: "offchain" }] };
+    return { verdict, hosts: [{ urls: [LEGACY_V1_DEFAULT_NODE], source: "offchain" }] };
   }
   const record = verdict.record;
   if (record === undefined) {

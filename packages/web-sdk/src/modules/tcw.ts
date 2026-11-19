@@ -194,7 +194,7 @@ export interface Config extends ClientConfig {
   tinycloudHosts?: string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /** Host hint for owners absent from both v2 and v1 registries. Default https://node.tinycloud.xyz; null disables onboarding. */
+  /** Host hint for owners absent from both v2 and v1 registries. Default https://tee.node.tinycloud.xyz; null disables onboarding. */
   newUserHost?: string | null;
   /** Explicit wallet-owner signing for private share placement. */
   sharePlacementSigner?: (message: string) => Promise<string>;

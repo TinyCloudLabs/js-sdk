@@ -259,7 +259,7 @@ cookies), the `Host` header must match `TC_MCP_PUBLIC_URL` (a guard against
 DNS rebinding), responses never allow credentials, and only
 `WWW-Authenticate`, `Mcp-Session-Id` and `Mcp-Protocol-Version` are exposed to
 scripts. There is no Origin allowlist to configure. The
-default TinyCloud node is `https://node.tinycloud.xyz`.
+default TinyCloud node is `https://tee.node.tinycloud.xyz`.
 The MCP server asks OpenKey's resource-server token introspection endpoint
 (RFC 7662) about each access token before serving a call.
 `TC_MCP_INTROSPECTION_URL` (the endpoint; HTTPS outside localhost),

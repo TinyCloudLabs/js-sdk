@@ -3,7 +3,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { TinyCloudNode, type Manifest, type TinyCloudNodeConfig } from "@tinycloud/node-sdk";
 import { authorizationVerdictOf } from "@tinycloud/sdk-core";
 
-const DEFAULT_HOST = "https://node.tinycloud.xyz";
+const DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
 
 export interface DstackKeyClient {
   getKey(path: string, purpose: string): Promise<{ key: Uint8Array }>;

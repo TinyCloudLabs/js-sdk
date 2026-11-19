@@ -4,7 +4,7 @@ import { CourierError } from './errors.js';
 /** Courier KV layout and the single source of agent grant authority. */
 export const PREFIX = 'xyz.tinycloud.courier';
 export const EXT = 'https://tinycloud.xyz/ext/courier/v0';
-export const DEFAULT_HOST = 'https://node.tinycloud.xyz';
+export const DEFAULT_HOST = 'https://tee.node.tinycloud.xyz';
 /** Must equal @tinycloud/bootstrap AGENTS_SPACE; created at TinyCloud onboarding, never by Courier. */
 export const COURIER_SPACE = 'agents';
 export const AGENT_GRANT_EXPIRY = '30d';

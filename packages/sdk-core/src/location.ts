@@ -100,7 +100,7 @@ export type LocationSource =
 
 export const DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL =
   "https://registry.tinycloud.xyz";
-export const DEFAULT_TINYCLOUD_FALLBACK_HOST = "https://node.tinycloud.xyz";
+export const DEFAULT_TINYCLOUD_FALLBACK_HOST = "https://tee.node.tinycloud.xyz";
 
 /** Conventional local loopback node URL. Probed only when explicitly configured. */
 export const DEFAULT_LOCAL_NODE_URL = "http://127.0.0.1:8000";

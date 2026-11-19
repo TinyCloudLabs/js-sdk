@@ -196,7 +196,7 @@ code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt`
 | Setting | Flag | Env | Stored | Default |
 |---|---|---|---|---|
 | Profile dir | — | `COURIER_HOME` | — | `~/.courier` |
-| Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://node.tinycloud.xyz` |
+| Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://tee.node.tinycloud.xyz` |
 | OpenKey | `init --openkey-host` | `COURIER_OPENKEY_HOST` | `profile.openkeyHost` | `https://openkey.so` |
 | OpenKey API (short codes) | `init --openkey-api-host` | `COURIER_OPENKEY_API_HOST` | not stored | `https://api.openkey.so` for `https://openkey.so`, otherwise the OpenKey host |
 

@@ -296,7 +296,7 @@ export interface NodeUserAuthorizationConfig {
   registryPolicy?: RegistryPolicy;
   /**
    * `fail-closed` only: host for owners with no registry record (and only
-   * them). Default https://node.tinycloud.xyz. `null` refuses them with
+   * them). Default https://tee.node.tinycloud.xyz. `null` refuses them with
    * `NodeNotFoundError`.
    */
   newUserHost?: string | null;
@@ -802,7 +802,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
             }
           }
           const host = noEntryHosts[0] ?? this.newUserHost ??
-            (this.tinycloudFallbackHosts === undefined ? "https://node.tinycloud.xyz" : this.tinycloudFallbackHosts?.[0]);
+            (this.tinycloudFallbackHosts === undefined ? "https://tee.node.tinycloud.xyz" : this.tinycloudFallbackHosts?.[0]);
           if (!host || (this.newUserHost === null && noEntryHosts.length === 0)) throw new NodeNotFoundError(subject, resolved.verdict);
           const url = exactHttpOrigin(host, "new-user host");
           warnRegistryDefaultNode(resolved.verdict, this.registryCacheStore, this.onRegistryFallback);

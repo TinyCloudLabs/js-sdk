@@ -435,7 +435,7 @@ function toSessionSource(node: TinyCloudNodeLike, host?: string): TinyCloudVfsSo
     throw new Error("TinyCloudNode has no active session; call signIn() or restoreSession() first.");
   }
 
-  const resolvedHost = host ?? node.config?.host ?? "https://node.tinycloud.xyz";
+  const resolvedHost = host ?? node.config?.host ?? "https://tee.node.tinycloud.xyz";
 
   return {
     kind: "session",
@@ -483,7 +483,7 @@ export async function createTinyCloudDelegatedVfs(options: CreateTinyCloudDelega
     ...options,
     source: {
       kind: "resolved-delegation",
-      host: options.host ?? options.delegation.host ?? "https://node.tinycloud.xyz",
+      host: options.host ?? options.delegation.host ?? "https://tee.node.tinycloud.xyz",
       session: access.session,
       kvPrefix: access.kv?.config?.prefix ?? "",
     },
