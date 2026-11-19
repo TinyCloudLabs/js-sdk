@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CLIENT_NAMES, skillRoots } from "./clients.js";
@@ -178,5 +178,61 @@ describe("skill save --check", () => {
     const both = checkSkill({ agent: "claude-code,codex", context, bundledDir: source });
     expect(both.state).toBe("missing");
     expect(both.folders.map((entry) => entry.state)).toEqual(["current", "missing"]);
+  });
+});
+
+describe("skill save while another save runs, or after one was stopped", () => {
+  const claudeSkills = (context: { home: string }): string => join(context.home, ".claude", "skills");
+
+  test("staging and backup folders a stopped run left are swept, and other files in the folder are kept", () => {
+    const context = home();
+    const skills = claudeSkills(context);
+    mkdirSync(join(skills, ".tinycloud-cli.staging-1-aa"), { recursive: true });
+    mkdirSync(join(skills, ".tinycloud-cli.old-1-bb"), { recursive: true });
+    mkdirSync(join(skills, "other-skill"));
+    saveBundledSkill({ agent: "claude-code", context, bundledDir: bundle() });
+    expect(readdirSync(skills).sort()).toEqual(["other-skill", "tinycloud-cli"]);
+  });
+
+  test("a lock held by a running save is refused, and nothing is written", () => {
+    const context = home();
+    const skills = claudeSkills(context);
+    mkdirSync(join(skills, ".tinycloud-cli.lock"), { recursive: true });
+    writeFileSync(join(skills, ".tinycloud-cli.lock", "pid"), String(process.pid));
+    let code = "";
+    try {
+      saveBundledSkill({ agent: "claude-code", context, bundledDir: bundle() });
+    } catch (error) {
+      code = (error as { code?: string }).code ?? "";
+    }
+    expect(code).toBe("SKILL_FOLDER_BUSY");
+    expect(existsSync(join(skills, "tinycloud-cli"))).toBe(false);
+  });
+
+  test("a lock whose save is gone is taken over and removed", () => {
+    const context = home();
+    const skills = claudeSkills(context);
+    const lock = join(skills, ".tinycloud-cli.lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, "pid"), "2147483646");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    saveBundledSkill({ agent: "claude-code", context, bundledDir: bundle() });
+    expect(readdirSync(skills)).toEqual(["tinycloud-cli"]);
+  });
+
+  test.skipIf(root || windows)("a folder that fails after another was saved names the saved one", () => {
+    const context = home();
+    const second = join(context.home, ".agents", "skills");
+    mkdirSync(second, { recursive: true });
+    chmodSync(second, 0o500);
+    locked.push(second);
+    let metadata: unknown;
+    try {
+      saveBundledSkill({ agent: "claude-code,codex", context, bundledDir: bundle() });
+    } catch (error) {
+      metadata = (error as { metadata?: unknown }).metadata;
+    }
+    expect(metadata).toMatchObject({ saved: [join(claudeSkills(context), "tinycloud-cli")] });
   });
 });

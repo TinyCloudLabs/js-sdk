@@ -16,7 +16,7 @@ export type SkillFiles = ReadonlyMap<string, string>;
 
 /** The folder the package ships `skills/tinycloud-cli` in: next to `dist` when built, next to `src` from source. */
 export function bundledSkillDir(from: URL = new URL(import.meta.url)): string {
-  for (const relative of ["../skills", "../../skills", "../../../skills"]) {
+  for (const relative of ["../skills", "../../skills"]) {
     const candidate = join(dirname(fileURLToPath(from)), relative, SKILL_NAME);
     if (existsSync(join(candidate, "SKILL.md"))) return candidate;
   }
@@ -84,32 +84,89 @@ export function skillState(target: string, bundled: SkillFiles): SkillState {
   return marked !== undefined && same(found, marked) ? "outdated" : "changed";
 }
 
-/** Replace `target` (missing or outdated) with the bundled skill: staged beside it, then swapped in. */
+/** Another `skill save` holds the lock on the skills folder. */
+export class SkillFolderBusy extends Error {}
+
+const LOCK = `.${SKILL_NAME}.lock`;
+const LEFTOVER_PREFIXES = [`.${SKILL_NAME}.staging-`, `.${SKILL_NAME}.old-`];
+/** A lock this old is a crashed run's, whatever its owner says. */
+const LOCK_STALE_MS = 10 * 60 * 1000;
+/** A lock this young may not have its owner's pid written yet. */
+const LOCK_FRESH_MS = 5 * 1000;
+
+function lockHolderAlive(lock: string): boolean {
+  try {
+    const pid = Number(readFileSync(join(lock, "pid"), "utf8"));
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Hold `<root>/.tinycloud-cli.lock` (a folder, created atomically) until the returned function is called. */
+function takeLock(root: string): () => void {
+  const lock = join(root, LOCK);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      mkdirSync(lock);
+      writeFileSync(join(lock, "pid"), String(process.pid));
+      return () => rmSync(lock, { recursive: true, force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    let age: number;
+    try {
+      age = Date.now() - lstatSync(lock).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (age < LOCK_FRESH_MS || (age < LOCK_STALE_MS && lockHolderAlive(lock))) throw new SkillFolderBusy(root);
+    rmSync(lock, { recursive: true, force: true });
+  }
+  throw new SkillFolderBusy(root);
+}
+
+/** Staging and backup folders a run that was stopped partway left behind. Called only while holding the lock. */
+function sweepLeftovers(root: string): void {
+  for (const name of readdirSync(root)) {
+    if (LEFTOVER_PREFIXES.some((prefix) => name.startsWith(prefix))) rmSync(join(root, name), { recursive: true, force: true });
+  }
+}
+
+/** Replace `target` (missing or outdated) with the bundled skill: staged beside it, then swapped in, under a lock. */
 export function saveSkill(target: string, bundledDir: string, bundled: SkillFiles, cliVersion: string): void {
   const root = dirname(target);
   mkdirSync(root, { recursive: true });
-  const tag = `${process.pid}-${randomBytes(4).toString("hex")}`;
-  const staging = join(root, `.${SKILL_NAME}.staging-${tag}`);
-  const backup = join(root, `.${SKILL_NAME}.old-${tag}`);
+  const release = takeLock(root);
   try {
+    sweepLeftovers(root);
+    const tag = `${process.pid}-${randomBytes(4).toString("hex")}`;
+    const staging = join(root, `.${SKILL_NAME}.staging-${tag}`);
+    const backup = join(root, `.${SKILL_NAME}.old-${tag}`);
     mkdirSync(staging);
-    for (const name of bundled.keys()) {
-      const to = join(staging, ...name.split("/"));
-      mkdirSync(dirname(to), { recursive: true });
-      writeFileSync(to, readFileSync(join(bundledDir, ...name.split("/"))));
-    }
-    writeFileSync(join(staging, MARKER), `${JSON.stringify({ cli: cliVersion, files: Object.fromEntries(bundled) }, null, 2)}\n`);
-    const replacing = existsSync(target);
-    if (replacing) renameSync(target, backup);
     try {
-      renameSync(staging, target);
-    } catch (error) {
-      if (replacing) renameSync(backup, target);
-      throw error;
+      for (const name of bundled.keys()) {
+        const to = join(staging, ...name.split("/"));
+        mkdirSync(dirname(to), { recursive: true });
+        writeFileSync(to, readFileSync(join(bundledDir, ...name.split("/"))));
+      }
+      writeFileSync(join(staging, MARKER), `${JSON.stringify({ cli: cliVersion, files: Object.fromEntries(bundled) }, null, 2)}\n`);
+      const replacing = existsSync(target);
+      if (replacing) renameSync(target, backup);
+      try {
+        renameSync(staging, target);
+      } catch (error) {
+        if (replacing) renameSync(backup, target);
+        throw error;
+      }
+      if (replacing) rmSync(backup, { recursive: true, force: true });
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
     }
-    if (replacing) rmSync(backup, { recursive: true, force: true });
   } finally {
-    rmSync(staging, { recursive: true, force: true });
+    release();
   }
 }
 

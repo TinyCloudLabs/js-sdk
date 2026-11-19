@@ -80,7 +80,8 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
   }
   // The first command in a config folder says what TinyCloud is and what the CLI can do, once, on stderr.
   // An explicit --json, --quiet or TC_HIDE_BANNER=1 keeps stderr as it was; a piped stdout alone does not.
-  if (!opts.quiet && opts.json !== true && !isShareCommand && process.env.TC_HIDE_BANNER !== "1") {
+  const savedCheck = fullCommandName(actionCommand) === "skill save" && actionCommand.opts().check === true;
+  if (!opts.quiet && opts.json !== true && !isShareCommand && !savedCheck && process.env.TC_HIDE_BANNER !== "1") {
     let signedIn = fullCommandName(actionCommand) === "onboard";
     if (!signedIn) {
       try {

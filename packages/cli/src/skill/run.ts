@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { CLIENT_NAMES, skillRoots, type SkillContext } from "./clients.js";
-import { bundledSkillDir, readSkillFiles, refusingFolder, saveSkill, shownPath, SKILL_NAME, skillState, type SkillState } from "./bundle.js";
+import { bundledSkillDir, readSkillFiles, refusingFolder, saveSkill, shownPath, SkillFolderBusy, SKILL_NAME, skillState, type SkillState } from "./bundle.js";
 
 export interface SkillFolderResult {
   folder: string;
@@ -62,9 +62,7 @@ export function checkSkill(options: SkillOptions): SkillCheck {
 }
 
 /** The refusal for a folder the user cannot write: which folder, and why. No command and no advice. */
-export function unwritableFolder(error: unknown, target: string): CLIError | undefined {
-  const code = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : undefined;
-  if (code !== "EACCES" && code !== "EPERM" && code !== "EROFS") return undefined;
+function refusal(target: string, errno: string | undefined, saved: readonly string[]): CLIError {
   let why: string;
   let folder = dirname(target);
   try {
@@ -76,7 +74,28 @@ export function unwritableFolder(error: unknown, target: string): CLIError | und
   } catch {
     why = "this user can't write to it";
   }
-  return new CLIError("SKILL_FOLDER_NOT_WRITABLE", `Can't write ${shownPath(folder)}: ${why}.`, ExitCode.ERROR, { path: shownPath(folder), errno: code });
+  return new CLIError("SKILL_FOLDER_NOT_WRITABLE", `Can't write ${shownPath(folder)}: ${why}.`, ExitCode.ERROR, {
+    path: shownPath(folder),
+    ...(errno ? { errno } : {}),
+    ...(saved.length > 0 ? { saved: saved.map(shownPath) } : {}),
+  });
+}
+
+export function unwritableFolder(error: unknown, target: string, saved: readonly string[] = []): CLIError | undefined {
+  const code = typeof error === "object" && error !== null && "code" in error ? (error as { code: unknown }).code : undefined;
+  if (code !== "EACCES" && code !== "EPERM" && code !== "EROFS") return undefined;
+  return refusal(target, code, saved);
+}
+
+/** A folder (or the nearest one above it) that another user owns is refused before anything is written, wherever the path came from. */
+function foreignFolder(target: string): CLIError | undefined {
+  if (process.platform === "win32") return undefined;
+  try {
+    if (refusingFolder(target).ownedByUser) return undefined;
+  } catch {
+    return undefined;
+  }
+  return refusal(target, undefined, []);
 }
 
 /**
@@ -97,13 +116,29 @@ export function saveBundledSkill(options: SkillOptions): SkillSaved {
       { path: shownPath(changed.folder) },
     );
   }
+  for (const entry of states) {
+    if (entry.state === "current") continue;
+    const foreign = foreignFolder(entry.folder);
+    if (foreign) throw foreign;
+  }
   const version = cliVersion(bundledDir);
+  const saved: string[] = [];
   for (const entry of states) {
     if (entry.state === "current") continue;
     try {
       saveSkill(entry.folder, bundledDir, bundled, version);
+      saved.push(entry.folder);
     } catch (error) {
-      throw unwritableFolder(error, entry.folder) ?? error;
+      if (error instanceof SkillFolderBusy) {
+        throw new CLIError("SKILL_FOLDER_BUSY", `Another save is writing ${shownPath(dirname(entry.folder))}.`, ExitCode.ERROR, {
+          path: shownPath(dirname(entry.folder)),
+          ...(saved.length > 0 ? { saved: saved.map(shownPath) } : {}),
+        });
+      }
+      const unwritable = unwritableFolder(error, entry.folder, saved);
+      if (unwritable) throw unwritable;
+      if (saved.length === 0) throw error;
+      throw new CLIError("SKILL_SAVE_FAILED", `Couldn't write ${shownPath(entry.folder)}.`, ExitCode.ERROR, { path: shownPath(entry.folder), saved: saved.map(shownPath) });
     }
   }
   return {

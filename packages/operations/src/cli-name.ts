@@ -22,9 +22,9 @@ function npxCliVersion(bin: string): string | undefined {
 
 /**
  * The command hints and messages tell users to run. The CLI installs as both `tc` and `tinycloud` (Ubuntu's
- * iproute2 ships `/usr/sbin/tc`), so the name follows the invoked bin. Run by npx, neither is on the user's PATH and
- * npx picks the first bin, `tc`: the name is then the npx command that works, pinned to the version that is running.
- * Any other host process, such as the MCP server, gets `tc`.
+ * iproute2 ships `/usr/sbin/tc`), so the name follows the invoked bin. Run by npx, neither is on the user's PATH:
+ * the name is then the npx command that works, pinned to the version of the CLI package that is running. That needs
+ * the CLI's own manifest next to the bin, so any other host process (the MCP server, say) gets `tc`, as before.
  */
 export function cliNameFor(
   argv1: string,
@@ -33,7 +33,7 @@ export function cliNameFor(
 ): string {
   if (env.npm_command === "exec" && NPX_CACHE.test(argv1)) {
     const version = versionOf(argv1);
-    return `npx -y @tinycloud/cli${version ? `@${version}` : ""}`;
+    if (version) return `npx -y @tinycloud/cli@${version}`;
   }
   return basename(argv1) === "tinycloud" ? "tinycloud" : "tc";
 }

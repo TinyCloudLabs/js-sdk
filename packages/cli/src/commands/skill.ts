@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { handleError } from "../output/errors.js";
 import { outputJson } from "../output/formatter.js";
 import { checkSkill, saveBundledSkill } from "../skill/run.js";
+import { shownPath } from "../skill/bundle.js";
 
 /** `skill save`: the TinyCloud guide the CLI ships, copied into the skills folder an agent reads. Needs no sign-in or network. */
 export function registerSkillCommand(program: Command): void {
@@ -23,7 +24,7 @@ export function registerSkillCommand(program: Command): void {
         const saved = saveBundledSkill({ agent: options.agent, context });
         outputJson({ saved: saved.saved, version: saved.version, folder: saved.folder, folders: saved.folders });
         if (command.optsWithGlobals().quiet) return;
-        for (const folder of saved.unchanged) process.stderr.write(`TinyCloud's guide is already saved in ${folder}.\n`);
+        for (const folder of saved.unchanged) process.stderr.write(`TinyCloud's guide is already saved in ${shownPath(folder)}.\n`);
         process.stderr.write("Next: carry on with the owner's request.\n");
       } catch (error) {
         await handleError(error);
