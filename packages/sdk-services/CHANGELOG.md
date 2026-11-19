@@ -1,5 +1,21 @@
 # @tinycloudlabs/sdk-services
 
+## 3.13.0-beta.8
+
+### Patch Changes
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
+## 3.13.0-beta.6
+
+### Minor Changes
+
+- 0490f71: `feed card-md` prints the owner's card.md (`{text, version, updatedAt}`). When the owner hasn't set one, it prints the default (`{text, version, default: true}`). `feed publish` adds `cardMd: {version}` to its JSON, with `default: true` while it is the default, and `feed publish` and `feed watch` print the text once on stderr when its version differs from the last one this profile saw for that agent. `feed connect` copies the owner's card.md into the new agent's response database, or the default when the owner hasn't set one. An agent connected before card.md existed reads it with the same grant, without reconnecting. `@tinycloud/sdk-services` adds `readFeedCardMd` and an optional `onWake` callback on `listenFeedResponses`, run at the start of every drain.
+
+  Details: TC-3345
+
 ## 3.13.0-beta.3
 
 ### Minor Changes
