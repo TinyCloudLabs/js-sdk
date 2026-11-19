@@ -27,9 +27,10 @@ async function fixture(entries = requested, primary = "applications"): Promise<R
     requestedSpaces: ["account", "applications"].map(name => ({ space: name, spaceId: space(name), spaceReady: true })) };
 }
 describe("TC-2490 one approval contract fixtures", () => {
-  test("Home-only has discovery and named feed resources without generic app grants", () => {
+  test("Home-only has named feed resources, no account listing and no generic app grants; apps,feed keeps the listing", () => {
     const home = onboardingPermissions("feed");
-    expect(home.some(p => p.space === "account" && p.path === "spaces/")).toBe(true);
+    expect(home.some(p => p.space === "account")).toBe(false);
+    expect(onboardingPermissions("apps,feed").some(p => p.space === "account" && p.path === "spaces/")).toBe(true);
     expect(home.some(p => p.service === "tinycloud.sql" && p.path === "xyz.tinycloud.tinychat/home_feed" && p.actions.includes("tinycloud.sql/schema"))).toBe(true);
     expect(onboardingPermissions("apps,feed").find(p => p.path === "xyz.tinycloud.tinychat/home_feed")?.actions).toEqual(["tinycloud.sql/schema"]);
     expect(home.filter(p => p.space === "applications").every(p => p.path !== "")).toBe(true);

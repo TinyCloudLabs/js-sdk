@@ -29,7 +29,7 @@ test("existing-profile onboarding stores both spaces in one 1/1 approval and res
   const profile = await ProfileManager.getProfile(ctx.profile);
   const node = new TinyCloudNode({ host: ctx.host, wasmBindings: wasm, autoBootstrapAccount: false });
   await node.restoreSession(session);
-  const requested = onboardingPermissions("feed");
+  const requested = onboardingPermissions("apps,feed");
   expect(node.hasRuntimePermissions(requested)).toBe(false);
   let creates = 0, discovers = 0;
   const urls: string[] = [];
