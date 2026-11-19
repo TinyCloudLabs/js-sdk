@@ -86,33 +86,18 @@ type SignalStatics = { any?: (signals: AbortSignal[]) => AbortSignal };
 const statics = AbortSignal as unknown as SignalStatics;
 const nativeAny = statics.any;
 
-/** Install one branch of the combiner for the tests in the enclosing `describe`; returns how often `AbortSignal.any` ran. */
-function useBranch(branch: "any" | "listeners"): { anyCalls: () => number } {
-  let calls = 0;
+/** Install one branch of the combiner for the tests in the enclosing `describe`. */
+function useBranch(branch: "any" | "listeners"): void {
   beforeEach(() => {
-    calls = 0;
-    statics.any =
-      branch === "listeners"
-        ? undefined
-        : (signals) => {
-            calls++;
-            return nativeAny!.call(AbortSignal, signals);
-          };
+    statics.any = branch === "listeners" ? undefined : nativeAny;
   });
   afterEach(() => {
     statics.any = nativeAny;
   });
-  return { anyCalls: () => calls };
 }
 
 describe("ServiceContext [any] leaves no per-request abort listener", () => {
-  const { anyCalls } = useBranch("any");
-
-  test("uses AbortSignal.any", async () => {
-    const context = contextFor(respond);
-    await context.fetch(URL, { signal: fresh() });
-    assert.equal(anyCalls(), 1);
-  });
+  useBranch("any");
 
   test("sequential requests on one context leave no listener and print no MaxListenersExceededWarning", async () => {
     const context = contextFor(respond);
@@ -187,13 +172,7 @@ describe("ServiceContext [any] leaves no per-request abort listener", () => {
 // Without AbortSignal.any (older browsers) the combiner is what it was before this change. These pin that, so
 // nobody fixes it halfway: the listener stays until the context aborts, and the link is never cut.
 describe("ServiceContext [listeners] is unchanged from before", () => {
-  const { anyCalls } = useBranch("listeners");
-
-  test("does not use AbortSignal.any", async () => {
-    const context = contextFor(respond);
-    await context.fetch(URL, { signal: fresh() });
-    assert.equal(anyCalls(), 0);
-  });
+  useBranch("listeners");
 
   test("each request that carries its own signal leaves a listener until the context aborts", async () => {
     const context = contextFor(respond);

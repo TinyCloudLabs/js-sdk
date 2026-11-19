@@ -75,6 +75,7 @@ import {
   publicJwk,
   type CapabilityPresentationEnvelopeV1,
   endToEndNodeHost,
+  sessionTouchesVault,
 } from "@tinycloud/sdk-core";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import {
@@ -83,6 +84,7 @@ import {
   NodeNotRespondingError,
   PartialNodeWriteError,
   routingFailure,
+  isVaultResourceUri,
   type ResourceAccess,
   type ResourceDestination,
 } from "@tinycloud/sdk-services";
@@ -1436,7 +1438,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     checkCurrent();
     const host = context?.host ?? this.primaryTinyCloudHost;
     const spaceId = context?.spaceId ?? (typeof targetSpaceId === "string" ? targetSpaceId : this._tinyCloudSession.spaceId);
-    const destinations = await this.resolveResourceDestinations(spaceId, "host");
+    // The secrets space, or a session that names vault data, activates only on end-to-end origins.
+    const endToEnd = isVaultResourceUri(spaceId) || await sessionTouchesVault(this._tinyCloudSession);
+    const destinations = (await this.resolveResourceDestinations(spaceId, "host"))
+      .map((destination) => endToEnd ? { ...destination, url: endToEndNodeHost(destination.url) } : destination);
     if (this.registryVerdict?.status === "registered") {
       const results: SpaceHostResult[] = [];
       for (const destination of destinations) {
@@ -1513,7 +1518,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
     checkCurrent();
-    return submitHostDelegation(host, headers, signal);
+    // Hosting the secrets space is posted only to the end-to-end origin.
+    return submitHostDelegation(isVaultResourceUri(spaceId) ? endToEndNodeHost(host) : host, headers, signal);
   }
 
   /**
@@ -1589,7 +1595,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
       }
     }
     let result: SpaceHostResult | undefined;
-    for (const destination of targets.values()) {
+    // A session that names vault data activates only on end-to-end origins.
+    const endToEnd = await sessionTouchesVault(this._tinyCloudSession);
+    const activationUrl = (url: string) => endToEnd ? endToEndNodeHost(url) : url;
+    const activationTargets = new Map([...targets.values()].map((destination) => {
+      const url = activationUrl(destination.url);
+      return [url, { ...destination, url }] as const;
+    }));
+    for (const destination of activationTargets.values()) {
       await verifyResourceDestination(destination, globalThis.fetch.bind(globalThis));
       let activated: SpaceHostResult;
       try {
@@ -1600,7 +1613,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       if (!activated.success && activated.status !== 404) {
         throw Object.assign(new Error(`Failed to activate session: ${describeHostFailure(activated)}`), { cause: activated });
       }
-      if (destination.url === primary[0].url) result = activated;
+      if (destination.url === activationUrl(primary[0].url)) result = activated;
     }
     if (!result) throw new Error("Primary space activation did not return a result");
     this.recordActivationSkippedSpaces(result, primarySpaceId);
@@ -1657,7 +1670,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
       onHosted: () => {
         this._spaceHosting = "hosted";
       },
-      activate: (context) => activateSessionWithHost(context.host, session.delegationHeader),
+      activate: async (context) => activateSessionWithHost(
+        await sessionTouchesVault(session) ? endToEndNodeHost(context.host) : context.host,
+        session.delegationHeader,
+      ),
       signal,
     });
   }

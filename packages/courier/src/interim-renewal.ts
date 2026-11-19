@@ -177,7 +177,7 @@ async function cleanup(node: TinyCloudNode, peer: InterimPeer, cid: string, save
   return true;
 }
 
-/** Runs only while the shared async profile transaction is held by the caller. */
+/** Network queries run unlocked; the caller persists each local change with a locked merge. */
 async function checkSiblings(node: TinyCloudNode, profile: Profile, peer: InterimPeer, save: () => void, now: number): Promise<{ tip: AccountDelegationRecord; records: AccountDelegationRecord[] } | InterimResult> {
   parentOf(node, profile, now);
   const records = await issued(node, profile);
@@ -265,7 +265,7 @@ export function assertSuccessor(profile: Profile, peer: StoredPeer, prior: Accou
   }
 }
 
-/** Issue only our own child. The caller holds withProfileTransaction across every awaited boundary. */
+/** Issue only our own child; persist intent and issued children before subsequent network actions. */
 export async function maintainOutbound(node: TinyCloudNode, profile: Profile, peer: InterimPeer, persist: () => void, options: { force?: boolean; manual?: boolean; extendOnly?: boolean } = {}): Promise<InterimResult> {
   const save = () => { profile.version = 4; persist(); };
   const local = interimLocalState(peer);

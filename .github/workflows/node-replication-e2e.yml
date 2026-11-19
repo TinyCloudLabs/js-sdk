@@ -30,6 +30,10 @@ env:
   # tinycloud-node v1.20.6 pinned by digest, with the TC-899 fix (see replica-e2e.yml).
   TINYCLOUD_NODE_IMAGE: ghcr.io/tinycloudlabs/tinycloud-node:1.20.6@sha256:41667d3d133aaa12290a2f3a744afacd838988327552d159c60f04466e66f86f
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   node-replication-e2e:
     runs-on: ubuntu-latest
@@ -111,6 +115,11 @@ jobs:
           TC_TERMINAL_DELEGATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/TinyCloudNode.terminalDelegation.e2e.test.ts
 
+      - name: Run delegated encryption and multi-space runtime grant e2e
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/node-sdk/src/DelegatedAccess.encryption.e2e.test.ts packages/node-sdk/src/TinyCloudNode.runtimePermissions.multiSpace.e2e.test.ts
+
       - name: Run knowledge CLI e2e (apps-agent preset, knowledge list|read)
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -135,6 +144,11 @@ jobs:
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/onboard.timeout.e2e.test.ts
+
+      - name: Run onboard re-run e2e (the session's space is re-checked, real node)
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/run-private-tests.sh" bun test --max-concurrency=1 packages/cli/src/commands/onboard.rerun-recheck.e2e.test.ts
 
       - name: Run auth grant --timeout e2e (approval wait bound, kill seams, real node)
         env:

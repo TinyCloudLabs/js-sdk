@@ -20,6 +20,7 @@ mock.module("../config/profiles.js", () => ({
     },
     getSession: async () => session,
     getKey: async () => key,
+    getStoredKey: async () => key,
     setSession: async (_name: string, next: Record<string, unknown>) => {
       session = next;
       savedSessions.push(next);
