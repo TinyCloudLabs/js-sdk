@@ -691,7 +691,8 @@ platform.
 
 An agent (delegate-session) profile with no local replica state keeps its key on
 `auth logout`; only `session.json` is removed, and the output says "Signed out.
-The key is kept, so a new grant can be imported for it." (`keyKept: true`).
+The key is kept, so a new grant can be imported for it. Grants already made for
+this key stay valid until they expire unless the owner revokes them." (`keyKept: true`).
 `tinycloud auth import` of a grant addressed to that key then makes it the
 profile's session, replacing a live, expired or signed-out one. Every other
 logout deletes the key: "Signed out. The key was deleted; the next sign-in

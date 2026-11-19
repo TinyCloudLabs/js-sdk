@@ -208,7 +208,8 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       await ProfileManager.setSession(profileName, commit.session);
       if (current.profile?.authSignedOut === true || commit.durable === true) {
         await syncAuthCredentialFiles(profilePath(profileName));
-        await ProfileManager.setProfileDurable(profileName, { ...profile, authSignedOut: false });
+        const { authKeyRetained: _authKeyRetained, ...signedIn } = profile;
+        await ProfileManager.setProfileDurable(profileName, { ...signedIn, authSignedOut: false });
       } else {
         await ProfileManager.setProfile(profileName, profile);
       }

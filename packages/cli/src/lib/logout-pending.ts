@@ -142,17 +142,23 @@ export function logoutKeepsKey(profile: ProfileConfig): boolean {
 
 /**
  * Remove request keys before the durable signed-out fence, then attempt both credential unlinks; with `keepKey`, only
- * the session goes and the profile key stays for the next sign-in.
+ * the session goes and the profile key stays for the next sign-in. The fence records the decision
+ * (`authKeyRetained`), so crash recovery finishes exactly this logout.
  */
 export async function clearProfileCredentials(
   name: string, syncDirectory = false, legacyCleanup = false, keepKey = false,
 ): Promise<void> {
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
-    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    const { namedKeys: _namedKeys, authKeyRetained: _authKeyRetained, ...signedOutProfile } = profile;
     await rm(join(profilePath(name), "approval-pending.json"), { force: true });
     // This durable profile write syncs the pending-key removal before logout can be observed.
-    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
+    await ProfileManager.setProfileDurable(name, {
+      ...signedOutProfile,
+      authSignedOut: true,
+      ...(keepKey ? { authKeyRetained: true } : {}),
+      ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}),
+    });
     let failed = false;
     let error: unknown;
     if (!keepKey) {
@@ -167,15 +173,17 @@ export async function clearProfileCredentials(
   }, { requireProfile: true });
 }
 
-/** A crash after the durable signed-out flag but before unlink must not strand the session, or a key logout drops. */
+/**
+ * A crash after the durable signed-out flag but before unlink must not strand the session, or a key that logout meant
+ * to delete: only a logout that recorded `authKeyRetained` keeps the key.
+ */
 async function finishSignedOutCredentialRemoval(name: string): Promise<void> {
   const profile = await ProfileManager.getProfile(name).catch((error: unknown) => {
     if (error instanceof CLIError && error.code === "PROFILE_NOT_FOUND") return null;
     throw error;
   });
   if (profile?.authSignedOut !== true) return;
-  const keepKey = logoutKeepsKey(profile);
-  for (const file of keepKey ? ["session.json"] : ["session.json", "key.json"]) {
+  for (const file of profile.authKeyRetained === true ? ["session.json"] : ["session.json", "key.json"]) {
     try {
       await lstat(join(profilePath(name), file));
     } catch (error) {
@@ -183,8 +191,9 @@ async function finishSignedOutCredentialRemoval(name: string): Promise<void> {
       throw error;
     }
     await ProfileManager.withLock(name, async () => {
-      if ((await ProfileManager.getProfile(name)).authSignedOut === true) {
-        await clearProfileCredentials(name, true, false, keepKey);
+      const current = await ProfileManager.getProfile(name);
+      if (current.authSignedOut === true) {
+        await clearProfileCredentials(name, true, false, current.authKeyRetained === true);
       }
     }, { requireProfile: true });
     return;

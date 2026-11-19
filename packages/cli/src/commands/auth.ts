@@ -847,7 +847,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           authenticated: false,
           keyKept,
           message: keyKept
-            ? "Signed out. The key is kept, so a new grant can be imported for it."
+            ? "Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them."
             : "Signed out. The key was deleted; the next sign-in creates a new one.",
           replicasRemoved,
           replicasKept: options.keepReplicas === true,

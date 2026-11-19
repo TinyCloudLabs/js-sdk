@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Server } from "bun";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PortableDelegation } from "@tinycloud/node-sdk";
@@ -991,7 +992,7 @@ describe("auth import makes a grant for the profile's key its session; logout ke
       expect(logout.exitCode, JSON.stringify(logout)).toBe(0);
       expect(JSON.parse(logout.stdout)).toMatchObject({
         keyKept: true,
-        message: "Signed out. The key is kept, so a new grant can be imported for it.",
+        message: "Signed out. The key is kept, so a new grant can be imported for it. Grants already made for this key stay valid until they expire unless the owner revokes them.",
       });
       expect(await readFile(keyPath, "utf8")).toBe(keyBefore);
       expect(await withTinyCloudStateRoot(home, () => readFile(sessionPath("agent"), "utf8").catch(() => null))).toBeNull();
@@ -1005,6 +1006,31 @@ describe("auth import makes a grant for the profile's key its session; logout ke
         JSON.parse(await readFile(sessionPath("agent"), "utf8")) as { jwk: object; verificationMethod: string });
       expect(session).toMatchObject({ jwk: seeded.jwk, verificationMethod: seeded.sessionDid });
       await expectGrantIsTheSession(home, "agent", grant.cid, grantExpiry, sessionExpiry * 1000);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // A crash after logout's durable signed-out write, before its unlinks: the next command finishes that logout.
+  test.each([
+    ["an interrupted replica logout (--keep-replicas) deletes the key", false],
+    ["an interrupted key-keeping logout keeps the key", true],
+  ] as const)("recovery after %s", async (_name, keyRetained) => {
+    const home = await mkdtemp(join(tmpdir(), "tc-3434-crash-"));
+    try {
+      await seedSessionAndLongerGrant(home, "agent", Math.floor(Date.now() / 1000) + 3600, Math.floor(Date.now() / 1000) + 7200);
+      const directory = await withTinyCloudStateRoot(home, async () => profilePath("agent"));
+      const profileFile = join(directory, "profile.json");
+      await mkdir(join(directory, "replicas", "notes"), { recursive: true });
+      await writeFile(profileFile, JSON.stringify({
+        ...JSON.parse(await readFile(profileFile, "utf8")) as Record<string, unknown>,
+        authSignedOut: true,
+        ...(keyRetained ? { authKeyRetained: true } : {}),
+      }));
+      const status = await runBuiltCli(home, ["--profile", "agent", "--json", "auth", "status"]);
+      expect(status.exitCode, JSON.stringify(status)).toBe(0);
+      expect(existsSync(join(directory, "session.json"))).toBe(false);
+      expect(existsSync(join(directory, "key.json"))).toBe(keyRetained);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

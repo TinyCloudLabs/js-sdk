@@ -380,7 +380,7 @@ export interface DelegatedSessionBootstrap {
 }
 
 /** The profile fields a bootstrap writes, and a rollback compares and restores. */
-const BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut"] as const;
+const BOOTSTRAP_PROFILE_FIELDS = ["sessionDid", "spaceId", "authSignedOut", "authKeyRetained"] as const;
 
 /** What a bootstrap replaced and what it wrote, read and written under the profile lock. */
 interface BootstrapWrite {
@@ -442,8 +442,10 @@ export async function bootstrapDelegatedSession(
       jwk,
       verificationMethod: sessionDid,
     };
-    // A delegated session never carries named-key authority.
-    const { namedKeys: _namedKeys, authSignedOut: _authSignedOut, ...previousFields } = previousProfile;
+    // A delegated session never carries named-key authority; signing in ends the signed-out state.
+    const {
+      namedKeys: _namedKeys, authSignedOut: _authSignedOut, authKeyRetained: _authKeyRetained, ...previousFields
+    } = previousProfile;
     const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
