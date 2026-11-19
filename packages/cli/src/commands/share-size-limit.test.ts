@@ -72,7 +72,7 @@ describe("the share size limit is the largest upload the node accepts", () => {
   test("one byte over 95 MiB is refused before anything is published, with the size message", async () => {
     const result = await run([await fileOf(NODE_UPLOAD_BODY_BYTES + 1)]);
     expect(result.exitCode).toBe(7);
-    expect(errorOf(result.stderr)).toEqual({ code: "MAX_BYTES_EXCEEDED", message: "Shared files must be under 95 MB. Use a smaller file or split it." });
+    expect(errorOf(result.stderr)).toEqual({ code: "MAX_BYTES_EXCEEDED", message: "Shared files can be up to 95 MiB. Use a smaller file or split it." });
     expect(published).toHaveLength(0);
   });
 
@@ -83,7 +83,7 @@ describe("the share size limit is the largest upload the node accepts", () => {
     expect(published).toHaveLength(0);
   });
 
-  test("a file over a smaller --max-bytes names that limit, not 95 MB", async () => {
+  test("a file over a smaller --max-bytes names that limit, not 95 MiB", async () => {
     const result = await run([await fileOf(2000), "--max-bytes", "1000"]);
     expect(result.exitCode).toBe(7);
     expect(errorOf(result.stderr)).toEqual({
@@ -110,7 +110,7 @@ describe("the share size limit is the largest upload the node accepts", () => {
     expect(standard.exitCode).toBe(7);
     expect(errorOf(standard.stderr)).toEqual({
       code: "MAX_BYTES_EXCEEDED",
-      message: "These files add up to more than 95 MB. Share fewer at once or use smaller files.",
+      message: "These files add up to more than 95 MiB. Share fewer at once or use smaller files.",
     });
     expect(published).toHaveLength(0);
   });
@@ -127,10 +127,10 @@ describe("the share size limit is the largest upload the node accepts", () => {
     expect(published).toHaveLength(1);
   });
 
-  test("an addressed share over 71 MiB is refused before anything is published, and says 71 MB", async () => {
+  test("an addressed share over 71 MiB is refused before anything is published, and says 71 MiB", async () => {
     const result = await run([await fileOf(ADDRESSED_LIMIT + 1), "--to", recipient]);
     expect(result.exitCode).toBe(7);
-    expect(errorOf(result.stderr)).toEqual({ code: "MAX_BYTES_EXCEEDED", message: "Files shared with specific people must be under 71 MB. Use a smaller file or split it." });
+    expect(errorOf(result.stderr)).toEqual({ code: "MAX_BYTES_EXCEEDED", message: "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it." });
     expect(published).toHaveLength(0);
   });
 });

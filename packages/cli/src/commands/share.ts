@@ -54,8 +54,8 @@ const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 const INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 const NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
-const SHARE_TOO_LARGE_MESSAGE = "Shared files must be under 95 MB. Use a smaller file or split it.";
-const ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people must be under 71 MB. Use a smaller file or split it.";
+const SHARE_TOO_LARGE_MESSAGE = "Shared files can be up to 95 MiB. Use a smaller file or split it.";
+const ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it.";
 
 export interface ShareCommandServices {
   readonly targetAdapter?: TargetPublishAdapter;
@@ -420,7 +420,7 @@ function shareTooLarge(maxBytes: number | undefined, ceiling: number, together =
   const largest = ceiling === MAX_SHARE_STDIN_BYTES ? "95" : "71";
   const message = together
     ? defaultLimit
-      ? `These files add up to more than ${largest} MB. Share fewer at once or use smaller files.`
+      ? `These files add up to more than ${largest} MiB. Share fewer at once or use smaller files.`
       : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to ${largest} MiB.`
     : defaultLimit
       ? ceiling === MAX_SHARE_STDIN_BYTES ? SHARE_TOO_LARGE_MESSAGE : ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE
