@@ -409,7 +409,7 @@ test('connections beyond the connection budget are closed without a reply', asyn
   });
 });
 
-test('requests beyond the pending budget are refused busy without waiting for the queue', async () => {
+test('requests beyond the pending budget are refused busy without waiting for the queue', { timeout: 20000 }, async () => {
   const env = makeEnv();
   const ids = Array.from({ length: 40 }, () => writeItem(env).itemId);
   let release;
@@ -422,8 +422,16 @@ test('requests beyond the pending budget are refused busy without waiting for th
     return { messageId: `msg-${env.calls.length}` };
   };
   await withSender(env, async () => {
-    const pending = ids.map((itemId) => request(env.pipe, requestFor(itemId)));
-    await sleep(300);
+    // The requests over the budget are answered at once while the first send is still held at the gate: wait for
+    // those replies (an explicit signal), then let the queue drain.
+    let busy = 0;
+    let overBudget;
+    const answered = new Promise((resolve) => { overBudget = resolve; });
+    const pending = ids.map((itemId) => request(env.pipe, requestFor(itemId)).then((reply) => {
+      if (reply === 'refused:busy\n' && ++busy === 7) overBudget();
+      return reply;
+    }));
+    await answered;
     release();
     const replies = await Promise.all(pending);
     assert.equal(replies.filter((reply) => reply === 'refused:busy\n').length, 7);

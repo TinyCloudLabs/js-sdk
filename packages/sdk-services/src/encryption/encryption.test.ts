@@ -872,11 +872,9 @@ describe("discoverNetwork", () => {
     }
   });
 
-  it("falls back to .well-known on node failure", async () => {
+  it("consults .well-known only when the node reports no network", async () => {
     const node: NodeDescriptorFetcher = {
-      fetchByNetworkId: async () => {
-        throw new Error("network unreachable");
-      },
+      fetchByNetworkId: async () => null,
     };
     const wk: WellKnownDescriptorFetcher = {
       fetchWellKnown: async () => makeDescriptor(),
@@ -890,6 +888,29 @@ describe("discoverNetwork", () => {
     if (result.ok) {
       expect(result.data.source).toBe("well-known");
     }
+  });
+
+  it("does not consult .well-known when the node lookup fails", async () => {
+    let consulted = false;
+    const node: NodeDescriptorFetcher = {
+      fetchByNetworkId: async () => {
+        throw new Error("HTTP 500");
+      },
+    };
+    const wk: WellKnownDescriptorFetcher = {
+      fetchWellKnown: async () => {
+        consulted = true;
+        return makeDescriptor();
+      },
+    };
+    const result = await discoverNetwork({
+      identifier: NETWORK_ID,
+      node,
+      wellKnown: wk,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("TRANSPORT_ERROR");
+    expect(consulted).toBe(false);
   });
 
   it("accepts PKH descriptor principals that differ only by address casing", async () => {

@@ -26,6 +26,7 @@ test("measures the canonical worker exactly once at gzip level 9", () => {
   const { dir } = fixture(bytes);
   const measured = execFileSync("gzip", ["-9", "-c"], { input: bytes }).byteLength;
   expect(checkWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
+  expect(() => checkWorkerSize(dir, measured - 1)).toThrow(/exceeds .* by 1 bytes/);
 });
 test("uses the reviewed GitHub worker ceilings without additional headroom", () => {
   const ledger = JSON.parse(readFileSync(join(import.meta.dir, "../../web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Record<string, { worker?: { ceiling: number }; replicaWorker?: { ceiling: number } } | undefined>;

@@ -5,7 +5,7 @@ import { CourierError, CourierPending, EXIT_PENDING, errInfo } from './errors.js
 import {
   requestHelp, cmdInit, cmdManifest, cmdPair, cmdRevoke, cmdSend, cmdInbox, cmdRead, cmdTask, cmdRequest, cmdOrders,
 } from './commands.js';
-import { cmd, programName, setProgramName } from './program.js';
+import { cmd, programName, setProgramName, tcCmd } from './program.js';
 import { cmdWatch } from './watch-cmd.js';
 import { cmdIntake } from './intake/intake.js';
 import { cmdOutbox } from './outbox.js';
@@ -16,6 +16,7 @@ import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
 import { courierVersion } from './version.js';
 import { cmdStart } from './guided.js';
+import { cmdStatus } from './status.js';
 import { cmdInvite, cmdJoin } from './invitation.js';
 
 function usage(): string {
@@ -27,10 +28,6 @@ Usage: ${name} <command> [args]
 Setup & pairing (humans run these):
   start [--new <subject> | --session <id> [--peer p] | --link <invitation> --consent]
                                    Discover accessible chats; choose new/existing only when chats exist.
-  invite --session <id> --mode same-owner|anyone|named [--recipient <did:key|peer>] --consent
-                                   Print one handoff link and serve its signed pairing (default --wait 300).
-  invite serve <invitationId> [--wait 300]
-                                   Resume the same invitation and durable winning claim.
   join <invitation-link> --consent [--wait 300]
                                    Join and activate the link's intended session; never create a substitute.
   init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
@@ -54,12 +51,13 @@ Setup & pairing (humans run these):
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew both directions; humans or watcher only
   pair renew <peer> --renew-artifact [--force]  Emit renewed C artifact for handoff; receiver runs pair accept
-  revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
+  revoke <peer>                    Revoke the peer's access and remove the pairing. Files you already shared stay available until each share expires or you revoke it (\`${tcCmd('share revoke <id>')}\`).
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
               [--intent request|ask|answer|update|inform] [--ask "…"]… [--constraint "…"]…
               [--reply-to <messageId>] [--task-ref <taskId>]…
+  status [--peer <peer>] [--json]   Saved per-side expiry; no remote access or renewal check
   inbox [--json] [--peek]          New counterparty messages; --peek skips receipt updates
   read <threadId> [--peer p] [--json]
                                    The merged thread: both sides' messages + tasks
@@ -95,7 +93,7 @@ Guards (woken agents run with these; humans rarely do):
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 
 Delivery (one watcher per person per machine; never calls a model):
-  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--once]
+  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded [--agent-cli]] [--env-pass NAME]… [--home-file REL]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--once]
                                    Subscribe to each peer's to/<me>/ and your me/approvals/, poll every
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
@@ -109,9 +107,12 @@ Delivery (one watcher per person per machine; never calls a model):
                                              Claude agents only (use --paseo-provider claude), refuses without it
                                      claude  \`claude -p\`, always guarded, session id kept per thread and resumed
                                              [--claude-settings f] [--claude-allow rule]… [--claude-bin p]
-                                     exec    sh -c <cmd> with COURIER_THREAD, COURIER_PEER, COURIER_MESSAGES.
+                                     exec    sh -c <cmd> with COURIER_THREAD, COURIER_PEER, COURIER_MESSAGES, COURIER_PROMPT.
                                              NOT approval-guarded: needs --unguarded, prints a notice on every
-                                             wake; not for agents that can merge, deploy or publish
+                                             wake; not for agents that can merge, deploy or publish.
+                                             An agent CLI with no guarded adapter (codex, opencode, omp, gemini, …)
+                                             also needs --agent-cli: nothing checks what it does with a peer's
+                                             message, so give its OS account only what the agent may use
                                    [--wake-timeout 900] limits one wake run, in seconds.
                                    Wake budget: at most --wake-budget message wake attempts per thread per UTC day; then
                                    the thread pauses (inform "thread paused" to the peer, notification to you via
@@ -119,8 +120,9 @@ Delivery (one watcher per person per machine; never calls a model):
                                    Notification paths never start or message agents. inform never wakes.
                                    Woken claude/exec runs get an environment allowlist (PATH, HOME, locale,
                                    proxy/CA, COURIER_*), clean HOME/XDG paths, no tokens; [--env-pass NAME]…
-                                   adds one on purpose. paseo agents inherit the Paseo daemon's environment:
-                                   known credential names are blanked, others are not.
+                                   adds one variable and [--home-file REL]… copies one file of your HOME (an
+                                   agent's model login) on purpose. paseo agents inherit the Paseo daemon's
+                                   environment: known credential names are blanked, others are not.
   watch … --install-launchd | --install-systemd [--dry-run] [--name n]
                                    Install the same watch command as a macOS launchd agent or a Linux
                                    systemd --user unit. --dry-run prints the exact file and commands.
@@ -182,6 +184,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'pair': return cmdPair(sub);
     case 'revoke': return cmdRevoke(sub);
     case 'send': return cmdSend(sub);
+    case 'status': return cmdStatus(sub);
     case 'inbox': return cmdInbox(sub);
     case 'read': return cmdRead(sub);
     case 'task': return cmdTask(sub);

@@ -10,6 +10,7 @@ import {
   type ShareEnvelopeV2,
   type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
+import { encryptionNodeOrigin } from "./encryption-origin.js";
 import { artifactBindingView, assertArtifactBinding } from "./artifact-pin.js";
 import type { ShareAuthorizationAdapter, ShareAuthorizedContent, ShareAuthorizationResult } from "./authorization.js";
 import { SHARE_V2_PROTOCOL } from "./protocol.js";
@@ -579,7 +580,7 @@ export class ShareRecipientClient {
     });
     try {
       this.options.onStage?.("decryption");
-      const response = await this.fetchFn(new URL("/invoke", this.options.nodeOrigin), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body), ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
+      const response = await this.fetchFn(new URL("/invoke", encryptionNodeOrigin(this.options.nodeOrigin)), { method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json", Authorization: invocation.authorization }, body: JSON.stringify(body), ...(this.options.signal === undefined ? {} : { signal: this.options.signal }) });
       if (!response.ok) throw await recipientHttpError(response, "v3 decrypt invocation rejected");
       const value = object(await response.json(), "v3 decrypt response");
       const allowed = ["type", "targetNode", "networkId", "invocationCid", "encryptedSymmetricKeyHash", "receiverPublicKeyHash", "wrappedKey", "alg", "keyVersion", "requestHash", "nodeId", "nodeSignature"];

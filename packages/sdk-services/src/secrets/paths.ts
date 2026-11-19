@@ -1,3 +1,5 @@
+import type { SecretType } from "./secretTypes";
+
 export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 const SECRET_PREFIX = "secrets/";
@@ -27,6 +29,11 @@ export const TC832_RESERVED_SCOPES: readonly string[] = Object.freeze([
 export interface SecretPutOptions extends SecretScopeOptions {
   /** Write only when no secret exists under this name; never overwrite. */
   ifAbsent?: boolean;
+  /**
+   * What the secret is. Stored inside the encrypted payload. `secret` (the
+   * default) is not stored: a payload with no type already means `secret`.
+   */
+  type?: SecretType;
 }
 
 /**

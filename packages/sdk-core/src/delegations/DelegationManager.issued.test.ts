@@ -93,7 +93,7 @@ function managerWith(
 }
 
 describe("DelegationManager.query direction issued", () => {
-  test("signs one proofless list invocation on <session DID>/delegation and posts the contract body", async () => {
+  test("signs one proofless list invocation on canonical session-key delegation resource and posts the contract body", async () => {
     const key = sessionKey();
     const { manager, calls, invokeAny } = managerWith(key.signer, ({ url }) =>
       url.endsWith("/info") ? info(["delegation-issued-query-v1"]) : page([item("bafy-a")]));
@@ -108,7 +108,7 @@ describe("DelegationManager.query direction issued", () => {
     expect(JSON.parse(query.init.body!)).toEqual({ direction: "issued", status: "active", space: "default", limit: 25, cursor: "c1" });
     const authorization = query.init.headers!.Authorization!;
     const payload = payloadOf(authorization);
-    expect(payload.att).toEqual({ [`${key.did}/delegation`]: { "tinycloud.delegation/list": [{}] } });
+    expect(payload.att).toEqual({ [`tinycloud:${key.did.slice("did:".length)}:agent/delegation`]: { "tinycloud.delegation/list": [{}] } });
     expect(payload.prf).toEqual([]);
     expect(payload.iss.split("#")[0]).toBe(key.did);
     expect(verifies(authorization, key.publicKey)).toBe(true);
@@ -242,7 +242,7 @@ describe("DelegationManager.query direction issued", () => {
     expect(result).toEqual({ ok: false, error: expect.objectContaining({ code: "NETWORK_ERROR" }) });
   });
 
-  test("the invocation carries exactly one capability: one bare <DID>/delegation resource with the single list ability", async () => {
+  test("the invocation carries exactly one capability: one canonical session-key delegation resource with the single list ability", async () => {
     const key = sessionKey();
     const { manager, calls } = managerWith(key.signer, ({ url }) =>
       url.endsWith("/info") ? info(["delegation-issued-query-v1"]) : page([]));
@@ -251,7 +251,7 @@ describe("DelegationManager.query direction issued", () => {
 
     const { att } = payloadOf(calls.find((call) => call.url.endsWith("/delegation/query"))!.init.headers!.Authorization!);
     const resources = Object.keys(att);
-    expect(resources).toEqual([`${key.did}/delegation`]);
+    expect(resources).toEqual([`tinycloud:${key.did.slice("did:".length)}:agent/delegation`]);
     expect(resources[0]).not.toMatch(/[?#]/);
     expect(Object.keys(att[resources[0]!]!)).toEqual(["tinycloud.delegation/list"]);
     expect(att[resources[0]!]!["tinycloud.delegation/list"]).toEqual([{}]);

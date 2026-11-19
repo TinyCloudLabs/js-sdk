@@ -341,17 +341,21 @@ describe("without --timeout, an approval request that expired unanswered ends th
     expect(await entries()).toEqual([]);
   });
 
-  test("(f) the loop ends: after the drop the next run makes a NEW request with a new link", async () => {
+  // test-ruling: TC-3153. Was: "(f) the loop ends: after the drop the next run makes a NEW request with a new link" (exit 3 with the
+  // dead link, then the next run makes the new request). Now: the same run makes the new request, and its link is the first one shown.
+  test("(f) the loop ends: a request long past retention is replaced in the same run by a NEW request with a new link", async () => {
     const first = await createPending();
     await expireLocally(20 * 60_000);
     discoverRefusal = REAL_SHAPE;
-    expect((await pendingOf(() => acquireApprovalRequest(did, options()))).code).toBe("APPROVAL_REQUEST_EXPIRED");
-    discoverRefusal = undefined;
-    const second = await createPending();
-    expect(second.requestId).not.toBe(first.requestId);
-    expect(second.approvalUrl).not.toBe(first.approvalUrl);
+    offered = [];
+    await expect(acquireApprovalRequest(did, options((approvalUrl) => { offered.push(approvalUrl); throw LEFT; }))).rejects.toBe(LEFT);
+    expect(offered).toHaveLength(1);
+    expect(offered[0]).not.toBe(first.approvalUrl);
     expect(linkPosts).toBe(2);
-    expect(Date.parse(second.requestExpiresAt)).toBeGreaterThan(Date.now());
+    const [second] = await entries();
+    expect(second!.requestId).not.toBe(first.requestId);
+    expect(second!.approvalUrl).toBe(offered[0]);
+    expect(Date.parse(second!.requestExpiresAt)).toBeGreaterThan(Date.now());
   });
 
   test("a request that is still open is untouched: a new link is offered and a resumed one is offered again, as before", async () => {

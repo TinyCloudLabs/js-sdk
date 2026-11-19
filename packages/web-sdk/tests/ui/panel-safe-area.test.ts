@@ -147,4 +147,17 @@ describe("the loading stand-in", () => {
     expect(HOST_CSS.match(/\.pending \.pclose\{[^}]*\}/)?.[0]).toContain("width:44px");
     expect(HOST_CSS.match(/\.pending button\{[^}]*\}/)?.[0]).toContain("min-height:44px");
   });
+  test("a failed panel load warns about reload and offers recovery instead of retrying the same chunk", () => {
+    let reloads = 0;
+    const pending = createPendingPanel(() => {});
+    page.document.body.append(pending.el);
+
+    pending.showError(() => void (reloads += 1));
+
+    expect(pending.el.textContent).toContain("This didn't load. Reloading the page can fix it. Save anything you're working on first.");
+    const button = [...pending.el.querySelectorAll("button")].find((candidate) => candidate.textContent === "Reload page");
+    expect(button).toBeDefined();
+    button?.click();
+    expect(reloads).toBe(1);
+  });
 });

@@ -208,8 +208,8 @@ describe("TinyCloudNode sharing", () => {
       chainId: 1,
     };
     const longest = await node.createSubDelegation(parent, { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild" });
-    expect(longest.expiry.getTime()).toBe(parentExpiry.getTime());
-    expect((wasmBindings.prepareSession as any).mock.calls[0][0].expirationTime).toBe(parentExpiry.toISOString());
+    expect(longest.expiry.getTime()).toBe(Math.floor(parentExpiry.getTime() / 1000) * 1000);
+    expect((wasmBindings.prepareSession as any).mock.calls[0][0].expirationTime).toBe(new Date(Math.floor(parentExpiry.getTime() / 1000) * 1000).toISOString());
 
     const before = Date.now();
     const hour = await node.createSubDelegation(parent, { path: "docs", actions: ["tinycloud.kv/get"], delegateDID: "did:key:z6MkChild", expiryMs: 60 * 60_000 });

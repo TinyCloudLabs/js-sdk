@@ -1,4 +1,4 @@
-import type { RegistryCacheEntry, RegistryCacheRecord, RegistryCacheStore, RegistryCacheTombstone, RegistrySequenceStore } from "@tinycloud/sdk-core";
+import type { RegistryCacheEntry, RegistryCacheRecord, RegistryCacheStore, RegistryCacheTombstone, RegistryRegistrationEvidence, RegistryRegistrationKind, RegistrySequenceStore } from "@tinycloud/sdk-core";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { constants as fsConstants, fstatSync, readFileSync, readlinkSync } from "node:fs";
@@ -1099,42 +1099,71 @@ export function createProfileRegistryCacheStore(profile: string): RegistryCacheS
 
 /** Independent high-water state survives an absent cache file without inventing absence. */
 export function createProfileRegistrySequenceStore(profile: string): RegistrySequenceStore {
-  type Sequence = { ownerKey: string; sequence: number };
-  const memory = new Map<string, number>();
-  const find = (records: readonly Sequence[], key: string): number | undefined => {
+  type Sequence = { ownerKey: string; sequence: number; kind?: RegistryRegistrationKind };
+  const memory = new Map<string, RegistryRegistrationEvidence>();
+  // Only durable signed provenance may be reused after its original profile scope ends.
+  const durablySigned = new Set<string>();
+  const rank = (kind: RegistryRegistrationKind): number => kind === "signed-v2" ? 2 : kind === "unknown" ? 1 : 0;
+  const remember = (key: string, next: RegistryRegistrationEvidence): void => {
+    const previous = memory.get(key);
+    if (!previous || next.sequence > previous.sequence ||
+        (next.sequence === previous.sequence && rank(next.kind) > rank(previous.kind))) {
+      memory.set(key, next);
+    }
+  };
+  const find = (records: readonly Sequence[], key: string): RegistryRegistrationEvidence | undefined => {
     const keys = new Set<string>();
     for (const entry of records) {
       if (!entry || typeof entry.ownerKey !== "string" || keys.has(entry.ownerKey) ||
-          !Number.isSafeInteger(entry.sequence) || entry.sequence < 0) {
+          !Number.isSafeInteger(entry.sequence) || entry.sequence < 0 ||
+          (entry.kind !== undefined && entry.kind !== "legacy-v1" && entry.kind !== "signed-v2" && entry.kind !== "unknown") ||
+          (entry.kind === "legacy-v1" && entry.sequence !== 0)) {
         throw new Error("Invalid registry sequence store");
       }
       keys.add(entry.ownerKey);
     }
-    return records.find((entry) => entry.ownerKey === key)?.sequence;
+    const stored = records.find((entry) => entry.ownerKey === key);
+    return stored === undefined ? undefined : { sequence: stored.sequence, kind: stored.kind ?? "unknown" };
+  };
+  const getRegistration = async (key: string): Promise<RegistryRegistrationEvidence | undefined> => {
+    const cached = memory.get(key);
+    if (cached?.kind === "signed-v2" && durablySigned.has(key)) return cached;
+    const stored = find((await readProfileStore<Sequence>(profile, "registry-sequences")).records, key);
+    if (stored) {
+      remember(key, stored);
+      if (stored.kind === "signed-v2") durablySigned.add(key);
+    }
+    const current = memory.get(key);
+    if (current?.kind === "signed-v2" && !durablySigned.has(key)) {
+      return { sequence: current.sequence, kind: "unknown" };
+    }
+    return current;
   };
   return {
     async get(key) {
-      const stored = find((await readProfileStore<Sequence>(profile, "registry-sequences")).records, key);
-      const sequence = Math.max(stored ?? -1, memory.get(key) ?? -1);
-      if (sequence < 0) return undefined;
-      memory.set(key, sequence);
-      return sequence;
+      return (await getRegistration(key))?.sequence;
     },
-    async set(key, sequence) {
-      // Match the browser sequence adapter: a failed disk write must not
-      // make this client forget registration it has already verified.
-      memory.set(key, Math.max(memory.get(key) ?? -1, sequence));
-      await withRegistryStoreUpdate(profile, "registry-sequences", () =>
-        updateProfileStoreWhileLocked<Sequence, void>(profile, "registry-sequences", (records) => {
+    getRegistration,
+    async set(key, sequence, kind = "signed-v2") {
+      if (!Number.isSafeInteger(sequence) || sequence < 0 ||
+          (kind !== "legacy-v1" && kind !== "signed-v2" && kind !== "unknown") ||
+          (kind === "legacy-v1" && sequence !== 0)) {
+        throw new Error("Invalid registry registration evidence");
+      }
+      // A failed write retains knowledge, but cannot fake a durable promotion.
+      remember(key, { sequence, kind });
+      const stored = await withRegistryStoreUpdate(profile, "registry-sequences", () =>
+        updateProfileStoreWhileLocked<Sequence, RegistryRegistrationEvidence>(profile, "registry-sequences", (records) => {
           const current = find(records, key);
-          const highWater = Math.max(current ?? -1, memory.get(key) ?? -1);
-          memory.set(key, highWater);
+          if (current) remember(key, current);
+          const highest = memory.get(key)!;
           return {
-            records: current !== undefined && current >= highWater ? records
-              : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, sequence: highWater }],
-            result: undefined,
+            records: current?.sequence === highest.sequence && current.kind === highest.kind ? records
+              : [...records.filter((entry) => entry.ownerKey !== key), { ownerKey: key, ...highest }],
+            result: highest,
           };
         }));
+      if (stored.kind === "signed-v2") durablySigned.add(key);
     },
   };
 }
