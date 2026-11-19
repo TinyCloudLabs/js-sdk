@@ -69,6 +69,9 @@ program
   .option("--no-diagnostic-logs", "Don't record a CLI log for this command");
 
 
+// Set by the preAction hook when this run may show the first-run text; shown by the postAction hook once the command has succeeded.
+let aboutPending: { signedIn: boolean } | undefined;
+
 program.hook("preAction", async (hookedCommand, actionCommand) => {
   const opts = hookedCommand.optsWithGlobals();
   setJsonOutputRequested(opts.json === true);
@@ -78,8 +81,10 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
   if (!opts.quiet && !isShareCommand) {
     emitBanner(version);
   }
-  // The first command in a config folder says what TinyCloud is and what the CLI can do, once, on stderr.
-  // An explicit --json, --quiet or TC_HIDE_BANNER=1 keeps stderr as it was; a piped stdout alone does not.
+  // The first command in a config folder that succeeds says what TinyCloud is and what the CLI can do, once, on stderr
+  // after its own output (see the postAction hook), so an error is never preceded by it and stderr stays one JSON
+  // document. An explicit --json, --quiet or TC_HIDE_BANNER=1 keeps stderr as it was; a piped stdout alone does not.
+  aboutPending = undefined;
   const savedCheck = fullCommandName(actionCommand) === "skill save" && actionCommand.opts().check === true;
   if (!opts.quiet && opts.json !== true && !isShareCommand && !savedCheck && process.env.TC_HIDE_BANNER !== "1") {
     let signedIn = fullCommandName(actionCommand) === "onboard";
@@ -90,7 +95,7 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
         // No config folder yet: this computer is not signed in.
       }
     }
-    showAboutOnce({ dir: CONFIG_DIR, cli: CLI_NAME, signedIn });
+    aboutPending = { signedIn };
   }
 
   // Config guard — warn if not configured for auth-required commands
@@ -127,6 +132,10 @@ program.hook("preAction", async (hookedCommand, actionCommand) => {
 
 program.hook("postAction", async (_hookedCommand, actionCommand) => {
   outputWarnings([]);
+  if (aboutPending && (process.exitCode === undefined || process.exitCode === 0)) {
+    showAboutOnce({ dir: CONFIG_DIR, cli: CLI_NAME, signedIn: aboutPending.signedIn });
+  }
+  aboutPending = undefined;
   if (actionCommand.name() === "bug-report") return;
   await appendDiagnosticLog({
     root: CONFIG_DIR,
