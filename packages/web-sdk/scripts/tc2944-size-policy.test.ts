@@ -29,7 +29,7 @@ test("TC-2944 records the exact canonical CI root bytes of #1069 within the 800-
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(800);
-    expect(rootCeilingFor(ledger, format)).toEqual({ row: "tc2944VaultPathClassifierRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc2923TeeDefaultRoot: undefined }, format)).toEqual({ row: "tc2944VaultPathClassifierRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
