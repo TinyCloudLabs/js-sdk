@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.7.1
+
+### Patch Changes
+
+- 21efb2c: `tinycloud profile show` prints only its documented fields, and reading a profile sets its folder and files to the same owner-only permissions a new profile gets.
+
+  Details: TC-2652, TC-2653
+
 ## 1.7.0
 
 ### Minor Changes
