@@ -139,6 +139,15 @@ export class WebSecretsService implements ISecretsService {
       : this.service.get(name, options);
   }
 
+  getEntry(
+    name: string,
+    options?: SecretScopeOptions,
+  ): ReturnType<ISecretsService["getEntry"]> {
+    return options === undefined
+      ? this.service.getEntry(name)
+      : this.service.getEntry(name, options);
+  }
+
   async put(
     name: string,
     value: string,

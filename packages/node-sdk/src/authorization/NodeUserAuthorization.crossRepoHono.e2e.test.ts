@@ -60,10 +60,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { publicJwk } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.cross-repo-hono.test";
 
 // Deterministic test key — MUST match the harness signer so
 // `result.address === signer.getAddress()` holds in the consumer.
@@ -161,6 +165,8 @@ if (HARNESS_AVAILABLE) {
   beforeEach(() => {
     originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: any, init?: any) => {
+      const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+      if (metadata) return metadata;
       const url = String(input);
       if (url.startsWith("http://127.0.0.1:")) {
         return originalFetch(input, init);
@@ -242,13 +248,14 @@ if (HARNESS_AVAILABLE) {
     await new Promise((r) => setTimeout(r, 50));
   }, 30_000);
 
-  afterAll(() => {
+  afterAll(async () => {
     if (harnessProc) {
       try {
         harnessProc.kill("SIGTERM");
       } catch {
         // ignore
       }
+      await harnessProc.exited;
     }
   });
 }
@@ -278,6 +285,7 @@ async function buildPreparedSession() {
   // so `signInWithOpenKeyResult` receives an equivalent `prepared`
   // reference.
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer,
     wasmBindings: wasm,
     signStrategy: { type: "auto-sign" },
@@ -368,7 +376,7 @@ suite(
     const prepRes = await harnessPost("/api/delegate/authorize-sign-prepare", {
       keyId,
       siwe: preparation.prepared.siwe,
-      jwk: preparation.prepared.jwk,
+      jwk: publicJwk(preparation.prepared.jwk),
       host,
     });
     expect(prepRes.status).toBe(200);
@@ -438,7 +446,7 @@ suite(
     const prepRes = await harnessPost("/api/delegate/authorize-sign-prepare", {
       keyId,
       siwe: preparation.prepared.siwe,
-      jwk: preparation.prepared.jwk,
+      jwk: publicJwk(preparation.prepared.jwk),
       host,
     });
     expect(prepRes.status).toBe(200);

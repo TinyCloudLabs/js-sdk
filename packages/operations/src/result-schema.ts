@@ -84,14 +84,27 @@ const warningsSchema: JsonSchema = {
   type: "array",
   minItems: 1,
   items: {
-    type: "object",
-    properties: {
-      code: { const: "STORED_GRANT_SKIPPED" },
-      reason: { type: "string", enum: [...STORED_GRANT_SKIP_REASONS] },
-      grantCid: { type: "string", pattern: DELEGATION_CID_PATTERN },
-    },
-    required: ["code", "reason"],
-    additionalProperties: false,
+    oneOf: [
+      {
+        type: "object",
+        properties: {
+          code: { const: "STORED_GRANT_SKIPPED" },
+          reason: { type: "string", enum: [...STORED_GRANT_SKIP_REASONS] },
+          grantCid: { type: "string", pattern: DELEGATION_CID_PATTERN },
+        },
+        required: ["code", "reason"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          code: { const: "REGISTRY_UNAVAILABLE" },
+          reason: { type: "string", enum: ["using_default_node", "using_cached_settings"] },
+        },
+        required: ["code", "reason"],
+        additionalProperties: false,
+      },
+    ],
   },
 };
 

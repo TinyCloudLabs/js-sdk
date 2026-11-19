@@ -26,7 +26,7 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  *   - `get` mints the pinned share's read-only child delegation and reads back a version on a 412;
  *   - `metadata` backs the Policy/v3 root for addressed artifact shares;
  *   - `list` finds the next version number and backs `share versions`.
- *   Profiles signed in before this entry need `auth login --device --manifest builtin:share-publishing` again.
+ *   Profiles signed in before this entry need `auth login --manifest builtin:share-publishing` again.
  *
  * - `tinycloud.encryption/decrypt` on the account's own `default/share/` prefix:
  *   an email-addressed share's policy ceiling includes decrypt on one leaf in that prefix, and without it

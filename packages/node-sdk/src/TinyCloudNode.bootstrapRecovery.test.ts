@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   AccountService,
@@ -203,6 +204,7 @@ function makeRecoveryHarness(fake: FakeCloud): TinyCloudNode {
     capabilityRequest: undefined,
     lastActivationSkippedSpaceIds: [] as string[],
     hosts: [HOST],
+    resolveResourceDestinations: async () => [{ url: HOST }],
     async createBootstrapSession({ spaceId }: { spaceId: string }) {
       const name = spaceName(spaceId);
       fake.at(`session:${name}`, () => fake.sessions.add(spaceId));
@@ -827,6 +829,7 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
   Reflect.set(node, "auth", {
     tinyCloudSession: undefined,
     capabilityRequest: undefined,
+    resolveResourceDestinations: async () => [{ url: HOST }],
     createBootstrapSession: async () => session,
     hostOwnedSpaceResult: async () => submitHostDelegation(HOST, {}),
   });
@@ -838,7 +841,7 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
     await run.call(node, [hostStep]);
     throw new Error("expected bootstrap host to fail");
   } catch (error) {
-    expect((error as Error).message).toContain("403 - Forbidden");
+    expect(error).toMatchObject({ cause: { success: false, status: 403 } });
     expect(authorizationVerdictOf(error)).toBe("forbidden");
   }
 
@@ -849,7 +852,7 @@ test("bootstrap host and activation failures retain the HTTP verdict", async () 
     await run.call(node, [sessionStep, activationStep]);
     throw new Error("expected bootstrap activation to fail");
   } catch (error) {
-    expect((error as Error).message).toContain("401 - session expired");
+    expect(error).toMatchObject({ cause: { success: false, status: 401 } });
     expect(authorizationVerdictOf(error)).toBe("unauthenticated");
   }
 });

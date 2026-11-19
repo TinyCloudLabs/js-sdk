@@ -12,6 +12,8 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { bases } from "multiformats/basics";
 import { verifyMessage } from "viem";
 
+import { pkhDid } from "./identity";
+
 export interface LocationRecordPayload {
   version: 1;
   subject: string;
@@ -23,6 +25,26 @@ export interface LocationRecordPayload {
 export interface LocationRecord extends LocationRecordPayload {
   signature: string;
 }
+
+export interface LocationRecordV2Payload {
+  version: 2;
+  subject: string;
+  nodes: Array<{ did: string; url: string }>;
+  spaces: Array<{
+    space: string;
+    nodes: Array<{ did: string; mode: "read-write" | "read-only" }>;
+  }>;
+  encryptionNode: string | null;
+  updated_at: string;
+  sequence: number;
+}
+
+export interface LocationRecordV2 extends LocationRecordV2Payload {
+  signature: string;
+}
+
+/** A request callback, without runtime-specific native fetch static properties. */
+type LocationFetch = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 
 export interface VerifyOwnerNodeBindingOptions {
   /** Registry that serves the owner's signed location record. */
@@ -56,7 +78,7 @@ export interface PublishLocationRecordOptions {
   /** Signer for `subject`; the registry never receives private key material. */
   signer: LocationRecordSigner;
   /** Custom fetch implementation. Defaults to globalThis.fetch. */
-  fetch?: typeof fetch;
+  fetch?: LocationFetch;
   now?: () => Date;
 }
 
@@ -445,10 +467,377 @@ export async function verifyLocationRecord(
   return false;
 }
 
+export function canonicalLocationPayloadV2(
+  payload: LocationRecordV2Payload,
+): string {
+  return JSON.stringify({
+    version: payload.version,
+    subject: payload.subject,
+    nodes: payload.nodes
+      .map(({ did, url }) => ({ did, url }))
+      .sort((left, right) => compareAscii(left.did, right.did)),
+    spaces: payload.spaces
+      .map(({ space, nodes }) => ({
+        space,
+        nodes: nodes
+          .map(({ did, mode }) => ({ did, mode }))
+          .sort((left, right) => compareAscii(left.did, right.did)),
+      }))
+      .sort((left, right) => compareAscii(left.space, right.space)),
+    encryptionNode: payload.encryptionNode,
+    updated_at: payload.updated_at,
+    sequence: payload.sequence,
+  });
+}
+
+export function validateLocationRecordV2Payload(
+  input: unknown,
+): LocationRecordV2Payload {
+  const payload = exactV2Object(
+    input,
+    ["version", "subject", "nodes", "spaces", "encryptionNode", "updated_at", "sequence"],
+    "payload",
+  );
+  if (payload.version !== 2) {
+    throw new LocationRecordValidationError("version must be 2");
+  }
+  validateV2OwnerSubject(payload.subject);
+
+  if (!Array.isArray(payload.nodes)) {
+    throw new LocationRecordValidationError("nodes must be an array");
+  }
+  const nodeDids = new Set<string>();
+  const origins = new Set<string>();
+  const nodes: LocationRecordV2Payload["nodes"] = [];
+  for (const item of payload.nodes) {
+    const node = exactV2Object(item, ["did", "url"], "node");
+    if (typeof node.did !== "string") {
+      throw new LocationRecordValidationError("node.did must be a string");
+    }
+    validateV2DidKey(node.did, "node.did");
+    if (typeof node.url !== "string") {
+      throw new LocationRecordValidationError("node.url must be a string");
+    }
+    const origin = validateV2Origin(node.url);
+    if (nodeDids.has(node.did) || origins.has(origin)) {
+      throw new LocationRecordValidationError("node DIDs and origins must be unique");
+    }
+    nodeDids.add(node.did);
+    origins.add(origin);
+    nodes.push({ did: node.did, url: origin });
+  }
+
+  if (!Array.isArray(payload.spaces)) {
+    throw new LocationRecordValidationError("spaces must be an array");
+  }
+  const spaceKeys = new Set<string>();
+  const spaces: LocationRecordV2Payload["spaces"] = [];
+  for (const item of payload.spaces) {
+    const space = exactV2Object(item, ["space", "nodes"], "space");
+    if (typeof space.space !== "string" || !isAsciiNonEmpty(space.space)) {
+      throw new LocationRecordValidationError("space.space must be a non-empty ASCII URI");
+    }
+    const identity = validateV2SpaceOwner(space.space, payload.subject as string);
+    if (spaceKeys.has(identity)) {
+      throw new LocationRecordValidationError("spaces must be unique");
+    }
+    spaceKeys.add(identity);
+    if (!Array.isArray(space.nodes)) {
+      throw new LocationRecordValidationError("space.nodes must be an array");
+    }
+    const membershipDids = new Set<string>();
+    const memberships: LocationRecordV2Payload["spaces"][number]["nodes"] = [];
+    for (const item of space.nodes) {
+      const membership = exactV2Object(item, ["did", "mode"], "space membership");
+      if (typeof membership.did !== "string") {
+        throw new LocationRecordValidationError("membership.did must be a string");
+      }
+      validateV2DidKey(membership.did, "membership.did");
+      if (!nodeDids.has(membership.did)) {
+        throw new LocationRecordValidationError("space membership must reference a listed node");
+      }
+      if (membershipDids.has(membership.did)) {
+        throw new LocationRecordValidationError("space membership DIDs must be unique");
+      }
+      if (membership.mode !== "read-write" && membership.mode !== "read-only") {
+        throw new LocationRecordValidationError("membership.mode must be read-write or read-only");
+      }
+      membershipDids.add(membership.did);
+      memberships.push({ did: membership.did, mode: membership.mode });
+    }
+    spaces.push({ space: space.space, nodes: memberships });
+  }
+
+  if (payload.encryptionNode !== null) {
+    if (typeof payload.encryptionNode !== "string") {
+      throw new LocationRecordValidationError("encryptionNode must be a DID or null");
+    }
+    validateV2DidKey(payload.encryptionNode, "encryptionNode");
+    if (!nodeDids.has(payload.encryptionNode)) {
+      throw new LocationRecordValidationError("encryptionNode must reference a listed node");
+    }
+  }
+  if (typeof payload.updated_at !== "string" || !isV2UtcTimestamp(payload.updated_at)) {
+    throw new LocationRecordValidationError("updated_at must be a valid UTC RFC 3339 timestamp with milliseconds");
+  }
+  if (
+    typeof payload.sequence !== "number" ||
+    !Number.isSafeInteger(payload.sequence) ||
+    payload.sequence < 0
+  ) {
+    throw new LocationRecordValidationError("sequence must be a non-negative safe integer");
+  }
+
+  return {
+    version: 2,
+    subject: payload.subject as string,
+    nodes,
+    spaces,
+    encryptionNode: payload.encryptionNode as string | null,
+    updated_at: payload.updated_at,
+    sequence: payload.sequence,
+  };
+}
+
+export function validateLocationRecordV2(input: unknown): LocationRecordV2 {
+  const record = exactV2Object(
+    input,
+    ["version", "subject", "nodes", "spaces", "encryptionNode", "updated_at", "sequence", "signature"],
+    "record",
+  );
+  const payload = validateLocationRecordV2Payload({
+    version: record.version,
+    subject: record.subject,
+    nodes: record.nodes,
+    spaces: record.spaces,
+    encryptionNode: record.encryptionNode,
+    updated_at: record.updated_at,
+    sequence: record.sequence,
+  });
+  if (typeof record.signature !== "string" || !isCanonicalV2Signature(payload.subject, record.signature)) {
+    throw new LocationRecordValidationError("signature is not in canonical owner-signature format");
+  }
+  return { ...payload, signature: record.signature };
+}
+
+export async function verifyLocationRecordV2(
+  input: LocationRecordV2,
+): Promise<boolean> {
+  const record = validateLocationRecordV2(input);
+  const payload = canonicalLocationPayloadV2(record);
+  if (record.subject.startsWith("did:pkh:")) {
+    const address = record.subject.slice(record.subject.lastIndexOf(":") + 1);
+    try {
+      return await verifyMessage({
+        address: address as `0x${string}`,
+        message: payload,
+        signature: record.signature as `0x${string}`,
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    return ed25519.verify(
+      decodeBase64Url(record.signature),
+      new TextEncoder().encode(payload),
+      canonicalV2DidKey(record.subject),
+      { zip215: false },
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function signLocationRecordV2(
+  payload: LocationRecordV2Payload,
+  signer: LocationRecordSigner,
+): Promise<LocationRecordV2> {
+  const validated = validateLocationRecordV2Payload(payload);
+  const message = canonicalLocationPayloadV2(validated);
+  const isPkh = validated.subject.startsWith("did:pkh:");
+  if ((signer.type === "did:pkh") !== isPkh) {
+    throw new LocationRecordValidationError("signer type does not match owner subject");
+  }
+  const signature = signer.type === "did:pkh"
+    ? await signer.signMessage(message)
+    : base64UrlEncode(await signer.signBytes(new TextEncoder().encode(message)));
+  const record = validateLocationRecordV2({ ...validated, signature });
+  if (!(await verifyLocationRecordV2(record))) {
+    throw new LocationRecordValidationError("signature does not verify for owner subject");
+  }
+  return record;
+}
+
+function exactV2Object(
+  input: unknown,
+  expected: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new LocationRecordValidationError(`${label} must be an object`);
+  }
+  const keys = Reflect.ownKeys(input);
+  if (keys.length !== expected.length || keys.some((key) => typeof key !== "string" || !expected.includes(key))) {
+    throw new LocationRecordValidationError(`${label} has missing or unknown fields`);
+  }
+  return input as Record<string, unknown>;
+}
+
+function validateV2OwnerSubject(subject: unknown): asserts subject is string {
+  if (typeof subject !== "string" || !isAsciiNonEmpty(subject)) {
+    throw new LocationRecordValidationError("subject must be a canonical owner DID");
+  }
+  const pkh = /^did:pkh:eip155:([1-9][0-9]*):(0x[a-fA-F0-9]{40})$/.exec(subject);
+  if (pkh !== null) {
+    const chainId = Number(pkh[1]);
+    try {
+      if (Number.isSafeInteger(chainId) && chainId > 0 && pkhDid(pkh[2], chainId) === subject) return;
+    } catch {
+      // Report one stable validation error below.
+    }
+    throw new LocationRecordValidationError("subject must use a positive safe chain ID and EIP-55 address");
+  }
+  validateV2DidKey(subject, "subject");
+}
+
+function validateV2DidKey(value: string, label: string): void {
+  try {
+    canonicalV2DidKey(value);
+  } catch {
+    throw new LocationRecordValidationError(`${label} must be a canonical Ed25519 did:key`);
+  }
+}
+
+function canonicalV2DidKey(did: string): Uint8Array {
+  if (!did.startsWith("did:key:z")) {
+    throw new LocationRecordValidationError("DID must be an Ed25519 did:key");
+  }
+  const identifier = did.slice("did:key:".length);
+  const bytes = bases.base58btc.decode(identifier);
+  if (
+    bytes.length !== 34 ||
+    bytes[0] !== 0xed ||
+    bytes[1] !== 0x01 ||
+    bases.base58btc.encode(bytes) !== identifier
+  ) {
+    throw new LocationRecordValidationError("DID must use the canonical Ed25519 multicodec");
+  }
+  return bytes.slice(2);
+}
+
+function validateV2Origin(input: string): string {
+  if (!isAsciiNonEmpty(input)) {
+    throw new LocationRecordValidationError("node.url must be an ASCII HTTP(S) origin");
+  }
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new LocationRecordValidationError("node.url must be an absolute HTTP(S) origin");
+  }
+  if (
+    (url.protocol !== "https:" && url.protocol !== "http:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    url.origin !== input
+  ) {
+    throw new LocationRecordValidationError("node.url must be an exact origin without path, query, fragment, or credentials");
+  }
+  if (url.protocol === "http:" && url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") {
+    throw new LocationRecordValidationError("HTTP node URLs are allowed only for IPv4 or IPv6 loopback");
+  }
+  return url.origin;
+}
+
+function validateV2SpaceOwner(space: string, subject: string): string {
+  if (!/^[A-Za-z0-9._~!$&'()*+,;=:@%-]+$/.test(space)) {
+    throw new LocationRecordValidationError("space must be a complete normalized TinyCloud space URI");
+  }
+  for (let index = space.indexOf("%"); index !== -1; index = space.indexOf("%", index + 3)) {
+    const octet = space.slice(index + 1, index + 3);
+    if (
+      !/^[0-9A-F]{2}$/.test(octet) ||
+      /^[A-Za-z0-9._~-]$/.test(String.fromCharCode(Number.parseInt(octet, 16)))
+    ) {
+      throw new LocationRecordValidationError("space URI percent encoding must be normalized");
+    }
+  }
+  if (subject.startsWith("did:key:")) {
+    const prefix = `tinycloud:${subject.slice("did:".length)}:`;
+    if (!space.startsWith(prefix) || space.length === prefix.length || space.slice(prefix.length).includes(":")) {
+      throw new LocationRecordValidationError("space owner must match the did:key subject");
+    }
+    return space;
+  }
+  const parts = /^tinycloud:pkh:eip155:([1-9][0-9]*):(0x[a-fA-F0-9]{40}):([^:]+)$/.exec(space);
+  const ownerAddress = subject.slice(subject.lastIndexOf(":") + 1);
+  if (
+    parts === null ||
+    !Number.isSafeInteger(Number(parts[1])) ||
+    Number(parts[1]) <= 0 ||
+    parts[2]!.toLowerCase() !== ownerAddress.toLowerCase()
+  ) {
+    throw new LocationRecordValidationError("space owner address must match the did:pkh subject");
+  }
+  return `tinycloud:pkh:eip155:${parts[1]}:${parts[2]!.toLowerCase()}:${parts[3]}`;
+}
+
+function isV2UtcTimestamp(value: string): boolean {
+  const match = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})Z$/.exec(value);
+  if (match === null) return false;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  return (
+    year > 0 &&
+    daysInMonth !== undefined &&
+    day >= 1 &&
+    day <= daysInMonth &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59
+  );
+}
+
+function isCanonicalV2Signature(subject: string, signature: string): boolean {
+  if (subject.startsWith("did:pkh:")) {
+    if (!/^0x[0-9a-fA-F]{130}$/.test(signature)) return false;
+    const r = BigInt(`0x${signature.slice(2, 66)}`);
+    const s = BigInt(`0x${signature.slice(66, 130)}`);
+    const v = Number.parseInt(signature.slice(130), 16);
+    const curveOrder = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+    return r > 0n && r < curveOrder && s > 0n && s <= curveOrder / 2n && (v === 27 || v === 28);
+  }
+  if (!/^[A-Za-z0-9_-]{86}$/.test(signature)) return false;
+  try {
+    const bytes = decodeBase64Url(signature);
+    return bytes.length === 64 && base64UrlEncode(bytes) === signature;
+  } catch {
+    return false;
+  }
+}
+
+function isAsciiNonEmpty(value: string): boolean {
+  if (value.length === 0) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
+}
+
+function compareAscii(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export async function fetchLocationRecord(
   registryUrl: string,
   subject: string,
-  fetchFn: typeof fetch = globalThis.fetch,
+  fetchFn: LocationFetch = globalThis.fetch,
   signal?: AbortSignal,
 ): Promise<LocationRecord | null> {
   const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;

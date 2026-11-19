@@ -39,7 +39,7 @@ export function markdownFilename(value: string): string {
   return filename;
 }
 
-/** Share filenames follow the share viewer's rule; every refusal is `UNSAFE_FILENAME` (exit 8). */
+/** Share filenames follow the share viewer's rule; every refusal is `UNSAFE_FILENAME` (exit 2). */
 export function shareFilename(value: string): string {
   try {
     return canonicalShareFilename(value);
@@ -47,7 +47,7 @@ export function shareFilename(value: string): string {
     throw new CLIError(
       "UNSAFE_FILENAME",
       hasUnsafeFilenameCodePoint(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
-      8,
+      2,
     );
   }
 }

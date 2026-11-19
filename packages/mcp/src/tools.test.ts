@@ -24,6 +24,18 @@ test("registers exact SQL read and mutation annotations", () => {
     });
 });
 
+test("only record writes are annotated destructive: context saves a timezone and a query refreshes a rebuildable derived copy, and neither deletes a record", () => {
+  const annotations = Object.fromEntries(toolBindingsForTest()
+    .filter((candidate) => candidate.name.startsWith("tinycloud_apps_"))
+    .map((candidate) => [candidate.name, [candidate.readOnlyHint, candidate.destructiveHint]]));
+  expect(annotations).toMatchObject({
+    tinycloud_apps_context: [false, false],
+    tinycloud_apps_read: [true, false],
+    tinycloud_apps_write: [false, true],
+    tinycloud_apps_query: [false, false],
+  });
+});
+
 
 test("default v2 validation preserves nested references, literals, and exclusive bounds", () => {
   const literal = { $schema: "literal-data", items: [{ type: "not-a-schema" }] };

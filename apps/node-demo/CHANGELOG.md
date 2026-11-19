@@ -1,5 +1,407 @@
 # @tinycloudlabs/node-demo
 
+## 0.0.52-beta.3
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+  - @tinycloud/vfs@0.2.21-beta.3
+
+## 0.0.52-beta.2
+
+### Patch Changes
+
+- Updated dependencies [b758e71]
+  - @tinycloud/node-sdk@3.13.0-beta.2
+  - @tinycloud/vfs@0.2.21-beta.2
+
+## 0.0.52-beta.1
+
+### Patch Changes
+
+- Updated dependencies [2395340]
+  - @tinycloud/sdk-core@3.13.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.1
+  - @tinycloud/vfs@0.2.21-beta.1
+
+## 0.0.52-beta.0
+
+### Patch Changes
+
+- Updated dependencies [634753d]
+  - @tinycloud/node-sdk@3.13.0-beta.0
+  - @tinycloud/vfs@0.2.21-beta.0
+
+## 0.0.51
+
+### Patch Changes
+
+- Updated dependencies [85095e8]
+- Updated dependencies [f859fb3]
+- Updated dependencies [2139b24]
+- Updated dependencies [2a8edc2]
+- Updated dependencies [649bb18]
+- Updated dependencies [5817c2b]
+- Updated dependencies [55d52f7]
+- Updated dependencies [e50dd6c]
+- Updated dependencies [ccf3347]
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+- Updated dependencies [593f051]
+- Updated dependencies [c070c4b]
+- Updated dependencies [e409bef]
+- Updated dependencies [5f271e5]
+- Updated dependencies [693676e]
+- Updated dependencies [766d27a]
+- Updated dependencies [f3df7de]
+- Updated dependencies [d4366f9]
+- Updated dependencies [728b25c]
+- Updated dependencies [56df81d]
+- Updated dependencies [0080686]
+- Updated dependencies [f4220cf]
+- Updated dependencies [6010858]
+- Updated dependencies [b00ad0b]
+- Updated dependencies [163f986]
+- Updated dependencies [c2fde3d]
+- Updated dependencies [711903b]
+- Updated dependencies [5fe6cff]
+- Updated dependencies [88a5f28]
+- Updated dependencies [273491d]
+- Updated dependencies [9ff4cf2]
+- Updated dependencies [171ee63]
+  - @tinycloud/sdk-core@3.12.0
+  - @tinycloud/node-sdk@3.12.0
+  - @tinycloud/node-sdk-wasm@1.7.9
+  - @tinycloud/vfs@0.2.20
+
+## 0.0.51-beta.35
+
+### Patch Changes
+
+- Updated dependencies [711903b]
+  - @tinycloud/node-sdk@3.12.0-beta.38
+  - @tinycloud/vfs@0.2.19-beta.35
+
+## 0.0.51-beta.34
+
+### Patch Changes
+
+- Updated dependencies [c2fde3d]
+  - @tinycloud/sdk-core@3.12.0-beta.37
+  - @tinycloud/node-sdk@3.12.0-beta.37
+  - @tinycloud/vfs@0.2.19-beta.34
+
+## 0.0.51-beta.33
+
+### Patch Changes
+
+- Updated dependencies [f3df7de]
+  - @tinycloud/sdk-core@3.12.0-beta.36
+  - @tinycloud/node-sdk@3.12.0-beta.36
+  - @tinycloud/vfs@0.2.19-beta.33
+
+## 0.0.51-beta.32
+
+### Patch Changes
+
+- Updated dependencies [6010858]
+  - @tinycloud/sdk-core@3.12.0-beta.35
+  - @tinycloud/node-sdk@3.12.0-beta.35
+  - @tinycloud/vfs@0.2.19-beta.32
+
+## 0.0.51-beta.31
+
+### Patch Changes
+
+- Updated dependencies [163f986]
+  - @tinycloud/sdk-core@3.12.0-beta.34
+  - @tinycloud/node-sdk@3.12.0-beta.34
+  - @tinycloud/vfs@0.2.19-beta.31
+
+## 0.0.51-beta.30
+
+### Patch Changes
+
+- Updated dependencies [b00ad0b]
+  - @tinycloud/sdk-core@3.12.0-beta.33
+  - @tinycloud/node-sdk@3.12.0-beta.33
+  - @tinycloud/vfs@0.2.19-beta.30
+
+## 0.0.51-beta.29
+
+### Patch Changes
+
+- Updated dependencies [728b25c]
+  - @tinycloud/sdk-core@3.12.0-beta.31
+  - @tinycloud/node-sdk@3.12.0-beta.31
+  - @tinycloud/vfs@0.2.19-beta.29
+
+## 0.0.51-beta.28
+
+### Patch Changes
+
+- Updated dependencies [85095e8]
+  - @tinycloud/sdk-core@3.12.0-beta.30
+  - @tinycloud/node-sdk@3.12.0-beta.30
+  - @tinycloud/vfs@0.2.19-beta.28
+
+## 0.0.51-beta.27
+
+### Patch Changes
+
+- Updated dependencies [0080686]
+  - @tinycloud/sdk-core@3.12.0-beta.28
+  - @tinycloud/node-sdk@3.12.0-beta.28
+  - @tinycloud/vfs@0.2.19-beta.27
+
+## 0.0.51-beta.26
+
+### Patch Changes
+
+- Updated dependencies [f4220cf]
+  - @tinycloud/sdk-core@3.12.0-beta.27
+  - @tinycloud/node-sdk@3.12.0-beta.27
+  - @tinycloud/vfs@0.2.19-beta.26
+
+## 0.0.51-beta.25
+
+### Patch Changes
+
+- Updated dependencies [2a8edc2]
+  - @tinycloud/node-sdk@3.12.0-beta.26
+  - @tinycloud/vfs@0.2.19-beta.25
+
+## 0.0.51-beta.24
+
+### Patch Changes
+
+- Updated dependencies [56df81d]
+  - @tinycloud/sdk-core@3.12.0-beta.24
+  - @tinycloud/node-sdk@3.12.0-beta.24
+  - @tinycloud/vfs@0.2.19-beta.24
+
+## 0.0.51-beta.23
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.23
+- @tinycloud/sdk-core@3.12.0-beta.23
+- @tinycloud/vfs@0.2.19-beta.23
+
+## 0.0.51-beta.22
+
+### Patch Changes
+
+- Updated dependencies [d4366f9]
+  - @tinycloud/sdk-core@3.12.0-beta.22
+  - @tinycloud/node-sdk@3.12.0-beta.22
+  - @tinycloud/vfs@0.2.19-beta.22
+
+## 0.0.51-beta.21
+
+### Patch Changes
+
+- Updated dependencies [766d27a]
+  - @tinycloud/sdk-core@3.12.0-beta.21
+  - @tinycloud/node-sdk@3.12.0-beta.21
+  - @tinycloud/node-sdk-wasm@1.7.9-beta.0
+  - @tinycloud/vfs@0.2.19-beta.21
+
+## 0.0.51-beta.20
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.20
+- @tinycloud/sdk-core@3.12.0-beta.20
+- @tinycloud/vfs@0.2.19-beta.20
+
+## 0.0.51-beta.19
+
+### Patch Changes
+
+- Updated dependencies [5fe6cff]
+  - @tinycloud/sdk-core@3.12.0-beta.19
+  - @tinycloud/node-sdk@3.12.0-beta.19
+  - @tinycloud/vfs@0.2.19-beta.19
+
+## 0.0.51-beta.18
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.18
+- @tinycloud/sdk-core@3.12.0-beta.18
+- @tinycloud/vfs@0.2.19-beta.18
+
+## 0.0.51-beta.17
+
+### Patch Changes
+
+- Updated dependencies [273491d]
+  - @tinycloud/sdk-core@3.12.0-beta.17
+  - @tinycloud/node-sdk@3.12.0-beta.17
+  - @tinycloud/vfs@0.2.19-beta.17
+
+## 0.0.51-beta.16
+
+### Patch Changes
+
+- Updated dependencies [f859fb3]
+  - @tinycloud/node-sdk@3.12.0-beta.16
+  - @tinycloud/sdk-core@3.12.0-beta.16
+  - @tinycloud/vfs@0.2.19-beta.16
+
+## 0.0.51-beta.15
+
+### Patch Changes
+
+- Updated dependencies [88a5f28]
+  - @tinycloud/node-sdk@3.12.0-beta.15
+  - @tinycloud/vfs@0.2.19-beta.15
+
+## 0.0.51-beta.14
+
+### Patch Changes
+
+- Updated dependencies [e50dd6c]
+  - @tinycloud/sdk-core@3.12.0-beta.14
+  - @tinycloud/node-sdk@3.12.0-beta.14
+  - @tinycloud/vfs@0.2.19-beta.14
+
+## 0.0.51-beta.13
+
+### Patch Changes
+
+- Updated dependencies [649bb18]
+  - @tinycloud/sdk-core@3.12.0-beta.13
+  - @tinycloud/node-sdk@3.12.0-beta.13
+  - @tinycloud/vfs@0.2.19-beta.13
+
+## 0.0.51-beta.12
+
+### Patch Changes
+
+- Updated dependencies [693676e]
+  - @tinycloud/sdk-core@3.12.0-beta.12
+  - @tinycloud/node-sdk@3.12.0-beta.12
+  - @tinycloud/vfs@0.2.19-beta.12
+
+## 0.0.51-beta.11
+
+### Patch Changes
+
+- Updated dependencies [5f271e5]
+  - @tinycloud/node-sdk@3.12.0-beta.11
+  - @tinycloud/vfs@0.2.19-beta.11
+
+## 0.0.51-beta.10
+
+### Patch Changes
+
+- Updated dependencies [593f051]
+  - @tinycloud/node-sdk@3.12.0-beta.10
+  - @tinycloud/sdk-core@3.12.0-beta.10
+  - @tinycloud/vfs@0.2.19-beta.10
+
+## 0.0.51-beta.9
+
+### Patch Changes
+
+- Updated dependencies [e409bef]
+  - @tinycloud/sdk-core@3.12.0-beta.9
+  - @tinycloud/node-sdk@3.12.0-beta.9
+  - @tinycloud/vfs@0.2.19-beta.9
+
+## 0.0.51-beta.8
+
+### Patch Changes
+
+- Updated dependencies [c070c4b]
+  - @tinycloud/sdk-core@3.12.0-beta.8
+  - @tinycloud/node-sdk@3.12.0-beta.8
+  - @tinycloud/vfs@0.2.19-beta.8
+
+## 0.0.51-beta.7
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.12.0-beta.7
+- @tinycloud/sdk-core@3.12.0-beta.7
+- @tinycloud/vfs@0.2.19-beta.7
+
+## 0.0.51-beta.6
+
+### Patch Changes
+
+- Updated dependencies [171ee63]
+  - @tinycloud/vfs@0.2.19-beta.6
+
+## 0.0.51-beta.5
+
+### Patch Changes
+
+- Updated dependencies [2139b24]
+  - @tinycloud/sdk-core@3.12.0-beta.5
+  - @tinycloud/node-sdk@3.12.0-beta.5
+  - @tinycloud/vfs@0.2.19-beta.5
+
+## 0.0.51-beta.4
+
+### Patch Changes
+
+- Updated dependencies [ccf3347]
+  - @tinycloud/sdk-core@3.12.0-beta.4
+  - @tinycloud/node-sdk@3.12.0-beta.4
+  - @tinycloud/vfs@0.2.19-beta.4
+
+## 0.0.51-beta.3
+
+### Patch Changes
+
+- Updated dependencies [b32f52e]
+- Updated dependencies [66a03e0]
+  - @tinycloud/sdk-core@3.12.0-beta.3
+  - @tinycloud/node-sdk@3.12.0-beta.3
+  - @tinycloud/vfs@0.2.19-beta.3
+
+## 0.0.51-beta.2
+
+### Patch Changes
+
+- Updated dependencies [9ff4cf2]
+  - @tinycloud/node-sdk@3.12.0-beta.2
+  - @tinycloud/vfs@0.2.19-beta.2
+
+## 0.0.51-beta.1
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+  - @tinycloud/vfs@0.2.19-beta.1
+
+## 0.0.51-beta.0
+
+### Patch Changes
+
+- Updated dependencies [5817c2b]
+  - @tinycloud/node-sdk@3.11.1-beta.0
+  - @tinycloud/vfs@0.2.19-beta.0
+
+## 0.0.50
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+  - @tinycloud/vfs@0.2.18
+
 ## 0.0.50-beta.2
 
 ### Patch Changes

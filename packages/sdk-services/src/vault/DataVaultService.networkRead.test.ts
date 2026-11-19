@@ -22,6 +22,7 @@ import {
   getTinyCloudDebugLogs,
 } from "../debug";
 import { KVService } from "../kv/KVService";
+import { NodeIdentityMismatchError, NodeNotRespondingError, ResourceNotRoutedError } from "../resourceRouting";
 import { DataVaultService, type VaultCrypto } from "./DataVaultService";
 import { SecretsService } from "../secrets/SecretsService";
 
@@ -230,6 +231,7 @@ function createClassifiedVault(options?: {
 
   return {
     kv,
+    encryption,
     getNetworkCalls: () => networkCalls,
     vault,
     setKvResponse: (response: () => Promise<Response>) => {
@@ -376,10 +378,37 @@ describe("DataVaultService.readNetworkEncrypted", () => {
     fixture.setDecrypt(async () => {
       throw new Error("node transport failure canary");
     });
-    const transport = await fixture.vault.readNetworkEncrypted("secrets/API_KEY");
-    expect(transport).toEqual({ status: "node_unreachable" });
+    const transport = await fixture.vault.readNetworkEncrypted("secrets/API_KEY").catch((error: unknown) => error);
+    expect(transport).toMatchObject({ code: "DECRYPTION_DEPENDENCY_UNAVAILABLE" });
     expect(JSON.stringify(transport)).not.toContain("canary");
     expect(JSON.stringify(transport)).not.toContain("sensitive value");
+  });
+
+  test("network-only reads preserve routing failures from KV and decrypt results and rejections", async () => {
+    const fixture = createClassifiedVault();
+    const envelope = await fixture.encrypt({ value: "routing-boundary-dummy" });
+    fixture.setKvResponse(async () => {
+      throw new NodeIdentityMismatchError("https://wrong.fixture.invalid", TARGET_NODE, "did:key:other");
+    });
+    await expect(fixture.vault.readNetworkEncrypted("secrets/API_KEY"))
+      .rejects.toMatchObject({ code: "NODE_IDENTITY_MISMATCH" });
+
+    const get = fixture.kv.get;
+    fixture.kv.get = async () => { throw new NodeNotRespondingError(["https://offline.fixture.invalid"]); };
+    await expect(fixture.vault.readNetworkEncrypted("secrets/API_KEY"))
+      .rejects.toMatchObject({ code: "NODE_NOT_RESPONDING" });
+    fixture.kv.get = get;
+
+    fixture.setKvResponse(async () => new Response(envelope, { status: 200 }));
+    fixture.setDecrypt(async () => {
+      throw Object.assign(new Error("private registry cause"), { code: "registry_unavailable" });
+    });
+    await expect(fixture.vault.readNetworkEncrypted("secrets/API_KEY"))
+      .rejects.toMatchObject({ code: "registry_unavailable" });
+
+    fixture.encryption.decryptEnvelope = async () => { throw new ResourceNotRoutedError(NETWORK_ID); };
+    await expect(fixture.vault.readNetworkEncrypted("secrets/API_KEY"))
+      .rejects.toMatchObject({ code: "RESOURCE_NOT_ROUTED" });
   });
 
   test("redacts classified-read canaries from debug logs and telemetry", async () => {

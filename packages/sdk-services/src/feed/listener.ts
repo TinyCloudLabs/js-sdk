@@ -22,6 +22,11 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
   let failed = false;
   let failure: unknown;
   let current: AbortController | undefined;
+  let attempted = false;
+  let done = false;
+  const deliver: typeof options.deliver = options.once
+    ? (response) => { attempted = true; return options.deliver(response); }
+    : options.deliver;
 
   const drain = async (): Promise<void> => {
     do {
@@ -36,7 +41,7 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
         for (const response of page.data.responses) {
           if (signal.aborted) return;
           const handoff = await deliverFeedResponse({
-            handoff: options.handoff, recipient: options.recipient, response, deliver: options.deliver,
+            handoff: options.handoff, recipient: options.recipient, response, deliver,
           });
           if (!handoff.ok && !isDispatchDeadlineFailure(handoff.error)) throw handoff.error;
         }
@@ -44,10 +49,10 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
         afterSequence = page.data.nextSequence;
         if (!page.data.hasMore) break;
       }
-    } while (dirty && !signal.aborted);
+    } while (dirty && !signal.aborted && !attempted);
   };
   const schedule = (): void => {
-    if (!ready || signal.aborted || failed) return;
+    if (!ready || signal.aborted || failed || done) return;
     dirty = true;
     if (draining) return;
     draining = drain().catch((error: unknown) => {
@@ -56,11 +61,14 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
       current?.abort();
     }).finally(() => {
       draining = undefined;
-      if (dirty && !failed) schedule();
+      if (attempted && !failed) {
+        done = true;
+        current?.abort();
+      } else if (dirty && !failed) schedule();
     });
   };
 
-  while (!signal.aborted && !failed) {
+  while (!signal.aborted && !failed && !done) {
     const connection = new AbortController();
     current = connection;
     const stop = () => connection.abort();

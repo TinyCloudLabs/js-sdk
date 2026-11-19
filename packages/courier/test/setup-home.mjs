@@ -28,6 +28,9 @@ if (!process.execArgv.includes('--test')) {
     process.env.TMPDIR = tmp;
     process.on('exit', () => fs.rmSync(testHome, { recursive: true, force: true }));
   }
+  process.env.TC_HOME = process.env.HOME;
+  // Intentional preload boundary: establish private homes before the guard or SDK imports.
+  await import('../../operations/test-support/test-bootstrap.mjs');
   process.env.COURIER_TEST_OWNER = String(process.pid);
 
   assert.match(testHome, HOME_PATTERN, 'test home must be a /var/tmp/tc1920.* dir');

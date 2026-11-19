@@ -1,3 +1,4 @@
+import { createRuntimeNode, maintainPeerSet, recordAuthorityRefusal, watchOwnerPreflight, watchPeerEligible } from './interim-runtime.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,11 +7,13 @@ import { spawnSync } from 'node:child_process';
 import { cmd, programName } from './program.js';
 import { CourierError } from './errors.js';
 import { loadProfile, profileDir, writeSecure } from './profile.js';
-import { courierNode, peerHooks, peerKv } from './node.js';
+import { peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
-import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
-import { startsAgentCli } from './guard/policy.js';
+import { fileWatchCache } from './watch-cache.js';
+import { UNGUARDED_REFUSAL, agentCliRefusal, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
+import { agentCliStarted, startsAgentCli } from './guard/policy.js';
+import { homeFileRefusal } from './guard/cleanhome.js';
 import { guardArgv } from './guard/command.js';
 import { writeGuardSettings } from './guard/install.js';
 import { createNotifier, type NotifyConfig } from './notify.js';
@@ -58,7 +61,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify osascript|exec|none] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded [--agent-cli]] [--env-pass NAME]… [--home-file REL]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify osascript|exec|none] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -84,11 +87,21 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
   const unguarded = args.has('unguarded');
   if (unguarded && adapter !== 'exec') throw new CourierError('usage', '--unguarded only applies with --wake exec; the claude and paseo adapters are always guarded.');
   if (adapter === 'exec' && !unguarded) throw new CourierError('usage', `${UNGUARDED_REFUSAL}\n${watchUsage()}`);
-  if (adapter === 'exec' && exec && startsAgentCli(exec)) throw new CourierError('usage', '--unguarded exec cannot start an agent CLI; use the guarded claude or paseo adapter.');
+  const agentCli = args.has('agent-cli');
+  if (agentCli && adapter !== 'exec') throw new CourierError('usage', '--agent-cli only applies with --wake exec --unguarded.');
+  const refusal = adapter === 'exec' ? agentCliRefusal(exec, agentCli) : undefined;
+  if (refusal) throw new CourierError('usage', refusal);
   const allow = args.all('claude-allow');
   const envPass = args.all('env-pass');
   for (const name of envPass) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new CourierError('usage', `--env-pass needs a variable name (got "${name}").`);
+  }
+  const homeFiles = args.all('home-file');
+  if (homeFiles.length && adapter !== 'exec' && adapter !== 'claude') throw new CourierError('usage', '--home-file only applies with --wake exec or --wake claude.');
+  for (const rel of homeFiles) {
+    if (rel === 'true' || rel === '') throw new CourierError('usage', '--home-file needs a value.');
+    const refused = homeFileRefusal(rel, { adapter, agentCli: adapter === 'exec' && exec ? agentCliStarted(exec) : undefined });
+    if (refused) throw new CourierError('usage', `${refused}.`);
   }
   return {
     adapter,
@@ -97,7 +110,9 @@ export function wakeConfig(args: ParsedArgs, owner: string | undefined): WakeCon
     home: profileDir(),
     exec,
     unguarded,
+    agentCli,
     envPass,
+    homeFiles,
     paseo: { bin: value(args, 'paseo-bin') ?? 'paseo', provider: value(args, 'paseo-provider') ?? 'claude', mode: value(args, 'paseo-mode') },
     // A woken claude may run only Courier commands unless the owner widens it with --claude-settings/--claude-allow.
     claude: { bin: value(args, 'claude-bin') ?? 'claude', settings: value(args, 'claude-settings'), allow: allow.length ? allow : [`Bash(${programName()}:*)`] },
@@ -232,20 +247,31 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   }
 
   const log = jsonLineLog();
-  const node = await courierNode(profile);
+  const node = await createRuntimeNode();
   const watcher = new Watcher({
+    beforePoll: () => watchOwnerPreflight(node),
+    // One peer, before acting for it: a strict verdict (inbound grant probed too; anything but positive throws, so the
+    // action fails closed). Every peer: the 300 s housekeeping.
+    checkAuthority: (handle) => handle === undefined ? maintainPeerSet(node) : maintainPeerSet(node, handle, true, true),
+    onAuthorityRefusal: recordAuthorityRefusal,
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',
     selfKv: node.kv,
+    // The DID the restored node session signs as: captured after the reload, so a key rotated meanwhile cannot split
+    // this watcher from the identity its node acts as.
+    agent: node.credentialHolderDid,
     spaceId: profile.spaceId!,
     selfHooks: node.hooks,
     peerHooks: (peer) => peerHooks(node, loadProfile(), peer),
-    loadPeers: () => Object.values(loadProfile().peers),
-    kvFor: (peer) => peerKv(node, loadProfile(), peer),
+    loadPeers: () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer)),
+    peerHandles: () => Object.keys(loadProfile().peers),
+    kvFor: (peer, renew) => peerKv(node, loadProfile(), peer, { renew }),
     wake: createWaker(config, { run: spawnRunner, sessions: fileSessions() }),
     postInform: async (peer, threadId, text, pauseId) => { await postPausedInform(node.kv, loadProfile(), peer, threadId, text, pauseId); },
     notify: createNotifier(notifyConfig(args, config), { run: spawnRunner }),
     holder: { profileId: watcherProfileId() },
+    // Only eligible peers' facts are kept: a refused, latched or removed peer's facts go with the next save.
+    localCache: fileWatchCache(node.credentialHolderDid, profile.spaceId!, () => Object.values(loadProfile().peers).filter(peer => watchPeerEligible(peer))),
     log,
   }, opts);
 

@@ -1,8 +1,10 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertPrivateTestEnvironment } from "../../operations/test-support/private-home.mjs";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -13,16 +15,33 @@ const tinycloudCliPath = join(packageDirectory, "../cli/dist/index.js");
 const nodeBinary = process.env.NODE_BINARY ?? "node";
 const homes: string[] = [];
 
+function privateClientEnvironment(home: string, nodeOrigin?: string) {
+  const bootstrap = new URL("../../operations/test-support/test-bootstrap.mjs", import.meta.url).href;
+  const registryPreload = nodeOrigin
+    ? ` --import=${new URL("./test-support/registry-fixture.mjs", import.meta.url).href}`
+    : "";
+  const environment = {
+    ...process.env,
+    HOME: home,
+    TC_HOME: home,
+    USERPROFILE: home,
+    TC_TEST_MCP_NODE_ORIGIN: nodeOrigin ?? "",
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${bootstrap}${registryPreload}`.trim(),
+  };
+  assertPrivateTestEnvironment(environment, home);
+  return environment;
+}
+
 afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-test("official v2 client lists exactly the generated KV CRUD and SQLite tools over stdio", async () => {
+test("official v2 client enforces operation schemas and owner opt-in over stdio", async () => {
   const home = await fixtureHome();
   const transport = new StdioClientTransport({
     command: nodeBinary,
     args: [cliPath, "--profile", "default"],
-    env: { ...process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stderr: "pipe",
   });
   const client = new Client({ name: "tinycloud-mcp-i4-test", version: "0.0.0" });
@@ -32,59 +51,35 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
   try {
     await client.connect(transport);
     const listed = await client.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toEqual([
-      "tinycloud_status",
-      "tinycloud_auth_status",
-      "tinycloud_auth_capabilities",
-      "tinycloud_auth_request",
-      "tinycloud_auth_import",
-      "tinycloud_account_spaces_list",
-      "tinycloud_account_applications_list",
-      "tinycloud_kv_list",
-      "tinycloud_kv_get",
-      "tinycloud_kv_head",
-      "tinycloud_kv_put",
-      "tinycloud_kv_delete",
-      "tinycloud_knowledge_list",
-      "tinycloud_knowledge_read",
-      "tinycloud_sql_schema_inspect",
-      "tinycloud_sql_query",
-      "tinycloud_sql_execute",
-      "tinycloud_secrets_get",
-      "tinycloud_secrets_status",
+    // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
+    // Local/stdio has 21 tools; the 24-tool hosted surface also exposes personal apps.
+    expect(listed.tools.map(({ name, annotations }) => [
+      name, annotations?.readOnlyHint, annotations?.destructiveHint,
+      annotations?.idempotentHint, annotations?.openWorldHint,
+    ])).toEqual([
+      ["tinycloud_status", true, false, true, false],
+      ["tinycloud_auth_status", true, false, true, false],
+      ["tinycloud_auth_capabilities", true, false, true, false],
+      ["tinycloud_auth_request", false, false, true, false],
+      // TC-2469 F5: preserve today's read-only hint despite saving a pending request.
+      ["tinycloud_auth_read_scope", true, false, true, false],
+      ["tinycloud_auth_import", false, false, true, false],
+      ["tinycloud_account_spaces_list", true, false, true, true],
+      ["tinycloud_account_applications_list", true, false, true, true],
+      ["tinycloud_kv_list", true, false, true, true],
+      ["tinycloud_kv_get", true, false, true, true],
+      ["tinycloud_read", true, false, true, true],
+      ["tinycloud_kv_head", true, false, true, true],
+      ["tinycloud_kv_put", false, true, true, true],
+      ["tinycloud_kv_delete", false, true, true, true],
+      ["tinycloud_knowledge_list", true, false, true, true],
+      ["tinycloud_knowledge_read", true, false, true, true],
+      ["tinycloud_sql_schema_inspect", true, false, true, true],
+      ["tinycloud_sql_query", true, false, true, true],
+      ["tinycloud_sql_execute", false, true, false, true],
+      ["tinycloud_secrets_get", false, false, true, true],
+      ["tinycloud_secrets_status", true, false, true, true],
     ]);
-    expect(listed.tools).toHaveLength(19);
-
-    for (const tool of listed.tools) {
-      expect(tool.annotations).toMatchObject({
-        readOnlyHint: ![
-          "tinycloud_auth_request",
-          "tinycloud_auth_import",
-          "tinycloud_kv_put",
-          "tinycloud_kv_delete",
-          "tinycloud_sql_execute",
-          "tinycloud_secrets_get",
-        ].includes(tool.name),
-        idempotentHint: tool.name !== "tinycloud_sql_execute",
-        destructiveHint: ["tinycloud_kv_put", "tinycloud_kv_delete", "tinycloud_sql_execute"].includes(tool.name),
-        openWorldHint: [
-          "tinycloud_account_spaces_list",
-          "tinycloud_account_applications_list",
-          "tinycloud_kv_list",
-          "tinycloud_kv_get",
-          "tinycloud_kv_head",
-          "tinycloud_kv_put",
-          "tinycloud_kv_delete",
-          "tinycloud_knowledge_list",
-          "tinycloud_knowledge_read",
-          "tinycloud_sql_schema_inspect",
-          "tinycloud_sql_query",
-          "tinycloud_sql_execute",
-          "tinycloud_secrets_get",
-          "tinycloud_secrets_status",
-        ].includes(tool.name),
-      });
-    }
 
     const status = await client.callTool({ name: "tinycloud_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({
@@ -97,11 +92,13 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       ["tinycloud_auth_status", {}, { status: "ok", operation: { operationId: "tinycloud.auth.status", operationVersion: 1 } }],
       ["tinycloud_auth_capabilities", {}, { status: "error", operation: { operationId: "tinycloud.auth.capabilities", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_auth_request", { requestId: "missing-request" }, { status: "error", operation: { operationId: "tinycloud.auth.request", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_auth_read_scope", { space: "applications", kvPrefixes: ["notes/"] }, { status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_auth_import", validImportProbe(), { status: "error", operation: { operationId: "tinycloud.auth.import", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_account_spaces_list", {}, { status: "error", operation: { operationId: "tinycloud.account.spaces.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_account_applications_list", {}, { status: "error", operation: { operationId: "tinycloud.account.applications.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_list", { space: "applications" }, { status: "error", operation: { operationId: "tinycloud.kv.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_get", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_read", { resource: { kind: "kv", space: "applications", key: "notes/example" } }, { status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_head", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.head", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_put", { space: "applications", key: "agents/example", mode: "create", content: { encoding: "utf8", value: "hello" } }, { status: "error", operation: { operationId: "tinycloud.kv.put", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_delete", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.delete", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
@@ -193,7 +190,7 @@ test("an explicitly pinned missing profile never falls back to config.defaultPro
   const transport = new StdioClientTransport({
     command: nodeBinary,
     args: [cliPath, "--profile", "missing"],
-    env: { ...process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
   });
   const client = new Client({ name: "tinycloud-mcp-pinned-profile-test", version: "0.0.0" });
   try {
@@ -370,6 +367,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     await writeFile(freshProfilePath, JSON.stringify({
       ...freshProfileConfig,
       autoDiscoverLocalNode: false,
+      tinycloudRegistryUrl: fixture.hermetic.host,
     }, null, 2));
     stage = "create bootstrap account request";
     const accountRequest = await runTinyCloudCli(home, [
@@ -411,7 +409,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     ], accountGrant)).toMatchObject({ imported: true, activated: true });
 
     stage = "retry account spaces";
-    retry = await connectClient(home, ["--profile", freshProfile]);
+    retry = await connectClient(home, ["--profile", freshProfile], fixture.hermetic.host);
     expect(contentOf(await timedTool(retry.client, {
       name: "tinycloud_account_spaces_list",
       arguments: {},
@@ -447,7 +445,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     });
 
     stage = "import KV get grant";
-    importer = await connectClient(home, ["--profile", freshProfile]);
+    importer = await connectClient(home, ["--profile", freshProfile], fixture.hermetic.host);
     expect(contentOf(await timedTool(importer.client, {
       name: "tinycloud_auth_import",
       arguments: kvGrant,
@@ -456,7 +454,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
     importer = undefined;
 
     stage = "retry KV get";
-    retry = await connectClient(home, ["--profile", freshProfile]);
+    retry = await connectClient(home, ["--profile", freshProfile], fixture.hermetic.host);
     expect(contentOf(await timedTool(retry.client, {
       name: "tinycloud_kv_get",
       arguments: { space: "applications", key: "agents/demo/profile", representation: "json" },
@@ -487,6 +485,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
   }
 }, 300_000);
 
+// Two real Node process startups and signed fixture setup need an integration deadline.
 test("an authorized missing secret returns only the value-free setup action", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-setup-"));
   const previousTcHome = process.env.TC_HOME;
@@ -549,7 +548,7 @@ test("an authorized missing secret returns only the value-free setup action", as
     else process.env.TC_HOME = previousTcHome;
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 15_000);
 
 test("secrets status on an unreadable name is ok consent_required and saves no request", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-status-consent-"));
@@ -1026,7 +1025,7 @@ async function runTinyCloudCliExit(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn({
     cmd: [nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args],
-    env: { ...globalThis.process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -1048,11 +1047,11 @@ interface ConnectedClient {
   readonly stderr: () => string;
 }
 
-async function connectClient(home: string, args: readonly string[]): Promise<ConnectedClient> {
+async function connectClient(home: string, args: readonly string[], nodeOrigin?: string): Promise<ConnectedClient> {
   const transport = new StdioClientTransport({
     command: nodeBinary,
     args: [cliPath, ...args],
-    env: { ...process.env, TC_HOME: home },
+    env: privateClientEnvironment(home, nodeOrigin),
     stderr: "pipe",
   });
   const client = new Client({ name: "tinycloud-mcp-hermetic-test", version: "0.0.0" });
@@ -1069,7 +1068,7 @@ async function runOwnerGrant(
 ): Promise<Record<string, any>> {
   const process = Bun.spawn({
     cmd: [nodeBinary, tinycloudCliPath, "--profile", profile, "--json", "--quiet", "auth", "grant", "--stdin", "--yes"],
-    env: { ...globalThis.process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -1092,7 +1091,7 @@ async function runTinyCloudCli(
 ): Promise<Record<string, any>> {
   const process = Bun.spawn({
     cmd: [nodeBinary, tinycloudCliPath, "--json", "--quiet", ...args],
-    env: { ...globalThis.process.env, TC_HOME: home },
+    env: privateClientEnvironment(home),
     stdin: input === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",

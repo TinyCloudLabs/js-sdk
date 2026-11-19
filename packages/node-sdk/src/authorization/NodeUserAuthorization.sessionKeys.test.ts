@@ -2,6 +2,9 @@ import { expect, setSystemTime, spyOn, test } from "bun:test";
 import type { ISessionManager, IWasmBindings, TinyCloudSession } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "../test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.session-keys.test";
 
 const ADDRESS = "0x0000000000000000000000000000000000000001";
 
@@ -73,6 +76,7 @@ test("same-clock sign-ins preserve independent session bindings and earlier/defa
   const defaultDid = manager.getDID("default");
   const storage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
+    tinycloudRegistryUrl: REGISTRY_ORIGIN,
     signer: {
       getAddress: async () => ADDRESS,
       getChainId: async () => 1,
@@ -90,7 +94,11 @@ test("same-clock sign-ins preserve independent session bindings and earlier/defa
   auth.refreshNodeInfo = async () => {};
   auth.ensureSpaceExists = async () => {};
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => { throw new Error("Network is outside the session-key fixture"); };
+  globalThis.fetch = async (input, init) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
+    throw new Error("Network is outside the session-key fixture");
+  };
   setSystemTime(new Date("2026-10-29T00:00:00.000Z"));
   const random = spyOn(Math, "random").mockReturnValueOnce(0.125).mockReturnValueOnce(0.25).mockReturnValueOnce(0.5);
   try {

@@ -1,12 +1,16 @@
+import "../test-support/test-bootstrap.mjs";
 import { randomUUID } from "node:crypto";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, rmdir, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import * as fileSystem from "node:fs/promises";
+import type { RegistryCacheEntry } from "@tinycloud/sdk-core";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   ProfileDeletedError,
   ProfileLockTimeoutError,
   additionalDelegationsPath,
+  createProfileRegistryCacheStore,
   authRequestsPath,
   profileConfigPath,
   profileLockMetadataPath,
@@ -27,6 +31,7 @@ import {
   updateProfileStore,
   upsertProfileRecord,
   withProfileLock,
+  withPinnedProfileDirectory,
   writeJsonAtomic,
   writeSession,
   withTinyCloudStateRoot,
@@ -971,6 +976,110 @@ test("reclaims an ownerless lock directory older than the stale threshold", asyn
     { timeoutMs: 1_000, retryMs: 2, staleAfterMs: 30_000 },
   );
   expect(records.map((record) => record.requestId)).toEqual(["req-ownerless-reclaimed"]);
+});
+
+test("a cache write entering during ancestor release owns its pin until commit", async () => {
+  const home = await isolatedHome();
+  const profile = "delegate";
+  await writeSession(profile, { marker: "original session" });
+  const cache = createProfileRegistryCacheStore(profile);
+  const entry: RegistryCacheEntry = {
+    ownerKey: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+    responseBody: '{"record":"opaque verified bytes"}',
+    sequence: 7,
+    fetchedAt: 1000,
+  };
+  const releaseBarrier = join(home, "release-barrier");
+  const collectBarrier = join(home, "collect-barrier");
+  await mkdir(releaseBarrier);
+  await mkdir(collectBarrier);
+  const previousRelease = process.env.TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR;
+  const previousCollect = process.env.TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR;
+  process.env.NODE_ENV = "test";
+  process.env.TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR = releaseBarrier;
+  process.env.TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR = collectBarrier;
+  const start = Promise.withResolvers<void>();
+  const atPublish = Promise.withResolvers<void>();
+  const publish = Promise.withResolvers<void>();
+  let entering = false;
+  let intercepted = false;
+  let commits = 0;
+  type WriteOutcome = { status: "fulfilled"; entry: RegistryCacheEntry } | { status: "rejected"; error: unknown };
+  let writing: Promise<WriteOutcome> | undefined;
+  const originalMkdir = fileSystem.mkdir;
+  // Preserve mkdir's overloads while pausing one publication. Details: TC-2481.
+  const interceptedMkdir = (async (path, options) => {
+    if (entering && !intercepted && String(path).endsWith("/.lock")) {
+      intercepted = true;
+      atPublish.resolve();
+      await publish.promise;
+    }
+    return originalMkdir(path, options);
+  }) as typeof mkdir;
+  const mkdirSpy = spyOn(fileSystem, "mkdir").mockImplementation(interceptedMkdir);
+  let outer: Promise<void> | undefined;
+  try {
+    outer = withProfileLock(profile, async () => {
+      writing = start.promise.then(() => {
+        entering = true;
+        return cache.update(entry.ownerKey, async () => {
+          commits += 1;
+          return entry;
+        });
+      }).then(
+        (value) => ({ status: "fulfilled", entry: value }),
+        (error: unknown) => ({ status: "rejected", error }),
+      );
+    });
+    await waitForProfileLockProtocol(join(releaseBarrier, `ready-${process.pid}-${profile}`), "ancestor release");
+    start.resolve();
+    await writeFile(join(releaseBarrier, "release"), "release\n");
+    await waitForProfileLockProtocol(join(collectBarrier, `ready-${process.pid}-${profile}`), "ancestor turn collection");
+    await atPublish.promise;
+    await writeFile(join(collectBarrier, "release"), "release\n");
+    await outer;
+    publish.resolve();
+    const outcome = await writing!;
+    if (outcome.status === "rejected") throw outcome.error;
+    expect(commits).toBe(1);
+    expect(outcome.entry).toMatchObject(entry);
+    expect(await cache.get(entry.ownerKey)).toEqual(outcome.entry);
+    expect(await readSession(profile)).toEqual({ marker: "original session" });
+  } finally {
+    mkdirSpy.mockRestore();
+    start.resolve();
+    publish.resolve();
+    await writeFile(join(releaseBarrier, "release"), "release\n");
+    await writeFile(join(collectBarrier, "release"), "release\n");
+    await Promise.all([outer, writing]);
+    if (previousRelease === undefined) delete process.env.TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR;
+    else process.env.TC_TEST_PROFILE_LOCK_RELEASE_BARRIER_DIR = previousRelease;
+    if (previousCollect === undefined) delete process.env.TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR;
+    else process.env.TC_TEST_PROFILE_LOCK_TURN_COLLECT_BARRIER_DIR = previousCollect;
+  }
+});
+
+test("a live lexical pin is not owned by a completed nested acquisition", async () => {
+  await isolatedHome();
+  await writeSession("selected", { owner: "selected" });
+  await writeSession("victim", { owner: "victim" });
+  const selected = profilePath("selected");
+  const moved = `${selected}.original`;
+  const start = Promise.withResolvers<void>();
+  let deferred: Promise<unknown> | undefined;
+  await withPinnedProfileDirectory("selected", async () => {
+    await withProfileLock("selected", async () => {
+      deferred = start.promise.then(() => withProfileLock("selected", () => readSession("selected")));
+      await writeSession("selected", { owner: "selected" });
+    });
+    await rename(selected, moved);
+    await symlink(profilePath("victim"), selected, "dir");
+    start.resolve();
+    expect(await deferred).toEqual({ owner: "selected" });
+  });
+  expect(await readSession("victim")).toEqual({ owner: "victim" });
+  expect(JSON.parse(await readFile(join(moved, "session.json"), "utf8"))).toEqual({ owner: "selected" });
+  await expect(readSession("selected")).rejects.toMatchObject({ code: "PROFILE_SYMLINK" });
 });
 
 test("lock ownership ends with the critical section: deferred work waits for the lock", async () => {

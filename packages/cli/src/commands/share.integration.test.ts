@@ -100,7 +100,7 @@ describe("tc share command integration", () => {
     };
     for (const name of ["a\u0001.md", "a\u200B.md", "a\u202E.md", "a\u2028.md"]) {
       const result = await refusal(["share", "publish", input, "--name", name, "--json"]);
-      expect(result.exitCode).toBe(8);
+      expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("UNSAFE_FILENAME");
     }
     const stdin = process.stdin as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<Buffer> };
@@ -109,7 +109,7 @@ describe("tc share command integration", () => {
     stdin[Symbol.asyncIterator] = () => { stdinRead = true; throw new Error("stdin must not be read"); };
     try {
       const result = await refusal(["share", "publish", "-", "--name", "a\u200B.md", "--json"]);
-      expect(result.exitCode).toBe(8);
+      expect(result.exitCode).toBe(2);
       expect(result.stderr).toContain("UNSAFE_FILENAME");
     } finally {
       stdin[Symbol.asyncIterator] = originalIterator;

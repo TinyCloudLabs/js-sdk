@@ -1,6 +1,6 @@
 import { IWasmBindings, ISessionManager, type PersistedSessionProof } from "@tinycloud/sdk-core";
 import { tinycloud, tcwSession, initialized } from "@tinycloud/web-sdk-wasm";
-import { invoke, invokeAny, prepareSession, completeSessionSetup } from "../modules/Storage/tinycloud/module";
+import { invoke, invokeAny, invokeDelegationStatus, prepareSession, completeSessionSetup } from "../modules/Storage/tinycloud/module";
 
 let wasmReady = false;
 
@@ -16,10 +16,18 @@ export class BrowserWasmBindings implements IWasmBindings {
 
   get invoke() { return invoke; }
   get invokeAny() { return invokeAny; }
+  get invokeDelegationStatus() {
+    return typeof tinycloud.invokeDelegationStatus === "function"
+      ? invokeDelegationStatus
+      : undefined;
+  }
   get prepareSession() { return prepareSession; }
   get completeSessionSetup() { return completeSessionSetup; }
   validatePersistedSession(proof: PersistedSessionProof) {
     return tinycloud.validatePersistedSession(proof);
+  }
+  validatePersistedSessionForRenewal(proof: PersistedSessionProof) {
+    return tinycloud.validatePersistedSessionForRenewal(proof);
   }
   computeCid(data: Uint8Array, codec: bigint): string { return tinycloud.computeCid(data, codec); }
 

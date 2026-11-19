@@ -40,6 +40,7 @@ import "./replication/node-loader";
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
+export { NodeNotRespondingError, NodeIdentityMismatchError, PartialNodeWriteError } from "@tinycloud/sdk-services";
 
 // Re-export core types
 export type {
@@ -137,6 +138,7 @@ export {
   pkhDid,
   principalDid,
   principalDidEquals,
+  publicJwk,
   parseCanonicalNetworkId,
   TinyCloudDebugLogger,
   tinyCloudDebugLogger,
@@ -166,6 +168,7 @@ export {
   type OpenKeyAuthorizeInput,
   type OpenKeyAuthorizationResultV1,
   type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
 } from "./authorization/NodeUserAuthorization";
 export { isAppKeyHostBound } from "./authorization/appKeyHostBinding";
 
@@ -208,6 +211,7 @@ export {
   TinyCloudNode,
   UnsupportedSessionRestoreError,
   InvalidRestoredSessionError,
+  RenewalLeaseOriginalExpiredError,
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
@@ -412,7 +416,9 @@ export type {
   VaultError,
   ISecretsService,
   SecretCatalogEntry,
+  SecretEntry,
   SecretPayload,
+  SecretType,
   SecretsError,
   ResolvedSecretPath,
   ParsedSecretCatalogKey,
@@ -525,6 +531,7 @@ export {
   DelegationManager,
   SharingService,
   createSharingService,
+  inspectShareToken,
   DelegationErrorCodes,
 } from "@tinycloud/sdk-core";
 

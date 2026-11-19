@@ -9,6 +9,8 @@ import { createMemoryPendingStore } from "./memoryPendingStore";
 import type { AuthorityRefusal, KVListPage, KVReplicaHandle, KVReplicaSpec, KVReplicaStorage, LocalReplicaStatus, ReplicaInspectedStatus, PendingWriteStore, ReplicationEvent, ResolvedReplicationOptions } from "./types";
 import { RequestTimeoutError, wrapError } from "../../errors";
 import { CONSENT_WINDOW_MS, DEFAULT_GRANT_TTL_MS } from "./contractConstants";
+import { replicaErrorFromService } from "@tinycloud/replica";
+import { createInMemoryRegistrySequenceStore, registryOwnerKeyV2, resolveRegistryResource, REGISTRY_NOT_FOUND_BODY } from "@tinycloud/sdk-core";
 
 const identity = canonicalReplicationIdentity({ host: "https://node.example", space: "tinycloud:pkh:eip155:1:0xabc:default", principal: "did:pkh:eip155:1:0xabc" });
 const status = (epoch = 0): LocalReplicaStatus => ({ coverage: "complete", lastSyncAt: new Date(1_000_000).toISOString(), syncedThroughEpoch: epoch, authority: { state: "valid", expiresAt: null }, grant: { cid: "grant", parentCid: null, expiresAt: null, state: "active", unconstrained: true }, counts: { keys: 1, contentMissing: 0, tombstones: 0 }, bytes: 1, lastError: null });
@@ -147,6 +149,49 @@ function setup({ durable = true, pendingStore, initialEpoch = 0, onSync, statusO
 
 const readRequest = (network: () => Promise<Result<KVResponse<unknown>>>) => ({ space: identity.space, key: "notes/a", path: "notes/a", options: undefined, signal: new AbortController().signal, network });
 const listRequest = (options: KVListOptions | undefined, network: () => Promise<Result<KVListPage>>) => ({ space: identity.space, listPath: "notes/", options, signal: new AbortController().signal, network });
+
+describe("saved-registration stale-sync refusals", () => {
+  test.each([
+    {
+      name: "an unverifiable answer",
+      reply: () => Response.json({ invalid: true }),
+    },
+    {
+      name: "authoritative absence after registration",
+      reply: () => new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 }),
+    },
+  ])("does not serve stale local data after $name", async ({ reply }) => {
+    const owner = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+    const sequenceStore = createInMemoryRegistrySequenceStore();
+    sequenceStore.set(registryOwnerKeyV2(owner), 1);
+    const failure = await resolveRegistryResource(owner, identity.space, "read", {
+      registryUrl: "https://registry.test",
+      sequenceStore,
+      fetch: (async () => reply()) as typeof fetch,
+    }).then(
+      () => { throw new Error("A known registration must refuse this answer"); },
+      (error) => wrapError("kv", error),
+    );
+    expect(failure.code).toBe("registry_unavailable");
+    expect(failure.meta?.reason).not.toBe("no-saved-settings");
+    const env = setup({
+      onSync: () => { throw replicaErrorFromService(failure, "sync"); },
+    });
+    env.setNow(1_300_000);
+    let requests = 0;
+    const refused = async () => {
+      requests++;
+      return err({ ...failure, service: "kv" });
+    };
+    expect(await env.controller.get(readRequest(refused)))
+      .toMatchObject({ ok: false, error: { code: failure.code } });
+    expect(await env.controller.list(listRequest(undefined, refused)))
+      .toMatchObject({ ok: false, error: { code: failure.code } });
+    expect(env.counters().localReads).toBe(0);
+    expect(env.listReads()).toBe(0);
+    expect(requests).toBe(2);
+  });
+});
 
 describe("rejected network read-through events", () => {
   test("a stale gate reports one failed network event per get/list without opening", async () => {

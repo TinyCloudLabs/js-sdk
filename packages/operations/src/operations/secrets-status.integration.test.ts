@@ -67,6 +67,7 @@ async function writeProfile(name: string, profile: Record<string, unknown>, sess
     name,
     spaceName: "secrets",
     createdAt: "2026-07-15T00:00:00.000Z",
+    tinycloudRegistryUrl: profile.host,
     ...profile,
   });
   if (session !== undefined) await writeJsonAtomic(sessionPath(name), session);
@@ -139,6 +140,11 @@ async function assertReadOnlyStatus(
     expect(invocation.space.endsWith(":secrets")).toBe(true);
   }
   for (const request of requests) {
+    if (request.method === "GET") {
+      expect(request.path).toMatch(/^\/v[12]\/locations\/[^/]+$/);
+      expect(request.authorizationSha256).toBeUndefined();
+      continue;
+    }
     expect(request.method).toBe("POST");
     if (request.path === "/delegate") {
       expect(allowedDelegations.has(request.authorizationSha256 ?? "")).toBe(true);

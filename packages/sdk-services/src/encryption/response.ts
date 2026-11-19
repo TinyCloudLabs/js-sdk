@@ -8,8 +8,8 @@
  * 1. Verify the node signature over the canonical response (excluding
  *    the signature field).
  * 2. Recompute every binding hash and reject any mismatch.
- * 3. Confirm `targetNode`, `networkId`, `alg`, and `keyVersion` echo
- *    what the SDK sent.
+ * 3. Confirm the target, network, and key version echo the request and
+ *    the returned key-wrap algorithm is supported independently.
  *
  * After verification, the SDK opens `wrappedKey` with the per-request
  * receiver private key and uses the resulting symmetric key to
@@ -27,6 +27,7 @@ import {
   type EncryptionCrypto,
   type EncryptionError,
 } from "./types";
+import { assertKeyWrapAlgorithm, KEY_WRAP_V2_ALG, openKeyV2, type KeyWrapContext } from "./keyWrap";
 
 /**
  * Construct the canonical bytes that the node signed.
@@ -102,7 +103,7 @@ export function verifyDecryptResponse(
       }),
     };
   }
-  if (response.alg !== request.alg) {
+  if (response.alg !== "x25519-aes256gcm/v1" && response.alg !== KEY_WRAP_V2_ALG) {
     return {
       ok: false,
       error: encryptionError({
@@ -171,7 +172,7 @@ export function verifyDecryptResponse(
     facts.receiverPublicKeyHash !== response.receiverPublicKeyHash ||
     facts.networkId !== response.networkId ||
     facts.targetNode !== response.targetNode ||
-    facts.alg !== response.alg ||
+    facts.alg !== request.alg ||
     facts.keyVersion !== response.keyVersion
   ) {
     return {
@@ -208,7 +209,13 @@ export function openWrappedKey(
   crypto: EncryptionCrypto,
   receiverPrivateKey: Uint8Array,
   response: DecryptResponseBody,
+  expected?: KeyWrapContext,
 ): Uint8Array {
   const wrapped = base64Decode(response.wrappedKey);
+  assertKeyWrapAlgorithm(wrapped, response.alg);
+  if (response.alg === KEY_WRAP_V2_ALG) {
+    if (!expected) throw new Error("V2 response requires expected key context");
+    return openKeyV2(receiverPrivateKey, wrapped, expected);
+  }
   return crypto.openWithReceiverKey(receiverPrivateKey, wrapped);
 }

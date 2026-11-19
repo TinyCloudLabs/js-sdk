@@ -14,6 +14,8 @@ const { TinyCloudWeb } = require("../src/modules/tcw") as { TinyCloudWeb: typeof
 const MANIFEST = { app_id: "com.test.app", name: "Test App", icon: "https://example.com/icon.png", permissions: [] };
 const ENTRY: PermissionEntry = { service: "tinycloud.delegation", space: "applications", path: "", actions: ["list"] };
 const SIWE = "prepared-siwe";
+const ALICE = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+const CONNECTED = { address: ALICE, keyId: "key-1", keyType: "MANAGED" };
 
 function unsupportedPersonalSign(): Error {
   return Object.assign(new Error("Unsupported wallet method: personal_sign"), { name: "UnsupportedMethodError" });
@@ -29,7 +31,7 @@ function node() {
     signatures.push(await (options?.signMessage ?? personalSign)(SIWE));
     return [];
   });
-  return { personalSign, signatures, grantRuntimePermissions, hasRuntimePermissions: () => false };
+  return { address: ALICE, personalSign, signatures, grantRuntimePermissions, hasRuntimePermissions: () => false };
 }
 
 function web(stub: ReturnType<typeof node>, config: Record<string, unknown>): TinyCloudWebType {
@@ -46,15 +48,15 @@ function web(stub: ReturnType<typeof node>, config: Record<string, unknown>): Ti
 }
 
 describe("TinyCloudWeb.requestPermissions signing", () => {
-  test("an OpenKey session signs through the OpenKey client and never calls personal_sign", async () => {
+  test("an OpenKey session signs through the OpenKey client with the connected key's id and never calls personal_sign", async () => {
     const stub = node();
-    const signMessage = mock(async (_request: { message: string }, _opts?: { mode?: string }) => ({ signature: "0xopenkey" }));
-    const tcw = web(stub, { openkey: { client: { authorizeTinyCloud: mock(), signMessage }, mode: "iframe" } });
+    const signMessage = mock(async (_request: { message: string; keyId: string }, _opts?: { mode?: string }) => ({ signature: "0xopenkey" }));
+    const tcw = web(stub, { openkey: { client: { authorizeTinyCloud: mock(), signMessage, lastAuth: CONNECTED }, mode: "iframe" } });
 
     const result = await tcw.requestPermissions([ENTRY], { expiryMs: 1000 });
 
     expect(result.approved).toBe(true);
-    expect(signMessage).toHaveBeenCalledWith({ message: SIWE }, { mode: "iframe" });
+    expect(signMessage).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "iframe" });
     expect(stub.personalSign).not.toHaveBeenCalled();
     expect(stub.signatures).toEqual(["0xopenkey"]);
     expect(stub.grantRuntimePermissions.mock.calls[0]?.[1]).toMatchObject({ expiry: 1000 });
@@ -62,12 +64,12 @@ describe("TinyCloudWeb.requestPermissions signing", () => {
 
   test("the OpenKey client signs in popup mode unless the session was configured otherwise", async () => {
     const stub = node();
-    const signMessage = mock(async (_request: { message: string }, _opts?: { mode?: string }) => ({ signature: "0xopenkey" }));
-    const tcw = web(stub, { openkey: { client: { authorizeTinyCloud: mock(), signMessage } } });
+    const signMessage = mock(async (_request: { message: string; keyId: string }, _opts?: { mode?: string }) => ({ signature: "0xopenkey" }));
+    const tcw = web(stub, { openkey: { client: { authorizeTinyCloud: mock(), signMessage, lastAuth: CONNECTED } } });
 
     await tcw.requestPermissions([ENTRY]);
 
-    expect(signMessage).toHaveBeenCalledWith({ message: SIWE }, { mode: "popup" });
+    expect(signMessage).toHaveBeenCalledWith({ message: SIWE, keyId: "key-1" }, { mode: "popup" });
   });
 
   test("a session without an OpenKey client signs through the connected wallet", async () => {
