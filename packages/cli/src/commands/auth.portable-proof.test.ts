@@ -230,7 +230,7 @@ describe("signed portable OpenKey grants", () => {
   test("an agent approval that unchecks an ability is refused and stores no grant", async () => {
     await expect(escalate(await signedProof({ raw: false, capabilitiesRead: true }), ownerDid, undefined, true)).rejects.toMatchObject({
       code: "OPENKEY_APPROVAL_NARROWER",
-      message: expect.stringContaining("Approve all of it"),
+      message: expect.stringContaining("The approval was narrower than the request, so no grant was stored."),
     });
     expect(activated).toEqual([]);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);

@@ -32,7 +32,7 @@ test("TC-3194 records the exact canonical CI root bytes of #1033 within the appr
     const delta = row.root.delta[format];
     expect(row.root.ceiling[format] - predecessor.root.ceiling[format]).toBe(delta);
     expect(delta).toBeLessThanOrEqual(APPROVED_GROWTH);
-    expect(rootCeilingFor({ ...ledger, tc3243SdkOwnsBusyRetryRoot: undefined, tc3285SecretTypesRoot: undefined, tc3286ShareNoDelegationActionsRoot: undefined }, format)).toEqual({ row: "tc3194NativeShareLinksRoot", ceiling: row.root.ceiling[format] });
+    expect(rootCeilingFor({ ...ledger, tc3243SdkOwnsBusyRetryRoot: undefined, tc3285SecretTypesRoot: undefined, tc3286ShareNoDelegationActionsRoot: undefined, tc2490OneApprovalRoot: undefined }, format)).toEqual({ row: "tc3194NativeShareLinksRoot", ceiling: row.root.ceiling[format] });
   }
 
   expect(ancestryPins(ledger, false)).toContainEqual({
