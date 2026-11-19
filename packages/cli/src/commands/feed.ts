@@ -5,7 +5,7 @@ import { parseSpaceUri } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage, appendFeedResponse, feedCardSchema, feedHandlingSchema, feedResourceNames, feedResponsePayloadSchema,
   getFeedCardState, initializeFeedDatabases, listFeedCards, listFeedResponses,
-  listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
+  listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedCardMd, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
 } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
 import type { FeedResponse, FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
@@ -18,9 +18,10 @@ import { cliErrorFromService, handleError } from "../output/errors.js";
 import { openFeedHandoff } from "../feed/local.js";
 import type { LocalFeedHandoff } from "../feed/local.js";
 import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runner.js";
-import { connectFeedAgent } from "../feed/connection.js";
+import { connectFeedAgent, feedAgentPermissions } from "../feed/connection.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
+import { cardMdChangedText, cardMdForPublish, rememberCardMdVersion } from "../feed/card-md.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -87,6 +88,11 @@ into shared logs.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 
+card-md prints the owner's card.md: {text, version, updatedAt}, or null when the owner has set
+none. publish and watch print the text once on stderr when its version differs from the last
+one this profile saw for the agent. publish also adds cardMd {version} to its JSON each time.
+An agent connected before card.md existed reads it with the same grant.
+
 export captures an owner-only raw KV snapshot to an unused private file. Source space,
 slash prefix and output are explicit; source get/sync grants are separate from feed SQL.
 `);
@@ -144,11 +150,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
         const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
-          const { delegation } = await node.delegateTo(did, [
-            { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
-            { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
-            { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] },
-          ], { expiry, requireActivation: true });
+          const { delegation } = await node.delegateTo(did, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
           return delegation;
         });
         outputJson({ source, delegation });
@@ -159,9 +161,24 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .requiredOption("--file <path>", "Card JSON file")
     .action(async (options, command) => {
       try {
-        const { output } = await context(command);
+        const { output, responses, profile } = await context(command);
         const card = feedCardSchema.parse(JSON.parse(await readFile(options.file, "utf8")));
-        outputJson(value(await publishFeedCard(output, card)));
+        const published = value(await publishFeedCard(output, card));
+        // card.md is advice about the next card: it never changes whether this one was published.
+        const directory = await ProfileManager.ensureProfileDir(profile.profile).catch(() => undefined);
+        const { cardMd, changed } = directory === undefined ? {} : await cardMdForPublish(responses, directory, options.agent);
+        if (changed) process.stderr.write(`${cardMdChangedText(changed)}\n`);
+        outputJson(cardMd === undefined ? published : { ...published, cardMd });
+      } catch (error) { return handleError(error); }
+    });
+
+  agentOptions(feed.command("card-md").description("Agent: read the owner's card.md, the owner's instructions for the cards you post"))
+    .action(async (options, command) => {
+      try {
+        const { responses, profile } = await context(command);
+        const cardMd = value(await readFeedCardMd(responses));
+        if (cardMd !== null) await rememberCardMdVersion(await ProfileManager.ensureProfileDir(profile.profile), options.agent, cardMd.version);
+        outputJson(cardMd);
       } catch (error) { return handleError(error); }
     });
 
@@ -280,6 +297,11 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           responses, handoff: local.handle, recipient: options.recipient, hooks: node.hooks, once: options.once === true,
           subscription: { space, service: "sql", pathPrefix: resources.responseResource },
           signal: abort.signal, deliver,
+          // The owner's card.md write wakes the watch with no response; show it once per version, on stderr.
+          onWake: async () => {
+            const { changed } = await cardMdForPublish(responses, directory, options.agent);
+            if (changed) process.stderr.write(`${cardMdChangedText(changed)}\n`);
+          },
         });
       } catch (error) { return handleError(error); }
       finally {
