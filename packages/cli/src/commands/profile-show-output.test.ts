@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const PRIVATE_KEY = "profile-show-key-canary-8e946b";
-const home = await mkdtemp(join(tmpdir(), "tc-profile-show-security-"));
+const EXTRA_VALUE = "profile-show-extra-value-8e946b";
+const home = await mkdtemp(join(tmpdir(), "tc-profile-show-output-"));
 const tcHome = await mkdtemp(join(tmpdir(), "tc-profile-show-state-"));
 const tinycloudDir = join(tcHome, ".tinycloud");
 const profileDir = join(tinycloudDir, "profiles", "default");
@@ -20,8 +20,8 @@ await writeFile(join(profileDir, "profile.json"), JSON.stringify({
   createdAt: "2026-01-01T00:00:00.000Z",
   posture: "local-owner-key",
   authMethod: "local",
-  privateKey: PRIVATE_KEY,
-  keyMaterial: "another-private-key-canary",
+  privateKey: EXTRA_VALUE,
+  keyMaterial: "profile-show-other-extra-value",
 }));
 
 const repoRoot = resolve(import.meta.dir, "../../../../");
@@ -44,11 +44,11 @@ afterAll(async () => {
 test.each([
   ["piped JSON output", []],
   ["explicit JSON output", ["--json"]],
-] as const)("profile show omits private key material from %s", (_mode, args) => {
+] as const)("profile show lists only its documented fields in %s", (_mode, args) => {
   const result = runProfileShow([...args]);
   if (result.status !== 0) throw new Error(`${result.stderr}\n${result.stdout}`);
-  expect(result.stdout).not.toContain(PRIVATE_KEY);
-  expect(result.stdout).not.toContain("another-private-key-canary");
+  expect(result.stdout).not.toContain(EXTRA_VALUE);
+  expect(result.stdout).not.toContain("profile-show-other-extra-value");
   const output = JSON.parse(result.stdout) as Record<string, unknown>;
   expect(output).not.toHaveProperty("privateKey");
   expect(output).not.toHaveProperty("keyMaterial");

@@ -2,6 +2,6 @@
 "@tinycloud/cli": patch
 ---
 
-Restrict profile details output to documented, non-secret fields.
+`tinycloud profile show` prints only its documented fields.
 
 Details: TC-2652
