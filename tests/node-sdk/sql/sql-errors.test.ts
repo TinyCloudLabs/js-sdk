@@ -28,11 +28,6 @@ describe("SQL Errors", () => {
 
   // PART 1: SQL Syntax Errors
   describe("SQL Syntax Errors", () => {
-    test("invalid SQL returns error", async () => {
-      const result = await alice.sql.query(`SELEC * FROM ${TABLE}`);
-      expect(result.ok).toBe(false);
-    });
-
     test("error message contains useful info", async () => {
       const result = await alice.sql.query(`SELEC * FROM ${TABLE}`);
       expect(result.ok).toBe(false);

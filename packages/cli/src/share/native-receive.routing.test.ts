@@ -9,7 +9,7 @@ import type { ProfileManager as ProfileManagerType } from "../config/profiles.js
 import type { createShareAuthorityAdapters as ShareAuthorityAdapterFactory } from "./adapters.js";
 import type { createHermeticEncryptedNode as HermeticEncryptedNodeFactory } from "../../../node-sdk/src/test-support/hermetic-encrypted-node";
 import type { PrivateKeySigner as PrivateKeySignerType } from "@tinycloud/node-sdk";
-import { DEFAULT_TINYCLOUD_FALLBACK_HOST, pkhDid, registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
+import { DEFAULT_TINYCLOUD_FALLBACK_HOST, endToEndNodeHost, pkhDid, registryOwnerKeyV2, signLocationRecordV2 } from "@tinycloud/sdk-core";
 import { createNativeShare, parseNativeShareUrl } from "@tinycloud/share-sdk";
 
 type FixtureServer = {
@@ -208,13 +208,13 @@ test("Native bearer receive reads a verified-unregistered owner's share from the
   const ownerInvocationCount = fixture.invocations().length;
   const registryRequestCount = registryRequests.length;
   const attackerRequestCount = attackerRequests.length;
-  // The fixture node answers for the default node's origin, so nothing reaches the real one.
+  // The fixture node answers for the default node's origins (its vault origin too: share paths are vault paths), so nothing reaches the real one.
   const defaultNodeRequests: string[] = [];
   const guardedFetch = globalThis.fetch;
   const fixtureHost = fixture.host;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== DEFAULT_TINYCLOUD_FALLBACK_HOST) return guardedFetch(input, init);
+    if (url.origin !== DEFAULT_TINYCLOUD_FALLBACK_HOST && url.origin !== endToEndNodeHost(DEFAULT_TINYCLOUD_FALLBACK_HOST)) return guardedFetch(input, init);
     defaultNodeRequests.push(url.pathname);
     const target = new URL(`${url.pathname}${url.search}`, fixtureHost).toString();
     return input instanceof Request ? guardedFetch(new Request(target, input), init) : guardedFetch(target, init);
