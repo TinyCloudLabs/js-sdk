@@ -12,6 +12,8 @@ export { initializeFeedHandoff, getFeedHandoff, deliverFeedResponse } from "./ha
 export { listenFeedResponses, drainFeedResponses } from "./listener";
 export type { FeedDrainOptions } from "./listener";
 export { feedResourceNames } from "./resources";
+export { readFeedCardMd } from "./card-md";
+export type { FeedCardMd } from "./card-md";
 export { feedCardSchema, newFeedResponseSchema, newFeedMessageSchema, feedHandlingSchema, feedResponsePayloadSchema } from "./schemas";
 export { projectFeedResponseNotification } from "./notification";
 export type { FeedRestoreOrigin, FeedRestoreDeliveryPolicy, FeedRestoreResponse, FeedRestoreRecords, FeedResponseDeliveryPage } from "./restore-types";

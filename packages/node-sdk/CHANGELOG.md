@@ -1,5 +1,84 @@
 # @tinycloudlabs/node-sdk
 
+## 3.13.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/sdk-core@3.13.0-beta.9
+
+## 3.13.0-beta.8
+
+### Patch Changes
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0-beta.8
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/replica@0.4.6-beta.2
+
+## 3.13.0-beta.7
+
+### Minor Changes
+
+- 9f3ca26: `DelegatedAccess` (from `useDelegation`) can read Secrets-app secrets through the delegation: `access.encryption` and `access.readSecret({ name, scope? })`, which returns the same `SecretReadResult` as `TinyCloudNode.readSecret`. A read needs `tinycloud.kv/get` on the secret's record and `tinycloud.encryption/decrypt` in the delegation. The decrypt permission isn't limited to that secret: it covers the owner's default network.
+
+  The new `@tinycloud/node-sdk/runtime-grants` and `@tinycloud/node-sdk/secret-read` entry points are internal: don't import them directly, as they can change in any release.
+
+  Details: TC-3338
+
+- 9f3ca26: `grantRuntimePermissions` (and `TinyCloudWeb.requestPermissions`) asks for one approval for a request across several spaces and returns one `PortableDelegation` per space. A requested space that isn't set up is never created: the call throws `MissingSpacesError` (`code: "SPACE_NOT_FOUND"`, `missingSpaceIds`, and `delegations` for the spaces that were granted). A space this account doesn't own throws before any approval (`code: "SPACE_NOT_OWNED"`). `MissingSpacesError` is exported from `@tinycloud/node-sdk`, `@tinycloud/node-sdk/core` and `@tinycloud/web-sdk`.
+
+  Details: TC-3338
+
+## 3.13.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [0490f71]
+  - @tinycloud/sdk-services@3.13.0-beta.6
+  - @tinycloud/replica@0.4.6-beta.1
+  - @tinycloud/sdk-core@3.13.0-beta.6
+
+## 3.13.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+
+## 3.13.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+
+## 3.13.0-beta.3
+
+### Minor Changes
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-services@3.13.0-beta.3
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/replica@0.4.6-beta.0
+
 ## 3.13.0-beta.2
 
 ### Patch Changes

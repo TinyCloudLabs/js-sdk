@@ -604,6 +604,10 @@ export {
   type VaultError,
   // Secrets Service
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -615,7 +619,9 @@ export {
   resolveSecretPath,
   type ISecretsService,
   type SecretCatalogEntry,
+  type SecretEntry,
   type SecretPayload,
+  type SecretType,
   type SecretsError,
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,
@@ -1232,4 +1238,4 @@ export {
 export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
 export { AccountSetupRequiredError } from "./account-setup";
 export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
-export { verifiedDelegationRouting, spaceIdsEqual } from "./delegations/portable";
+export { verifiedDelegationRouting, delegationTouchesVault, sessionTouchesVault, spaceIdsEqual } from "./delegations/portable";

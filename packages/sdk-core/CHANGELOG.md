@@ -1,5 +1,65 @@
 # @tinycloudlabs/sdk-core
 
+## 3.13.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+
+## 3.13.0-beta.8
+
+### Patch Changes
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-services@3.13.0-beta.8
+
+## 3.13.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [0490f71]
+  - @tinycloud/sdk-services@3.13.0-beta.6
+
+## 3.13.0-beta.5
+
+### Patch Changes
+
+- c7741ab: `DelegationManager.revokeIssued` reports `NOT_FOUND` only for the node's own `404 Space not found` answer. Any other 404 (a proxy page, an empty body, another route's text) is now a failed request (`NETWORK_ERROR` with `meta.status` 404), so a caller can no longer mistake it for "the delegation is gone". `tinycloud feed disconnect` relies on this: it removes the registry row only for the node's answer, and keeps it on any other failure.
+
+  Details: TC-3150
+
+## 3.13.0-beta.4
+
+### Patch Changes
+
+- 1f961e4: A share link no longer carries `tinycloud.delegation` actions, so whoever holds a link can't revoke, create, list or renew delegations with it. `sharing.generate`, and `delegateReceivedShare` (or `receive` when it sub-delegates) for a received link, now refuse any `tinycloud.delegation/*` action with `INVALID_INPUT`, before anything is signed or sent. `sharing.preflightGenerate` reports such a link as `"not-covered"`, so it never says `"ok"` for a link `generate` refuses. Read, list and edit shares are unchanged.
+
+  Details: TC-3286
+
+## 3.13.0-beta.3
+
+### Minor Changes
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-services@3.13.0-beta.3
+
 ## 3.13.0-beta.1
 
 ### Minor Changes
