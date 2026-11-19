@@ -5,4 +5,6 @@
 
 `DelegatedAccess` (from `useDelegation`) can read Secrets-app secrets through the delegation: `access.encryption` and `access.readSecret({ name, scope? })`, which returns the same `SecretReadResult` as `TinyCloudNode.readSecret`. A read needs `tinycloud.kv/get` on the secret's record and `tinycloud.encryption/decrypt` in the delegation.
 
+The new `@tinycloud/node-sdk/runtime-grants` and `@tinycloud/node-sdk/secret-read` entry points are internal: don't import them directly, as they can change in any release.
+
 Details: TC-3338

@@ -8,7 +8,10 @@ import type { EncryptionService, parsePermissionHint, VaultNetworkReadResult } f
 import type { DelegatedEncryptionFactory } from "./DelegatedAccess";
 import type { SecretReadResult } from "./TinyCloudNode";
 
-/** A {@link DelegatedAccess}'s decrypt service and its secret read, both signing with the access's session. */
+/**
+ * A {@link DelegatedAccess}'s decrypt service and its secret read, both signing with the access's session.
+ * @internal
+ */
 export interface DelegatedSecrets {
   encryption: EncryptionService;
   read(vaultKey: string): Promise<SecretReadResult>;
@@ -17,6 +20,7 @@ export interface DelegatedSecrets {
 /**
  * Build the access's encryption (registered on its context) and the vault behind its secret reads. `kv` is a
  * fresh, unprefixed KV service from the root: vault records sit at full space keys, outside the delegation's prefix.
+ * @internal
  */
 export function delegatedSecrets(
   context: ServiceContext,
@@ -58,6 +62,7 @@ function isSecretPayload(
  * Project a network-encrypted vault read of a secret record onto the safe
  * {@link SecretReadResult}: no node response, envelope or key material.
  * `parseHint` is the root's `parsePermissionHint`, so this file carries no copy of sdk-services.
+ * @internal
  */
 export function secretReadResult(
   result: VaultNetworkReadResult<unknown>,

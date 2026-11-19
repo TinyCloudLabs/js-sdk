@@ -28,6 +28,10 @@ import type { resolveExpiryMs, wholeSecondExpiry } from "./delegateToHelpers";
 import type { MissingSpacesError, PortableDelegation } from "./delegation";
 import type { RuntimePermissionGrantOptions } from "./TinyCloudNode";
 
+/**
+ * What {@link issueRuntimeGrants} takes from `TinyCloudNode`.
+ * @internal
+ */
 export interface RuntimeGrantPorts<Operation> {
   wasm: Pick<IWasmBindings, "prepareSession" | "ensureEip55" | "completeSessionSetup">;
   domain: string;
@@ -70,6 +74,7 @@ export interface RuntimeGrantPorts<Operation> {
   }): void;
 }
 
+/** @internal */
 export interface RuntimeGrantRequest {
   graph: { readonly signal: AbortSignal; assertActive(): void };
   session: TinyCloudSession;
@@ -79,6 +84,10 @@ export interface RuntimeGrantRequest {
   options: RuntimePermissionGrantOptions | undefined;
 }
 
+/**
+ * The signing and activation half of `TinyCloudNode.grantRuntimePermissions`.
+ * @internal
+ */
 export async function issueRuntimeGrants<Operation>(
   ports: RuntimeGrantPorts<Operation>,
   { graph, session, sessionExpiry, expanded, options }: RuntimeGrantRequest,
