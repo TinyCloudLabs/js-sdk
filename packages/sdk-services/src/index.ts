@@ -156,6 +156,9 @@ export {
 } from "./resourceRouting";
 export type { ResourceAccess, ResourceDestination, ResourceNodeInfo, ResourceRoutingConfig, ResourceTransport, ResourceTransportTarget, ResourceTransportOptions } from "./resourceRouting";
 
+// Abort plumbing shared with @tinycloud/node-sdk's service graph (not part of the documented API)
+export { linkAbortSignal, releaseWithBody } from "./abortLink";
+
 // Developer request log
 export type { RequestEvent, RequestLog, RequestLogReader, RequestSink, RequestService } from "./telemetry/requestLog";
 
