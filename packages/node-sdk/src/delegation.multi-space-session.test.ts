@@ -36,9 +36,14 @@ async function fixture(foreign = false) {
 }
 test("validated signed-session activation preserves both resource spaces and its requested primary route", async () => {
   const { node, grant, primary, secondary } = await fixture();
-  // The fixture owner has no location record; every other request answers as the node.
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) =>
-    unregisteredLocationRegistryResponse(input, REGISTRY, init) ?? Response.json({ activated: [], skipped: [] }), { preconnect: globalThis.fetch.preconnect }));
+  // The fixture owner has no location record; the node answers only POST /delegate.
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const registry = unregisteredLocationRegistryResponse(input, REGISTRY, init);
+    if (registry) return registry;
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.endsWith("/delegate") && init?.method === "POST") return Response.json({ activated: [], skipped: [] });
+    throw new Error(`Unexpected fetch: ${url}`);
+  }, { preconnect: globalThis.fetch.preconnect }));
   try {
     const installed = await activateValidatedRuntimeDelegation(node, grant, { host });
     expect(new Set(installed.effectivePermissions.map(p => p.space))).toEqual(new Set([primary, secondary]));

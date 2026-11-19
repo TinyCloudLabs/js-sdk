@@ -6,9 +6,15 @@ import { TinyCloudNode } from "./TinyCloudNode";
 import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
 
 const REGISTRY = "https://registry.fixture.test";
-/** The fixture owner has no location record; every other request answers as the node. */
-const nodeFetch = (body: object) => Object.assign(async (input: string | URL | Request, init?: RequestInit) =>
-  unregisteredLocationRegistryResponse(input, REGISTRY, init) ?? Response.json(body), { preconnect: globalThis.fetch.preconnect });
+/** The fixture owner has no location record; the node answers only /info and POST /delegate. */
+const nodeFetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+  const registry = unregisteredLocationRegistryResponse(input, REGISTRY, init);
+  if (registry) return registry;
+  const url = input instanceof Request ? input.url : String(input);
+  if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+  if (url.endsWith("/delegate") && init?.method === "POST") return Response.json({ activated: [], skipped: [] });
+  throw new Error(`Unexpected fetch: ${url}`);
+}, { preconnect: globalThis.fetch.preconnect });
 
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
 const address = await signer.getAddress();
@@ -35,7 +41,7 @@ test("one multi-space parent issues a child clipped to its actual shorter signed
   const node = new TinyCloudNode({ host: "https://node.test", tinycloudRegistryUrl: REGISTRY, autoBootstrapAccount: false, wasmBindings: wasm });
   await node.restoreSession({ ...session, spaceId: space("applications"), jwk: key, verificationMethod: did,
     address, chainId: 1, siwe: prepared.siwe, signature });
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(nodeFetch({ activated: [], skipped: [] }));
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(nodeFetch);
   try {
     setSystemTime(new Date(issued));
     // Numeric milliseconds match feed connect's existing parseExpiry(...)-Date.now() semantics.
@@ -55,7 +61,7 @@ test("primary routing prefers requested applications, otherwise first canonical 
       includeAccountRegistryPermissions: false,
       capabilityRequest: composeManifestRequest([{ app_id: "fixture", name: "Fixture", space: names[0], prefix: "", defaults: false, includePublicSpace: false, permissions }], { includeAccountRegistryPermissions: false }),
     });
-    const fetch = spyOn(globalThis, "fetch").mockImplementation(nodeFetch({ activated: [], skipped: [], protocol: 1, version: "1.0.0", features: [] }));
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(nodeFetch);
     try {
       await node.signIn();
       expect(node.spaceId?.toLowerCase()).toBe(space(names.includes("applications") ? "applications" : names.includes("account") ? "account" : "alpha").toLowerCase());

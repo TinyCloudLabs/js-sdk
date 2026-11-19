@@ -12,9 +12,15 @@ test("post-construction manifest routes through its requested space, ahead of im
   const node = new TinyCloudNode({ signer, wasmBindings: wasm, host: "https://routing.test", tinycloudRegistryUrl: REGISTRY, autoBootstrapAccount: false, autoCreateSpace: false });
   node.setManifest({ app_id: "com.demo.app", name: "Demo", defaults: false, includePublicSpace: false,
     permissions: [{ service: "tinycloud.kv", space: "default", path: "config", actions: ["get"] }] });
-  // The fixture owner has no location record; every other request answers as the node.
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) =>
-    unregisteredLocationRegistryResponse(input, REGISTRY, init) ?? Response.json({ protocol: 1, version: "1.0.0", features: [], activated: [], skipped: [] }), { preconnect: globalThis.fetch.preconnect }));
+  // The fixture owner has no location record; the node answers only /info and POST /delegate.
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+    const registry = unregisteredLocationRegistryResponse(input, REGISTRY, init);
+    if (registry) return registry;
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.endsWith("/info")) return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+    if (url.endsWith("/delegate") && init?.method === "POST") return Response.json({ activated: [], skipped: [] });
+    throw new Error(`Unexpected fetch: ${url}`);
+  }, { preconnect: globalThis.fetch.preconnect }));
   try {
     await node.signIn();
     expect(node.spaceId).toBe(wasm.makeSpaceId(await signer.getAddress(), 1, "default"));
