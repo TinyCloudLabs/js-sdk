@@ -152,7 +152,7 @@ var init_constants = __esm({
     CONFIG_DIR = tinycloudHomePath();
     PROFILES_DIR = profilesPath();
     CONFIG_FILE = tinycloudConfigPath();
-    DEFAULT_HOST = "https://tee.node.tinycloud.xyz";
+    DEFAULT_HOST = "https://node.tinycloud.xyz";
     DEFAULT_OPENKEY_HOST = "https://openkey.so";
     DEFAULT_OPENKEY_DEVICE_API_HOST = "https://api.openkey.so";
     DEFAULT_PROFILE = "default";
@@ -29307,7 +29307,7 @@ async function receiveLegacyV2(link4, options) {
   }
   return { metadata: metadataFor(envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "compact" }, bytes: bytes3, ...text === void 0 ? {} : { text } };
 }
-var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
+var SHARE_CONTENT_LIMIT = 95 * 1024 * 1024;
 var SHARE_PUBLISH_RESULT_VERSION = 1;
 var DEFAULT_SHARE_LIFETIME_MS = 7 * 24 * 60 * 60 * 1e3;
 function redactPublishedShare(result) {
@@ -32755,7 +32755,8 @@ import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open10, readFile as 
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
-var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
+var MAX_SHARE_STDIN_BYTES = 95 * 1024 * 1024;
+var MAX_ADDRESSED_SHARE_BYTES = 71 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
 async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
   if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("MAX_BYTES_EXCEEDED");
@@ -35286,6 +35287,8 @@ var SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 var INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 var NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
+var SHARE_TOO_LARGE_MESSAGE = "Shared files can be up to 95 MiB. Use a smaller file or split it.";
+var ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE = "Files shared with specific people can be up to 71 MiB. Use a smaller file or split it.";
 var ONGOING_UNAVAILABLE = "Ongoing shares are not available yet; v1 shares pin a version";
 function artifactRequest(options, actions, inputCount) {
   if (options.artifact === void 0) {
@@ -35552,8 +35555,17 @@ async function notifyRecordedShare(record2, recipient, adapter, storage, publish
 function byteLimit(value) {
   if (value === void 0) return void 0;
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "--max-bytes must be between 1 byte and 95 MiB.", 7);
   return parsed;
+}
+function shareCeiling(target) {
+  return target.kind === "bearer" ? MAX_SHARE_STDIN_BYTES : MAX_ADDRESSED_SHARE_BYTES;
+}
+function shareTooLarge(maxBytes, ceiling, together = false) {
+  const defaultLimit = maxBytes === void 0 || maxBytes >= ceiling;
+  const largest = ceiling === MAX_SHARE_STDIN_BYTES ? "95" : "71";
+  const message = together ? defaultLimit ? `These files add up to more than ${largest} MiB. Share fewer at once or use smaller files.` : `These files add up to more than the --max-bytes limit you set (${maxBytes} bytes). Share fewer at once or raise --max-bytes, up to ${largest} MiB.` : defaultLimit ? ceiling === MAX_SHARE_STDIN_BYTES ? SHARE_TOO_LARGE_MESSAGE : ADDRESSED_SHARE_TOO_LARGE_FILE_MESSAGE : `This file is over the --max-bytes limit you set (${maxBytes} bytes). Use a smaller file or raise --max-bytes, up to ${largest} MiB.`;
+  return new CLIError("MAX_BYTES_EXCEEDED", message, 7);
 }
 function mediaTypeFor(filename) {
   const extension = filename.toLowerCase().split(".").at(-1);
@@ -35564,12 +35576,12 @@ function requestedActions(values) {
   if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
-function assertAggregateInputLimit(inputs, maxBytes) {
-  const limit = maxBytes ?? MAX_SHARE_STDIN_BYTES;
+function assertAggregateInputLimit(inputs, maxBytes, ceiling) {
+  const limit = Math.min(maxBytes ?? ceiling, ceiling);
   let total = 0;
   for (const input of inputs) {
     total += input.bytes.byteLength;
-    if (!Number.isSafeInteger(total) || total > limit) throw new CLIError("MAX_BYTES_EXCEEDED", "combined share input exceeds the configured byte limit", 7);
+    if (!Number.isSafeInteger(total) || total > limit) throw shareTooLarge(maxBytes, ceiling, inputs.length > 1);
   }
 }
 function registerShareCommand(program2) {
@@ -35581,6 +35593,7 @@ function registerShareCommand(program2) {
       const target = parseShareTarget(options.to);
       if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
       const maxBytes = byteLimit(options.maxBytes);
+      const ceiling = shareCeiling(target);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
       const actions = requestedActions(options.action);
@@ -35601,9 +35614,11 @@ function registerShareCommand(program2) {
       } else {
         for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
         for (const file of files) shareInputFilename(file, name);
-        inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+        inputs = await Promise.all(files.map((file) => readShareInput(file, name, Math.min(maxBytes ?? ceiling, ceiling)).catch((error) => {
+          throw error instanceof Error && error.message === "MAX_BYTES_EXCEEDED" ? shareTooLarge(maxBytes, ceiling) : error;
+        })));
       }
-      assertAggregateInputLimit(inputs, maxBytes);
+      assertAggregateInputLimit(inputs, maxBytes, ceiling);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);

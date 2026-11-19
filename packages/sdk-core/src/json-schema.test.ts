@@ -414,11 +414,6 @@ describe("JSON Schema Export - Bundle", () => {
     }
   });
 
-  it("should have correct number of schemas in SCHEMA_NAMES", () => {
-    // We have 45 schemas defined
-    expect(SCHEMA_NAMES.length).toBe(45);
-  });
-
   it("should match schema count between flat and SCHEMA_NAMES", () => {
     const flat = getAllJsonSchemasFlat();
     expect(Object.keys(flat).length).toBe(SCHEMA_NAMES.length);

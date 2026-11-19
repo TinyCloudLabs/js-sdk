@@ -142,7 +142,8 @@ scenario('a renewal approved by the SAME owner installs, whatever the address ca
   stubSpaceProbe(t, readySpace);
   const ownerA = await firstInstall(ctx, WALLET_A);
   const profile = readHome('profile.json');
-  profile.ownerDid = ownerA.replace(/0x(.*)$/i, (_all, hex) => `0x${hex.toUpperCase()}`);
+  // A random EIP-55 address can have no lowercase letter (about 1 in 4,600), so upper-casing may change nothing: flip to the other case then.
+  profile.ownerDid = ownerA.replace(/0x(.*)$/i, (_all, hex) => `0x${hex === hex.toUpperCase() ? hex.toLowerCase() : hex.toUpperCase()}`);
   assert.notEqual(profile.ownerDid, ownerA);
   fs.writeFileSync(homeFile('profile.json'), JSON.stringify(profile), { mode: 0o600 });
   const printed = await request();

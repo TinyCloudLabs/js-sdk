@@ -12,9 +12,39 @@ import {
   ServiceContext,
   type TelemetryConfig,
 } from "@tinycloud/sdk-core";
-import type { FetchFunction, InvokeFunction, InvokeAnyFunction, RequestSink } from "@tinycloud/sdk-services";
+import {
+  parsePermissionHint,
+  resolveSecretPath,
+  type DataVaultService,
+  type EncryptionService,
+  type FetchFunction,
+  type IEncryptionService,
+  type InvokeFunction,
+  type InvokeAnyFunction,
+  type RequestSink,
+} from "@tinycloud/sdk-services";
 import { createServiceContext } from "./recordingServiceContext";
 import { PortableDelegation } from "./delegation";
+import type { DelegatedSecrets } from "./secret-read";
+import type { SecretReadResult } from "./TinyCloudNode";
+
+/**
+ * Builds the encryption and vault services of a {@link DelegatedAccess}. Both
+ * sign with the access's delegated session and target the encryption network
+ * of the delegation's owner. `TinyCloudNode.useDelegation` supplies it.
+ */
+export interface DelegatedEncryptionFactory {
+  encryption(): EncryptionService;
+  vault(kv: IKVService, encryption: EncryptionService): DataVaultService;
+}
+
+/** Input for {@link DelegatedAccess.readSecret}. The space is the delegation's. */
+export interface DelegatedSecretReadInput {
+  /** Env-style secret name. */
+  name: string;
+  /** Optional logical secret scope. */
+  scope?: string;
+}
 
 /**
  * The handles needed to rehydrate this delegation activation in a fresh
@@ -42,7 +72,8 @@ export interface RestorableSession {
  * Provides access to a space via a received delegation.
  *
  * This is returned by TinyCloudNode.useDelegation() and provides
- * KV operations on the delegated space.
+ * KV, SQL, DuckDB and hooks operations on the delegated space, plus decrypt
+ * and secret reads under the delegation (`encryption`, `readSecret`).
  */
 export class DelegatedAccess {
   private session: TinyCloudSession;
@@ -53,12 +84,17 @@ export class DelegatedAccess {
   private _sql: SQLService;
   private _duckdb: DuckDbService;
   private _hooks: HooksService;
+  private encryptionFactory: DelegatedEncryptionFactory | undefined;
+  private _encryption: IEncryptionService | undefined;
+  private _secrets: Promise<DelegatedSecrets> | undefined;
 
   /**
    * @param lifetime - Optional owner of this access: its `fetch` is used for
    *   requests and the service context is registered with `track`, so the
    *   owner can cancel and retire the access (TinyCloudNode does this when its
    *   session is replaced or signed out).
+   * @param encryptionFactory - Builds `encryption` and the vault behind
+   *   `readSecret`; without it both throw.
    */
   constructor(
     session: TinyCloudSession,
@@ -72,10 +108,12 @@ export class DelegatedAccess {
       track(context: ServiceContext): ServiceContext;
       requestSink?: RequestSink;
     },
+    encryptionFactory?: DelegatedEncryptionFactory,
   ) {
     this.session = session;
     this._delegation = delegation;
     this.host = host;
+    this.encryptionFactory = encryptionFactory;
 
     // Create service context. invokeAny is required for SQL operations whose
     // statements span multiple actions in a single invocation (e.g. the
@@ -183,6 +221,56 @@ export class DelegatedAccess {
    */
   get hooks(): IHooksService {
     return this._hooks;
+  }
+
+  /**
+   * Encryption under this delegation: `decrypt` signs with the delegated
+   * session, so it succeeds only for a network the delegation grants
+   * `tinycloud.encryption/decrypt` on (the owner's default network for
+   * secrets). Works for a session-only recipient: no wallet or SIWE session of
+   * its own is needed.
+   *
+   * `tinycloud.encryption/decrypt` isn't limited to one secret: it covers the owner's default network.
+   */
+  get encryption(): IEncryptionService {
+    if (!this.encryptionFactory) {
+      throw new Error("This delegated access was created without encryption.");
+    }
+    // The service itself loads with the secret-read module on the first call.
+    const loaded = async () => (await this.secrets()).encryption;
+    return this._encryption ??= {
+      config: {},
+      initialize() {},
+      onSessionChange() {},
+      onSignOut() {},
+      discoverNetwork: async (...args) => (await loaded()).discoverNetwork(...args),
+      encryptToNetwork: async (...args) => (await loaded()).encryptToNetwork(...args),
+      decryptEnvelope: async (...args) => (await loaded()).decryptEnvelope(...args),
+    };
+  }
+
+  /**
+   * Read a secret from the delegated space, as `TinyCloudNode.readSecret` does
+   * for an explicit space. Needs `tinycloud.kv/get` on the secret's vault
+   * record (`vault/secrets/...`) and `tinycloud.encryption/decrypt` on the
+   * owner's encryption network in this delegation; a missing one comes back
+   * as `permission_required`. Never requests or signs new authority.
+   */
+  async readSecret(input: DelegatedSecretReadInput): Promise<SecretReadResult> {
+    const resolved = resolveSecretPath(input.name, { scope: input.scope });
+    return (await this.secrets()).read(resolved.vaultKey);
+  }
+
+  /** One load and one set of services per access; a failed load is retried by the next call. */
+  private secrets(): Promise<DelegatedSecrets> {
+    return this._secrets ??= (async () => {
+      // Not a static import on purpose: web-sdk's root size budget has no room for it, so bundlers ship it as its own file.
+      const { delegatedSecrets } = await import("./secret-read.js");
+      return delegatedSecrets(this._serviceContext, this.encryptionFactory, new KVService({}), parsePermissionHint);
+    })().catch((error: unknown) => {
+      this._secrets = undefined;
+      throw error;
+    });
   }
 
   /**

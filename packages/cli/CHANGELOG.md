@@ -1,5 +1,69 @@
 # @tinycloud/cli
 
+## 1.8.0-beta.16
+
+### Patch Changes
+
+- 313b056: Shares can be up to 95 MiB, the most the TinyCloud node accepts in one upload (99,614,720 bytes). A larger file stops before uploading with "Shared files can be up to 95 MiB. Use a smaller file or split it." When several files together pass the limit, the message reads "These files add up to more than 95 MiB. Share fewer at once or use smaller files." `--max-bytes` accepts 1 byte to 95 MiB, and a file over a smaller `--max-bytes` gets its own message naming that limit.
+
+  Details: TC-3252
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+  - @tinycloud/operations@0.9.1-beta.10
+
+## 1.8.0-beta.15
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [0576031]
+- Updated dependencies [7399b14]
+  - @tinycloud/operations@0.9.1-beta.9
+  - @tinycloud/sdk-services@3.13.0-beta.8
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 1.8.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+  - @tinycloud/operations@0.9.1-beta.8
+
+## 1.8.0-beta.13
+
+### Minor Changes
+
+- 0490f71: `feed card-md` prints the owner's card.md (`{text, version, updatedAt}`). When the owner hasn't set one, it prints the default (`{text, version, default: true}`). `feed publish` adds `cardMd: {version}` to its JSON, with `default: true` while it is the default, and `feed publish` and `feed watch` print the text once on stderr when its version differs from the last one this profile saw for that agent. `feed connect` copies the owner's card.md into the new agent's response database, or the default when the owner hasn't set one. An agent connected before card.md existed reads it with the same grant, without reconnecting. `@tinycloud/sdk-services` adds `readFeedCardMd` and an optional `onWake` callback on `listenFeedResponses`, run at the start of every drain.
+
+  Details: TC-3345
+
+### Patch Changes
+
+- Updated dependencies [0490f71]
+  - @tinycloud/sdk-services@3.13.0-beta.6
+  - @tinycloud/node-sdk@3.13.0-beta.6
+  - @tinycloud/operations@0.9.1-beta.7
+  - @tinycloud/sdk-core@3.13.0-beta.6
+
+## 1.8.0-beta.12
+
+### Patch Changes
+
+- b096c5a: `tinycloud delegation revoke <cid>` from an owner profile can now revoke a grant that profile's own key issued, such as one made with `feed connect`. When the node lists the CID as issued by this profile's key, the CLI revokes it with that key, with no owner approval. A CID the node doesn't list as issued by this key is still refused, and a network or node failure is reported as an error.
+
+  Details: TC-3150
+
 ## 1.8.0-beta.11
 
 ### Patch Changes
