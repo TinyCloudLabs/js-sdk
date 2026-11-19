@@ -2,8 +2,8 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * What the CLI says about itself the first time it runs in a config folder: once, on stderr, before the first
- * command's own output. A tool the reader is already running says it, so nothing that asks for trust has to sit on a web
+ * What the CLI says about itself the first time a command succeeds in a config folder: once, on stderr, after the
+ * command's own output and never before an error. A tool the reader is already running says it, so nothing that asks for trust has to sit on a web
  * page. `cli` is the command that works on this computer (`tinycloud`, or the npx command when run by npx).
  */
 export function aboutText(cli: string, signedIn: boolean): string {
