@@ -142,7 +142,7 @@ export function createNamedKeyClient(
       };
     },
     // Public entry points replace these hooks with a captured operation first.
-    signInvocation: () => { throw new Error("Named-key operation was not captured"); },
+    signInvocation: () => { throw new Error("Internal error: a named-key request was signed without its session."); },
   };
   return new NamedKeyClient(config);
 }

@@ -5,7 +5,7 @@ import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
  * @packageDocumentation
  */
 
-import type { FetchFunction } from "@tinycloud/sdk-services";
+import { withDeadline, type FetchFunction } from "@tinycloud/sdk-services";
 import { httpResponseError } from "./http-error";
 
 export class ProtocolMismatchError extends Error {
@@ -64,9 +64,7 @@ export async function checkNodeInfo(
 ): Promise<NodeInfo> {
   return usingResponse(async () => {
     try {
-      return await fetchFn(`${host}/info`, {
-        signal: AbortSignal.timeout(5000),
-      });
+      return await fetchFn(`${host}/info`, withDeadline(fetchFn, {}, 5000));
     } catch (err) {
       throw new VersionCheckError(host, err as Error);
     }

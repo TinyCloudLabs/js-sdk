@@ -3,17 +3,21 @@ import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { retryInvocation, type RetryInvocationOptions } from "./retryInvocation";
 import { ErrorCodes, type FetchRequestInit, type FetchResponse } from "./types";
-import { routesRequests, resolvedDispatch, type ResolvedDispatch } from "./resolvedDispatch";
+import { outsideLanes, routesRequests, resolvedDispatch, startDeadline, type ResolvedDispatch } from "./resolvedDispatch";
 import type { FetchFunction } from "./types";
 
 const FOREGROUND_QUIET_MS = 400;
+// Steady foreground traffic delays a background request by at most this long; NODE_BUSY pauses still apply.
+const MAX_BACKGROUND_WAIT_MS = 5_000;
+// An abandoned, unread response stops counting against its lane after this long.
+const MAX_LANE_HOLD_MS = 15_000;
 const scheduled = Symbol.for("@tinycloud/sdk-services/scheduled-request");
 const lanesKey = Symbol.for("@tinycloud/sdk-services/request-lanes");
 const foregroundOperation = Symbol.for("@tinycloud/sdk-services/foreground-operation");
 
 export type RequestPriority = "foreground" | "background";
 type Operation = { hosts: Set<string>; finished: Promise<number> };
-type Request = FetchRequestInit & { [scheduled]?: string; [foregroundOperation]?: Operation; [resolvedDispatch]?: ResolvedDispatch };
+type Request = FetchRequestInit & { [scheduled]?: string; [foregroundOperation]?: Operation; [resolvedDispatch]?: ResolvedDispatch; [outsideLanes]?: boolean };
 
 export function isScheduled(init: FetchRequestInit | undefined, url?: string): boolean {
   const host = (init as Request | undefined)?.[scheduled];
@@ -40,7 +44,10 @@ const browser = globalThis as typeof globalThis & {
 type Lane = {
   foreground: number;
   background: boolean;
-  resumeAt: number;
+  /** Background work yields until this time after foreground work. */
+  quietUntil: number;
+  /** All background work pauses until this time after NODE_BUSY. */
+  busyUntil: number;
 };
 
 // Multiple SDK entrypoints may bundle ServiceContext separately.
@@ -50,7 +57,7 @@ const lanes = shared[lanesKey] ??= new Map<string, Lane>();
 function laneFor(host: string): Lane {
   const existing = lanes.get(host);
   if (existing) return existing;
-  const lane: Lane = { foreground: 0, background: false, resumeAt: 0 };
+  const lane: Lane = { foreground: 0, background: false, quietUntil: 0, busyUntil: 0 };
   lanes.set(host, lane);
   return lane;
 }
@@ -75,6 +82,9 @@ function trackResponse(response: FetchResponse): { response: FetchResponse; fini
   const finished = new Promise<void>((resolve) => { finish = resolve; });
   const reader = response.body.getReader();
   void reader.closed.then(finish, finish);
+  const hold = setTimeout(finish, MAX_LANE_HOLD_MS);
+  (hold as { unref?: () => void }).unref?.();
+  void finished.then(() => clearTimeout(hold));
   const body = new ReadableStream({
     async pull(controller) {
       try {
@@ -126,13 +136,13 @@ function nodeRequest(lane: Lane, foreground: boolean, send: () => Promise<FetchR
     void (async () => {
       try {
         const pause = await sendResponse(send(), resolve);
-        lane.resumeAt = Math.max(lane.resumeAt, performance.now() + pause);
+        if (pause) lane.busyUntil = Math.max(lane.busyUntil, performance.now() + pause);
       } catch (error) {
         reject(error);
       } finally {
         if (foreground) {
           lane.foreground--;
-          lane.resumeAt = Math.max(lane.resumeAt, performance.now() + FOREGROUND_QUIET_MS);
+          lane.quietUntil = Math.max(lane.quietUntil, performance.now() + FOREGROUND_QUIET_MS);
         } else {
           lane.background = false;
         }
@@ -183,7 +193,9 @@ export function foregroundRequest(
     void operation.finished.then(async (pause) => {
       await body;
       lane.foreground--;
-      lane.resumeAt = Math.max(lane.resumeAt, performance.now() + Math.max(FOREGROUND_QUIET_MS, pause));
+      const now = performance.now();
+      lane.quietUntil = Math.max(lane.quietUntil, now + FOREGROUND_QUIET_MS);
+      if (pause) lane.busyUntil = Math.max(lane.busyUntil, now + pause);
     });
     return pending;
   }
@@ -197,13 +209,17 @@ export async function backgroundRequest(
 ): Promise<FetchResponse> {
   const host = new URL(url, browser.location?.href).origin;
   const locks = browser.navigator?.locks;
+  const agedAt = performance.now() + MAX_BACKGROUND_WAIT_MS;
   if (locks) {
     return new Promise<FetchResponse>((resolve, reject) => {
       void locks.request(`tinycloud:background:${host}`, { signal }, async () => {
         let request: Promise<FetchResponse> | undefined;
         while (!request) {
           signal.throwIfAborted();
-          await locks.request(`tinycloud:foreground:${host}`, { ifAvailable: true }, (lock) => {
+          // Once aged, queue for the lock exclusively: current holders finish (with their quiet and busy pauses),
+          // and later foreground requests wait only until this one has started.
+          const aged = performance.now() >= agedAt;
+          await locks.request(`tinycloud:foreground:${host}`, aged ? { signal } : { ifAvailable: true }, (lock) => {
             if (lock !== null) {
               signal.throwIfAborted();
               request = send();
@@ -221,9 +237,11 @@ export async function backgroundRequest(
   const lane = laneFor(host);
   while (true) {
     signal.throwIfAborted();
-    const delay = lane.resumeAt - performance.now();
-    if (!lane.foreground && !lane.background && delay <= 0) break;
-    await abortableSleep(lane.foreground || lane.background ? 25 : delay, signal);
+    const now = performance.now();
+    const yielding = now < agedAt && (lane.foreground > 0 || lane.quietUntil > now);
+    const delay = lane.busyUntil - now;
+    if (!lane.background && !yielding && delay <= 0) break;
+    await abortableSleep(lane.background || yielding ? 25 : delay, signal);
   }
   return nodeRequest(lane, false, send);
 }
@@ -263,12 +281,14 @@ export function dispatchRequest(
   if ((transport as FetchFunction & { [routesRequests]?: boolean } | undefined)?.[routesRequests]) {
     return send(routed);
   }
-  if (isScheduled(init, url)) return send(routed);
+  // Every remaining path dispatches the request now: lane waiting does not count against its deadline.
+  const dispatchNow = (request: FetchRequestInit) => send(startDeadline(request));
+  if ((init as Request)[outsideLanes] || isScheduled(init, url)) return dispatchNow(routed);
   const request = scheduledRequest(routed, priority, url);
-  if (priority === "background") return backgroundRequest(url, init.signal, () => send(request));
+  if (priority === "background") return backgroundRequest(url, init.signal, () => dispatchNow(request));
   const operation = (init as Request)[foregroundOperation];
   const host = new URL(url, browser.location?.href).origin;
-  if (operation?.hosts.has(host)) return send(request);
+  if (operation?.hosts.has(host)) return dispatchNow(request);
   operation?.hosts.add(host);
-  return foregroundRequest(url, init.signal, () => send(request), operation);
+  return foregroundRequest(url, init.signal, () => dispatchNow(request), operation);
 }

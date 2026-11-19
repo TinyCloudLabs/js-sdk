@@ -381,6 +381,8 @@ export class EncryptionService
       );
       return encOk(plaintext);
     } catch (error) {
+      // An abort (caller, timeout or sign-out) is a transport outcome, not a failed decryption.
+      if (request.signal.aborted) return encErr(encryptionError({ code: "TRANSPORT_ERROR", cause: toError(error) }));
       const routing = routingFailure(error);
       if (routing) return encErr(decryptionError(routing));
       return encErr(

@@ -5,7 +5,7 @@ import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
  * browser bundles carry them as a separate file rather than in their root.
  */
 import type { ISpaceCreationHandler, SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
-import type { FetchFunction, InvokeAnyEntry, ServiceHeaders } from "@tinycloud/sdk-services";
+import { withDeadline, type FetchFunction, type InvokeAnyEntry, type ServiceHeaders } from "@tinycloud/sdk-services";
 import type { SpaceHosting } from "./authorization/NodeUserAuthorization";
 
 /** A permission the session holds, as `TinyCloudNode` tracks it. */
@@ -100,12 +100,11 @@ function selectRead({ spaceId, operations, covers }: SpaceHostingPorts): SpaceHo
 async function send(ports: SpaceHostingPorts, read: SpaceHostingRead): Promise<SpaceHosting | "refused"> {
   try {
     const { spaceId } = ports;
-    return await usingResponse(() => ports.fetch(`${ports.host}/invoke`, {
+    return await usingResponse(() => ports.fetch(`${ports.host}/invoke`, withDeadline(ports.fetch, {
       method: "POST",
       headers: { ...ports.sign([{ spaceId, service: read.service, path: read.path, action: read.action }]), ...read.headers },
       body: read.body,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    }), async (response) => {
+    }, TIMEOUT_MS)), async (response) => {
       if (response.ok) {
         return "hosted";
       }

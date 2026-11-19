@@ -6,6 +6,7 @@ import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
 import {
   backgroundFetch,
+  withDeadline,
   inheritResourceRouting,
   type RequestPriority,
   createResourceRoutingFetch,
@@ -7329,7 +7330,7 @@ export class TinyCloudNode {
           return this._namedKeyClient.then((client) => {
             graph.assertActive();
             if ((this._serviceContext?.session ?? this.session) !== session) {
-              throw new Error("Named-key session was replaced");
+              throw new Error("The session changed while this named-key operation was running.");
             }
             const method = (client as unknown as Record<string, (...args: unknown[]) => unknown>)[property];
             return Promise.resolve(method.apply(client, args)).then((result) => {
@@ -7850,9 +7851,11 @@ export class TinyCloudNode {
       try {
         await verifyResourceDestination(target, fetch ?? globalThis.fetch.bind(globalThis));
         signal.throwIfAborted();
-        const timeout = AbortSignal.timeout(5_000);
-        const result = await activateSessionWithHost(target.url, delegationHeader,
-          AbortSignal.any([signal, timeout]), fetch);
+        // A background activation's 5 s deadline starts when its lane dispatches it.
+        const result = fetch
+          ? await activateSessionWithHost(target.url, delegationHeader, signal,
+            (url, init) => fetch(url, withDeadline(fetch, init ?? {}, 5_000)))
+          : await activateSessionWithHost(target.url, delegationHeader, AbortSignal.any([signal, AbortSignal.timeout(5_000)]));
         signal.throwIfAborted();
         this.throwRegistryRefusal(result.status, result.error ?? "");
         if (result.success) {

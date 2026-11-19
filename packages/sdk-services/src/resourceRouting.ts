@@ -274,7 +274,9 @@ async function prepareWrite(replies: OwnedReplies, url: string, write: boolean):
   const host = new URL(url).origin;
   let state = replies.writes.get(host);
   if (!state) { state = { pending: 0, retained: [] }; replies.writes.set(host, state); }
-  await Promise.all(state.retained.splice(0).map(drainWriteClone));
+  // An unread reply holds its host's lane: release every earlier reply before waiting on any host, so two writes
+  // that visit the same hosts in opposite orders cannot hold one lane each while waiting for the other.
+  await Promise.all([...replies.writes.values()].flatMap((other) => other.retained.splice(0)).map(drainWriteClone));
   state.pending++;
   return state;
 }
@@ -343,13 +345,12 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
         init?.signal?.throwIfAborted();
         const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
         headers.push(["Authorization", signed]);
-        const timeout = AbortSignal.timeout(5_000);
-        const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
         const state = await prepareWrite(replies, target.url, write);
         try {
-          signal.throwIfAborted();
+          init?.signal?.throwIfAborted();
+          // The 5 s deadline covers the exchange only; it starts once a priority lane dispatches the request.
           const response = await usingResponse(
-            () => fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, { ...init, headers, signal, redirect: "error" }),
+            () => fetchResolved(fetchFn, `${target.url}${parsed.pathname}${parsed.search}`, deferDeadline({ ...init, headers, redirect: "error" }, 5_000)),
             (reply) => retainedWriteReply(reply, state),
           );
           return await rememberReply(replies, response, state);

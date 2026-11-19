@@ -171,6 +171,28 @@ export class KVService extends BaseService implements IKVService {
   }
 
   /**
+   * Wait for an attaching read-through under the caller's and the context's aborts, returning the abort. The
+   * call's own timeout is created after this, so it bounds the request rather than the attachment.
+   */
+  private async readThroughAttached(signal?: AbortSignal): Promise<{ error: unknown } | undefined> {
+    const ready = this.readThroughReady;
+    if (ready === null) return undefined;
+    const waiting = this.createRequestSignal(signal);
+    try {
+      waiting.signal.throwIfAborted();
+      await new Promise<void>((resolve, reject) => {
+        waiting.signal.addEventListener("abort", () => reject(waiting.signal.reason), { once: true });
+        void ready().then(resolve);
+      });
+      return undefined;
+    } catch (error) {
+      return { error };
+    } finally {
+      waiting.dispose();
+    }
+  }
+
+  /**
    * Create a new KVService instance.
    *
    * @param config - Service configuration
@@ -866,9 +888,10 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
 
+      const blocked = options?.source === "network" ? undefined : await this.readThroughAttached(options?.signal);
+      if (blocked) return err(wrapError("kv", blocked.error));
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
         request.signal.throwIfAborted();
         if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
         const network = () => this.getFromNetwork<T>(session, key, path, options, request.signal);
@@ -1023,9 +1046,10 @@ export class KVService extends BaseService implements IKVService {
       // sent as-is; everything else is JSON. Mirrors serializeBatchPutValue.
       const body = this.serializePutValue(value, options?.contentType);
 
+      const blocked = await this.readThroughAttached(options?.signal);
+      if (blocked) return err(wrapError("kv", blocked.error));
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        if (this.readThroughReady !== null) await this.readThroughReady();
         request.signal.throwIfAborted();
         if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
         const network = () => this.putToNetwork(session, key, path, body, options, request.signal);
@@ -1151,9 +1175,13 @@ export class KVService extends BaseService implements IKVService {
         seen.add(path);
       }
 
+      const blocked = await this.readThroughAttached(options?.signal);
+      if (blocked) {
+        const wrapped = wrapError("kv", blocked.error);
+        return err({ ...wrapped, meta: { ...wrapped.meta, requestMayHaveDispatched: false } });
+      }
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        if (this.readThroughReady !== null) await this.readThroughReady();
         request.signal.throwIfAborted();
         if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
         const network = () => this.batchPutToNetwork(session, items, paths, request.signal);
@@ -1425,9 +1453,10 @@ export class KVService extends BaseService implements IKVService {
         listPath = listPath ? `${listPath}/${options.path}` : options.path;
       }
 
+      const blocked = options?.source === "network" ? undefined : await this.readThroughAttached(options?.signal);
+      if (blocked) return err(wrapError("kv", blocked.error));
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        if (options?.source !== "network" && this.readThroughReady !== null) await this.readThroughReady();
         request.signal.throwIfAborted();
         if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
         const network = () => this.listFromNetwork(session, listPath, options, request.signal);
@@ -1780,9 +1809,10 @@ export class KVService extends BaseService implements IKVService {
 
       const path = this.getFullPath(key, options?.prefix);
 
+      const blocked = await this.readThroughAttached(options?.signal);
+      if (blocked) return err(wrapError("kv", blocked.error));
       const request = this.createRequestSignal(options?.signal, options?.timeout);
       try {
-        if (this.readThroughReady !== null) await this.readThroughReady();
         request.signal.throwIfAborted();
         if (this.context.session !== session) throw new DOMException("Session changed", "AbortError");
         const network = () => this.deleteFromNetwork(session, key, path, options, request.signal);

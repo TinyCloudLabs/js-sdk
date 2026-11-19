@@ -43,6 +43,8 @@ const callerTransfers: Record<string, Record<string, number>> = {
   "node-sdk/src/recordingServiceContext.ts": { invokeWithRetry: 1, recordCall: 1 },
   "node-sdk/src/TinyCloudNode.ts": { fetch: 1, createResourceTransport: 1, createAccountRegistryServices: 1 },
   "sdk-core/src/spaces/SpaceService.ts": { createSpaceScopedDelegations: 1 },
+  "sdk-core/src/share-placement.ts": { sharePlacementDestinations: 1 },
+  "node-sdk/src/encryption-keys.ts": { createNamedKeyClient: 1 },
 };
 // These named callbacks return decoded Result/RequesterHttpResponse values, not FetchResponse.
 const decodedCallbacks: Record<string, Record<string, number>> = {
