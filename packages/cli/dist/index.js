@@ -8194,7 +8194,8 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat6, readdir as readdir5, rm as rm6 } from "fs/promises";
+import { constants as fsConstants5 } from "fs";
+import { chmod as chmod3, lstat as lstat6, open as open7, readdir as readdir5, rm as rm6 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import { join as join11 } from "path";
 import {
@@ -8210,6 +8211,60 @@ import {
   writeSession,
   withPinnedProfileDirectory as withPinnedProfileDirectory2
 } from "@tinycloud/operations/state";
+function isTransientProfileEntryError(error) {
+  const code5 = error.code;
+  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP" || code5 === "EISDIR";
+}
+async function secureProfileDirectory(directory) {
+  const rootFlags = fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | (process.platform === "linux" ? 0 : fsConstants5.O_NOFOLLOW);
+  let root;
+  try {
+    root = await open7(directory, rootFlags);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const info = await root.stat();
+    if (!info.isDirectory()) {
+      throw new CLIError("PROFILE_INVALID", "Profile directory is not a real directory.");
+    }
+    if ((info.mode & 511) !== PRIVATE_DIR_MODE) {
+      await root.chmod(PRIVATE_DIR_MODE);
+    }
+    const pinnedDirectory2 = process.platform === "linux" ? `/proc/self/fd/${root.fd}` : directory;
+    let entries;
+    try {
+      entries = await readdir5(pinnedDirectory2, { withFileTypes: true });
+    } catch (error) {
+      if (isTransientProfileEntryError(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      let file;
+      try {
+        file = await open7(
+          join11(pinnedDirectory2, entry.name),
+          fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK
+        );
+      } catch (error) {
+        if (isTransientProfileEntryError(error)) continue;
+        throw error;
+      }
+      try {
+        const fileInfo = await file.stat();
+        if (fileInfo.isFile() && (fileInfo.mode & 511) !== 384) {
+          await file.chmod(384);
+        }
+      } finally {
+        await file.close();
+      }
+    }
+  } finally {
+    await root.close();
+  }
+}
 var ProfileManager;
 var init_profiles = __esm({
   "src/config/profiles.ts"() {
@@ -8286,7 +8341,11 @@ var init_profiles = __esm({
        * Throws CLIError if the profile doesn't exist.
        */
       static async getProfile(name) {
-        const profile = await withPinnedProfileDirectory2(name, (directory) => directory ? readJson(join11(directory, "profile.json")) : Promise.resolve(null));
+        const profile = await withPinnedProfileDirectory2(name, async (directory) => {
+          if (!directory) return null;
+          await secureProfileDirectory(directory);
+          return readJson(join11(directory, "profile.json"));
+        });
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
@@ -14844,7 +14903,7 @@ async function seal(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH + nonce.length);
   return { blob, cid: await computeCid(blob) };
 }
-async function open7(blob, key32) {
+async function open8(blob, key32) {
   if (blob.length < HEADER_LENGTH + NONCE_LENGTH + TAG_LENGTH) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -15261,7 +15320,7 @@ async function openRecordChecked(record2, key, nowMs) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
   let plaintext;
   try {
-    plaintext = await open7(body, key);
+    plaintext = await open8(body, key);
   } catch {
     throw new LinkError("body_open_failed");
   }
@@ -16066,11 +16125,11 @@ var init_duration = __esm({
 });
 
 // src/lib/browser.ts
-import open12 from "open";
+import open13 from "open";
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open12(url);
+    launcher = await open13(url);
   } catch {
     return false;
   }
@@ -16466,8 +16525,8 @@ var init_scoped_login = __esm({
 
 // src/auth/pending-code.ts
 import { createHash as createHash2 } from "crypto";
-import { constants as fsConstants5 } from "fs";
-import { open as open13, rm as rm8 } from "fs/promises";
+import { constants as fsConstants6 } from "fs";
+import { open as open14, rm as rm8 } from "fs/promises";
 import { join as join15 } from "path";
 import { profilePath as profilePath6 } from "@tinycloud/operations/state";
 var init_pending_code = __esm({
@@ -16851,7 +16910,7 @@ var init_invitation_key_grant = __esm({
 
 // src/auth/approval-request.ts
 import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes6, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open14 } from "fs/promises";
+import { open as open15 } from "fs/promises";
 import { join as join17 } from "path";
 import { setTimeout as wait } from "timers/promises";
 import { additionalDelegationsPath, profilePath as profilePath9 } from "@tinycloud/operations/state";
@@ -28567,7 +28626,7 @@ async function seal2(plaintextBytes, key32) {
   blob.set(ciphertext, HEADER_LENGTH2 + nonce.length);
   return { blob, cid: await computeCid2(blob) };
 }
-async function open8(blob, key32) {
+async function open9(blob, key32) {
   if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
     throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
   }
@@ -29143,7 +29202,7 @@ async function resolveLegacyV2(link4, options) {
     if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
     let plaintext;
     try {
-      plaintext = await open8(sealed, parsed.key32);
+      plaintext = await open9(sealed, parsed.key32);
     } catch {
       throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
     }
@@ -32692,7 +32751,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open9, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
+import { lstat as lstat7, mkdir as mkdir5, mkdtemp, open as open10, readFile as readFile7, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm7, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join12, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
@@ -32768,7 +32827,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve4(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open9(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open10(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
   const outputPath = join12(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -32792,7 +32851,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open9(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open10(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -33007,7 +33066,7 @@ init_constants();
 init_errors();
 init_session_expired();
 init_warnings();
-import { chmod as chmod4, link as link3, open as open10, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
+import { chmod as chmod4, link as link3, open as open11, readFile as readFile8, stat as stat5, unlink as unlink5 } from "fs/promises";
 import { dirname as dirname5, join as join13 } from "path";
 import { createHash } from "crypto";
 import { createProfileRegistryCacheStore as createProfileRegistryCacheStore2, createProfileRegistrySequenceStore as createProfileRegistrySequenceStore2, writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
@@ -33372,7 +33431,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       await link3(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink5(found.file);
-      const directory = await open10(dirname5(found.file), "r");
+      const directory = await open11(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -34057,7 +34116,7 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync } from "fs";
-import { lstat as lstat8, open as open11, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
+import { lstat as lstat8, open as open12, readdir as readdir6, realpath as realpath3, stat as stat6 } from "fs/promises";
 import { basename as basename3, dirname as dirname6, isAbsolute, join as join14, relative as relativePath, resolve as resolve5, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
@@ -34412,9 +34471,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open15 = html.indexOf("<", index);
-    if (open15 === -1) return;
-    index = open15 + 1;
+    const open16 = html.indexOf("<", index);
+    if (open16 === -1) return;
+    index = open16 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -35015,7 +35074,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat8(path);
     await hooks.afterLstat?.();
-    handle = await open11(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open12(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -35074,7 +35133,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open11(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open12(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
