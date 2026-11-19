@@ -19,7 +19,7 @@ async function forwardedRequest(input: { expiryChangeable?: boolean }): Promise<
       };
     },
   });
-  await authorize({ protocolVersion: 1, siwe: "siwe", jwk: { kty: "OKP" }, verificationMethod: "did:key:test", ...input });
+  await authorize({ protocolVersion: 1, siwe: "siwe", jwk: { kty: "OKP", crv: "Ed25519", x: "public" }, verificationMethod: "did:key:test", ...input });
   return request!;
 }
 
@@ -36,7 +36,7 @@ describe("wireOpenKeyAuthorize expiryChangeable", () => {
       protocolVersion: 1,
       siwe: "siwe",
       keyId: undefined,
-      jwk: { kty: "OKP" },
+      jwk: { kty: "OKP", crv: "Ed25519", x: "public" },
       host: undefined,
       presentation: undefined,
     });

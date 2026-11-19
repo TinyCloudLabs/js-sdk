@@ -17,8 +17,9 @@
         "category": "Productivity",
         "capabilities": ["Read personal records", "Create, update and delete personal records", "Query an optional derived copy"],
         "websiteURL": "https://tinycloud.xyz",
-        "supportURL": "https://t.me/+-_2ufE0JgIcyMjYx",
+        "supportURL": "https://tinycloud.xyz/support",
         "privacyPolicyURL": "https://tinycloud.xyz/privacy",
+        "termsOfServiceURL": "https://tinycloud.xyz/terms",
         "defaultPrompt": ["Show my personal records.", "Add a todo called Review release checklist, then show it to me.", "Summarize my workouts using a searchable copy."],
         "composerIcon": "./assets/logo.png",
         "logo": "./assets/logo.png"
@@ -51,8 +52,8 @@
               "expected_behavior": "After required confirmation or consent, the intended todo is absent in authoritative read/list results. Unrelated records remain. Do not claim historical-blob physical erasure."
             },
             {
-              "description": "P05: Optional derived copy. Authorized synthetic fixtures contain workouts of 20 and 30 minutes on October 18 and 19, 2026 in Europe/London.",
-              "prompt": "Use a fast searchable copy to total my workout minutes for October 18–19, 2026.",
+              "description": "P05: Optional derived copy. The test account's workouts app holds workouts of 20 and 30 minutes on October 18 and 19, 2026 in Europe/London.",
+              "prompt": "Use a fast searchable copy to total the workout minutes in my workouts app for October 18–19, 2026.",
               "tools_triggered": "tinycloud_apps_context and tinycloud_apps_read as needed, tinycloud_apps_query",
               "expected_behavior": "Obtain separate copy approval when needed, refresh the derived copy and return 50 minutes. Verify canonical personal records remain unchanged by this query."
             }
@@ -74,10 +75,12 @@
               "expected_behavior": "Secret retrieval is absent from discovery and excluded-tool invocation fails. Explain the unsupported capability without asking for secrets in chat."
             }
           ]
-        }
+        },
+        "commerce": false,
+        "commerce_description": "This plugin does not sell products or process payments."
       },
       "publication": {
-        "release_notes": "0.1.0 candidate: MCP-only personal records and optional derived-copy queries through the separate public endpoint. Review cases are definitions, not passing evidence. Deployment, ChatGPT acceptance, portal import, review and publication must be verified separately."
+        "release_notes": "0.1.0: first release. Read, create, update and delete your own TinyCloud personal records such as todos, goals and workouts, and run optional queries over a separately approved searchable copy. Sign in with OpenKey and approve each permission yourself."
       }
     }
   }

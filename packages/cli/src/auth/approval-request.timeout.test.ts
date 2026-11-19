@@ -646,9 +646,11 @@ describe("the whole call is bounded by timeout + grace, real clock, slow OpenKey
   const realClock = { now: undefined, sleep: undefined };
   const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
 
-  test("an unanswered wait whose polls hang ends at the timeout, not one 10 s request later", async () => {
+  test("an unanswered wait whose LATER polls hang ends at the timeout, not one 10 s request later", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
-    onRequest = (url, init) => url.pathname.endsWith("/result") ? hangUntilAbort(init) : undefined;
+    // test-ruling TC-2360: the first status check answers (202, pending) and completes whatever the deadline; every later poll hangs.
+    let resultCalls = 0;
+    onRequest = (url, init) => url.pathname.endsWith("/result") && ++resultCalls > 1 ? hangUntilAbort(init) : undefined;
     const started = Date.now();
     const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
     const elapsed = Date.now() - started;

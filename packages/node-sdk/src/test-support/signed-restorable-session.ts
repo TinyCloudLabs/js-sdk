@@ -4,6 +4,7 @@ import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 export const PROOF_PRIVATE_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 
 export async function signedRestorableSession(options?: {
+  privateKey?: string;
   expirationless?: boolean;
   expired?: boolean;
   spaces?: Record<string, string>;
@@ -15,7 +16,7 @@ export async function signedRestorableSession(options?: {
   caveat?: Record<string, unknown>;
 }) {
   const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner(PROOF_PRIVATE_KEY);
+  const signer = new PrivateKeySigner(options?.privateKey ?? PROOF_PRIVATE_KEY);
   const manager = wasm.createSessionManager();
   const jwk = JSON.parse(manager.jwk("default")!);
   const address = await signer.getAddress();

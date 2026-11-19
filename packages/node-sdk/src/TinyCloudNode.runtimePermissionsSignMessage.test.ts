@@ -66,6 +66,7 @@ async function setup(rawSiwe?: (address: string) => string) {
   // The signed-in session the grant is made for, installed directly because sign-in is not under test.
   const internals = node as unknown as { auth: unknown };
   internals.auth = {
+    resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
     tinyCloudSession: {
       address,
       chainId: 1,

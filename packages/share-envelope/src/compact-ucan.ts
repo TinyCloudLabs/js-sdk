@@ -6,6 +6,13 @@ import { fromBase64Url, toBase64Url } from "./bytes.js";
 import { canonicalize } from "./jcs.js";
 import { ed25519PublicKeyFromDidKey } from "./didkey.js";
 
+/**
+ * Longest window a proofless policy root may have: a policy session never outlives its roots, so this also bounds every session
+ * and descendant, and so the longest an addressed share can stay readable. Seconds. The one definition: the signer in sdk-core,
+ * the share-root signer in share-sdk, the CLI's pre-approval check and OpenKey's approval check all import it.
+ */
+export const POLICY_ROOT_MAX_LIFETIME_SECONDS = 31 * 24 * 60 * 60;
+
 export interface CompactUcanAuthorization {
   readonly authorization: string;
   readonly cid: string;

@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Prototype fixture: one profile-lock holder or contender, run as PID 1 of a
 // fresh PID namespace by profile-lock-namespaces.test.ts. The holder prints
 // "ready" once inside its critical section and leaves it when stdin closes.

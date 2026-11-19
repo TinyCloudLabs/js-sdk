@@ -17,6 +17,6 @@ test("wireOpenKeyAuthorize forwards the requested display mode", async () => {
     },
   }, { mode: "redirect" });
 
-  await authorize({ protocolVersion: 1, siwe: "siwe", jwk: {}, verificationMethod: "did:key:test" });
+  await authorize({ protocolVersion: 1, siwe: "siwe", jwk: { kty: "OKP", crv: "Ed25519", x: "public" }, verificationMethod: "did:key:test" });
   expect(received).toEqual({ mode: "redirect" });
 });

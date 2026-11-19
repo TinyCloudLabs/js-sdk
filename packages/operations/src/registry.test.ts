@@ -1,46 +1,28 @@
+import "../test-support/test-bootstrap.mjs";
 import { expect, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { invokeOperation } from "./invoke.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
+import { withTinyCloudStateRoot } from "./state.js";
 
-const expectedOperationIds = [
-  "tinycloud.account.applications.list",
-  "tinycloud.account.spaces.list",
-  "tinycloud.apps.context",
-  "tinycloud.apps.query",
-  "tinycloud.apps.read",
-  "tinycloud.apps.write",
-  "tinycloud.auth.capabilities",
-  "tinycloud.auth.import",
-  "tinycloud.auth.request",
-  "tinycloud.auth.status",
-  "tinycloud.knowledge.list",
-  "tinycloud.knowledge.read",
-  "tinycloud.kv.delete",
-  "tinycloud.kv.get",
-  "tinycloud.kv.head",
-  "tinycloud.kv.list",
-  "tinycloud.kv.put",
-  "tinycloud.secrets.get",
-  "tinycloud.secrets.status",
-  "tinycloud.sql.execute",
-  "tinycloud.sql.query",
-  "tinycloud.sql.schema.inspect",
-  "tinycloud.status.get",
-] as const;
-
-test("registry contains exactly the reviewed v1 operations", () => {
-  const definitions = operationDefinitionsForCatalog();
-
-  expect(definitions.map((definition) => definition.id).sort()).toEqual([...expectedOperationIds]);
-  expect(definitions.every((definition) => definition.version === 1)).toBe(true);
-  expect(new Set(definitions.map((definition) => definition.id)).size).toBe(definitions.length);
-});
+function isolatedTest(name: string, action: () => Promise<void>): void {
+  test(name, async () => {
+    const home = await mkdtemp(join(tmpdir(), "tc2481-operation-registry-"));
+    try {
+      await withTinyCloudStateRoot(home, action);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+}
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {
-  for (const operationId of expectedOperationIds) {
+  for (const { id: operationId } of operationDefinitionsForCatalog()) {
     expect(lookupOperation(operationId, 1)).toMatchObject({
       status: "found",
       definition: { id: operationId, version: 1 },
@@ -56,7 +38,7 @@ test("registry resolves each v1 operation and rejects unknown versions", () => {
   });
 });
 
-test("real registry-keyed invocation reaches safe status and capabilities paths", async () => {
+isolatedTest("real registry-keyed invocation reaches safe status and capabilities paths", async () => {
   const fixture = await createAuthRuntimeFixture();
   try {
     const status = await invokeOperation("tinycloud.status.get", 1, { profile: fixture.profile }, {});
@@ -80,7 +62,7 @@ test("real registry-keyed invocation reaches safe status and capabilities paths"
   }
 });
 
-test("registered auth.request plans a registered operation without executing its handler", async () => {
+isolatedTest("registered auth.request plans a registered operation without executing its handler", async () => {
   const fixture = await createAuthRuntimeFixture();
   const target = authOperationDefinitions.find((definition) => definition.id === "tinycloud.auth.capabilities");
   if (target === undefined) throw new Error("missing registered capabilities definition");

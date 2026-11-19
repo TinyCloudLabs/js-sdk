@@ -1,3 +1,4 @@
+import "../../../operations/test-support/test-bootstrap.mjs";
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -5,10 +6,12 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startUnregisteredLocationRegistry, type UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
 
 // Runs against a real TinyCloud node binary (the variable the node-sdk e2e tests use).
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const cliEntry = join(import.meta.dir, "../index.ts");
+const BOOTSTRAP = join(import.meta.dir, "../../../operations/test-support/test-bootstrap.mjs");
 // Each test starts several CLI processes against a real node.
 setDefaultTimeout(120_000);
 
@@ -23,10 +26,14 @@ interface Run {
 }
 
 describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local record of the grant, against a real node", () => {
+  const originalHome = process.env.HOME;
+  const originalTcHome = process.env.TC_HOME;
   let root: string;
   let host: string;
   let node: ChildProcess;
   let space: string;
+  let nodeClosed: Promise<void> | undefined;
+  let registry: UnregisteredLocationRegistry | undefined;
 
   const home = (profile: string) => join(root, `home-${profile}`);
 
@@ -34,7 +41,9 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
     const env: Record<string, string | undefined> = { ...process.env, HOME: home(profile), TC_HOME: home(profile) };
     delete env.TC_HOST;
     delete env.TC_PRIVATE_KEY;
-    const child = Bun.spawn([process.execPath, cliEntry, "--host", host, "--profile", profile, ...args], {
+    // init uses --name independently of the selected --profile.
+    const scopedArgs = args[0] === "init" ? ["init", "--name", profile, ...args.slice(1)] : args;
+    const child = Bun.spawn([process.execPath, "--preload", BOOTSTRAP, cliEntry, "--host", host, "--profile", profile, ...scopedArgs], {
       env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, exitCode] = await Promise.all([
@@ -46,13 +55,19 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
   async function ownerProfile(name: string): Promise<void> {
     await mkdir(home(name), { recursive: true });
     expect((await cli(name, ["init", "--key-only"])).exitCode).toBe(0);
+    const { withTinyCloudStateRoot, profileConfigPath, writeJsonAtomic } = await import("@tinycloud/operations/state");
+    await withTinyCloudStateRoot(home(name), async () => {
+      const path = profileConfigPath(name);
+      const profile: Record<string, unknown> = JSON.parse(await readFile(path, "utf8"));
+      await writeJsonAtomic(path, { ...profile, tinycloudRegistryUrl: registry!.url.origin });
+    });
     expect((await cli(name, ["auth", "login", "--method", "local"])).exitCode).toBe(0);
   }
 
   /** An agent profile holding a fresh read grant on the applications space; returns the grant's CID. */
   async function grantAgent(agent: string): Promise<string> {
     await mkdir(home(agent), { recursive: true });
-    const created = await cli(agent, ["profile", "create", agent, "--posture", "delegate-session", "--operator", "agent"]);
+    const created = await cli(agent, ["profile", "create", agent, "--posture", "delegate-session", "--operator", "agent", "--registry-url", registry!.url.origin]);
     if (created.exitCode !== 0) throw new Error(`profile create ${agent} exited ${created.exitCode}: ${created.stderr.slice(0, 500)}`);
     const requestFile = join(root, `${agent}-request.json`);
     const grantFile = join(root, `${agent}-grant.json`);
@@ -69,6 +84,9 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "tc-revoke-lookup-e2e-"));
+    process.env.HOME = root;
+    process.env.TC_HOME = root;
+    registry = await startUnregisteredLocationRegistry();
     const port = await new Promise<number>((resolve, reject) => {
       const server = createServer();
       server.once("error", reject);
@@ -82,7 +100,10 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
     node = spawn(NODE_BIN!, [], {
       cwd: root,
       env: {
-        ...process.env,
+        ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("TC_"))),
+        HOME: root,
+        TC_HOME: root,
+        USERPROFILE: root,
         TINYCLOUD_STORAGE__DATADIR: join(root, "data"),
         ROCKET_PORT: String(port),
         ROCKET_ADDRESS: "127.0.0.1",
@@ -91,6 +112,7 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    nodeClosed = new Promise<void>((resolve) => node.once("close", () => resolve()));
     const launched = Promise.withResolvers<void>();
     let output = "";
     const onData = (chunk: Buffer) => {
@@ -130,8 +152,21 @@ describe.skipIf(!NODE_BIN)("delegation revoke from a profile with no local recor
   }, 120_000);
 
   afterAll(async () => {
-    node?.kill();
-    if (root) await rm(root, { recursive: true, force: true });
+    try {
+      if (node && node.exitCode === null && node.signalCode === null) node.kill();
+      const stopped = await Promise.allSettled([nodeClosed, registry?.stop()]);
+      const failed = stopped.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    } finally {
+      try {
+        if (root) await rm(root, { recursive: true, force: true });
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+        if (originalTcHome === undefined) delete process.env.TC_HOME;
+        else process.env.TC_HOME = originalTcHome;
+      }
+    }
   });
 
   test("the owner's other profile revokes the grant; the agent is refused with a message that says so", async () => {

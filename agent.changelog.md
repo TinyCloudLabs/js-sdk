@@ -3,6 +3,81 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-17
+
+- TC-2416: the restricted addresses no longer offer or accept a catalog app in
+  `tinycloud_apps_context`. Its `app` description omits the slugs there, and a
+  catalog slug is answered with `INPUT_INVALID` / `catalog_app_unavailable` and
+  the tiny-app link instead of an approval request for access no tool on those
+  addresses can use. `/mcp` is unchanged. The rules keep their catalog section
+  on every address.
+- TC-2416: `/claude/mcp` repeats each tool's title as `annotations.title`, as
+  Anthropic's directory portal suggests. It is the first per-address difference
+  among the restricted addresses; the other four addresses are unchanged.
+
+## 2026-11-13
+
+- TC-2416 recovery: restore discovery, reads, conditional writes and optional SQL
+  copies for existing `default/xyz.tinycloud.agent-data/` apps. Reuse existing
+  grants and records; do not force new-layout approval, migration or replacement
+  apps. Restore query layout selection while keeping new-layout defaults,
+  exact discovery-entry grants, and the hosted/public tool sets unchanged.
+  Existing matching legacy kinds take precedence over automatic catalog routing.
+  Explicit Health Log and Recipes requests retain their catalog behavior.
+- Real-node smoke passed on both hosted surfaces with synthetic records:
+  legacy read/write/query recovery, stale-ETag refusal, new-layout writes and sibling
+  permission refusal. Stale markers now change revision on every write so a
+  concurrent same-day update cannot be incorrectly cleared during a copy rebuild.
+- TC-2416 recovery follow-up: `tinycloud_apps_context` inlines legacy kind
+  catalogs only while all catalog records serialize to at most 60,000
+  characters; past that it inlines app catalogs only and lists the rest in
+  `catalog.keys`, so the hosted 100,000-character limit cannot fail the call.
+
+## 2026-11-12
+
+- Hosted MCP consent carries its public requester origin; OpenKey binds the
+  host into the SIWE and labels it without claiming verified app identity.
+  Generic app changes now grant discovery get/put only on the selected app's
+  exact entry, with catalog-root reads. Existing broad grants need revocation
+  or expiry and reapproval; no deployment or grant revocation was performed.
+
+## 2026-11-09
+
+- TC-2393: staged ten-client hosted MCP requirements, existing protocol support,
+  source/live header differences and directory/auth review prerequisites.
+  No runtime or sign-in behavior changed.
+
+- TC-2416: the hosted personal-records tools use one layout (the `applications`
+  space, one folder per app); the older `agent-data` layout, the move tool and the
+  `layout` input are removed with no compatibility path. `agent.dev.md` says not to
+  reintroduce them.
+
+## 2026-11-07
+
+- Share publishing no longer creates the share key: removed the runtime
+  exact Share-key consent route and share-prefix `key.create`; the node records
+  the key at policy registration.
+
+## 2026-11-03
+
+- TC-2416: context accepts Health Log and Recipes catalog slugs, bundling
+  the known per-app task scopes and explaining read/change inputs in the schema.
+
+- TC-2416: personal-app context optionally bundles the named app and app list;
+  documented change/read access and reuse of read-only folder grants.
+
+## 2026-11-02
+
+- Added explicit reusable read-scope consent, cursor-preserving discovery and
+  digest-bound complete KV/SQL delivery to private/local MCP and shared
+  operations. Native reads retain their existing signed capability ceiling;
+  the public ChatGPT surface is unchanged. Handoffs carry locators/provenance,
+  not credentials or authority.
+- Verified the local hosted HTTP path against the live node using an isolated
+  profile copy: the 111,619-byte / 566-segment transcript reconstructed in ten
+  pages with the recorded SHA-256; a 130,000-character SQL field reconstructed
+  in eleven pages. No cloud records were written and no deployment was made.
+
 ## 2026-11-01
 
 - CI: the `conformance` PR job in `.github/workflows/operations-mcp.yml` is split into
@@ -12,6 +87,11 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   that glob; focused tests are still listed by hand in `conformance-core`. Shared build steps live
   in `.github/actions/conformance-setup`. Add a new job to the aggregate's `needs:` or it is not
   gated.
+
+- TC-2234: Courier email invitations reuse the Share path. `publishEmailShareV3` now lives in
+  `@tinycloud/node-sdk/share-publish` (the CLI imports it). Courier's grant check stays exact:
+  the base grant is exactly `AGENT_GRANT`; any `share/` entry is `grant-too-broad`. Per-invitation key authority
+  needs a separate approval path (not the standing grant); the OpenKey request and `AGENT_GRANT` are unchanged.
 
 ## 2026-10-29
 

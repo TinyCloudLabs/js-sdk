@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/node-sdk",
-  "version": "3.11.0-beta.1",
+  "version": "3.13.0-beta.3",
   "description": "TinyCloud SDK for Node.js with configurable authorization strategies",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -29,6 +29,16 @@
         "default": "./dist/encryption-keys.cjs"
       }
     },
+    "./space-hosting": {
+      "import": {
+        "types": "./dist/space-hosting.d.ts",
+        "default": "./dist/space-hosting.js"
+      },
+      "require": {
+        "types": "./dist/space-hosting.d.cts",
+        "default": "./dist/space-hosting.cjs"
+      }
+    },
     "./credential-pending-store": {
       "types": "./dist/credential-pending-store.d.ts",
       "import": "./dist/credential-pending-store.js",
@@ -48,6 +58,11 @@
       "types": "./dist/share-receive.d.ts",
       "import": "./dist/share-receive.js",
       "require": "./dist/share-receive.cjs"
+    },
+    "./share-publish": {
+      "types": "./dist/share-publish.d.ts",
+      "import": "./dist/share-publish.js",
+      "require": "./dist/share-publish.cjs"
     },
     "./replication/runtime": {
       "import": {
@@ -94,12 +109,12 @@
     "test:integration": "echo 'Integration tests live in tests/node-sdk workspace'"
   },
   "dependencies": {
-    "@tinycloud/share-sdk": "1.4.4",
-    "@tinycloud/share-envelope": "1.5.0",
-    "@tinycloud/replica": "0.4.3",
-    "@tinycloud/sdk-services": "3.8.3",
-    "@tinycloud/sdk-core": "3.11.0-beta.1",
-    "@tinycloud/node-sdk-wasm": "1.7.8",
+    "@tinycloud/share-sdk": "1.6.0-beta.0",
+    "@tinycloud/share-envelope": "1.6.0",
+    "@tinycloud/replica": "0.4.6-beta.0",
+    "@tinycloud/sdk-services": "3.13.0-beta.3",
+    "@tinycloud/sdk-core": "3.13.0-beta.3",
+    "@tinycloud/node-sdk-wasm": "1.7.9",
     "siwe": "^3.0.0"
   },
   "devDependencies": {
