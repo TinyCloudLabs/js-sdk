@@ -126,6 +126,8 @@ export {
   type PkhDidParts,
 } from "./identity";
 
+export { publicJwk } from "./jwk";
+
 export {
   HOLDER_KEY_BINDING_PRESENTATION_SCHEMA,
   LISTEN_SQL_STATEMENT_CATALOG,
@@ -211,6 +213,8 @@ export {
   MemorySenderShareRecordStorage,
   MemorySenderShareKeyStorage,
   SenderShareStore,
+  assertRenewalNodeIdentity,
+  verifyRenewalHistory,
 } from "./delegations";
 export {
   delegatePortablePolicySession,
@@ -388,6 +392,10 @@ export type {
   SenderShareRecordStorage,
   SenderShareKeyStorage,
   SenderShareRevocationScope,
+  RenewalNodeIdentity,
+  RenewalStampHistoryEntry,
+  VerifyRenewalHistoryInput,
+  VerifiedRenewalHistory,
 } from "./delegations";
 
 // Encryption network identity helpers
@@ -409,6 +417,9 @@ export {
   // Validation
   validatePersistedSessionData,
 } from "./storage";
+
+// Internal Node/Web package wiring; not a supported storage-provider capability.
+export { registerOwnedSessionStorage, invalidateOwnSession } from "./session-retirement";
 
 // User authorization interface and types
 export {
@@ -593,6 +604,10 @@ export {
   type VaultError,
   // Secrets Service
   SecretsService,
+  DEFAULT_SECRET_TYPE,
+  SECRET_TYPES,
+  isSecretType,
+  secretTypeOf,
   SECRET_NAME_RE,
   canonicalizeSecretScope,
   appSecretScope,
@@ -604,7 +619,9 @@ export {
   resolveSecretPath,
   type ISecretsService,
   type SecretCatalogEntry,
+  type SecretEntry,
   type SecretPayload,
+  type SecretType,
   type SecretsError,
   type ResolvedSecretPath,
   type ParsedSecretCatalogKey,
@@ -749,6 +766,7 @@ export {
   DelegationErrorCode,
   // Delegation types
   Delegation,
+  RenewalStampHistory,
   DelegationStatus,
   DelegationRevocationReceipt,
   AccountDelegationResource,
@@ -770,6 +788,8 @@ export {
   // v2 SharingService
   SharingService,
   createSharingService,
+  inspectShareToken,
+  InspectedShareToken,
   ISharingService,
   ShareDelegationPreflight,
   SharingServiceConfig,
@@ -936,7 +956,6 @@ export {
   composeManifestRequest,
   expandActionShortNames,
   expandPermissionEntries,
-  expandRuntimePermissionEntries,
   expandDelegationPermissionEntries,
   expandPermissionEntry,
   loadManifest,
@@ -1018,6 +1037,7 @@ export {
   createInMemoryLocalNodeIdentityStore,
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
+  exactHttpOrigin,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -1087,17 +1107,43 @@ export {
   registryOwnerSubjectV1,
   resolveFailClosedTinyCloudHosts,
   resolveOwnerHosts,
+  warnRegistryDefaultNode,
   type FailClosedHostOptions,
   type FailClosedHosts,
   type LookupOwnerRegistryVerdictOptions,
+  type RegistryFallbackReason,
+  REGISTRY_CACHE_MAX_AGE_MS,
   type NodeNotFoundContext,
   type NodeNotFoundDecision,
   type OnNodeNotFound,
   type RegistryPolicy,
+  type RegistryRegistrationEvidence,
+  type RegistryRegistrationKind,
   type RegistrySequenceStore,
   type ResolveOwnerHostsOptions,
 } from "./registry-policy";
+export {
+  canonicalLocationPayloadV2,
+  signLocationRecordV2,
+  validateLocationRecordV2,
+  validateLocationRecordV2Payload,
+  verifyLocationRecordV2,
+} from "./location";
+export type { LocationRecordV2, LocationRecordV2Payload } from "./location";
+export { resolveRegistryResource, type RegistryVerdictCache, type RegistryVerdictScope } from "./registry-policy";
 
+export {
+  createInMemoryRegistryCacheStore,
+  createLocalStorageRegistryCacheStore,
+  verifyRegistryCacheEntry,
+  DEFAULT_REGISTRY_CACHE_STORAGE_KEY,
+  type RegistryCacheEntry,
+  type RegistryCacheTombstone,
+  type RegistryCacheRecord,
+  type RegistryCacheStore,
+} from "./registry-cache";
+export { refreshOwnerRegistry } from "./registry-policy";
+export { registryOwnerKeyV2 } from "./registry-verdict";
 // Capability subset checking and recap parsing
 export {
   // Errors
@@ -1188,3 +1234,8 @@ export {
   type UnsignedPolicyObject,
   type UnsignedPolicyStatus,
 } from "./policy";
+
+export { endToEndNodeHost, sameTinyCloudNode } from "./tinycloud-node";
+export { AccountSetupRequiredError } from "./account-setup";
+export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "@tinycloud/bootstrap";
+export { verifiedDelegationRouting, spaceIdsEqual } from "./delegations/portable";

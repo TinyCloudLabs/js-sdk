@@ -11,6 +11,8 @@ import { activateSessionWithHost } from "@tinycloud/sdk-core";
 import { checkLinkRecord, resolveApprovalRequest, signerFromJwk, type CheckedLinkRecord, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
 import { canonicalize } from "@tinycloud/share-envelope";
 import { profilePath } from "@tinycloud/operations/state";
+import { startUnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
+import type { UnregisteredLocationRegistry } from "../../../node-sdk/src/test-support/unregistered-location-registry";
 
 // TC-2299 real-node e2e for `tinycloud auth grant --timeout`, on the fixture of agent-grant-openkey.e2e.test.ts
 // (an OpenKey owner profile with a broad 3 h session and a fake OpenKey that signs the requested scope with the
@@ -18,6 +20,7 @@ import { profilePath } from "@tinycloud/operations/state";
 // arrives is collected and exits 0, and a process SIGKILLed at each seam resumes with no new request and one ack.
 const NODE_BIN = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const cliEntry = join(import.meta.dir, "../index.ts");
+const TEST_BOOTSTRAP = join(import.meta.dir, "../../../operations/test-support/test-bootstrap.mjs");
 const OWNER_SESSION_MS = 3 * 3600_000;
 const SEVEN_DAYS_S = 7 * 86400;
 const hoursUntil = (iso: string) => (Date.parse(iso) - Date.now()) / 3600_000;
@@ -27,6 +30,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
   let root: string;
   let host: string;
   let node: ChildProcess;
+  let registry: UnregisteredLocationRegistry;
   let ownerSigner: PrivateKeySigner;
   let appSpace: string;
   const wasm = new NodeWasmBindings();
@@ -53,6 +57,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
   let requesterDid = "";
   let requesterJwk: OpenKeyApprovalRequestV1["targetPublicJwk"] | undefined;
   let priorTcHome: string | undefined;
+  let priorHome: string | undefined;
   const approvalRequests = new Map<string, ApprovalFixtureEntry>();
   const approvalResults = new Map<string, ApprovalFixtureEntry>();
   const seenProofs = new Set<string>();
@@ -159,7 +164,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
     env.NODE_EXTRA_CA_CERTS = approvalCertificatePath;
     env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
     Object.assign(env, extraEnv);
-    return { argv: [process.execPath, ...(preload ? ["--preload", preload] : []), cliEntry, "--host", host, "--profile", profile, ...args], env };
+    return { argv: [process.execPath, "--preload", TEST_BOOTSTRAP, ...(preload ? ["--preload", preload] : []), cliEntry, "--host", host, "--profile", profile, ...args], env };
   }
 
   async function cli(profile: string, args: string[]) {
@@ -188,7 +193,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
 
   async function agentRequest(name: string, args: string[]) {
     await mkdir(home(name), { recursive: true });
-    const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent"]);
+    const created = await cli(name, ["profile", "create", name, "--posture", "delegate-session", "--operator", "agent", "--registry-url", registry.url.origin]);
     expect(created.exitCode).toBe(0);
     const file = join(root, `${name}-req.json`);
     const made = await cli(name, ["auth", "request", ...args, "--emit", file]);
@@ -200,7 +205,11 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "tc-agent-openkey-e2e-"));
     priorTcHome = process.env.TC_HOME;
+    priorHome = process.env.HOME;
+    await mkdir(home("owner"), { recursive: true });
+    process.env.HOME = home("owner");
     process.env.TC_HOME = home("owner");
+    registry = startUnregisteredLocationRegistry();
     approvalCertificatePath = join(root, "approval-cert.pem");
     const approvalKeyPath = join(root, "approval-key.pem");
     const certificate = Bun.spawn(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
@@ -211,7 +220,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
     approvalCertificate = await readFile(approvalCertificatePath, "utf8");
     approvalServer = Bun.serve({ hostname: "127.0.0.1", port: 0,
       tls: { key: Bun.file(approvalKeyPath), cert: approvalCertificate }, fetch: approvalFixtureResponse });
-    const { profileConfigPath, profilePath, sessionPath, tinycloudConfigPath, writeJsonAtomic } = await import(
+    const { profileConfigPath, profilePath, sessionPath, tinycloudConfigPath, withTinyCloudStateRoot, writeJsonAtomic } = await import(
       "@tinycloud/operations/state"
     );
 
@@ -247,7 +256,12 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
 
     // The owner wallet (local key) hosts the applications space and seeds one document.
     await mkdir(home("lowner"), { recursive: true });
-    expect((await cli("lowner", ["init", "--key-only"])).exitCode).toBe(0);
+    expect((await cli("lowner", ["init", "--name", "lowner", "--key-only"])).exitCode).toBe(0);
+    await withTinyCloudStateRoot(home("lowner"), async () => {
+      const path = profileConfigPath("lowner");
+      const profile = JSON.parse(await readFile(path, "utf8"));
+      await writeJsonAtomic(path, { ...profile, tinycloudRegistryUrl: registry.url.origin });
+    });
     expect((await cli("lowner", ["auth", "login", "--method", "local"])).exitCode).toBe(0);
     expect(
       (await cli("lowner", ["auth", "request", "--cap", "tinycloud.kv:applications::get,list,put,del", "--grant", "--yes"]))
@@ -298,6 +312,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
     await writeJsonAtomic(profileConfigPath("owner"), {
       name: "owner",
       host,
+      tinycloudRegistryUrl: registry.url.origin,
       chainId: 1,
       spaceName: "applications",
       spaceId: appSpace,
@@ -329,11 +344,18 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
 
   afterAll(async () => {
     try {
+      if (node?.exitCode === null && node.signalCode === null) {
+        const exited = Promise.withResolvers<void>();
+        node.once("exit", () => exited.resolve());
+        node.kill("SIGTERM");
+        await exited.promise;
+      }
     } finally {
       approvalServer?.stop(true);
+      registry?.stop(true);
       if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
-      node?.kill("SIGTERM");
-      await rm(root, { recursive: true, force: true });
+      if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+      if (root) await rm(root, { recursive: true, force: true });
     }
   });
 

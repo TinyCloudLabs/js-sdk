@@ -43,6 +43,8 @@ export function resolveProfileOperatorType(profile: {
 
 export interface ProfileConfig {
   name: string;
+  /** Stored registry override; TC_REGISTRY_URL takes precedence at invocation time. */
+  tinycloudRegistryUrl?: string;
   host: string;
   chainId: number;
   spaceName: string;
@@ -112,6 +114,8 @@ export interface ProfileConfig {
 export interface CLIContext {
   profile: string;
   host: string;
+  /** Effective registry URL from TC_REGISTRY_URL or the selected profile; absent for SDK default. */
+  tinycloudRegistryUrl?: string;
   verbose: boolean;
   noCache: boolean;
   quiet: boolean;

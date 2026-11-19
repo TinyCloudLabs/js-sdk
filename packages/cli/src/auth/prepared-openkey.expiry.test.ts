@@ -69,6 +69,7 @@ const HOUR = 3600_000;
 const hits = { delegate: 0 };
 const node = Bun.serve({ port: 0, fetch(request) {
   const path = new URL(request.url).pathname;
+  if (/^\/v[12]\/locations\//.test(path)) return Response.json({ error: "location record not found" }, { status: 404 });
   if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: ["encryption-named-keys-v1"] });
   if (path === "/delegate" && request.method === "POST") { hits.delegate++; return Response.json({ activated: [], skipped: [] }); }
   return new Response(`Unexpected node request: ${path}`, { status: 404 });
@@ -86,7 +87,7 @@ beforeEach(async () => {
   hits.delegate = 0;
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setProfile("owner", {
-    name: "owner", host, chainId: 1, spaceName: "default", did: "did:key:prior", ownerDid,
+    name: "owner", host, tinycloudRegistryUrl: host, chainId: 1, spaceName: "default", did: "did:key:prior", ownerDid,
     posture: "owner-openkey", authMethod: "openkey", createdAt: "2026-10-01T00:00:00.000Z",
   });
   await ProfileManager.clearSession("owner");

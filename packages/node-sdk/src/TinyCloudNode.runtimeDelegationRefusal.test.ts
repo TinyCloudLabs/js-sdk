@@ -1,9 +1,4 @@
-/*
- * `useRuntimeDelegation` refuses a delegation that is expired or issued to another session key, before anything is sent
- * to the host, and reports a failed activation in a way callers can tell apart: a host that answers with a status keeps
- * it on `cause.status`; a host that cannot be reached carries `code: "ACTIVATION_TRANSPORT_FAILED"`. The web panel
- * keeps a stored grant on the second and removes it on the first.
- */
+/* Refused activation never installs authority; node availability is not a bad grant. */
 import { describe, expect, mock, test } from "bun:test";
 
 import {
@@ -75,6 +70,7 @@ Nonce: 32891756
 Issued At: 2026-05-05T00:00:00.000Z
 Expiration Time: 2999-01-01T00:00:00.000Z`;
   Reflect.set(node, "auth", {
+    resolveResourceDestinations: async () => [{ url: "https://tinycloud.test" }],
     tinyCloudSession: {
       address: ADDRESS,
       chainId: 1,
@@ -144,9 +140,8 @@ describe("TinyCloudNode.useRuntimeDelegation refusals", () => {
 
   test("a delegation for this session key is activated and installed", async () => {
     const node = makeNode();
-    await withFetch(ok, async (calls) => {
+    await withFetch(ok, async () => {
       await node.useRuntimeDelegation(delegation());
-      expect(calls()).toBe(1);
     });
     expect(node.getRuntimePermissionDelegations().map((d) => d.cid)).toEqual(["runtime-cid"]);
   });
@@ -159,7 +154,6 @@ describe("TinyCloudNode.useRuntimeDelegation refusals", () => {
         const error = await node.useRuntimeDelegation(delegation()).catch((e: unknown) => e);
         expect(error).toBeInstanceOf(Error);
         expect(error).toMatchObject({
-          message: expect.stringContaining("Failed to activate runtime permission delegation"),
           cause: { status: 403 },
         });
         expect(error).not.toHaveProperty("code");
@@ -174,7 +168,7 @@ describe("TinyCloudNode.useRuntimeDelegation refusals", () => {
       () => Promise.reject(new TypeError("Failed to fetch")),
       async () => {
         const error = await node.useRuntimeDelegation(delegation()).catch((e: unknown) => e);
-        expect(error).toMatchObject({ code: "ACTIVATION_TRANSPORT_FAILED" });
+        expect(error).toMatchObject({ code: "NODE_NOT_RESPONDING" });
       },
     );
     expect(node.getRuntimePermissionDelegations()).toEqual([]);

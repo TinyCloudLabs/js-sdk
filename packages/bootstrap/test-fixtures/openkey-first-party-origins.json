@@ -1,0 +1,18 @@
+{
+  "source": "TinyCloudLabs/openkey@c4bceb3e5eaf65704f384ff0d0dfade0b75b97b4:apps/api/src/services/first-party-origins.ts",
+  "origins": [
+    "https://tinycloud.chat",
+    "https://home.tinycloud.xyz",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://share.tinycloud.xyz",
+    "https://secrets.tinycloud.xyz",
+    "https://lightning-node-1.gecko-snares.ts.net:8451"
+  ],
+  "pagesProjects": [
+    "tinychat-4jq",
+    "share-2fz",
+    "tinycloud-secrets",
+    "openkey-tinycloud-demo"
+  ]
+}

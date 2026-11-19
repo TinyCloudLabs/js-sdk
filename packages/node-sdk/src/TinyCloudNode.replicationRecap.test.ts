@@ -14,12 +14,17 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./replication/node-loader";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.replication-recap.test";
 
 const PRIVATE_KEY =
   "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 
 function signInFetch(): typeof fetch {
-  return (async (input: unknown, init?: RequestInit) => {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     const url = String(input);
     if (url.endsWith("/info")) {
       return new Response(
@@ -68,6 +73,7 @@ describe("signed recap probes (review: real WASM)", () => {
   test("owner recap merges one root sync ability into its existing KV root resource", async () => {
     const wasm = new NodeWasmBindings();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: new PrivateKeySigner(PRIVATE_KEY),
       tinycloudHosts: ["https://tinycloud.test"],
@@ -93,6 +99,7 @@ describe("signed recap probes (review: real WASM)", () => {
     // root get and the SIWE gained an unrestricted get+sync on `notes`.
     const wasm = new NodeWasmBindings();
     const node = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: new PrivateKeySigner(PRIVATE_KEY),
       tinycloudHosts: ["https://tinycloud.test"],
@@ -133,6 +140,7 @@ describe("signed recap probes (review: real WASM)", () => {
       includePublicSpace: false,
     };
     const uncovered = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: new PrivateKeySigner(PRIVATE_KEY),
       tinycloudHosts: ["https://tinycloud.test"],
@@ -150,6 +158,7 @@ describe("signed recap probes (review: real WASM)", () => {
     // Positive control: a trailing-slash `get(notes/)` covers
     // `notes/private/` under sdk-core containment, and the flag signs it.
     const covered = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: wasm,
       signer: new PrivateKeySigner(PRIVATE_KEY),
       tinycloudHosts: ["https://tinycloud.test"],

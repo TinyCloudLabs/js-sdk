@@ -424,10 +424,8 @@ export function diffImmutableSiweFields(
   ).filter((key) => !(options?.allowExpirationChange === true && key === "expirationTime"));
   const diffs: string[] = [];
   for (const key of keys) {
-    // Normalize undefined to "" so a field missing on both sides is
-    // considered equal, but a field present on only one side is a diff.
-    const a = original[key] ?? "";
-    const b = signed[key] ?? "";
+    const a = original[key];
+    const b = signed[key];
     if (a !== b) {
       diffs.push(key);
     }

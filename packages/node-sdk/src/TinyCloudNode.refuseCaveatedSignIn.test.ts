@@ -24,6 +24,9 @@ import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { TinyCloudNode } from "./TinyCloudNode";
+import { unregisteredLocationRegistryResponse } from "./test-support/unregistered-location-registry";
+
+const REGISTRY_ORIGIN = "https://registry.caveated-signin.test";
 
 const ADDRESS = "0x1234567890abcdef1234567890abcdef12345678";
 
@@ -177,12 +180,14 @@ function manifest(caveats: Caveats): Manifest {
   };
 }
 
-let fetchMock: Mock<() => Promise<never>>;
+let fetchMock: Mock<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>;
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
-  fetchMock = mock(async () => {
+  fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const metadata = unregisteredLocationRegistryResponse(input, REGISTRY_ORIGIN, init);
+    if (metadata) return metadata;
     throw new Error("network is closed in this test");
   });
   globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -266,6 +271,7 @@ describe("TinyCloudNode.signIn refuses caveated manifests", () => {
   test("unconstrained caveats prepare the same session as no caveats", async () => {
     const baseline = fakeWasm();
     const baselineNode = new TinyCloudNode({
+      tinycloudRegistryUrl: REGISTRY_ORIGIN,
       wasmBindings: baseline.wasm,
       signer: spySigner().signer,
       host: "https://tinycloud.test",
@@ -280,6 +286,7 @@ describe("TinyCloudNode.signIn refuses caveated manifests", () => {
     for (const [, caveats] of UNCONSTRAINED) {
       const { wasm, prepareSession } = fakeWasm();
       const node = new TinyCloudNode({
+        tinycloudRegistryUrl: REGISTRY_ORIGIN,
         wasmBindings: wasm,
         signer: spySigner().signer,
         host: "https://tinycloud.test",

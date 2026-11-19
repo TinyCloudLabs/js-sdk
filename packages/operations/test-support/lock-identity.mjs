@@ -1,3 +1,4 @@
+import "./test-bootstrap.mjs";
 // Simulated same-PID records exercise the built Node ESM without namespace privileges.
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";

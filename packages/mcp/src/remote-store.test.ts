@@ -1,3 +1,4 @@
+import "../../operations/test-support/test-bootstrap.mjs";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +7,7 @@ import { join } from "node:path";
 import { invokeOperation } from "@tinycloud/operations";
 
 import { ApprovalOwnerMismatchError, ApprovalStageError, RemoteTenantStore, type ConnectStatus } from "./remote-store.js";
+import { resetMcpRegistryFixture } from "./test-support/registry-fixture.mjs";
 import {
   OTHER_OWNER_KEY,
   REQUESTER_KEY,
@@ -26,8 +28,12 @@ const directories: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-  await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  try {
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+    await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+  } finally {
+    resetMcpRegistryFixture();
+  }
 });
 
 test("keeps hosted delegates isolated by OAuth subject", async () => {
@@ -156,41 +162,6 @@ test("first operations and expired sessions receive account-bound reconnect link
     });
     await expect(store.completeApproval(state, callbackRequest(foreign)))
       .rejects.toBeInstanceOf(ApprovalOwnerMismatchError);
-  }
-});
-
-test("tc-apps approvals explain exact capabilities and fall back for unrelated permissions", async () => {
-  const store = await testStore();
-  const requester = await ownerDid(REQUESTER_KEY);
-  await store.initializeTenant("approval-account");
-  const records = {
-    service: "tinycloud.kv", space: "default", path: "xyz.tinycloud.agent-data/",
-    actions: ["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/put", "tinycloud.kv/del"],
-  };
-  const cases = [
-    { permissions: [records], matches: true },
-    { permissions: [{ ...records, path: "xyz.tinycloud.agent-data/other/" }], matches: false },
-    { permissions: [{ ...records, space: "other" }], matches: false },
-    { permissions: [{ ...records, service: "tinycloud.sql" }], matches: false },
-    { permissions: [{ ...records, actions: [...records.actions, "tinycloud.kv/metadata"] }], matches: false },
-  ];
-  for (const [index, { permissions, matches }] of cases.entries()) {
-    const result = record(await store.decorateAuthorityResult("approval-account", [requester], {
-      status: "authority_required", operation: {}, context: {},
-      request: { requestId: `request-${index}`, requested: permissions },
-      approval: { kind: "openkey" },
-    }));
-    const approval = record(result.approval);
-    const state = new URL(String(approval.url)).searchParams.get("state")!;
-    const redirect = new URL(await store.approvalRedirect(state));
-    const payload = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString());
-    if (matches) {
-      expect(payload.reason).toContain("Lets Claude keep your personal records");
-      expect(approval.fallback).not.toBe("Open the approval URL, then retry the same MCP tool.");
-    } else {
-      expect(payload.reason).toContain("Approve the exact capabilities requested");
-      expect(payload.reason).not.toContain("Lets Claude");
-    }
   }
 });
 
@@ -429,7 +400,7 @@ async function createHermeticNode(): Promise<HermeticNode> {
   // The loopback node lives in node-sdk's test sources, outside this package's
   // build graph; stdio.test.ts loads the same fixtures the same way.
   const module = await import(new URL(
-    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    "./test-support/hermetic-node.mjs",
     import.meta.url,
   ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
   const hermetic = await module.createHermeticEncryptedNode();

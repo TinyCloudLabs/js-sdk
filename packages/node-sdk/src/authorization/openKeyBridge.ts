@@ -14,7 +14,7 @@
 // by hand — the wire shape it enforces exactly mirrors what OpenKey
 // emits and what `signInWithOpenKeyResult` accepts.
 
-import type { CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
+import { publicJwk, type CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
 
 /**
  * Structural shape of the OpenKey SDK's `authorizeTinyCloud()` method.
@@ -22,7 +22,31 @@ import type { CapabilityPresentationEnvelopeV1 } from "@tinycloud/sdk-core";
  * `OpenKey` instance from `@openkey/sdk` — without either package
  * needing to import from the other.
  */
+export interface OpenKeySignInIdentity {
+  readonly address: string;
+  readonly chainId: number;
+  readonly keyId: string;
+  readonly keyType: "MANAGED" | "EXTERNAL";
+  readonly requestId: string;
+}
+
+export interface OpenKeyContinuation {
+  cancel(): void | Promise<void>;
+  authorize(prepare: (identity: OpenKeySignInIdentity) => Promise<OpenKeyBridgeInput>): ReturnType<OpenKeyAuthorizeTinyCloud["authorizeTinyCloud"]>;
+}
+
 export interface OpenKeyAuthorizeTinyCloud {
+  supportsTinyCloudSignIn?(): Promise<boolean>;
+  getContinuationProvider?(): { request(args: { method: string; params?: unknown[] }): Promise<unknown> };
+  beginTinyCloudSignIn?(options: {
+    chainId: number | (() => Promise<number>);
+    verify: (input: {
+      result: Awaited<ReturnType<OpenKeyAuthorizeTinyCloud["authorizeTinyCloud"]>>;
+      identity: OpenKeySignInIdentity;
+      request: Omit<OpenKeyBridgeInput, "verificationMethod">;
+      origin: string;
+    }) => Promise<boolean>;
+  }): OpenKeyContinuation;
   authorizeTinyCloud(request: {
     protocolVersion: 1;
     siwe: string;
@@ -60,6 +84,7 @@ export interface OpenKeyAuthorizeTinyCloud {
 export interface OpenKeyBridgeInput {
   protocolVersion: 1;
   siwe: string;
+  /** The public session key. The bridge sends only its public members to OpenKey. */
   jwk: Record<string, unknown>;
   /** SDK-prepared session-key DID, for local handoff consistency only; not an OpenKey request field. */
   readonly verificationMethod: string;
@@ -116,7 +141,8 @@ export function wireOpenKeyAuthorize(
 ): NodeUserAuthorizationAuthorizeFn {
   return async (input) => {
     // The bridge does not fabricate any protocol fields — every value
-    // flows through unchanged. Wire drift (missing signedMessage,
+    // flows through unchanged, except the session key, which is reduced to
+    // its public members. Wire drift (missing signedMessage,
     // malformed selectedActionKeys, empty permissions on a capability-
     // bearing SIWE) is surfaced by `signInWithOpenKeyResult`; the
     // bridge only translates types.
@@ -124,7 +150,7 @@ export function wireOpenKeyAuthorize(
       protocolVersion: 1,
       siwe: input.siwe,
       keyId: input.keyId,
-      jwk: input.jwk,
+      jwk: publicJwk(input.jwk),
       host: input.host,
       // Forward the presentation envelope verbatim — the OpenKey SDK
       // validates and size-bounds it before use.

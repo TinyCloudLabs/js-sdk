@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import {
   APPS_AGENT_EXPIRY,
-  APPS_AGENT_MAX_APPS,
   appsAgentPermissions,
   appsAgentScopeNotice,
   assertRequestFields,
@@ -183,10 +182,10 @@ describe("resolveAppsAgentRequest", () => {
     );
   });
 
-  test("at most five apps", () => {
-    const apps = Array.from({ length: APPS_AGENT_MAX_APPS + 1 }, (_, index) => `app.n${index}`);
-    expect(() => resolveAppsAgentRequest({ preset: "apps-agent", app: apps })).toThrow(expect.objectContaining({ exitCode: 2 }));
-    expect(resolveAppsAgentRequest({ preset: "apps-agent", app: apps.slice(0, APPS_AGENT_MAX_APPS) })?.appIds).toHaveLength(APPS_AGENT_MAX_APPS);
+  test("any number of apps, read or write", () => {
+    const apps = Array.from({ length: 8 }, (_, index) => `app.n${index}`);
+    expect(resolveAppsAgentRequest({ preset: "apps-agent", app: apps })).toEqual({ mode: "read", appIds: apps });
+    expect(resolveAppsAgentRequest({ preset: "apps-agent", write: true, app: apps })).toEqual({ mode: "write", appIds: apps });
   });
 
   test("refuses anything that would make the printed scope untrue", () => {
@@ -287,6 +286,15 @@ describe("describeGrantScope: the text follows what will be signed", () => {
       expect(scope.text).toBe(notice);
       expect(scope.extras).toEqual([]);
       expect(entryLines(scope.text)).toEqual([]);
+    }
+  });
+
+  test("a preset request naming more than five apps is still recognised as the preset", () => {
+    const apps = Array.from({ length: 8 }, (_, index) => `app.n${index}`);
+    for (const mode of ["read", "write"] as const) {
+      const scope = scopeOf(asRequested(mode, apps));
+      expect(scope.text).toBe(appsAgentScopeNotice(mode, apps));
+      expect(scope.extras).toEqual([]);
     }
   });
 
