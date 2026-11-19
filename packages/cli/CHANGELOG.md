@@ -1,5 +1,131 @@
 # @tinycloud/cli
 
+## 1.8.0-beta.16
+
+### Patch Changes
+
+- 313b056: Shares can be up to 95 MiB, the most the TinyCloud node accepts in one upload (99,614,720 bytes). A larger file stops before uploading with "Shared files can be up to 95 MiB. Use a smaller file or split it." When several files together pass the limit, the message reads "These files add up to more than 95 MiB. Share fewer at once or use smaller files." `--max-bytes` accepts 1 byte to 95 MiB, and a file over a smaller `--max-bytes` gets its own message naming that limit.
+
+  Details: TC-3252
+
+- Updated dependencies [313b056]
+  - @tinycloud/share-sdk@1.6.0-beta.1
+  - @tinycloud/node-sdk@3.13.0-beta.9
+  - @tinycloud/sdk-core@3.13.0-beta.9
+  - @tinycloud/operations@0.9.1-beta.10
+
+## 1.8.0-beta.15
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [0576031]
+- Updated dependencies [7399b14]
+  - @tinycloud/operations@0.9.1-beta.9
+  - @tinycloud/sdk-services@3.13.0-beta.8
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 1.8.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+  - @tinycloud/operations@0.9.1-beta.8
+
+## 1.8.0-beta.13
+
+### Minor Changes
+
+- 0490f71: `feed card-md` prints the owner's card.md (`{text, version, updatedAt}`). When the owner hasn't set one, it prints the default (`{text, version, default: true}`). `feed publish` adds `cardMd: {version}` to its JSON, with `default: true` while it is the default, and `feed publish` and `feed watch` print the text once on stderr when its version differs from the last one this profile saw for that agent. `feed connect` copies the owner's card.md into the new agent's response database, or the default when the owner hasn't set one. An agent connected before card.md existed reads it with the same grant, without reconnecting. `@tinycloud/sdk-services` adds `readFeedCardMd` and an optional `onWake` callback on `listenFeedResponses`, run at the start of every drain.
+
+  Details: TC-3345
+
+### Patch Changes
+
+- Updated dependencies [0490f71]
+  - @tinycloud/sdk-services@3.13.0-beta.6
+  - @tinycloud/node-sdk@3.13.0-beta.6
+  - @tinycloud/operations@0.9.1-beta.7
+  - @tinycloud/sdk-core@3.13.0-beta.6
+
+## 1.8.0-beta.12
+
+### Patch Changes
+
+- b096c5a: `tinycloud delegation revoke <cid>` from an owner profile can now revoke a grant that profile's own key issued, such as one made with `feed connect`. When the node lists the CID as issued by this profile's key, the CLI revokes it with that key, with no owner approval. A CID the node doesn't list as issued by this key is still refused, and a network or node failure is reported as an error.
+
+  Details: TC-3150
+
+## 1.8.0-beta.11
+
+### Patch Changes
+
+- a3562f4: `tinycloud onboard`, run again with a session that still works, now checks that the node hosts the session's space before it goes on. If the space isn't hosted, it waits as it does after an approval (up to 150 seconds or the `--timeout` share), then ends with exit 1 `SPACE_SETUP_PENDING` instead of failing later with "Space not found". A hosted space costs one read and no wait.
+
+  Details: TC-2380
+
+## 1.8.0-beta.10
+
+### Minor Changes
+
+- c7741ab: New `tinycloud feed disconnect --agent <token>`: an owner removes a connected agent in one step. It reads the grant ID from the owner's feed registry, revokes the grant with the profile's own key (no OpenKey approval), then removes the registry row; a failed revoke leaves the row so it can be retried. Before, `delegation revoke <cid>` from the owner profile failed with TARGET_NOT_FOUND because the owner session cannot list the grants it issued and the CLI kept no record of a `feed connect` grant.
+
+  Details: TC-3150
+
+### Patch Changes
+
+- 92f9309: `tinycloud profile show` prints only its documented fields.
+
+  Details: TC-2652
+
+- 91f4a95: Internal changes for profiles; nothing in the CLI's commands changes.
+
+  Details: TC-2653
+
+- Updated dependencies [c7741ab]
+  - @tinycloud/sdk-core@3.13.0-beta.5
+  - @tinycloud/node-sdk@3.13.0-beta.5
+  - @tinycloud/operations@0.9.1-beta.6
+
+## 1.8.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [1f961e4]
+  - @tinycloud/sdk-core@3.13.0-beta.4
+  - @tinycloud/node-sdk@3.13.0-beta.4
+  - @tinycloud/operations@0.9.1-beta.5
+
+## 1.8.0-beta.8
+
+### Minor Changes
+
+- 400cf7f: A secret can carry an optional type: `secret` (the default), `totp`, `username` or `password`. `secrets.put(name, value, { type })` stores the type inside the encrypted secret. The new `secrets.getEntry(name)` returns `{ value, type, createdAt, updatedAt }`; a secret with no stored type, or with a type the client doesn't know, reads as `secret`.
+
+  `secrets.get` is unchanged, and older clients still read typed secrets, since they only need `value`. Storing `secret`, or no type, writes the same payload as before.
+
+  `@tinycloud/sdk-services/secrets/totp` (not exported from the package root) adds `parseTotpSeed` (an `otpauth://totp/` link or a bare base32 seed), `generateTotp` (RFC 6238, SHA1/SHA256/SHA512) and `totpSecondsRemaining`.
+
+  `tinycloud secrets put --type <secret|totp|username|password>` sets the type. For `totp`, the value must be a valid seed: an `otpauth://totp/` link or a bare base32 seed.
+
+  Details: TC-3285
+
+### Patch Changes
+
+- Updated dependencies [400cf7f]
+  - @tinycloud/sdk-services@3.13.0-beta.3
+  - @tinycloud/sdk-core@3.13.0-beta.3
+  - @tinycloud/node-sdk@3.13.0-beta.3
+  - @tinycloud/operations@0.9.1-beta.4
+
 ## 1.8.0-beta.7
 
 ### Minor Changes
