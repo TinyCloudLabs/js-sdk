@@ -55,6 +55,24 @@ describe("cliNameFor", () => {
     expect(cliNameFor(bin, { npm_command: "exec" })).toBe("npx -y @tinycloud/cli");
   });
 
+  test("the CLI's own bin rewrites argv[1] to its real path inside the package; the version is read from there", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-cli-name-"));
+    made.push(root);
+    const pkg = join(root, ".npm", "_npx", "abc123", "node_modules", "@tinycloud", "cli");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@tinycloud/cli", version: "1.6.6" }));
+    expect(cliNameFor(join(pkg, "bin", "tinycloud"), { npm_command: "exec" })).toBe("npx -y @tinycloud/cli@1.6.6");
+  });
+
+  test("a package.json that is not the CLI's is not used for the pin", () => {
+    const root = mkdtempSync(join(tmpdir(), "tc-cli-name-"));
+    made.push(root);
+    const pkg = join(root, ".npm", "_npx", "abc123", "node_modules", "other");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "other", version: "6.6.6" }));
+    expect(cliNameFor(join(pkg, "bin", "tinycloud"), { npm_command: "exec" })).toBe("npx -y @tinycloud/cli");
+  });
+
   test("the npx cache path alone is not enough: npm must say it is exec", () => {
     const bin = npxLayout("1.8.0");
     expect(cliNameFor(bin, {})).toBe("tc");

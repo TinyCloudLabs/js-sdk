@@ -4,14 +4,20 @@ import { basename, dirname, join } from "node:path";
 /** npx runs a package's bin from `<home>/.npm/_npx/<hash>/node_modules/.bin/<bin>`. */
 const NPX_CACHE = /[\\/]_npx[\\/]/;
 
-/** The version of the CLI package npx unpacked next to the bin it runs, or none when it cannot be read. */
+/**
+ * The version of the CLI package npx unpacked, or none when it cannot be read. The CLI's own bin rewrites `argv[1]` to
+ * its real path, `…/node_modules/@tinycloud/cli/bin/tinycloud`; the `.bin/<name>` link npx makes is the other place to look.
+ */
 function npxCliVersion(bin: string): string | undefined {
-  try {
-    const { version } = JSON.parse(readFileSync(join(dirname(bin), "..", "@tinycloud", "cli", "package.json"), "utf8"));
-    return typeof version === "string" && /^[0-9A-Za-z.+-]+$/.test(version) ? version : undefined;
-  } catch {
-    return undefined;
+  for (const manifest of [join(dirname(bin), "..", "package.json"), join(dirname(bin), "..", "@tinycloud", "cli", "package.json")]) {
+    try {
+      const { name, version } = JSON.parse(readFileSync(manifest, "utf8"));
+      if (name === "@tinycloud/cli" && typeof version === "string" && /^[0-9A-Za-z.+-]+$/.test(version)) return version;
+    } catch {
+      // Not there: try the next place.
+    }
   }
+  return undefined;
 }
 
 /**
