@@ -22,11 +22,10 @@ function npxCliVersion(bin: string): string | undefined {
 
 /**
  * The command hints and messages tell users to run. The CLI installs as both `tc` and `tinycloud` (Ubuntu's
- * iproute2 ships `/usr/sbin/tc`), so the name follows the invoked bin. Run by npx, neither is on the user's PATH:
- * the name is then the npx command that works, pinned to the version of the CLI package that is running. It sets
- * `--prefix "$HOME"` so npx never walks up from the current folder to a project's (or a planted /tmp) `node_modules`,
- * `package.json` or `.npmrc`, and runs the `tinycloud` bin with `-p`, so the `tc` rename notice never shows. That needs
- * the CLI's own manifest next to the bin, so any other host process (the MCP server, say) gets `tc`, as before.
+ * iproute2 ships `/usr/sbin/tc`), so the name follows the invoked bin. Under npx, the CLI name is the full npx
+ * command, pinned to the version of the CLI package that is running. `--prefix "$HOME"` keeps it independent of the
+ * current folder, and `-p … tinycloud` runs the `tinycloud` bin. That needs the CLI's own manifest next to the bin,
+ * so any other host process (the MCP server, say) gets `tc`, as before.
  */
 export function cliNameFor(
   argv1: string,
