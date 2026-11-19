@@ -15,6 +15,11 @@ export function saveGuideNextLine(cli: string = CLI_NAME): string {
 /** After `skill save` succeeds: back to what the owner asked for. */
 export const CONTINUE_NEXT_LINE = "Next: carry on with the owner's request.";
 
+/** With the not-signed-in error: the one command that fixes it. */
+export function signInNextLine(cli: string = CLI_NAME): string {
+  return `Next: \`${cli} onboard\` asks the owner for approval and waits for it.`;
+}
+
 /**
  * The offer after `onboard`, or `undefined` when `skill save` would not be the next step: the guide is already saved
  * and current, a skills folder holds files TinyCloud did not write (`skill save` refuses it), or no agent's skills

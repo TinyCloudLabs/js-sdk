@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-// TC-3278: the first error an agent sees on a computer that is not signed in names the cause and the one command
-// that fixes it, in the CLI's own invocation form.
+// TC-3278: the first error an agent sees on a computer that is not signed in gives the cause only; the one command
+// that fixes it comes as a Next: line in the CLI's own invocation form, inside the one JSON document on stderr.
 const ENTRY = resolve(import.meta.dir, "..", "index.ts");
 const made: string[] = [];
 afterEach(() => {
@@ -22,9 +22,9 @@ describe("the not-signed-in error", () => {
       env: { ...ambient, HOME: home, TC_HOME: join(home, "tc") },
     });
     expect(result.status).toBe(3);
-    const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string } };
+    const { error } = JSON.parse(result.stderr) as { error: { code: string; message: string; hint?: string } };
     expect(error.code).toBe("AUTH_REQUIRED");
-    expect(error.message).toMatch(/^This computer isn't signed in\. `(tinycloud|tc|npx -y @tinycloud\/cli@\S+) onboard` asks the owner for approval and waits for it\.$/);
-    expect(error.message).not.toMatch(/auth login|init|Not authenticated/);
+    expect(error.message).toBe("This computer isn't signed in.");
+    expect(error.hint).toMatch(/^Next: `(tinycloud|tc|npx -y @tinycloud\/cli@\S+) onboard` asks the owner for approval and waits for it\.$/);
   });
 });
