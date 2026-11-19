@@ -21,6 +21,8 @@ import { parseFeedRunner, printFeedResponse, runFeedRunner } from "../feed/runne
 import { connectFeedAgent, feedAgentPermissions } from "../feed/connection.js";
 import { disconnectFeedAgent } from "../feed/disconnect.js";
 import { revokeIssuedDelegation } from "./delegation.js";
+import { delegateWithGiveBack, shellWord } from "../lib/revoke-controls.js";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { exportFeedRawSnapshot } from "../feed/export.js";
 import { importFeedPreparedBundle } from "../feed/import.js";
 import { CARD_MD_RESOURCE, DEFAULT_CARD_MD, cardMdChangedText, cardMdOrDefaultForPublish, copyCardMdToAgent, markDefault, rememberCardMdVersion } from "../feed/card-md.js";
@@ -144,22 +146,25 @@ slash prefix and output are explicit; source get/sync grants are separate from f
     .option("--expiry <duration>", "Delegation expiry duration", "24h")
     .action(async (options, command) => {
       try {
-        const { node, space, sql, resources, output, responses } = await context(command);
+        const { node, space, sql, resources, output, responses, profile } = await context(command);
         const did = options.to.split("#")[0];
         const source: FeedSource = {
           sourceId: options.agent, agentDid: did, label: options.label,
           output: { spaceId: space, database: resources.outputResource },
           responses: { spaceId: space, database: resources.responseResource },
         };
+        let revokeControl: Awaited<ReturnType<typeof node.delegateTo>>["revokeControl"];
         const delegation = await connectFeedAgent(sql.db(REGISTRY), source, async () => {
           value(await initializeFeedDatabases({ output, responses }));
           // The agent has the owner's card.md from its first read, not from the Feed's next open.
           await copyCardMdToAgent(sql.db(CARD_MD_RESOURCE), responses);
           const expiry = parseExpiry(options.expiry).getTime() - Date.now();
-          const { delegation } = await node.delegateTo(did, feedAgentPermissions(space, resources), { expiry, requireActivation: true });
-          return delegation;
+          const granted = await delegateWithGiveBack(node, did, feedAgentPermissions(space, resources), { expiry, requireActivation: true }, () => `${CLI_NAME} feed disconnect --agent ${shellWord(options.agent)}`,
+          (orphan) => revokeIssuedDelegation(node, profile, orphan));
+          revokeControl = granted.revokeControl;
+          return granted.delegation;
         });
-        outputJson({ source, delegation });
+        outputJson({ source, delegation, ...(revokeControl === undefined ? {} : { revokeControl }) });
       } catch (error) { return handleError(error); }
     });
 

@@ -7,6 +7,7 @@ import { handleError, CLIError, cliErrorFromService } from "../output/errors.js"
 import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
+import { delegateWithGiveBack, shellWord, findRevokeControl, removeHeldDelegation, removeRevokeControl, type StoredRevokeControl } from "../lib/revoke-controls.js";
 import { parseExpiry } from "../lib/duration.js";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { PermissionNotInManifestError, type AccountDelegationRecord, type TinyCloudNode } from "@tinycloud/node-sdk";
@@ -112,6 +113,59 @@ export async function revokeIssuedDelegation(node: TinyCloudNode, ctx: { profile
   throw issuedFailure(result.error, ctx.host);
 }
 
+/** A delegate-posture revoke: with the revoke-only grant stored beside `cid` it gives the grant back; otherwise it revokes what its own key issued. */
+export async function revokeAsDelegate(node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string) {
+  const control = await findRevokeControl(ctx.profile, cid);
+  return control === undefined
+    ? revokeIssuedDelegation(node, ctx, cid)
+    : giveBackDelegation(node, ctx, cid, control);
+}
+
+/**
+ * The holder gives back a grant with the revoke-only grant it was issued with. The stored grant and revoke grant are dropped
+ * only after the node answered 200, or after a "not found" answer is confirmed by the node's own status for the delegation
+ * (revoked or expired). The node never answers 404 for a delegation it does not have, so a bare 404 is a wrong host or a proxy
+ * and the access may still be live. Any other failure, a refusal or a network error included, leaves both for a retry.
+ */
+export async function giveBackDelegation(
+  node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string, control: StoredRevokeControl,
+) {
+  // The revoke is signed with this profile's key and carries the revoke grant as its proof, so the grant is installed first.
+  try {
+    node.installRevokeControl({ ...control, expiry: new Date(control.expiry) });
+  } catch (error) {
+    throw new CLIError(
+      "REVOKE_UNAUTHORIZED",
+      error instanceof Error ? error.message : String(error),
+      ExitCode.PERMISSION_DENIED,
+      { hint: "The revoke grant stored with this delegation cannot be used by this profile; ask the owner to revoke it." },
+    );
+  }
+  const result = await node.delegationManager.revoke(cid, { authorityCid: control.cid });
+  if (!result.ok) {
+    if (result.error.code === "PERMISSION_DENIED") {
+      throw new CLIError(
+        "REVOKE_UNAUTHORIZED",
+        `The node refused this revocation: ${result.error.message}.`,
+        ExitCode.PERMISSION_DENIED,
+        { status: result.error.meta?.status, hint: "The revoke grant issued with this delegation may have ended or been withdrawn by its issuer." },
+      );
+    }
+    if (result.error.code !== "NOT_FOUND") throw issuedFailure(result.error, ctx.host);
+    const confirmed = await node.delegationManager.status(cid);
+    if (!confirmed.ok || (confirmed.data.status !== "revoked" && confirmed.data.status !== "expired")) {
+      throw new CLIError(
+        "GIVE_BACK_NOT_CONFIRMED",
+        `The node answered "not found" when giving back ${cid}, so this access may still be active. Nothing was removed from this profile. Try again, and check that --host is the node that issued it.`,
+        ExitCode.ERROR,
+      );
+    }
+  }
+  await removeHeldDelegation(ctx.profile, cid);
+  await removeRevokeControl(ctx.profile, cid);
+  return { cid, revoked: true as const, authority: "revoke-grant" as const, ...(result.ok ? {} : { alreadyGone: true as const }) };
+}
+
 async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
   if (yes) return;
   const warning = "This is your current sign-in session; revoking it signs you out";
@@ -143,6 +197,7 @@ export function registerDelegationCommand(
     .requiredOption("--path <path>", "KV path scope")
     .requiredOption("--actions <actions>", "Comma-separated actions (e.g., kv/get,kv/list)")
     .option("--expiry <duration>", "Expiry duration (e.g., 1h, 7d, ISO date)", "1h")
+    .option("--holder-may-revoke", "Also give the recipient a revoke-only grant so it can give this delegation back (at most 31 days)", false)
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -170,15 +225,16 @@ export function registerDelegationCommand(
         // (POST /delegate); the node does not serve tinycloud.delegation/create.
         // The space must be explicit: an entry without one targets the
         // "applications" space, not the session's default space.
-        const { delegation: created } = await node.delegateTo(
-          recipient,
-          Object.entries(byService).map(([service, serviceActions]) => ({
-            service,
-            space: "default",
-            path: options.path,
-            actions: serviceActions,
-          })),
-          { expiry: expiry.getTime() - Date.now(), requireActivation: true },
+        const entries = Object.entries(byService).map(([service, serviceActions]) => ({
+          service,
+          space: "default",
+          path: options.path,
+          actions: serviceActions,
+        }));
+        const delegateOptions = { expiry: expiry.getTime() - Date.now(), requireActivation: true };
+        const { delegation: created, revokeControl } = await (options.holderMayRevoke === true
+          ? delegateWithGiveBack(node, recipient, entries, delegateOptions, (cid) => `${CLI_NAME} delegation revoke ${shellWord(cid)}`, (orphan) => revokeIssuedDelegation(node, ctx, orphan))
+          : node.delegateTo(recipient, entries, delegateOptions)
         ).catch((error: unknown) => {
           if (error instanceof PermissionNotInManifestError) {
             const needed = error.missing
@@ -213,6 +269,7 @@ export function registerDelegationCommand(
           actions,
           expiry: created.expiry.toISOString(),
           status: confirmed.status,
+          ...(revokeControl === undefined ? {} : { revokeControl }),
         });
       } catch (error) {
         return handleError(error);
@@ -298,8 +355,9 @@ export function registerDelegationCommand(
         // session carries no owner authority; an owner sign-in under that posture takes the owner path.
         const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : undefined;
         if (delegateCandidate !== undefined && delegateCandidate.address === undefined) {
-          // A delegate revokes what its own key issued; it never asks its owner for revoke authority.
-          outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
+          // A delegate revokes what its own key issued; it never asks its owner for revoke authority. A grant it holds
+          // that came with a revoke-only grant is given back with that grant instead.
+          outputJson(await revokeAsDelegate(delegateCandidate, ctx, cid));
           return;
         }
         const session = await ProfileManager.getSession(ctx.profile);

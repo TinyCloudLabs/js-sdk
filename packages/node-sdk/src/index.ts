@@ -215,6 +215,7 @@ export {
   type TinyCloudNodeConfig,
   type DelegateToOptions,
   type DelegateToResult,
+  type RevokeControl,
   type RuntimePermissionGrantOptions,
   type EnsureEncryptionNetworkOptions,
   type CreateOwnerDelegationParams,
