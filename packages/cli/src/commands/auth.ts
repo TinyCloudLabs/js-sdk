@@ -831,7 +831,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             "--approve-inventory only applies to a separate plain logout after a refused pending remote revocation.",
             ExitCode.USAGE_ERROR);
         }
-        if (!options.revoke && !options.force && !await logoutWillKeepKey(ctx.profile)) {
+        // --keep-replicas always deletes the key (legacy replicas stay fenced only by the shred), so it is checked.
+        if (!options.revoke && !options.force && (options.keepReplicas || !await logoutWillKeepKey(ctx.profile))) {
           await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
         }
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
