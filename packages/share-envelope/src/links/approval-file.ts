@@ -54,7 +54,7 @@ const legacyEntrySchema = z.object({
   signingKey: z.unknown(), relayPrivateKey: z.unknown(), ackId: z.unknown(),
   resultRef: z.unknown(), resultExpiresAt: z.unknown(), resultEnvelope: z.unknown(),
   committed: z.unknown(), acknowledged: z.unknown(),
-  expectedOwner: z.unknown(), commandIntent: z.unknown(),
+  expectedOwner: z.unknown(), commandIntent: z.unknown(), invitationMeta: z.unknown(),
   command: z.object({ result: z.object({ expiry: z.string().optional() }).passthrough().optional() }).passthrough().optional(),
 });
 
@@ -71,6 +71,7 @@ function migrateEntry(raw: unknown, notes: { requestId: string; note: "request-e
     ...(v1.expectedOwner === undefined ? {} : { expectedOwner: v1.expectedOwner }),
     ...(v1.commandIntent === undefined ? {} : { commandIntent: v1.commandIntent }),
     ...(v1.command === undefined ? {} : { command: v1.command }),
+    ...(v1.invitationMeta === undefined ? {} : { invitationMeta: v1.invitationMeta }),
   };
   const phase = v1.acknowledged === true ? "acked"
     : v1.committed === true ? "committed"
