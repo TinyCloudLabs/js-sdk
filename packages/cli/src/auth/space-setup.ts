@@ -172,27 +172,14 @@ function hasKvAction(permission: PermissionEntry, action: "list" | "get"): boole
 function readTarget(permissions: readonly PermissionEntry[] | undefined):
   | { readonly op: "list"; readonly prefix: string }
   | { readonly op: "get"; readonly key: string }
-  | { readonly op: "sql"; readonly database: string }
   | undefined {
   const kv = (permissions ?? []).filter((permission) => permission.service === "tinycloud.kv" || permission.service === "kv");
   const list = kv.find((permission) => hasKvAction(permission, "list"));
   if (list) return { op: "list", prefix: list.path };
   const get = kv.find((permission) => hasKvAction(permission, "get"));
-  if (!get) return sqlReadTarget(permissions);
+  if (!get) return undefined;
   // A grant on one key is read as that key; a prefix grant is read at a key that does not exist (a hosted space answers 404 "key not found").
   return { op: "get", key: get.path === "" || get.path.endsWith("/") ? `${get.path}.tinycloud-space-probe` : get.path };
-}
-
-/**
- * A session with no kv grant (a goal-scoped onboarding such as `--for feed`) is checked
- * with a one-row SQL read on a database it may read: a grant on one database path
- * names it; a prefix grant (ending in `/`) names none, so it is not probed.
- */
-function sqlReadTarget(permissions: readonly PermissionEntry[] | undefined): { readonly op: "sql"; readonly database: string } | undefined {
-  const grant = (permissions ?? []).find((permission) =>
-    (permission.service === "tinycloud.sql" || permission.service === "sql") && permission.path !== "" && !permission.path.endsWith("/")
-    && permission.actions.some((action) => action === "read" || action === "tinycloud.sql/read"));
-  return grant ? { op: "sql", database: grant.path } : undefined;
 }
 
 const UNHOSTED = /space not found/i;
@@ -215,11 +202,10 @@ export function kvSpaceProbe(
     if (!target) return "unreadable";
     restored ??= await restore(ctx);
     if ("unavailable" in restored) return "unreadable";
-    const result = target.op === "sql"
-      ? await restored.node.sql.db(target.database).query("SELECT 1")
-      : target.op === "list"
-        ? await restored.node.kv.list({ prefix: target.prefix, limit: 1 })
-        : await restored.node.kv.get(target.key);
+    const kv = restored.node.kv;
+    const result = target.op === "list"
+      ? await kv.list({ prefix: target.prefix, limit: 1 })
+      : await kv.get(target.key);
     if (result.ok) return "hosted";
     const status = (result.error.meta as { status?: number } | undefined)?.status;
     if (status === 404 && UNHOSTED.test(result.error.message)) return "unhosted";
