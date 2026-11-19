@@ -8066,14 +8066,14 @@ export class TinyCloudNode {
       // A registered owner whose signed record lists none of the requested
       // spaces: no node serves them because they were never set up.
       const requested = spaces.filter((spaceId) => bySpace.get(spaceId)!.length > 0);
+      const listed = error instanceof NodeNotFoundError && error.verdict.status === "registered"
+        ? error.verdict.record?.spaces.map(({ space }) => space)
+        : undefined;
       if (
-        error instanceof NodeNotFoundError &&
-        error.verdict.status === "registered" &&
-        error.verdict.record !== undefined &&
+        listed !== undefined &&
         rawEntries.length === 0 &&
         requested.length > 0 &&
-        requested.every((spaceId) =>
-          !error.verdict.record!.spaces.some(({ space }) => this.spaceIdsEqual(space, spaceId)))
+        requested.every((spaceId) => !listed.some((space) => this.spaceIdsEqual(space, spaceId)))
       ) {
         throw new MissingSpacesError(requested, []);
       }
