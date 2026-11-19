@@ -1,9 +1,11 @@
 /**
- * `approval-pending.json`, version 2: the ONE file format of pending approval requests for the CLI and Courier, and the readers
- * of the two v1 shapes it replaces (the CLI's ARRAY of entries, Courier's single OBJECT). Pure: the adapter reads the file, calls
- * `parseApprovalFile`, applies events, and writes `serializeApprovalFile` (v2 only). A pending entry holds private keys, so an
- * entry that cannot be read is QUARANTINED with its raw content, never silently dropped, and is purged by `sweepApprovalFile`
- * after the longest possible request life.
+ * `approval-pending.v2.json`, version 2: the ONE file format of pending approval requests for the CLI and Courier, and the readers
+ * of the two v1 shapes it replaces in `approval-pending.json` (the CLI's ARRAY of entries, Courier's single OBJECT). The v2 file has
+ * its own name: a published tc reads `approval-pending.json` as its v1 array with no version check, so v2 content under that name
+ * makes it crash on every run. Pure: the adapter reads both files, calls `loadApprovalFiles` (which migrates the v1 file into the v2
+ * file and then deletes it), applies events, and writes `serializeApprovalFile` (v2 only). Logout and the key sweep delete both
+ * names (`discardApprovalFiles`). A pending entry holds private keys, so an entry that cannot be read is QUARANTINED with its raw
+ * content, never silently dropped, and is purged by `sweepApprovalFile` after the longest possible request life.
  */
 import { z } from "zod";
 
@@ -16,6 +18,25 @@ import {
 } from "./approval-entry.js";
 import { reduce, requesterState, type Outcome } from "./approval-requester.js";
 import { parseLinkTimestamp } from "./header.js";
+
+/** The v2 file. */
+export const APPROVAL_FILE = "approval-pending.v2.json";
+/** The v1 file (the CLI's array, Courier's object): read, migrated into `APPROVAL_FILE`, then deleted. Never written. */
+export const LEGACY_APPROVAL_FILE = "approval-pending.json";
+export type ApprovalFileName = typeof APPROVAL_FILE | typeof LEGACY_APPROVAL_FILE;
+/** One file operation for the adapter, applied in order: a delete that follows a write runs only after the write is durable. */
+export type ApprovalFileOp =
+  | { readonly op: "write"; readonly name: typeof APPROVAL_FILE }
+  | { readonly op: "delete"; readonly name: ApprovalFileName };
+
+/**
+ * The parsed JSON of each file in the profile directory: absent (`undefined`) when the file does not exist, `null` when it exists
+ * but is not JSON.
+ */
+export interface ApprovalFilesInput {
+  readonly v2?: unknown;
+  readonly v1?: unknown;
+}
 
 export interface QuarantinedEntry {
   /** The unread content exactly as found. It may hold private keys; it is purged, never printed. */
@@ -108,7 +129,7 @@ const fileSchema = z.object({
 });
 
 /**
- * Read a parsed `approval-pending.json`: the v2 file, the CLI's v1 array, or Courier's v1 object. No entry is lost: one that
+ * Read one parsed pending-approval file: the v2 file, the CLI's v1 array, or Courier's v1 object. No entry is lost: one that
  * cannot be read moves to `unrecognized` (stamped with `now`). `now` is an input so the function stays pure.
  */
 export function parseApprovalFile(raw: unknown, options: { readonly now: number }): ApprovalFileParse {
@@ -154,6 +175,57 @@ export function parseApprovalFile(raw: unknown, options: { readonly now: number 
 /** The text of the v2 file. The adapter writes it atomically, mode 0600, in a 0700 directory. */
 export function serializeApprovalFile(file: ApprovalFile): string {
   return `${JSON.stringify({ version: 2, entries: file.entries, unrecognized: file.unrecognized }, null, 2)}\n`;
+}
+
+export type ApprovalFilesLoad =
+  /** `ops` turns the files on disk into `file`: with a v1 file, write the v2 file, then delete the v1 file. */
+  | { readonly kind: "ok"; readonly file: ApprovalFile; readonly migratedFrom: 0 | 1; readonly notes: readonly { readonly requestId: string; readonly note: "request-expiry-mismatch" }[]; readonly ops: readonly ApprovalFileOp[] }
+  /** A file written by a newer client: neither file is touched. */
+  | { readonly kind: "newer"; readonly version: number }
+  /** `name` is not a pending-approval file: the adapter sets that file aside and loads again. */
+  | { readonly kind: "corrupt"; readonly name: ApprovalFileName };
+
+/**
+ * Read the profile's pending approvals from both names. The v1 file's entries are migrated and added after the v2 file's (one that
+ * repeats a v2 `requestId` is the older copy of a migration cut short, and is set aside, not dropped); the v2 file is written and only
+ * then is the v1 file deleted. A v1 file can reappear after migration when an older tc runs on the same profile: it is merged again.
+ */
+export function loadApprovalFiles(input: ApprovalFilesInput, options: { readonly now: number }): ApprovalFilesLoad {
+  const current = input.v2 === undefined ? undefined : parseApprovalFile(input.v2, options);
+  if (current?.kind === "newer") return current;
+  if (current?.kind === "corrupt") return { kind: "corrupt", name: APPROVAL_FILE };
+  if (input.v1 === undefined) {
+    return current === undefined
+      ? { kind: "ok", file: { version: 2, entries: [], unrecognized: [] }, migratedFrom: 0, notes: [], ops: [] }
+      : { ...current, ops: [] };
+  }
+  const legacy = parseApprovalFile(input.v1, options);
+  if (legacy.kind === "newer") return legacy;
+  if (legacy.kind === "corrupt") return { kind: "corrupt", name: LEGACY_APPROVAL_FILE };
+  const merged = parseApprovalFile({
+    version: 2,
+    entries: [...(current?.file.entries ?? []), ...legacy.file.entries],
+    unrecognized: [...(current?.file.unrecognized ?? []), ...legacy.file.unrecognized],
+  }, options);
+  if (merged.kind !== "ok") return { kind: "corrupt", name: LEGACY_APPROVAL_FILE };
+  return {
+    kind: "ok", file: merged.file, migratedFrom: 1, notes: [...(current?.notes ?? []), ...legacy.notes],
+    ops: [{ op: "write", name: APPROVAL_FILE }, { op: "delete", name: LEGACY_APPROVAL_FILE }],
+  };
+}
+
+/**
+ * Logout and the key sweep: delete BOTH names, whatever they hold (a file that cannot be read, or one from a newer client, may
+ * hold keys too); a name that does not exist counts as deleted. `requestIds`: the readable entries this removes, for the message.
+ */
+export function discardApprovalFiles(input: ApprovalFilesInput, options: { readonly now: number }): { readonly requestIds: readonly string[]; readonly ops: readonly ApprovalFileOp[] } {
+  const requestIds = new Set<string>();
+  for (const raw of [input.v2, input.v1]) {
+    if (raw === undefined) continue;
+    const parsed = parseApprovalFile(raw, options);
+    if (parsed.kind === "ok") for (const entry of parsed.file.entries) requestIds.add(entry.requestId);
+  }
+  return { requestIds: [...requestIds], ops: [{ op: "delete", name: APPROVAL_FILE }, { op: "delete", name: LEGACY_APPROVAL_FILE }] };
 }
 
 export interface SweptEntry {

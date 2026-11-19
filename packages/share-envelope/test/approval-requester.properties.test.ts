@@ -60,6 +60,37 @@ function randomEvent(random: () => number, now: number): Event {
   }
 }
 
+const SUCCESS: Record<(typeof CALLS)[number], Reply[]> = {
+  discover: [{ kind: "pending" }, { kind: "ready", resultRef: RESULT_REF, resultExpiresAt: RESULT_EXPIRES }],
+  fetch: [{ kind: "envelope", envelope: { relay: "opaque" } }],
+  ack: [{ kind: "acked" }],
+};
+
+/**
+ * The event the machine just asked for: the reply to its call (mostly a success), the tick after its sleep, a verdict (mostly
+ * `ok`) after verify, `committed` after commit. Walks draw it 3 times in 4, a few seconds later, and otherwise any event at any
+ * time worth hitting: they still hit out-of-order events and the time edges, but also reach `fetched`, `committed` and `acked`
+ * from `open`.
+ */
+function askedEvent(random: () => number, now: number, asked: Effect): Event {
+  switch (asked.type) {
+    case "sleep": return { type: "tick", now };
+    case "verify": return { type: "verdict", now, verdict: random() < 0.7 ? "ok" : pick(random, ["refused", "clock", "ended"] as const) };
+    // A CLI command entry is kept until its child grant expires: often a day or more, so the ack lands before it.
+    case "commit": return { type: "committed", now, ...(random() < 0.5 ? { retainUntil: now + 86_400_000 } : {}) };
+    case "call": {
+      const roll = random();
+      const reply: Reply = roll < 0.6 ? pick(random, SUCCESS[asked.call])
+        : roll < 0.7 ? { kind: "network" }
+        : roll < 0.8 ? { kind: "malformed", call: asked.call }
+        : { kind: "error", call: asked.call, status: 400, code: pick(random, CODES) };
+      const skew = pick(random, SKEWS);
+      return { type: "reply", now, reply, ...(skew === undefined ? {} : { serverDateSkewMs: skew }) };
+    }
+    default: return randomEvent(random, now);
+  }
+}
+
 /** Times worth hitting: around E, E+S, the purge time, and ordinary poll steps. */
 function nextNow(random: () => number, now: number): number {
   switch (Math.floor(random() * 8)) {
@@ -119,9 +150,10 @@ function checkStep(before: RequesterState, event: Event, step: Step, violations:
 }
 
 describe("random walks over every event from every phase", () => {
-  test("10,000 walks keep every per-step invariant", () => {
+  test("10,000 walks keep every per-step invariant, and walks from open reach committed and acked", () => {
     const random = rng(0x2377);
     const violations: string[] = [];
+    const reachedFromOpen = new Set<ApprovalPhase>();
     for (let walk = 0; walk < 10_000; walk++) {
       const phase = pick(random, PHASES);
       let state: RequesterState = requesterState(entryIn(phase, { staged: random() < 0.5 && phase !== "committed" && phase !== "acked" }));
@@ -131,11 +163,14 @@ describe("random walks over every event from every phase", () => {
       const start = reduce(state, started);
       checkStep(state, started, start, violations);
       state = start.state;
+      let asked = nextEffectOf(start);
       for (let step = 0; step < 30; step++) {
-        now = nextNow(random, now);
-        const event = randomEvent(random, now);
+        const followsAsk = random() < 0.75;
+        now = followsAsk ? now + Math.floor(random() * 5_000) : nextNow(random, now);
+        const event = followsAsk ? askedEvent(random, now, asked) : randomEvent(random, now);
         const result = reduce(state, event);
         checkStep(state, event, result, violations);
+        if (phase === "open" && result.state.entry !== undefined) reachedFromOpen.add(result.state.entry.phase);
         // 7. a settled state is final: the same event again is a no-op with the same finish
         if (result.state.settled !== undefined) {
           const again = reduce(result.state, event);
@@ -143,9 +178,11 @@ describe("random walks over every event from every phase", () => {
           break;
         }
         state = result.state;
+        asked = nextEffectOf(result);
       }
     }
     expect(violations.slice(0, 5)).toEqual([]);
+    expect([...reachedFromOpen].sort()).toEqual(["acked", "committed", "discovered", "fetched", "open"]);
   });
 
   test("a clock hold or a failed ack never drops anything but keys the machine itself scrubs", () => {

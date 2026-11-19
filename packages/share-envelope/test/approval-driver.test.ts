@@ -207,7 +207,7 @@ describe("bounded waits", () => {
     expect(h.now()).toBeLessThanOrEqual(start + 30_000 + 5_000 + 2_000);
   });
 
-  test("a clock more than 60 s off on a 401 holds the entry (12); the same 401 after E + S lapses it (3)", async () => {
+  test("a clock more than 45 s off on a 401 holds the entry (12); the same 401 after E + S lapses it (3)", async () => {
     const early = harness(entryIn("open", { staged: true }), { discover: [{ reply: { kind: "error", call: "discover", status: 401, code: "invalid_proof" }, skew: 120_000 }] });
     expect((await driveApproval(early.io, entryIn("open").requestId)).exitCode).toBe(12);
     expect(early.stored()!.hold).toBeDefined();

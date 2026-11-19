@@ -10,11 +10,11 @@ only; the package root and the web-sdk bundle do not reach it.
 
 | file | what it is | impure? |
 | --- | --- | --- |
-| `approval-entry.ts` | the entry schema (one pending request, `approval-pending.json` v2), `purgeAt`, `localExpiry`, the time constants | no |
+| `approval-entry.ts` | the entry schema (one pending request, `approval-pending.v2.json`), `purgeAt`, `localExpiry`, the time constants | no |
 | `approval-requester.ts` | `reduce(state, event) -> { state, effects }`, `RULES`, `APPROVAL_EXIT` | no |
 | `approval-client.ts` | `classifyReply` (an OpenKey answer -> `Reply`), `callApproval` (one call, classified) | `fetch` only |
 | `approval-driver.ts` | `driveApproval(io, requestId, options)`: the one poll/sleep/fetch/verify/commit/ack loop | via `io` |
-| `approval-file.ts` | `parseApprovalFile` (v2, CLI v1 array, Courier v1 object), `serializeApprovalFile`, `sweepApprovalFile` | no |
+| `approval-file.ts` | `parseApprovalFile` (v2, CLI v1 array, Courier v1 object), `loadApprovalFiles` / `discardApprovalFiles` (both file names), `serializeApprovalFile`, `sweepApprovalFile` | no |
 
 An adapter supplies `io`: a store (`read`/`write`/`remove`, atomic and mode 0600), a transport (`callApproval` with the signing
 key), `verify` (local verification of the opened result), `commit` (save the grant durably), a clock and `sleep`.
@@ -64,7 +64,7 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 | discover 400 `invalid_request` | `refused` (5), never an expiry | drop |
 | discover 404 `not_found` | `lapsed` (3) | drop |
 | discover 410 `expired_result`; fetch 404 / 410 / 409 `acknowledged` | `gone` (3) | drop |
-| 400 `request_binding` | `refused` (5) | drop |
+| discover or fetch 400 `request_binding` | `refused` (5) | drop |
 | 401 `invalid_proof` on discover, clock > 45 s off the `Date` header, before `E + S` | `clock` (12) | keep, held |
 | 401 `invalid_proof` on fetch or ack, clock > 45 s off | `clock` (12) | keep, held, until `purgeAt` |
 | 401 `invalid_proof` on fetch or ack, clock sane or `Date` missing | `unexpected` (7): an approved result is never dropped by a 401 | keep until `purgeAt` |
@@ -74,7 +74,7 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 | anything else, 5 in a row | `unexpected` (7) | keep until `purgeAt` |
 | no answer until the deadline | resumed: `unreachable` (6), kept; created this run, or a 202 seen this run and `now < E`: `pending` (8) | keep |
 | ack 200 / 404 / 409 / 410 | `completed` (0) | drop, or keep key-free until `retainUntil` |
-| ack failure (network, other) | `completed` with an `ack-pending` warning (6) | keep (committed) |
+| ack failure (network, 400 `request_binding`, other) | `completed` with an `ack-pending` warning (6) | keep (committed) |
 
 `APPROVAL_EXIT`: completed 0, lapsed / gone / abandoned / denied 3, refused 5, unreachable 6, unexpected / internal 7, pending 8,
 clock 12. `exitCodeOf` returns 6 for a `completed` outcome with an `ack-pending` or `ack-expired` warning: the grant is saved, but
@@ -87,7 +87,12 @@ kept until `purgeAt`, then ends `completed` with an `ack-expired` warning (exit 
 
 ### The file
 
-`approval-pending.json`, version 2: `{ version: 2, entries: [...], unrecognized: [...] }`, mode 0600 in a 0700 directory, written
+`approval-pending.v2.json` (`APPROVAL_FILE`), version 2: `{ version: 2, entries: [...], unrecognized: [...] }`. It does not reuse the v1
+name `approval-pending.json` (`LEGACY_APPROVAL_FILE`): a published tc reads that name as its v1 array with no version check, and v2
+content there makes it fail on every run. `loadApprovalFiles` reads both names: the v1 file (the CLI's array or Courier's object) is
+migrated into the v2 file, the v2 file is written, and only then is the v1 file deleted; a v1 file an older tc writes later is merged
+again on the next load (a repeated `requestId` is set aside). Logout and the key sweep delete both names (`discardApprovalFiles`),
+whatever they hold. The v2 file is mode 0600 in a 0700 directory, written
 atomically by the adapter. An entry that cannot be read (including a repeated `requestId`, a request life above 24 h, or a
 signing key with fields other than `kty`, `crv`, `x`, `d` and a short `kid`/`alg`/`use`) is moved to `unrecognized` with its raw
 content (never deleted silently) and purged `24 h + R + S` after it was set aside (a stamp in the future counts from now). A file

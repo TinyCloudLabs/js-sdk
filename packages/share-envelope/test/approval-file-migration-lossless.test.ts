@@ -87,8 +87,9 @@ describe("v1 -> v2 migration is lossless", () => {
   });
 
   test("a v1 array of several entries keeps them all, in order", () => {
-    const raw = PHASES.map((phase, index) => ({ ...v1(phase), requestId: `abcdefghijklmnopqrstuvwxy${"234567"[index]}` }));
-    expect(migrated(raw).map((entry) => [entry.requestId, entry.phase])).toEqual(raw.map((item, index) => [item.requestId, PHASES[index]]));
+    const ids = PHASES.map((_, index) => `abcdefghijklmnopqrstuvwxy${"234567"[index]}`);
+    const raw = PHASES.map((phase, index) => ({ ...v1(phase), requestId: ids[index] }));
+    expect(migrated(raw).map((entry) => [entry.requestId, entry.phase])).toEqual(PHASES.map((phase, index) => [ids[index]!, phase]));
   });
 });
 

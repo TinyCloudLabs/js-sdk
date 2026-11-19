@@ -1,5 +1,5 @@
 /**
- * One pending approval request as a requester keeps it on disk: the schema of an entry of `approval-pending.json` (v2) and
+ * One pending approval request as a requester keeps it on disk: the schema of an entry of `approval-pending.v2.json` and
  * the two time rules every client shares, the local expiry `E` and the purge time. Pure: no clock, no I/O.
  *
  * An entry HOLDS PRIVATE KEYS (`keys`): the relay key that opens the approved result, and, when this request's signing key is

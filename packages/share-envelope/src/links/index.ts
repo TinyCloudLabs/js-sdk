@@ -160,11 +160,19 @@ export {
   type DriveResult,
 } from "./approval-driver.js";
 export {
+  APPROVAL_FILE,
+  LEGACY_APPROVAL_FILE,
+  discardApprovalFiles,
+  loadApprovalFiles,
   parseApprovalFile,
   serializeApprovalFile,
   sweepApprovalFile,
   type ApprovalFile,
+  type ApprovalFileName,
+  type ApprovalFileOp,
   type ApprovalFileParse,
+  type ApprovalFilesInput,
+  type ApprovalFilesLoad,
   type QuarantinedEntry,
   type SweptEntry,
 } from "./approval-file.js";
