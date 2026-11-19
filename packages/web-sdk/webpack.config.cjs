@@ -275,6 +275,15 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
     callback(null, `${type} ./space-hosting.${ext}`);
     return;
   }
+  // The signing half of runtime grants and the secret reads are their own files, loaded on first use.
+  if (request === "./runtime-grants.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./runtime-grants.${ext}`);
+    return;
+  }
+  if (request === "./secret-read.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./secret-read.${ext}`);
+    return;
+  }
   if (isIssuedDelegationsRequest({ context, request })) {
     callback(null, `${type} ./delegations-issued.${ext}`);
     return;
@@ -323,6 +332,8 @@ const lazyEntries = {
   modals: "./src/notifications/modals-entry.ts",
   "encryption-keys": "./src/encryption-keys-entry.ts",
   "space-hosting": "./src/space-hosting-entry.ts",
+  "runtime-grants": "./src/runtime-grants-entry.ts",
+  "secret-read": "./src/secret-read-entry.ts",
   "registry-verdict-cache": "./src/registry-verdict-cache-entry.ts",
   "delegations-issued": "./src/delegations-issued-entry.ts",
   "delegations-renewal": "./src/delegations-renewal-entry.ts",

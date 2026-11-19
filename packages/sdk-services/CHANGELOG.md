@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-services
 
+## 3.13.0-beta.8
+
+### Patch Changes
+
+- 7399b14: Vault and secrets requests to the production node now go to its dedicated address, including listings of the whole key space. So do grants that name or cover vault data, and sessions that name vault entries. Self-hosted nodes are unchanged.
+
+  Details: TC-2944
+
 ## 3.13.0-beta.6
 
 ### Minor Changes

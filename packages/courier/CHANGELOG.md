@@ -1,5 +1,27 @@
 # @tinycloud/courier
 
+## 0.7.0-beta.8
+
+### Minor Changes
+
+- 0576031: The CLI, the hosted MCP server and Courier now use `https://node.tinycloud.xyz` as the default TinyCloud node, in place of `https://tee.node.tinycloud.xyz`. Profiles that already store a host keep it. To keep using `https://tee.node.tinycloud.xyz`, set `--host` or `TC_HOST` for the CLI and the MCP server, or `COURIER_HOST` for Courier.
+
+  Details: TC-2923
+
+### Patch Changes
+
+- Updated dependencies [7399b14]
+  - @tinycloud/sdk-core@3.13.0-beta.8
+  - @tinycloud/node-sdk@3.13.0-beta.8
+
+## 0.6.1-beta.7
+
+### Patch Changes
+
+- Updated dependencies [9f3ca26]
+- Updated dependencies [9f3ca26]
+  - @tinycloud/node-sdk@3.13.0-beta.7
+
 ## 0.6.1-beta.6
 
 ### Patch Changes
