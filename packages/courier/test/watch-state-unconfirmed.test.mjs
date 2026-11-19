@@ -32,6 +32,12 @@ function nodeKv() {
         ? { ok: true, data: { data: row.text, headers: { etag: row.etag } } }
         : { ok: false, error: { code: 'KV_NOT_FOUND', message: `Key not found: ${key}`, service: 'kv' } };
     },
+    // One `tinycloud.kv/get` per key in one invocation, as the node answers a batch (master reads peer entries this way).
+    async batchGet(keys) {
+      const results = [];
+      for (const key of keys) results.push({ key, result: await this.get(key) });
+      return { ok: true, data: { results, count: results.length } };
+    },
     async put(key, value, options = {}) {
       const at = faults.findIndex((f) => f.key === key);
       const fault = at >= 0 ? faults.splice(at, 1)[0].kind : undefined;
@@ -62,6 +68,7 @@ function recording(kv) {
     kv: {
       list: (...args) => kv.list(...args),
       get: (...args) => kv.get(...args),
+      batchGet: (...args) => kv.batchGet(...args),
       put: (key, ...rest) => { writes.push(key); return kv.put(key, ...rest); },
       delete: (key, ...rest) => { writes.push(key); return kv.delete(key, ...rest); },
     },

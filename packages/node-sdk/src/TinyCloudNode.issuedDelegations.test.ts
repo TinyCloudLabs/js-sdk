@@ -61,7 +61,7 @@ describe("TinyCloudNode session-key invocations for issued delegations", () => {
     const list = seen.find((entry) => entry.url.endsWith("/delegation/query"))!;
     const revoke = seen.find((entry) => entry.url.endsWith("/revoke"))!;
     for (const [entry, att] of [
-      [list, { [`${sessionDid}/delegation`]: { "tinycloud.delegation/list": [{}] } }],
+      [list, { [`tinycloud:${sessionDid.slice("did:".length)}:agent/delegation`]: { "tinycloud.delegation/list": [{}] } }],
       [revoke, { "urn:cid:bafy-issued": { "tinycloud.delegation/revoke": [{}] } }],
     ] as const) {
       const { body, signed, signature } = claims(entry.authorization!);

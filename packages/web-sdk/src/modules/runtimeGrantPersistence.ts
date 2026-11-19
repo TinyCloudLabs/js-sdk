@@ -15,7 +15,21 @@ export interface RuntimeGrantStore {
   saveRuntimeGrants(address: string, grants: readonly PortableDelegation[]): Promise<void>;
 }
 
-/** How long a restore waits for stored grants to be activated before it carries on without them. */
+const mutations = new WeakMap<RuntimeGrantStore, Promise<void>>();
+
+/** Serialize short storage mutations while grant activation runs independently. */
+export function serializeRuntimeGrantMutation<T>(
+  store: RuntimeGrantStore | undefined,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  if (store === undefined) return mutation();
+  const previous = mutations.get(store) ?? Promise.resolve();
+  const current = previous.then(mutation);
+  mutations.set(store, current.then(() => undefined, () => undefined));
+  return current;
+}
+
+/** Bound for the automatic post-restore grant reactivation wait. */
 export const RESTORE_GRANT_BUDGET_MS = 4_000;
 
 interface Resource {
@@ -74,10 +88,12 @@ export async function rememberRuntimeGrants(
 ): Promise<void> {
   const own = grants.filter((grant) => isPanelGrant(grant, address));
   if (own.length === 0) return;
-  const known = await store.loadRuntimeGrants(address);
-  if (!isCurrent()) return;
-  const added = new Set(own.map((grant) => grant.cid));
-  await store.saveRuntimeGrants(address, [...known.filter((grant) => !added.has(grant.cid)), ...own]);
+  await serializeRuntimeGrantMutation(store, async () => {
+    const known = await store.loadRuntimeGrants(address);
+    if (!isCurrent()) return;
+    const added = new Set(own.map((grant) => grant.cid));
+    await store.saveRuntimeGrants(address, [...known.filter((grant) => !added.has(grant.cid)), ...own]);
+  });
 }
 
 /**
@@ -104,18 +120,22 @@ export async function reuseRuntimeGrants(
 ): Promise<void> {
   const isCurrent = options.isCurrent ?? (() => true);
   const work = (async () => {
-    const grants = await store.loadRuntimeGrants(address);
-    const refused = new Set<PortableDelegation>();
+    const grants = await serializeRuntimeGrantMutation(store, () => store.loadRuntimeGrants(address));
+    const refused = new Set<string>();
     for (const grant of grants) {
       if (!isCurrent()) return;
       try {
         await use(grant);
       } catch (error) {
-        if (refusesGrant(error)) refused.add(grant);
+        if (refusesGrant(error)) refused.add(grant.cid);
       }
     }
     if (refused.size > 0 && isCurrent()) {
-      await store.saveRuntimeGrants(address, grants.filter((grant) => !refused.has(grant)));
+      await serializeRuntimeGrantMutation(store, async () => {
+        const current = await store.loadRuntimeGrants(address);
+        if (!isCurrent()) return;
+        await store.saveRuntimeGrants(address, current.filter((grant) => !refused.has(grant.cid)));
+      });
     }
   })().catch(() => undefined);
   // The wait ends with the work or at the budget; the timer is cleared when the work finishes first.

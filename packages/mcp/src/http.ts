@@ -64,34 +64,58 @@ export interface HostedMcpApp {
   readonly close: () => Promise<void>;
 }
 
+/**
+ * Path prefixes of the restricted personal-record addresses: the ChatGPT
+ * plugin's, and one for each assistant directory that lists TinyCloud, so a
+ * change one directory's review demands does not alter what another lists.
+ * Each is its own OAuth resource at `<prefix>/mcp` with its own approval route
+ * and tenant state. All register the same tools.
+ */
+const RESTRICTED_ADDRESS_PREFIXES = ["chatgpt", "claude", "grok", "muse"] as const;
+
+/**
+ * Addresses whose tools repeat their title as `annotations.title`. Claude's
+ * directory takes each tool's listing name from there and suggests adding it
+ * when it is missing. The other directories list the tools as they are.
+ */
+const ANNOTATION_TITLE_PREFIXES: ReadonlySet<string> = new Set(["claude"]);
+
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   if (config.nativeServiceCredential !== undefined &&
     Buffer.byteLength(config.nativeServiceCredential, "utf8") < 32) {
     throw new Error("TC_MCP_NATIVE_SERVICE_CREDENTIAL must contain at least 32 bytes.");
   }
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
-  const pluginUrl = new URL("./chatgpt/mcp", resourceUrl);
   const statusFor = (resource: URL): TokenStatusChecker | undefined =>
     config.introspection === undefined
       ? undefined
       : createTokenStatusChecker({ ...config.introspection, resourceUrl: resource.toString() });
   const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
-  const plugin = createHostedSurface({
-    ...config,
-    nativeServiceCredential: undefined,
-    stateDir: join(config.stateDir, "chatgpt"),
-    approvalPath: new URL("./connect", pluginUrl).pathname,
-  }, pluginUrl, "public", statusFor(pluginUrl));
-  const pluginPaths: Record<string, true> = {
-    [pluginUrl.pathname]: true,
-    [new URL("./connect", pluginUrl).pathname]: true,
-    [new URL("./connect/callback", pluginUrl).pathname]: true,
-    [new URL(getOAuthProtectedResourceMetadataUrl(pluginUrl)).pathname]: true,
-  };
+  const surfaces = [hosted];
+  const restrictedByPath = new Map<string, HostedMcpApp>();
+  for (const prefix of RESTRICTED_ADDRESS_PREFIXES) {
+    const restrictedUrl = new URL(`./${prefix}/mcp`, resourceUrl);
+    const connectUrl = new URL("./connect", restrictedUrl);
+    const restricted = createHostedSurface({
+      ...config,
+      nativeServiceCredential: undefined,
+      stateDir: join(config.stateDir, prefix),
+      approvalPath: connectUrl.pathname,
+    }, restrictedUrl, "public", statusFor(restrictedUrl), ANNOTATION_TITLE_PREFIXES.has(prefix));
+    surfaces.push(restricted);
+    for (const owned of [
+      restrictedUrl,
+      connectUrl,
+      new URL("./connect/callback", restrictedUrl),
+      new URL(getOAuthProtectedResourceMetadataUrl(restrictedUrl)),
+    ]) {
+      restrictedByPath.set(owned.pathname, restricted);
+    }
+  }
   return {
-    fetch: (request) => (pluginPaths[new URL(request.url).pathname] === true ? plugin : hosted).fetch(request),
+    fetch: (request) => (restrictedByPath.get(new URL(request.url).pathname) ?? hosted).fetch(request),
     close: async () => {
-      await Promise.all([hosted.close(), plugin.close()]);
+      await Promise.all(surfaces.map((surface) => surface.close()));
     },
   };
 }
@@ -101,6 +125,7 @@ function createHostedSurface(
   resourceUrl: URL,
   surface: "hosted" | "public",
   tokenStatus: TokenStatusChecker | undefined,
+  annotationTitles = false,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
   const callbackPath = `${connectPath}/callback`;
@@ -151,6 +176,7 @@ function createHostedSurface(
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
+      annotationTitles,
       ...(nativeOwner === undefined ? {} : {
         allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get", "tinycloud_read"] as const,
       }),
@@ -162,7 +188,7 @@ function createHostedSurface(
           store.decorateAuthorityResult(subject, ownerDids, result, invocation),
       } : {}),
     }, validator);
-    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface);
+    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface, annotationTitles);
     return server;
   }, {
     legacy: "stateless",
@@ -530,7 +556,9 @@ function registerConnectTool(
   store: RemoteTenantStore,
   identity: OAuthIdentity,
   surface: "hosted" | "public",
+  annotationTitles: boolean,
 ): void {
+  const title = "Connect TinyCloud";
   const inputSchema = fromJsonSchema({ type: "object", properties: {}, additionalProperties: false }, validator);
   const outputSchema = fromJsonSchema({
     type: "object",
@@ -546,11 +574,12 @@ function registerConnectTool(
   server.registerTool(
     "tinycloud_connect",
     {
-      title: "Connect TinyCloud",
+      title,
       description: "Check the hosted delegate connection and return a one-time OpenKey approval URL when setup is required.",
       inputSchema,
       outputSchema,
       annotations: {
+        ...(annotationTitles ? { title } : {}),
         readOnlyHint: false,
         idempotentHint: true,
         destructiveHint: false,

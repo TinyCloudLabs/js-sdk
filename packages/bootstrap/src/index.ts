@@ -834,3 +834,5 @@ export function bootstrapSteps(
     },
   ];
 }
+
+export { FIRST_PARTY_ORIGINS, FIRST_PARTY_PAGES_SUBDOMAINS, isFirstPartyOrigin } from "./first-party-origins";

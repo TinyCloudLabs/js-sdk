@@ -96,3 +96,9 @@ export function unwrap<T>(r: ResultLike<T> | T, what: string): T {
   }
   return r as T;
 }
+
+/** Authorization refusals are terminal; never infer them from an untrusted message string. */
+export function isAuthorizationRefusal(error: unknown): boolean {
+  return httpStatuses(error).some(status => status === 401 || status === 403)
+    || ['AUTH_UNAUTHORIZED', 'AUTH_FORBIDDEN', 'PERMISSION_DENIED'].includes(String(fieldOf(error, 'code')));
+}

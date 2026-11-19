@@ -10,7 +10,7 @@ export interface PendingPanel {
   readonly el: HTMLElement;
   setOpen(open: boolean): void;
   showLoading(): void;
-  showError(retry: () => void): void;
+  showError(reloadPage: () => void): void;
 }
 
 export function createPendingPanel(onClose: () => void): PendingPanel {
@@ -27,14 +27,14 @@ export function createPendingPanel(onClose: () => void): PendingPanel {
   status.setAttribute("role", "status");
   status.textContent = text("view.loading");
 
-  const retry = document.createElement("button");
-  retry.type = "button";
-  retry.textContent = text("view.retry");
-  retry.hidden = true;
+  const reload = document.createElement("button");
+  reload.type = "button";
+  reload.textContent = text("view.reloadPage");
+  reload.hidden = true;
 
-  let onRetry: (() => void) | undefined;
-  retry.addEventListener("click", () => {
-    onRetry?.();
+  let onReload: (() => void) | undefined;
+  reload.addEventListener("click", () => {
+    onReload?.();
   });
 
   // The close control comes first so it is reachable while the panel loads or fails to load.
@@ -45,7 +45,7 @@ export function createPendingPanel(onClose: () => void): PendingPanel {
   close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   close.addEventListener("click", onClose);
 
-  el.append(close, status, retry);
+  el.append(close, status, reload);
   el.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
@@ -59,12 +59,12 @@ export function createPendingPanel(onClose: () => void): PendingPanel {
     },
     showLoading() {
       status.textContent = text("view.loading");
-      retry.hidden = true;
+      reload.hidden = true;
     },
-    showError(retryLoad) {
-      onRetry = retryLoad;
-      status.textContent = text("view.error");
-      retry.hidden = false;
+    showError(reloadPage) {
+      onReload = reloadPage;
+      status.textContent = text("panel.loadError");
+      reload.hidden = false;
     },
   };
 }

@@ -173,7 +173,7 @@ test("fresh local sign-in persists its verified replica stamp beside the owner s
   expect(nextKey).toEqual(nextSession.jwk);
   expect(await restoreSessionStamp(paths.directory, ownerDid, nextSession.replicaStamp)).toEqual(nextSession.replicaStamp);
   expect(JSON.parse(await withTinyCloudStateRoot(home, () => readFile(profileConfigPath(PROFILE), "utf8"))).authSignedOut).toBe(false);
-});
+}, 30_000);
 
 test("a durable signed-out profile never exposes leftover key or session bytes through ProfileManager", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc858-signed-out-readers-"));

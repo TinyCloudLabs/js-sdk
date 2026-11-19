@@ -24,7 +24,8 @@ concurrency:
 jobs:
   web-sdk-tests:
     name: Run web-sdk test files
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest is now Ubuntu 26.04, which `playwright install chromium` does not support. Unpin with a Playwright bump.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
@@ -113,6 +114,9 @@ jobs:
       # tests load web-sdk's own dist/index.cjs.
       - name: Build web-sdk and its workspace dependencies
         if: steps.gate.outputs.run == 'true'
+        env:
+          # web-sdk's webpack build exceeds Node's default ~2 GB heap (TC-2952).
+          NODE_OPTIONS: --max-old-space-size=6144
         run: bunx turbo build --filter=@tinycloud/web-sdk...
 
       # A broken `exports` target (missing types file, subpath bundle never
@@ -174,7 +178,7 @@ jobs:
       - name: Install Playwright Chromium
         if: steps.gate.outputs.run == 'true'
         working-directory: packages/web-sdk
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
       - name: Run browser smoke tests
         if: steps.gate.outputs.run == 'true'
