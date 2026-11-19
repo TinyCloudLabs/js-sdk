@@ -2,7 +2,7 @@ import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import { BaseService } from "../base/BaseService";
 import type { RequestSignal } from "../base/types";
 import { abortableSleep } from "../sleep";
-import { outsideLanes } from "../resolvedDispatch";
+import { outsideLanesRequest } from "../resolvedDispatch";
 import type {
   FetchResponse,
   InvokeAnyEntry,
@@ -561,13 +561,12 @@ export class HooksService extends BaseService implements IHooksService {
       phase = "open";
       if (!owns()) return { kind: "stopped" };
       return await awaitOwned(request.signal, () => usingResponse(
-        () => context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(mint.ticket)}`, {
+        // The stream never finishes its body, so it must not occupy a priority lane.
+        () => context.fetch(`${host}/hooks/events?ticket=${encodeURIComponent(mint.ticket)}`, outsideLanesRequest({
           method: "GET",
           headers: { accept: "text/event-stream" },
           signal: request!.signal,
-          // The stream never finishes its body, so it must not occupy a priority lane.
-          [outsideLanes]: true,
-        }),
+        })),
         async (stream) => {
           if (!owns()) return { kind: "stopped" } as const;
           if (!stream.ok) {

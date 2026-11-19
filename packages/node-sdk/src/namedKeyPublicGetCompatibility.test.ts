@@ -41,6 +41,7 @@ function unsignedNode() {
     getDefaultEncryptionNetworkId() { throw new Error("public GET must not resolve a default"); },
     get encryption(): any { throw new Error("public GET must not initialize encryption"); },
     createEncryptionCrypto: () => ({}),
+    encryptionDestination: async () => ({ url: "https://node.invalid", nodeDid: "did:key:node" }),
     signRawNetworkAuthorization() { throw new Error("public GET must not sign"); },
   };
 }

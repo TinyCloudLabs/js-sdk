@@ -65,11 +65,10 @@ test("a request deadline starts when its lane dispatches it", async () => {
 
 test("a request deadline still bounds the exchange after dispatch", async () => {
   const host = "https://deadline-exchange.invalid";
-  const fetch = backgroundFetch(async (_url, init) => {
-    await Bun.sleep(1_000);
-    init!.signal!.throwIfAborted();
-    return new Response("late");
-  });
+  // A node that never answers: only the request's own signal ends the exchange.
+  const fetch = backgroundFetch((_url, init) => new Promise((_, reject) => {
+    init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+  }));
   const started = performance.now();
   await expect(fetch(`${host}/slow`, withDeadline(fetch, {}, 200))).rejects.toMatchObject({ name: "TimeoutError" });
   expect(performance.now() - started).toBeLessThan(1_000);

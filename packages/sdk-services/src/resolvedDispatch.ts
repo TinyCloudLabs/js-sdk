@@ -15,6 +15,12 @@ export function inheritResourceRouting(target: FetchFunction, source: FetchFunct
   return Object.assign(target, { [routesRequests]: (source as FetchFunction & { [routesRequests]?: boolean })[routesRequests] === true });
 }
 
+/** Mark a long-lived request (an event stream) to bypass the priority lanes. */
+export function outsideLanesRequest(init: FetchRequestInit): FetchRequestInit {
+  const request: FetchRequestInit & { [outsideLanes]: boolean } = { ...init, [outsideLanes]: true };
+  return request;
+}
+
 /** Bound the request's own exchange to `ms`, starting when it is dispatched rather than while it waits for a lane. */
 export function deferDeadline(init: FetchRequestInit, ms: number): FetchRequestInit {
   return { ...init, [requestDeadline]: ms } as Deferred;

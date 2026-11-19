@@ -1,6 +1,6 @@
 import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 import type { FetchFunction, FetchResponse, ServiceHeaders, ServiceSession } from "./types";
-import { fetchResolved, routesRequests } from "./resolvedDispatch";
+import { deferDeadline, fetchResolved, routesRequests, withDeadline } from "./resolvedDispatch";
 
 export type ResourceAccess = "read" | "write" | "host" | "encryption";
 export interface ResourceDestination { readonly url: string; readonly nodeDid?: string }
@@ -44,12 +44,11 @@ export async function verifyResourceDestination(target: ResourceDestination, fet
   let info: unknown;
   let keys: unknown;
   try {
-    const signal = AbortSignal.timeout(5_000);
     const replies = await Promise.all([
       `${target.url}/info`,
       `${target.url}/.well-known/tinycloud/node-keys`,
     ].map((url) => usingResponse(
-      () => fetchFn(url, { signal, redirect: "error" }),
+      () => fetchFn(url, withDeadline(fetchFn, { redirect: "error" }, 5_000)),
       async (response) => {
         // Consume each first body before another background request needs its slot.
         const status = response.status;
@@ -269,14 +268,16 @@ async function drainWriteClone(response: FetchResponse): Promise<void> {
   if (response.clone) await usingResponse(() => Promise.resolve(response.clone!()), (clone) => clone.arrayBuffer()).catch(() => undefined);
 }
 
-async function prepareWrite(replies: OwnedReplies, url: string, write: boolean): Promise<WriteReplies | undefined> {
+async function prepareWrite(replies: OwnedReplies, url: string, write: boolean, background: boolean): Promise<WriteReplies | undefined> {
   if (!write) return undefined;
   const host = new URL(url).origin;
   let state = replies.writes.get(host);
   if (!state) { state = { pending: 0, retained: [] }; replies.writes.set(host, state); }
-  // An unread reply holds its host's lane: release every earlier reply before waiting on any host, so two writes
-  // that visit the same hosts in opposite orders cannot hold one lane each while waiting for the other.
-  await Promise.all([...replies.writes.values()].flatMap((other) => other.retained.splice(0)).map(drainWriteClone));
+  // An unread reply holds its host's lane. A background lane is exclusive, so a background write releases every
+  // earlier reply before waiting on any host: two writes that visit the same hosts in opposite orders cannot then
+  // hold one lane each while waiting for the other. Foreground lanes are shared, so they release only this host's.
+  const holders = background ? [...replies.writes.values()] : [state];
+  await Promise.all(holders.flatMap((other) => other.retained.splice(0)).map(drainWriteClone));
   state.pending++;
   return state;
 }
@@ -313,7 +314,7 @@ export function createResourceTransportInvocationFetch(transport: ResourceTransp
       const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {}))
         .filter(([name]) => name.toLowerCase() !== "authorization");
       headers.push(["Authorization", signed]);
-      const state = await prepareWrite(replies, target.url, write);
+      const state = await prepareWrite(replies, target.url, write, init?.priority === "low");
       try {
         init?.signal?.throwIfAborted();
         const response = await usingResponse(
@@ -345,7 +346,7 @@ export function createResourceRoutingFetch(fetchFn: FetchFunction, routing: Reso
         init?.signal?.throwIfAborted();
         const headers = (Array.isArray(init?.headers) ? init.headers : Object.entries(init?.headers ?? {})).filter(([name]) => name.toLowerCase() !== "authorization");
         headers.push(["Authorization", signed]);
-        const state = await prepareWrite(replies, target.url, write);
+        const state = await prepareWrite(replies, target.url, write, init?.priority === "low");
         try {
           init?.signal?.throwIfAborted();
           // The 5 s deadline covers the exchange only; it starts once a priority lane dispatches the request.

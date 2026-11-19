@@ -57,6 +57,7 @@ function fixture(fetch: typeof globalThis.fetch) {
     get session() { return this._serviceContext.session; },
     getDefaultEncryptionNetworkId: () => network(current),
     createEncryptionCrypto: () => ({ sha256: () => new Uint8Array(32) }),
+    encryptionDestination: async () => ({ url: "https://node.invalid", nodeDid: "did:key:node" }),
     signRawNetworkAuthorization: async (_input: unknown, binding: any) => {
       binding?.graph.assertActive();
       const session = binding?.session ?? node._serviceContext.session;

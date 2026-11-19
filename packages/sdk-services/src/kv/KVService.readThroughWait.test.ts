@@ -11,7 +11,10 @@ const session: ServiceSession = {
 function service(host: string) {
   const context = new ServiceContext({
     hosts: [host], session, invoke: () => ({}), invokeAny: () => ({}),
-    fetch: async () => new Response("[]", { headers: { "content-type": "application/json" } }),
+    // A batch put is confirmed by its written keys; every other call accepts a JSON body.
+    fetch: async (_url, init) => init?.body instanceof FormData
+      ? Response.json({ written: ["note"], count: 1 })
+      : new Response("[]", { headers: { "content-type": "application/json" } }),
   });
   const kv = new KVService();
   kv.initialize(context);
