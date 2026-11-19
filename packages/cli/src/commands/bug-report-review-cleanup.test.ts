@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -42,7 +42,7 @@ async function run(args: string[], fetchImpl?: (url: string | URL | Request, ini
   registerBugReportCommand(program, {
     root,
     interactive: false,
-    fetchImpl,
+    fetchImpl: fetchImpl as typeof fetch | undefined,
     write: (text: string) => output.push(text),
     handleError: async (error: unknown): Promise<never> => { throw error; },
   });
@@ -83,6 +83,21 @@ test("--clear-logs deletes the saved review copies along with the CLI log", asyn
   await run(["--clear-logs"]);
   await expect(stat(diagnosticLogPath(root))).rejects.toMatchObject({ code: "ENOENT" });
   await expect(stat(join(root, "bug-report-reviews"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("--clear-logs removes a symlinked review directory without touching what it points to", async () => {
+  if (process.platform === "win32") return;
+  const outside = await mkdtemp(join(tmpdir(), "tc-bug-report-outside-"));
+  try {
+    const sentinel = join(outside, "sentinel.txt");
+    await writeFile(sentinel, "keep me");
+    await symlink(outside, join(root, "bug-report-reviews"), "dir");
+    await run(["--clear-logs"]);
+    await expect(lstat(join(root, "bug-report-reviews"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(sentinel, "utf8")).toBe("keep me");
+  } finally {
+    await rm(outside, { recursive: true, force: true });
+  }
 });
 
 test("the owner-only mode check is skipped on Windows, where Node reports other modes, but still applies on POSIX", async () => {
