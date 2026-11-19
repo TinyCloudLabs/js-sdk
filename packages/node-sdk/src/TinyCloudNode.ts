@@ -7502,8 +7502,8 @@ export class TinyCloudNode {
 
   /**
    * Read a secret from an explicit target space without requesting or
-   * auto-signing authority. An isolated read binds both requests to one
-   * installed grant, never a broader session or a mix of grants.
+   * auto-signing authority. An owner with no selected CID can use their
+   * signed-in session. Other isolated reads bind both requests to one grant.
    */
   async readSecret(input: SecretReadInput): Promise<SecretReadResult> {
     const resolved = resolveSecretPath(input.name, { scope: input.scope, isolated: input.isolated });
@@ -7512,7 +7512,10 @@ export class TinyCloudNode {
       : this.ownedSpaceId(input.space);
     const vault = this.getBaseVault(targetSpace);
     let result: Awaited<ReturnType<DataVaultService["readNetworkEncrypted"]>> | undefined;
-    if (!input.isolated) {
+    const unpinnedOwner = input.isolated && input.delegationCid === undefined
+      ? this.ownerDidFromSpaceId(targetSpace)
+      : undefined;
+    if (!input.isolated || (unpinnedOwner !== undefined && didPrincipalMatches(unpinnedOwner, this.did))) {
       if (input.delegationCid !== undefined) return { status: "read_failed" };
       result = await vault.readNetworkEncrypted(resolved.vaultKey);
     } else {

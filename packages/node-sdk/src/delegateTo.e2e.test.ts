@@ -347,6 +347,23 @@ describe.skipIf(!NODE_BIN)("delegateTo against a real node", () => {
       .toEqual({ status: "ok", value: "synthetic A" });
   }, 30_000);
 
+  test("TC-3284: an owner reads their own isolated secret without a delegation", async () => {
+    const { owner, space } = await secretOwner();
+    const name = "OWNER_ONLY";
+    const expected = { status: "ok", value: "synthetic owner value" };
+    expect(await owner.secrets.put(name, expected.value, { ...isolated, ifAbsent: true }))
+      .toMatchObject({ ok: true });
+
+    expect(await owner.readSecret({ space, name, ...isolated })).toEqual(expected);
+    expect(await owner.readSecret({ space: "secrets", name, ...isolated })).toEqual(expected);
+    expect(await owner.readSecret({ space, name, ...isolated, delegationCid: "not-installed" }))
+      .toEqual({ status: "read_failed" });
+
+    const outsider = await secretRecipient();
+    expect(await outsider.readSecret({ space, name, ...isolated }))
+      .toEqual({ status: "read_failed" });
+  }, 30_000);
+
   test("TC-3284: a replacement at the same name has independent read authority", async () => {
     const { owner, space } = await secretOwner();
     const recipient = await secretRecipient();
