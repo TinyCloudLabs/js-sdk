@@ -38,6 +38,7 @@
     "feed-disconnect",
     "mcp-agent-discovery",
     "native-share-recording-links",
+    "node-default-host",
     "node-sdk-delegate-not-before",
     "node-sdk-registry-sync-busy",
     "onboard-rerun-space-recheck",
@@ -48,6 +49,7 @@
     "tc-2652-profile-show-output",
     "tc-2653-profile-loading",
     "tc-3141-legacy-list-lazy",
-    "tc-3285-secret-types"
+    "tc-3285-secret-types",
+    "vault-dedicated-address"
   ]
 }
