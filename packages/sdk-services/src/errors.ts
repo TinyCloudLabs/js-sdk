@@ -606,11 +606,11 @@ export function isStorageFullError(error: { code?: string } | null | undefined):
 
 /** Shown when a write would make a database larger than the node allows for one database. */
 export const DATABASE_SIZE_LIMIT_MESSAGE =
-  "This database has reached its size limit, so this change was not saved. Reading still works. Delete data from this database, or move some of it to another database, to save again.";
+  "This database has reached its size limit, so this change wasn't saved. You can still read it. To save again, delete some of its data or move some to another database.";
 
 /** Shown when a database is already larger than the node will open. */
 export const DATABASE_TOO_LARGE_TO_OPEN_MESSAGE =
-  "This database is larger than TinyCloud can open, so it was not read or changed.";
+  "This database is too large for TinyCloud to open, so it wasn't read or changed.";
 
 /**
  * Classify the node's `507 sql_database_size_limit: ...` (SQL and DuckDB) as
