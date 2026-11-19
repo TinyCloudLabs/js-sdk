@@ -56,6 +56,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
+import { storedGrantsCovering } from "../auth/covering-grants.js";
 import { approvalCommandIntent, approvalRenewalOf, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
@@ -975,9 +976,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     )
     .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`)
     .option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)")
+    .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
+    .option("--fresh", "With --grant on an OpenKey owner profile: ask the owner for a new approval even if the current grants already cover the request. The old grant is kept (not removed, not revoked); the output lists the new CIDs and, from local storage, the stored grants that already covered the request. Revoke is by CID: revoke each to end access")
     .action(async (options, cmd) => {
       try {
         noteUnneededYes(options.yes);
+        // Refused before anything is contacted. Only an OpenKey approval request link can be left and resumed: a pasted
+        // code and a device authorization are not saved requests, and without --grant nothing is approved.
+        if (options.timeout !== undefined && (!options.grant || options.paste === true || options.device === true)) {
+          throw new CLIError("INVALID_ARGUMENT", "--timeout requires --grant and cannot be combined with --paste or --device: only the approval request link can be left and resumed.", ExitCode.USAGE_ERROR);
+        }
+        const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         const globalOpts = cmd.optsWithGlobals();
         // Without --grant, the request records the host it is for and no session is restored.
         const ctx = await ProfileManager.resolveContext(globalOpts, options.grant ? {} : { storedSession: "unused" });
@@ -988,6 +997,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
+        }
+        if (options.fresh && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--fresh requires --grant on an OpenKey owner profile: it asks the owner for a new approval although the current grants already cover the request.", ExitCode.USAGE_ERROR);
         }
         const preset = resolveAppsAgentRequest(options);
         const resolutionOptions = { allowLogicalSpaces: true };
@@ -1028,11 +1040,14 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         await completeApprovalResult(ctx.profile);
         let node: TinyCloudNode | undefined;
         if (!keyOnlyOpenKey) node = await ensureAuthenticated(ctx);
+        // Listed beside the new grant at the end. Read before the approval: nothing here changes or removes an old grant.
+        const existing = options.fresh ? storedGrantsCovering(await loadAdditionalDelegations(ctx.profile), requested, profile.ownerDid) : [];
 
         // Fast path: master's grantRuntimePermissions / hasRuntimePermissions
         // already does the diff against the live session + existing runtime
         // grants; no need to compute it ourselves.
-        if (node?.hasRuntimePermissions(requested)) {
+        // --fresh skips it: the owner asked for a new approval although the current grants already cover the request.
+        if (!options.fresh && node?.hasRuntimePermissions(requested)) {
           outputJson({ changed: false, missing: [], added: [] });
           return;
         }
@@ -1091,6 +1106,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                   expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                   noPopup: options.popup === false,
                   paste: options.paste,
+                  ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: index + 1, of: groups.length } }),
                   ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
                 });
               }
@@ -1134,6 +1150,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             delegationCids,
             expiry,
             ...(options.device ? { declined } : {}),
+            ...(options.fresh ? { fresh: true, existingDelegationCids: existing.map((grant) => grant.cid) } : {}),
           });
           return;
         }
@@ -1498,9 +1515,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (!artifact) {
           throw new CLIError(
             "REQUEST_NOT_FOUND",
-            options.last
+            `${options.last
               ? `No stored permission requests exist for profile "${ctx.profile}".`
-              : "Provide a requestId or use --last.",
+              : "Provide a requestId or use --last."} `
+              + "A stopped `auth request ... --grant` is not stored here: run the same command again (same flags, same profile) "
+              + "and it resumes the saved approval request instead of starting over.",
             ExitCode.NOT_FOUND,
           );
         }

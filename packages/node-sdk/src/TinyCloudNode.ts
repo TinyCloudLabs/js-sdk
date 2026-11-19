@@ -262,6 +262,7 @@ import {
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
   extractSiweExpiration,
+  wholeSecondExpiry,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -1048,6 +1049,25 @@ const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
   "disableSubDelegation requires a session-key delegation to a did:key (not did:pkh); use the session-key DID or drop the flag";
 
 /**
+ * Check `DelegateToOptions.notBefore` against the expiry the delegation will actually be signed with, and return it
+ * as whole seconds since the epoch (floored, as the expiry is). `undefined` when none was requested.
+ */
+function resolveNotBeforeSecs(notBefore: Date | undefined, expiration: Date, nowMs: number): number | undefined {
+  if (notBefore === undefined) return undefined;
+  if (!(notBefore instanceof Date) || !Number.isFinite(notBefore.getTime()) || notBefore.getTime() < 0) {
+    throw new Error("delegateTo: notBefore must be a valid Date");
+  }
+  const notBeforeSecs = Math.floor(notBefore.getTime() / 1000);
+  if (notBeforeSecs >= Math.floor(expiration.getTime() / 1000)) {
+    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is not before the delegation's expiry (${expiration.toISOString()})`);
+  }
+  if (notBefore.getTime() > nowMs) {
+    throw new Error(`delegateTo: notBefore (${notBefore.toISOString()}) is in the future; the node would reject the delegation until then, so it must not be later than now`);
+  }
+  return notBeforeSecs;
+}
+
+/**
  * Options for {@link TinyCloudNode.delegateTo}.
  *
  * `expiry` accepts either an ms-format duration string (e.g. `"7d"`, `"1h"`)
@@ -1070,6 +1090,14 @@ const TERMINAL_DELEGATION_REQUIRES_SESSION_KEY =
 export interface DelegateToOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
+  /**
+   * Sign the delegation with this not-before (`nbf`), to the whole second, so a delegation can be backdated to cover an
+   * issuer clock that runs ahead of the node's. Refused when it is in the future (the node checks a delegation against its own
+   * clock with no leeway, so a future `nbf` fails activation), when it is not before the delegation's expiry (the
+   * expiry delegateTo will sign, after the session cap and, on the runtime-grant path, the runtime grant's own end), or not a valid Date, and with `forceWalletSign`, whose SIWE
+   * path cannot carry it. Default: none, so the delegation is valid from the moment it is signed.
+   */
+  notBefore?: Date;
   /** Force the wallet-signed SIWE path even if the caps are derivable. Default false. */
   forceWalletSign?: boolean;
   /**
@@ -1378,6 +1406,21 @@ function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
     }
   }
   return "gate_unavailable";
+}
+
+/**
+ * The node's busy or timeout answer, which the SDK has already retried (under
+ * its retry policy, honouring the node's Retry-After) by the time it reaches a
+ * caller. Read from the error or the error it wraps.
+ */
+function isSdkRetriedNodeAnswer(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth += 1) {
+    const code = Reflect.get(current, "code");
+    if (code === ErrorCodes.NODE_BUSY || code === ErrorCodes.REQUEST_TIMEOUT) return true;
+    current = Reflect.get(current, "cause");
+  }
+  return false;
 }
 
 export class TinyCloudNode {
@@ -4449,6 +4492,17 @@ export class TinyCloudNode {
           );
           return;
         }
+        // The node's busy and timeout answers reach here after the SDK has
+        // retried them under its retry policy and the node's Retry-After. A
+        // second loop would multiply the requests a busy node gets (up to 12
+        // per write instead of 4), so stop; the next sync tries again.
+        if (isSdkRetriedNodeAnswer(error)) {
+          console.warn(
+            "TinyCloud account registry sync stopped: the node is busy; the SDK already retried it",
+            error,
+          );
+          return;
+        }
         lastError = error;
         if (attempt < delays.length - 1) {
           await new Promise<void>((resolve, reject) => {
@@ -7044,16 +7098,27 @@ export class TinyCloudNode {
     spaceId: string;
     path: string;
     actions: string[];
+    resources?: Array<{ path: string; actions: string[] }>;
     requestedExpiry: Date;
   }, assertActive?: () => void): Promise<Delegation | undefined> {
     // A share past the technical limit is a clear refusal, not a swallowed failure below.
     assertExpiryWithinTechnicalLimit(params.requestedExpiry, "siwe");
+    // One resource keeps the path/actions shape; several are one permission each,
+    // in share order, so the returned delegation's flat path is the share's first.
+    const authority = params.resources && params.resources.length > 1
+      ? {
+        permissions: params.resources.map((resource) => ({
+          service: resource.actions[0]?.split("/", 1)[0] ?? "",
+          path: resource.path,
+          actions: [...resource.actions],
+        })),
+      }
+      : { path: params.path, actions: params.actions };
     try {
       return (await this.createOwnerDelegation({
         delegateDid: params.shareKeyDID,
         spaceId: params.spaceId,
-        path: params.path,
-        actions: params.actions,
+        ...authority,
         expiresAt: params.requestedExpiry,
       }, assertActive, params.onPrepared)).delegation;
     } catch {
@@ -7930,7 +7995,8 @@ export class TinyCloudNode {
     const requestedExpiryMs = resolveExpiryMs(options?.expiry);
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
-      expiresAt = sessionExpiry;
+      // At the session's expiry, to the whole second: the node compares a child's expiry with its parent's.
+      expiresAt = wholeSecondExpiry(sessionExpiry);
     }
     assertExpiryWithinTechnicalLimit(expiresAt, "siwe");
 
@@ -8403,6 +8469,9 @@ export class TinyCloudNode {
           "handed to onPrepared.",
       );
     }
+    if (options?.notBefore !== undefined && options.forceWalletSign) {
+      throw new Error("delegateTo: notBefore cannot be combined with forceWalletSign=true; the wallet-signed path cannot carry it.");
+    }
     if (options?.disableSubDelegation && did.startsWith("did:pkh:")) {
       throw new Error(TERMINAL_DELEGATION_REQUIRES_SESSION_KEY);
     }
@@ -8510,6 +8579,7 @@ export class TinyCloudNode {
       }
       throw new PermissionNotInManifestError(plan.missing ?? [], plan.granted ?? []);
     }
+    const notBeforeSecs = resolveNotBeforeSecs(options?.notBefore, plan.effectiveExpiration, Date.now());
     if (plan.path === "runtime") {
       const delegation = await this.createDelegationViaRuntimeGrant(
         did,
@@ -8520,6 +8590,7 @@ export class TinyCloudNode {
         onPrepared,
         options?.disableSubDelegation === true,
         options?.requireActivation === true,
+        notBeforeSecs,
       );
       return { delegation, prompted: false };
     }
@@ -8538,6 +8609,7 @@ export class TinyCloudNode {
       onPrepared,
       options?.disableSubDelegation === true,
       options?.requireActivation === true,
+      notBeforeSecs,
     );
     return { delegation, prompted: false };
   }
@@ -8848,6 +8920,7 @@ export class TinyCloudNode {
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
     requireActivation = false,
+    notBeforeSecs?: number,
   ): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -8929,6 +9002,7 @@ export class TinyCloudNode {
       spaceId,
       abilities,
       expirationSecs,
+      notBeforeSecs,
     }, disableSubDelegation);
 
     // Translate the WASM result into a PortableDelegation. We don't
@@ -8989,6 +9063,7 @@ export class TinyCloudNode {
     onPrepared?: DelegateToOptions["onPrepared"],
     disableSubDelegation = false,
     requireActivation = false,
+    notBeforeSecs?: number,
   ): Promise<PortableDelegation> {
     const graph = this._serviceGraph;
     graph.assertActive();
@@ -9000,6 +9075,7 @@ export class TinyCloudNode {
       spaceId: grant.session.spaceId,
       abilities: this.permissionsToAbilities(entries),
       expirationSecs: Math.floor(expirationTime.getTime() / 1000),
+      notBeforeSecs,
     }, disableSubDelegation);
 
     const primary = result.resources[0];
@@ -10153,8 +10229,12 @@ export class TinyCloudNode {
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
-    // The activated session lasts as long as the delegation it is proven by.
-    const expirationTime = delegation.expiry;
+    // The activated session lasts as long as the delegation it is proven by, to the whole second: the node
+    // compares a child's expiry with its parent's, and a child at the parent's milliseconds can read as later.
+    const expirationTime = wholeSecondExpiry(delegation.expiry);
+    if (expirationTime.getTime() <= now.getTime()) {
+      throw new Error("The delegation expires within a second; ask for a new one.");
+    }
     assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
 
     // Prepare the session with:
@@ -10321,14 +10401,16 @@ export class TinyCloudNode {
       );
     }
 
-    // Default to the longest a sub-delegation may last: its parent's expiry.
+    // Default to the longest a sub-delegation may last: its parent's expiry, to the whole second (the node
+    // compares a child's expiry with its parent's, and a child at the parent's milliseconds can read as later).
     const now = new Date();
+    const parentExpiry = wholeSecondExpiry(parentDelegation.expiry);
     const requestedExpiry = params.expiryMs === undefined
-      ? parentDelegation.expiry
+      ? parentExpiry
       : new Date(now.getTime() + params.expiryMs);
     // Sub-delegation cannot outlive parent, so cap at parent's expiry
     const actualExpiry =
-      requestedExpiry > parentDelegation.expiry ? parentDelegation.expiry : requestedExpiry;
+      requestedExpiry > parentExpiry ? parentExpiry : requestedExpiry;
     assertExpiryWithinTechnicalLimit(actualExpiry, "siwe");
 
     // Build abilities for the sub-delegation

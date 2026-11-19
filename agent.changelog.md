@@ -3,6 +3,18 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-17
+
+- TC-2416: the restricted addresses no longer offer or accept a catalog app in
+  `tinycloud_apps_context`. Its `app` description omits the slugs there, and a
+  catalog slug is answered with `INPUT_INVALID` / `catalog_app_unavailable` and
+  the tiny-app link instead of an approval request for access no tool on those
+  addresses can use. `/mcp` is unchanged. The rules keep their catalog section
+  on every address.
+- TC-2416: `/claude/mcp` repeats each tool's title as `annotations.title`, as
+  Anthropic's directory portal suggests. It is the first per-address difference
+  among the restricted addresses; the other four addresses are unchanged.
+
 ## 2026-11-13
 
 - TC-2416 recovery: restore discovery, reads, conditional writes and optional SQL
@@ -16,6 +28,10 @@ entry when `agent.dev.md` or related agent workflow expectations change.
   legacy read/write/query recovery, stale-ETag refusal, new-layout writes and sibling
   permission refusal. Stale markers now change revision on every write so a
   concurrent same-day update cannot be incorrectly cleared during a copy rebuild.
+- TC-2416 recovery follow-up: `tinycloud_apps_context` inlines legacy kind
+  catalogs only while all catalog records serialize to at most 60,000
+  characters; past that it inlines app catalogs only and lists the rest in
+  `catalog.keys`, so the hosted 100,000-character limit cannot fail the call.
 
 ## 2026-11-12
 
