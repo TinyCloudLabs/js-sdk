@@ -474,7 +474,6 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
       return ownerSigner;
     });
     expect(done.exitCode).toBe(0);
-    console.log("WORKS_ONBOARD_LINES:" + JSON.stringify(done.stderr.split("\n").filter((l) => /guide for agents|^Next:/.test(l))) + " exit=" + done.exitCode);
     expect(done.offered.map((entry) => entry.id)).toEqual([accountRequestId]);
     const approval2 = done.offered[0]!;
     assertThirtyDays(approval2);
