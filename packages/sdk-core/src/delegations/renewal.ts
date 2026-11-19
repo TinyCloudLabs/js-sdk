@@ -8,6 +8,8 @@ import { decodeBase64Url } from "../credentials/digest";
 import { decodeCanonicalDagCbor, parseSignedSiweCacao } from "./cacao";
 import { principalDidEquals } from "../identity";
 import { activateSessionWithHost } from "../space";
+import { endToEndNodeHost } from "../tinycloud-node";
+import { delegationTouchesVault } from "./portable";
 import { boundedResponseBytes } from "../location";
 import { usingResponse } from "@tinycloud/sdk-services/internal/response-body";
 
@@ -299,9 +301,12 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
     || leaseEnd <= leaseStart || leaseEnd - leaseStart > year || leaseEnd > now + year) {
     throw new Error("Owner renewal lease validity bounds are invalid or expired");
   }
+  // A lease that names vault data is checked and admitted only on the end-to-end origin.
+  const leaseAuthorization = input.leaseAuthorization.replace(/^Bearer\s+/i, "");
+  const host = await delegationTouchesVault(leaseAuthorization) ? endToEndNodeHost(input.host) : input.host;
   // Check the verified host still advertises the identity being admitted.
   const current = await usingResponse(
-    () => fetch(`${input.host}/.well-known/tinycloud/node-keys`, { redirect: "error", signal: input.signal }),
+    () => fetch(`${host}/.well-known/tinycloud/node-keys`, { redirect: "error", signal: input.signal }),
     async (response) => {
       if (!response.ok) throw new Error(`Renewal identity discovery failed: ${response.status}`);
       const bytes = await boundedResponseBytes(response, 16 * 1024);
@@ -314,9 +319,7 @@ export async function admitOwnerRenewalLease(input: AdmitOwnerRenewalLeaseInput)
     throw new Error("Renewal node identity changed");
   }
   // The producer has already admitted the original. Only replay the saved lease.
-  const result = await activateSessionWithHost(input.host, {
-    Authorization: input.leaseAuthorization.replace(/^Bearer\s+/i, ""),
-  }, input.signal);
+  const result = await activateSessionWithHost(host, { Authorization: leaseAuthorization }, input.signal);
   if (!result.success) throw new Error(`Owner renewal admission failed: ${result.status} ${result.error ?? ""}`);
   return Object.freeze({
     originalCid: original.cid,
