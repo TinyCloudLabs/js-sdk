@@ -8,6 +8,8 @@ import { ExitCode, DEFAULT_HOST, DEFAULT_CHAIN_ID } from "../config/constants.js
 import { generateKey } from "../auth/local-key.js";
 import { refreshOpenKeySession } from "./auth.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
+import { hasPendingSignIn } from "../auth/approval-request.js";
+import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
 
 /**
  * A new profile with a fresh session key and no sign-in, as `init --key-only`
@@ -45,8 +47,14 @@ export function registerInitCommand(program: Command): void {
     .option("--paste", "Use manual paste mode for authentication")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--default-space <name>", "Default space used when --space is omitted (e.g. applications)")
+    .option("--timeout <duration>", `OpenKey sign-in only (not --paste or --key-only). ${APPROVAL_TIMEOUT_OPTION_DESCRIPTION}`)
     .action(async (options, cmd) => {
       try {
+        // Refused before anything is created or contacted. A sign-in is one approval: step 1 of 1.
+        const approvalWait = options.timeout === undefined ? undefined : { deadlineMs: Date.now() + parseApprovalTimeout(options.timeout), step: 1, of: 1 };
+        if (approvalWait && (options.paste || options.keyOnly)) {
+          throw new CLIError("INVALID_ARGUMENT", "--timeout applies only to an OpenKey sign-in through an approval link; it can't be used with --paste or --key-only.", ExitCode.USAGE_ERROR);
+        }
         const globalOpts = cmd.optsWithGlobals();
         const profileName: string = options.name;
         const host: string = options.host ?? globalOpts.host ?? DEFAULT_HOST;
@@ -59,16 +67,26 @@ export function registerInitCommand(program: Command): void {
           );
         }
 
-        // Check if profile already exists
+        // An existing profile is refused, except one an earlier `init` created whose sign-in is still waiting for the
+        // owner's approval (exit 8, or an interrupted run): the rerun resumes that same approval link.
+        let created: { did: string; previousDefaultProfile: string } | undefined;
+        let did: string;
         if (await ProfileManager.profileExists(profileName)) {
-          throw new CLIError(
-            "PROFILE_EXISTS",
-            `Profile "${profileName}" already exists. Use \`${CLI_NAME} profile delete ${profileName}\` first or choose a different name.`,
-            ExitCode.ERROR,
-          );
+          const existing = await ProfileManager.getProfile(profileName);
+          const resumable = !options.keyOnly && existing.authMethod === undefined &&
+            await ProfileManager.getSession(profileName) === null && await hasPendingSignIn(profileName);
+          if (!resumable) {
+            throw new CLIError(
+              "PROFILE_EXISTS",
+              `Profile "${profileName}" already exists. Use \`${CLI_NAME} profile delete ${profileName}\` first or choose a different name.`,
+              ExitCode.ERROR,
+            );
+          }
+          did = existing.did;
+        } else {
+          created = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
+          did = created.did;
         }
-
-        const { did, previousDefaultProfile } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
 
         if (options.keyOnly) {
           outputJson({
@@ -86,9 +104,11 @@ export function registerInitCommand(program: Command): void {
           paste: options.paste,
           noPopup: options.popup === false,
           persistHost: true,
-          createdProfile: { previousDefaultProfile },
+          ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
+          ...(approvalWait === undefined ? {} : { approvalWait }),
         });
-        await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
+        await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,
+          approvalWait === undefined ? undefined : spaceSetupTimeoutMs(approvalWait));
 
         outputJson({
           profile: profileName,
