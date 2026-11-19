@@ -1,0 +1,32 @@
+import { expect, test } from "bun:test";
+import { APPROVAL_FILE, loadApprovalFiles, serializeApprovalFile } from "../src/links/index.js";
+import { RELAY_KEY, T0, entryIn } from "./approval-machine-fixtures.js";
+
+// TC-2377 ruling: a tc that predates `approval-pending.v2.json` signs out by deleting only `approval-pending.json`, so the v2 file
+// and its keys outlive that logout. The next load of a signed-out profile discards every request made before the sign-out; a
+// request made since (a sign-in in progress on that profile) is kept, and a signed-in profile keeps everything.
+
+const NOW = T0 + 60_000;
+const before = { ...entryIn("open", { requestId: "abcdefghijklmnopqrstuvwxb2" }), createdAt: new Date(T0).toISOString() };
+const since = { ...entryIn("open", { requestId: "abcdefghijklmnopqrstuvwxc3" }), createdAt: new Date(T0 + 30_000).toISOString() };
+const v2 = JSON.parse(serializeApprovalFile({ version: 2, entries: [before, since], unrecognized: [{ raw: { relayPrivateKey: RELAY_KEY }, quarantinedAt: new Date(T0).toISOString() }] }));
+
+test("signed out: requests from before the sign-out are discarded with their keys; signed in: every request is kept", () => {
+  const signedOut = loadApprovalFiles({ v2 }, { now: NOW, signedOutAt: T0 + 10_000 });
+  if (signedOut.kind !== "ok") throw new Error(signedOut.kind);
+  expect(signedOut.discarded).toEqual([before.requestId]);
+  expect(signedOut.file.entries.map((entry) => entry.requestId)).toEqual([since.requestId]);
+  expect(signedOut.file.unrecognized).toEqual([]);
+  expect(signedOut.ops).toEqual([{ op: "write", name: APPROVAL_FILE }]);
+  // What the adapter writes holds no key of a discarded request.
+  const written = serializeApprovalFile(signedOut.file);
+  expect(written).not.toContain(before.requestId);
+  expect(written.split(RELAY_KEY)).toHaveLength(2);
+
+  const signedIn = loadApprovalFiles({ v2 }, { now: NOW });
+  if (signedIn.kind !== "ok") throw new Error(signedIn.kind);
+  expect(signedIn.discarded).toEqual([]);
+  expect(signedIn.file.entries.map((entry) => entry.requestId)).toEqual([before.requestId, since.requestId]);
+  expect(signedIn.file.unrecognized).toHaveLength(1);
+  expect(signedIn.ops).toEqual([]);
+});

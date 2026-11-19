@@ -173,6 +173,7 @@ export {
   type ApprovalFileParse,
   type ApprovalFilesInput,
   type ApprovalFilesLoad,
+  type ApprovalFilesLoadOptions,
   type QuarantinedEntry,
   type SweptEntry,
 } from "./approval-file.js";

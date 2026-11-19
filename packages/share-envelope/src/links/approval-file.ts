@@ -178,26 +178,55 @@ export function serializeApprovalFile(file: ApprovalFile): string {
 }
 
 export type ApprovalFilesLoad =
-  /** `ops` turns the files on disk into `file`: with a v1 file, write the v2 file, then delete the v1 file. */
-  | { readonly kind: "ok"; readonly file: ApprovalFile; readonly migratedFrom: 0 | 1; readonly notes: readonly { readonly requestId: string; readonly note: "request-expiry-mismatch" }[]; readonly ops: readonly ApprovalFileOp[] }
+  /**
+   * `ops` turns the files on disk into `file`: with a v1 file, or after a discard, write the v2 file; then delete the v1 file.
+   * `discarded`: the requests removed with their keys because they were made before the profile was signed out.
+   */
+  | { readonly kind: "ok"; readonly file: ApprovalFile; readonly migratedFrom: 0 | 1; readonly notes: readonly { readonly requestId: string; readonly note: "request-expiry-mismatch" }[]; readonly ops: readonly ApprovalFileOp[]; readonly discarded: readonly string[] }
   /** A file written by a newer client: neither file is touched. */
   | { readonly kind: "newer"; readonly version: number }
   /** `name` is not a pending-approval file: the adapter sets that file aside and loads again. */
   | { readonly kind: "corrupt"; readonly name: ApprovalFileName };
 
+export interface ApprovalFilesLoadOptions {
+  readonly now: number;
+  /**
+   * Set while the profile is signed out: when it was signed out (epoch ms). A logout by a tc that predates the v2 file deletes only
+   * the v1 file and records no time; the adapter passes `now` on the first load that finds the profile signed out without one, and
+   * keeps that time until the profile is signed in again. Entries (and quarantined content) from before it are discarded with their
+   * keys; requests made since, by a sign-in in progress, are kept.
+   */
+  readonly signedOutAt?: number;
+}
+
 /**
  * Read the profile's pending approvals from both names. The v1 file's entries are migrated and added after the v2 file's (one that
  * repeats a v2 `requestId` is the older copy of a migration cut short, and is set aside, not dropped); the v2 file is written and only
  * then is the v1 file deleted. A v1 file can reappear after migration when an older tc runs on the same profile: it is merged again.
+ * A signed-out profile keeps no request from before its sign-out (`signedOutAt`).
  */
-export function loadApprovalFiles(input: ApprovalFilesInput, options: { readonly now: number }): ApprovalFilesLoad {
+export function loadApprovalFiles(input: ApprovalFilesInput, options: ApprovalFilesLoadOptions): ApprovalFilesLoad {
+  const loaded = loadBoth(input, options);
+  if (loaded.kind !== "ok" || options.signedOutAt === undefined) return loaded;
+  const signedOutAt = options.signedOutAt;
+  const entries = loaded.file.entries.filter((entry) => Date.parse(entry.createdAt) > signedOutAt);
+  const unrecognized = loaded.file.unrecognized.filter((item) => Date.parse(item.quarantinedAt) > signedOutAt);
+  const discarded = loaded.file.entries.filter((entry) => !entries.includes(entry)).map((entry) => entry.requestId);
+  if (entries.length === loaded.file.entries.length && unrecognized.length === loaded.file.unrecognized.length) return loaded;
+  return {
+    ...loaded, file: { version: 2, entries, unrecognized }, discarded,
+    ops: [{ op: "write", name: APPROVAL_FILE }, ...(input.v1 === undefined ? [] : [{ op: "delete", name: LEGACY_APPROVAL_FILE } as const])],
+  };
+}
+
+function loadBoth(input: ApprovalFilesInput, options: { readonly now: number }): ApprovalFilesLoad {
   const current = input.v2 === undefined ? undefined : parseApprovalFile(input.v2, options);
   if (current?.kind === "newer") return current;
   if (current?.kind === "corrupt") return { kind: "corrupt", name: APPROVAL_FILE };
   if (input.v1 === undefined) {
     return current === undefined
-      ? { kind: "ok", file: { version: 2, entries: [], unrecognized: [] }, migratedFrom: 0, notes: [], ops: [] }
-      : { ...current, ops: [] };
+      ? { kind: "ok", file: { version: 2, entries: [], unrecognized: [] }, migratedFrom: 0, notes: [], ops: [], discarded: [] }
+      : { ...current, ops: [], discarded: [] };
   }
   const legacy = parseApprovalFile(input.v1, options);
   if (legacy.kind === "newer") return legacy;
@@ -210,7 +239,7 @@ export function loadApprovalFiles(input: ApprovalFilesInput, options: { readonly
   if (merged.kind !== "ok") return { kind: "corrupt", name: LEGACY_APPROVAL_FILE };
   return {
     kind: "ok", file: merged.file, migratedFrom: 1, notes: [...(current?.notes ?? []), ...legacy.notes],
-    ops: [{ op: "write", name: APPROVAL_FILE }, { op: "delete", name: LEGACY_APPROVAL_FILE }],
+    ops: [{ op: "write", name: APPROVAL_FILE }, { op: "delete", name: LEGACY_APPROVAL_FILE }], discarded: [],
   };
 }
 
