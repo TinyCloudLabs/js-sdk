@@ -52,8 +52,8 @@ export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
     .description("Sets up this computer with its owner's OpenKey approval and a 30-day starting grant; with --with feed, only what the Feed needs, for 7 days. Prints a short approval link, then collects, checks and saves the result. An interrupted run resumes when the same command runs again.")
-    .option("--with <tasks>", "Tasks to authorize: apps (default), feed (the Feed only) or apps,feed (7 days, like feed)")
-    .option("--expiry <duration>", "How long the approval lasts: a number and m, h, d or w, at most 30d (default 30d; 7d when --with includes feed)")
+    .option("--with <tasks>", "Tasks to authorize: apps (default), feed (the Feed only) or apps,feed (keeps the account listing that apps needs)")
+    .option("--expiry <duration>", "How long the approval lasts: a number and m, h, d or w, at most 30d. Default: the shortest of the selected tasks' defaults (apps 30d, feed 7d), so 7d when --with includes feed")
     .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (options, cmd) => {
