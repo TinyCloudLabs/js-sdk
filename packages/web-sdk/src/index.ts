@@ -452,10 +452,11 @@ export { createKVService } from "./modules/Storage/tinycloud/KVServiceAdapter";
 // Delegation Transport Types (re-exported from node-sdk for compatibility)
 export {
   DelegatedAccess,
+  MissingSpacesError,
   serializeDelegation,
   deserializeDelegation,
 } from "@tinycloud/node-sdk/core";
-export type { PortableDelegation, SpaceHosting } from "@tinycloud/node-sdk/core";
+export type { DelegatedSecretReadInput, PortableDelegation, SpaceHosting } from "@tinycloud/node-sdk/core";
 
 // TinyCloudNode re-export (for advanced usage)
 export {
