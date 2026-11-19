@@ -182,6 +182,7 @@ test("network-admin and key-admin facts hash their sent bodies with the same rul
     }
     if (url.origin === HOST && url.pathname === "/info") return Response.json({ nodeId: NODE_DID });
     if (url.origin === HOST && url.pathname === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
+    if (url.origin === HOST && (init?.method ?? "GET") === "GET" && url.pathname.startsWith("/encryption/networks/")) return new Response(null, { status: 404 });
     sent.push(String(init?.body));
     return new Response(JSON.stringify({ descriptor: {} }), { status: 200 });
   }) as typeof fetch;

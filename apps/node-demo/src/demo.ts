@@ -31,6 +31,7 @@ import {
   TinyCloud,
   serializeDelegation,
   deserializeDelegation,
+  ownerFullAccess,
 } from "@tinycloud/node-sdk";
 import { Wallet } from "ethers";
 import { existsSync, readFileSync, writeFileSync } from "fs";
@@ -121,7 +122,7 @@ async function runDemo() {
   const alice = new TinyCloudNode({
     privateKey: aliceKey,
     host: TINYCLOUD_URL,
-    prefix: "demo-alice",
+    ...ownerFullAccess("demo-alice"),
     autoCreateSpace: true,
   });
 

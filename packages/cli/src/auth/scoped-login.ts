@@ -1,9 +1,9 @@
-import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
+import { technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, liveStoredLease, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
-import { ExitCode } from "../config/constants.js";
+import { CLI_DEFAULT_SESSION_EXPIRY_DAYS, CLI_DEFAULT_SESSION_EXPIRY_MS, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
@@ -66,11 +66,11 @@ export function expiryLimit(expiry: RequestedExpiry): number {
 }
 
 /**
- * Latest signed expiry when no `--expiry` was given: the SDK's default session request (`EXPIRY.SESSION_MS`, 30 days)
- * from now, plus the same clock-skew allowance, evaluated when the approval arrives.
+ * Latest signed expiry when no `--expiry` was given: the CLI's default login lifetime (`CLI_DEFAULT_SESSION_EXPIRY_MS`,
+ * 30 days) from now, plus the same clock-skew allowance, evaluated when the approval arrives.
  */
 export function defaultExpiryLimit(): number {
-  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+  return Date.now() + CLI_DEFAULT_SESSION_EXPIRY_MS + CLOCK_SKEW_MS;
 }
 
 /**
@@ -94,7 +94,7 @@ export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLI
   const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
   if (match === null) return undefined;
   const requested = defaultRequest
-    ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
+    ? `the default ${CLI_DEFAULT_SESSION_EXPIRY_DAYS} day lifetime this login requested`
     : "the requested --expiry";
   return Object.assign(
     new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),

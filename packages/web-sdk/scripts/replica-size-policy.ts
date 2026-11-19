@@ -488,6 +488,7 @@ export type Ledger = {
   tc3286ShareNoDelegationActionsRoot?: LogoutRatchet;
   tc2944VaultPathClassifierRoot?: LogoutRatchet;
   tc3448OnBehalfPromptRoot?: LogoutRatchet;
+  tc3443GenericManifestRoot?: LogoutRatchet;
   tc2773LazyRestoreReplicaWorker?: Omit<WorkerRatchet, "worker"> & { replicaWorker: { delta: number; ceiling: number } };
 };
 
@@ -1130,6 +1131,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc3286ShareNoDelegationActionsRoot !== undefined) pins.push({ row: "tc3286ShareNoDelegationActionsRoot", pin: root.tc3286ShareNoDelegationActionsRoot.sourceCommits.at(-1)! });
   if (root.tc2944VaultPathClassifierRoot !== undefined) pins.push({ row: "tc2944VaultPathClassifierRoot", pin: root.tc2944VaultPathClassifierRoot.sourceCommits.at(-1)! });
   if (root.tc3448OnBehalfPromptRoot !== undefined) pins.push({ row: "tc3448OnBehalfPromptRoot", pin: root.tc3448OnBehalfPromptRoot.sourceCommits.at(-1)! });
+  if (root.tc3443GenericManifestRoot !== undefined) pins.push({ row: "tc3443GenericManifestRoot", pin: root.tc3443GenericManifestRoot.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1242,6 +1244,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc3286ShareNoDelegationActionsRoot", root.tc3286ShareNoDelegationActionsRoot?.root.ceiling],
     ["tc2944VaultPathClassifierRoot", root.tc2944VaultPathClassifierRoot?.root.ceiling],
     ["tc3448OnBehalfPromptRoot", root.tc3448OnBehalfPromptRoot?.root.ceiling],
+    ["tc3443GenericManifestRoot", root.tc3443GenericManifestRoot?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -3696,6 +3699,26 @@ export const approvedTc3448OnBehalfPromptRoot: LogoutRatchet = {
   "reason": "The web-sdk permission prompt can name the app a request is for and hide the 30-day option (PermissionRequestModal, requestPermissionsCore). Canonical Node 22/Bun 1.3.14 CI on #1095 (8bfd1d1b, master c2f4cc76) measured index.mjs 1529672 and index.cjs 1462669 gzip -9 bytes: +47 and +56 over the TC-2944 ceilings 1529625 and 1462613. No other ceiling moves. Details: TC-3448"
 };
 
+/** The exact TC-3443 generic app-folder manifest root allowance from canonical CI. */
+export const approvedTc3443GenericManifestRoot: LogoutRatchet = {
+  "label": "a sign-in without a manifest asks only for its app's own folder (TC-3443)",
+  "ruling": "size-ruling: TC-3443 row tc3443GenericManifestRoot raises the web-sdk root ceilings by CI's measured delta for the generic app-folder manifest, its warning and ownerFullAccess",
+  "base": "c5a7f854291974630f3595aa1ef45466beca67c6",
+  "sourceCommits": ["fbfebee0d1a134eee0f49c52261f5a53dbf65c60"],
+  "canonicalCI": {
+    "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44595739813",
+    "jobs": [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44595739813/job/135813379736",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/44595739813/job/135813379768"
+    ]
+  },
+  "root": {
+    "delta": { "index.mjs": 410, "index.cjs": 170 },
+    "ceiling": { "index.mjs": 1530082, "index.cjs": 1462839 }
+  },
+  "reason": "A sign-in without a manifest asks only for its app's own folder (the generic app-folder manifest and its one console warning), and owner tools opt into every action on their space with ownerFullAccess (sdk-core owner-access, node-sdk and web-sdk sign-in); sdk-core and node-sdk are bundled into the web-sdk root. Canonical Node 22/Bun 1.3.14 CI on #1099 (fbfebee0, master c5a7f854 merged in) measured index.mjs 1530082 and index.cjs 1462839 gzip -9 bytes: +410 and +170 over the TC-3448 ceilings 1529672 and 1462669. No other ceiling moves. Details: TC-3443"
+};
+
 export const approvedLedgerRows: Record<string, unknown> = {
   phase2Ratchet: approvedPhase2,
   fixRequiredRatchet: approvedFixRequiredRatchet,
@@ -3805,6 +3828,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc3286ShareNoDelegationActionsRoot: approvedTc3286ShareNoDelegationActionsRoot,
   tc2944VaultPathClassifierRoot: approvedTc2944VaultPathClassifierRoot,
   tc3448OnBehalfPromptRoot: approvedTc3448OnBehalfPromptRoot,
+  tc3443GenericManifestRoot: approvedTc3443GenericManifestRoot,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -4308,6 +4332,11 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2944VaultPathClassifierRoot ||
         JSON.stringify(value.tc3448OnBehalfPromptRoot) !== JSON.stringify(approvedTc3448OnBehalfPromptRoot))) {
     throw new Error("Only the exact TC-3448 root admission is approved.");
+  }
+  if (value.tc3443GenericManifestRoot !== undefined &&
+      (!value.tc3448OnBehalfPromptRoot ||
+        JSON.stringify(value.tc3443GenericManifestRoot) !== JSON.stringify(approvedTc3443GenericManifestRoot))) {
+    throw new Error("Only the exact TC-3443 root admission is approved.");
   }
 }
 
@@ -5257,5 +5286,13 @@ export function validateTc3448OnBehalfPromptRootTransition(base?: LogoutRatchet,
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3448OnBehalfPromptRoot) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-3448 root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-3443 generic app-folder manifest root admission is introduced once and immutable. */
+export function validateTc3443GenericManifestRootTransition(base?: LogoutRatchet, current?: LogoutRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc3443GenericManifestRoot) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-3443 root admission may be introduced once and cannot change later.");
   }
 }

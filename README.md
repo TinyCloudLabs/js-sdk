@@ -71,14 +71,18 @@ npm install @tinycloud/web-sdk
 ```
 
 ```typescript
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
 
-const tc = new TinyCloudWeb();
+// The manifest names the app. With no `permissions`, the app gets
+// KV and SQL under `com.example.notes/` in the `applications` space.
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
+
+const tc = new TinyCloudWeb({ manifest });
 await tc.signIn();
 
 // KV storage
-await tc.kv.put('myKey', { hello: 'world' });
-const result = await tc.kv.get('myKey');
+await tc.kv.put('com.example.notes/myKey', { hello: 'world' });
+const result = await tc.kv.get('com.example.notes/myKey');
 ```
 
 ### Node.js SDK
@@ -91,13 +95,16 @@ npm install @tinycloud/node-sdk
 import {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   TinyCloudNode,
+  ownerFullAccess,
 } from '@tinycloud/node-sdk';
 
+// A backend acting as the owner of its own `default` space asks for every action there.
+// An app acting for a user declares a `manifest` instead (see the web example).
 const tc = new TinyCloudNode({
   privateKey: process.env.PRIVATE_KEY,
   domain: 'api.myapp.com',
+  ...ownerFullAccess('default'),
 });
-
 await tc.signIn();
 
 // KV storage
@@ -119,6 +126,8 @@ const delegation = await tc.createDelegation({
   abilities: ['tinycloud.kv/get', 'tinycloud.kv/put'],
 });
 ```
+
+Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. Sessions last 7 days unless you set `sessionExpirationMs`.
 
 ## Documentation
 

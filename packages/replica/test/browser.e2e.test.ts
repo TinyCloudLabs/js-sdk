@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { contentHash as hash } from "@tinycloud/replica";
-import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+import { PrivateKeySigner, TinyCloudNode, ownerFullAccess } from "@tinycloud/node-sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -270,7 +270,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     });
 
     // The owner session and fixture data.
-    owner = new TinyCloudNode({ privateKey: OWNER_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    owner = new TinyCloudNode({ privateKey: OWNER_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await owner.signIn();
     spaceId = owner.session!.spaceId;
     space = spaceId;
@@ -613,7 +613,7 @@ describe.skipIf(NODE_BIN === undefined)("browser replica against a real node", (
     expect(first).toMatchObject({ status: "synced" });
 
     // Session 2: signIn() rotates the session key — G2's issuer differs.
-    const owner2 = new TinyCloudNode({ privateKey: OWNER_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true });
+    const owner2 = new TinyCloudNode({ privateKey: OWNER_KEY, host, tinycloudRegistryUrl: registry.url.origin, autoCreateSpace: true, ...ownerFullAccess() });
     await owner2.signIn();
     expect(owner2.did).toBe(owner.did); // the pkh identity is stable
     // Explicit-only abilities never enter the SIWE recap: session 2 must

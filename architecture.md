@@ -673,7 +673,9 @@ bun run docs:dev            # Development server
 ### Browser SDK Usage Pattern
 
 ```typescript
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
+
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
 
 // 1. SDK Initialization
 const tcw = new TinyCloudWeb({
@@ -683,7 +685,8 @@ const tcw = new TinyCloudWeb({
   },
   modules: {
     storage: true
-  }
+  },
+  manifest,
 });
 
 // 2. Authentication Flow (with wallet)
@@ -700,13 +703,14 @@ tcw.extend(customExtension);
 ### Node.js SDK Usage Pattern
 
 ```typescript
-import { TinyCloudNode, serializeDelegation } from '@tinycloud/node-sdk';
+import { TinyCloudNode, ownerFullAccess, serializeDelegation } from '@tinycloud/node-sdk';
 
 // 1. SDK Initialization (with private key)
 const tc = new TinyCloudNode({
   privateKey: process.env.ETHEREUM_PRIVATE_KEY,
   host: 'https://tinycloud.example.com',
   autoCreateNamespace: true,
+  ...ownerFullAccess(),
 });
 
 // 2. Authentication Flow (no wallet needed)

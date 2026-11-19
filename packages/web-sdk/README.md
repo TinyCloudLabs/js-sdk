@@ -31,19 +31,18 @@ bun add @tinycloud/web-sdk
 ## Quick Start
 
 ```typescript
-import { TinyCloudWeb } from '@tinycloud/web-sdk';
+import { TinyCloudWeb, type Manifest } from '@tinycloud/web-sdk';
 
-// Initialize the SDK
-const tc = new TinyCloudWeb();
+// The manifest names the app. With no `permissions`, the app gets
+// KV and SQL under `com.example.notes/` in the `applications` space.
+const manifest: Manifest = { app_id: 'com.example.notes', name: 'Notes' };
 
-// Connect to the user's wallet
-await tc.connect();
+const tc = new TinyCloudWeb({ manifest });
+await tc.signIn();
 
-// Use storage
-const storage = tc.storage;
-await storage.put('myKey', { hello: 'world' });
-const result = await storage.get('myKey');
-console.log(result.data); // { hello: 'world' }
+// KV storage
+await tc.kv.put('com.example.notes/myKey', { hello: 'world' });
+const result = await tc.kv.get('com.example.notes/myKey');
 ```
 
 ### Stored sessions and `signIn()`
@@ -57,6 +56,8 @@ grants), and the default browser storage does not restore a session past its
 expiry. The permission check does not contact the node, so a session the node
 rejects (a 401 after a revocation or a reset, for example) is still restored.
 With OpenKey, `prepareSignIn()` makes the same check.
+
+Without a `manifest`, `signIn()` asks only for the app's own folder, `applications/<your domain reversed>/` (KV and SQL), and logs a warning. Sessions last 7 days unless you set `sessionExpirationMs`.
 
 `restoreSession()` resolves from stored state. It automatically starts a
 background hosting probe, capped at 5 seconds, and reactivates stored panel

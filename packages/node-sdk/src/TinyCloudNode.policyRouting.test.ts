@@ -9,6 +9,7 @@ import { base58btc } from "multiformats/bases/base58";
 import * as core from "@tinycloud/sdk-core";
 import {
   canonicalizeEncryptionJson,
+  ownerFullAccess,
   pkhDid,
   signLocationRecordV2,
   importPortableDelegation,
@@ -143,7 +144,7 @@ async function fixture(mode: "cold" | "registered" | "wrong-identity", options: 
   const profileDir = replication ? await mkdtemp(join(tmpdir(), "policy-preflight-")) : undefined;
   if (profileDir) replicaRoots.push(profileDir);
   const node = new TinyCloudNode({ signer: owner, wasmBindings: new NodeWasmBindings(), tinycloudRegistryUrl: REGISTRY,
-    ...(options.newUserHost ? { newUserHost: options.newUserHost } : {}),
+    ...(options.newUserHost ? { newUserHost: options.newUserHost } : {}), ...ownerFullAccess(),
     autoDiscoverLocalNode: false, ...(profileDir ? { replication: { enabled: true, prefixes: ["notes/"],
       mode: "foreground" as const, profileDir,
       storage: createSqliteReplicaStorage({ dir: join(profileDir, "replicas"), guard: async (section) => section() }),
@@ -870,6 +871,7 @@ test(retireDuringSigning
       if (request.method === "GET" && path.startsWith("/v2/locations/")) return Response.json({ record });
       if (request.method === "GET" && path === "/info") return Response.json({ protocol: wasm.protocolVersion(), nodeId: NODE_DID });
       if (request.method === "GET" && path === "/.well-known/tinycloud/node-keys") return Response.json({ nodeDid: NODE_DID });
+      if (request.method === "GET" && path.startsWith("/encryption/networks/")) return new Response(null, { status: 404 });
       if (request.method === "POST" && path === "/encryption/networks") {
         frontRequests.push({ authorized: request.headers.has("authorization"), bodyBytes: (await request.arrayBuffer()).byteLength });
         return new Response(null, { status: 307, headers: { location: `${sink.url.origin}/capture` } });
