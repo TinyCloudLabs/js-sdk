@@ -1,6 +1,6 @@
 # Authentication, part 2: secret reads, imported delegations and stored grants
 
-Part 2 of the authentication guide. The entry point is [AUTH.md](AUTH.md), which has device login, browser login with a manifest, more spaces, unscoped login and sign-out.
+Part 2 of the authentication guide. The entry point is [AUTH.md](AUTH.md), which has the approval-link sign-in, device login, browser login with a manifest, more spaces, unscoped login and sign-out.
 
 ## Secret reads for an agent
 

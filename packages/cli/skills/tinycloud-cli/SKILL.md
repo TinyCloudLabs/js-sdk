@@ -20,7 +20,7 @@ Every file is under 25 KB, so one command reads it whole. Size class: **S** is u
 | File | Covers | Size |
 | --- | --- | --- |
 | SKILL.md | This overview: context, sign-in, reading data, apps, publish and share | L |
-| AUTH.md | Device login for servers, browser login with a manifest, more spaces after login, unscoped login and sign-out, verifying access | L |
+| AUTH.md | Sign in with an approval link (the default), device login (only when asked), browser login with a manifest, more spaces after login, unscoped login and sign-out, verifying access | L |
 | AUTH-2.md | Secret reads for an agent, imported delegations and their request bindings, stored grants | L |
 | REFERENCE.md | Command reference entry: calling the CLI, global options, context and login, delegations, spaces, profiles, courier, node health, shell completions | L |
 | REFERENCE-2.md | Secrets (`run`, `request`, `wait`, `manage`, scoped reads), local replicas, read-through replication diagnostics | L |
